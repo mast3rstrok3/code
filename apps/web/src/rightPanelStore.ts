@@ -22,7 +22,7 @@ export const RIGHT_PANEL_KINDS = [
   "file",
   "preview",
   "terminal",
-  "app-dev-stack",
+  "app-stack",
   "pull-request",
   "agents",
   "workflows",
@@ -43,7 +43,7 @@ export type RightPanelSurface =
     }
   | { id: "diff"; kind: "diff" }
   | { id: "files"; kind: "files" }
-  | { id: "app-dev-stack"; kind: "app-dev-stack" }
+  | { id: "app-stack"; kind: "app-stack" }
   | {
       id: `file:${string}`;
       kind: "file";
@@ -81,7 +81,8 @@ const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 // v12 adds the persisted singleton Workflows surface.
 // v13 adds prompt-specific workflow instruction surfaces.
 // v14 removes the legacy Plan surface now that plans render in the transcript.
-const RIGHT_PANEL_STORAGE_VERSION = 14;
+// v15 renames the app-dev-stack surface to app-stack.
+const RIGHT_PANEL_STORAGE_VERSION = 15;
 
 /**
  * The pull-request list's shared panel (see PULL_REQUESTS_PANEL_ID in the route) is session
@@ -148,8 +149,8 @@ const singletonSurface = (
       return { id: "diff", kind };
     case "files":
       return { id: "files", kind };
-    case "app-dev-stack":
-      return { id: "app-dev-stack", kind };
+    case "app-stack":
+      return { id: "app-stack", kind };
     case "review":
       return { id: "review", kind };
     case "logs":
@@ -286,6 +287,9 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
               const surfaces = Array.isArray(validThreadState?.surfaces)
                 ? validThreadState.surfaces.flatMap<RightPanelSurface>((surface) => {
                     if ((surface as { kind?: unknown }).kind === "plan") return [];
+                    if ((surface as { kind?: unknown }).kind === "app-dev-stack") {
+                      return [{ id: "app-stack", kind: "app-stack" }];
+                    }
                     if (surface.kind === "file") {
                       const revealLine =
                         typeof surface.revealLine === "number" &&

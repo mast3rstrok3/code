@@ -1,8 +1,8 @@
 import type {
-  AppDevStack,
-  AppDevStackDiscoveredStackPodLogs,
-  AppDevStackPod,
-  AppDevStackPodLogEntry,
+  AppStack,
+  AppStackDiscoveredStackPodLogs,
+  AppStackPod,
+  AppStackPodLogEntry,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -19,9 +19,9 @@ import {
   stackLogReadLimitLabel,
   stackLogTailSelectionLabel,
   stackLogTailSelectionToReadLimit,
-} from "./AppDevStackLogsPanel.logic";
+} from "./AppStackLogsPanel.logic";
 
-const backendEntry: AppDevStackPodLogEntry = {
+const backendEntry: AppStackPodLogEntry = {
   podName: "backend-abc",
   containerName: "backend",
   phase: "Running",
@@ -34,7 +34,7 @@ const backendEntry: AppDevStackPodLogEntry = {
   error: null,
   fetchedAt: "2026-06-25T00:00:00.000Z",
 };
-const frontendEntry: AppDevStackPodLogEntry = {
+const frontendEntry: AppStackPodLogEntry = {
   podName: "frontend-def",
   containerName: "vite",
   phase: "Running",
@@ -47,7 +47,7 @@ const frontendEntry: AppDevStackPodLogEntry = {
   error: null,
   fetchedAt: "2026-06-25T00:00:01.000Z",
 };
-const redisErrorEntry: AppDevStackPodLogEntry = {
+const redisErrorEntry: AppStackPodLogEntry = {
   podName: "redis-ghi",
   containerName: "redis",
   phase: "Pending",
@@ -60,7 +60,7 @@ const redisErrorEntry: AppDevStackPodLogEntry = {
   error: "pod is restarting",
   fetchedAt: "2026-06-25T00:00:02.000Z",
 };
-const emptyMinioEntry: AppDevStackPodLogEntry = {
+const emptyMinioEntry: AppStackPodLogEntry = {
   podName: "minio-jkl",
   containerName: "minio",
   phase: "Running",
@@ -73,14 +73,14 @@ const emptyMinioEntry: AppDevStackPodLogEntry = {
   error: null,
   fetchedAt: "2026-06-25T00:00:03.000Z",
 };
-const entries: AppDevStackPodLogEntry[] = [
+const entries: AppStackPodLogEntry[] = [
   backendEntry,
   frontendEntry,
   redisErrorEntry,
   emptyMinioEntry,
 ];
 
-const makeStack = (input: Partial<AppDevStack> & Pick<AppDevStack, "id" | "worktreePath">) => {
+const makeStack = (input: Partial<AppStack> & Pick<AppStack, "id" | "worktreePath">) => {
   const { id, worktreePath, ...rest } = input;
   return {
     id,
@@ -98,13 +98,13 @@ const makeStack = (input: Partial<AppDevStack> & Pick<AppDevStack, "id" | "workt
     createdAt: rest.createdAt ?? "2026-06-25T00:00:00.000Z",
     updatedAt: rest.updatedAt ?? "2026-06-25T00:00:00.000Z",
     ...rest,
-  } satisfies AppDevStack;
+  } satisfies AppStack;
 };
 
 const makeDiscoveredStack = (
-  input: Pick<AppDevStackDiscoveredStackPodLogs, "stackId" | "namespace" | "entries"> &
-    Partial<AppDevStackDiscoveredStackPodLogs>,
-): AppDevStackDiscoveredStackPodLogs => ({
+  input: Pick<AppStackDiscoveredStackPodLogs, "stackId" | "namespace" | "entries"> &
+    Partial<AppStackDiscoveredStackPodLogs>,
+): AppStackDiscoveredStackPodLogs => ({
   stackId: input.stackId,
   namespace: input.namespace,
   displayName: input.displayName ?? input.namespace,
@@ -211,31 +211,31 @@ describe("filterStackPodLogEntries", () => {
 
 describe("groupStackPodLogEntriesByService", () => {
   it("groups generated pods by their owning service", () => {
-    const backendContainerEntry: AppDevStackPodLogEntry = {
+    const backendContainerEntry: AppStackPodLogEntry = {
       ...backendEntry,
       podName: "backend-6797f5894c-7hx7b",
       ownerName: "backend-6797f5894c",
     };
-    const backendWorkerEntry: AppDevStackPodLogEntry = {
+    const backendWorkerEntry: AppStackPodLogEntry = {
       ...backendEntry,
       podName: "backend-6797f5894c-9q2kx",
       containerName: "worker",
       logs: "worker listening\n",
       ownerName: "backend-6797f5894c",
     };
-    const codexRunnerEntry: AppDevStackPodLogEntry = {
+    const codexRunnerEntry: AppStackPodLogEntry = {
       ...backendEntry,
       podName: "codex-runner-745ff49b99-km2qn",
       containerName: "runner",
       logs: "runner ready\n",
       ownerName: "codex-runner-745ff49b99",
     };
-    const generatedFrontendEntry: AppDevStackPodLogEntry = {
+    const generatedFrontendEntry: AppStackPodLogEntry = {
       ...frontendEntry,
       podName: "frontend-7b9b4fb858-jpl26",
       ownerName: "frontend-7b9b4fb858",
     };
-    const keycloakEntry: AppDevStackPodLogEntry = {
+    const keycloakEntry: AppStackPodLogEntry = {
       ...frontendEntry,
       podName: "keycloak-0",
       containerName: "keycloak",
@@ -478,7 +478,7 @@ describe("stack log tail labels and limits", () => {
 
 describe("countStackLogContainers", () => {
   it("counts containers across all pods", () => {
-    const pods: AppDevStackPod[] = [
+    const pods: AppStackPod[] = [
       {
         name: "backend-abc",
         phase: "Running",

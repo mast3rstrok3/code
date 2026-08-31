@@ -111,6 +111,50 @@ const optionalTrimmedString = (name: string) =>
 const optionalUrl = (name: string) =>
   Config.url(name).pipe(Config.option, Config.map(Option.getOrUndefined));
 
+// The feature was renamed from "app dev stack" to "app stack". Hosts still
+// export the old T3CODE_APP_DEV_STACK_* names, so each new name falls back to
+// its old one when unset. A malformed value still fails under the name that
+// was actually set, because Config.option only absorbs missing data.
+const APP_STACK_ENV_PREFIX = "T3CODE_APP_STACK_";
+const LEGACY_APP_STACK_ENV_PREFIX = "T3CODE_APP_DEV_STACK_";
+
+const appStackEnv = <A>(
+  make: (name: string) => Config.Config<A>,
+  name: string,
+): Config.Config<Option.Option<A>> =>
+  Config.all([
+    make(name).pipe(Config.option),
+    make(name.replace(APP_STACK_ENV_PREFIX, LEGACY_APP_STACK_ENV_PREFIX)).pipe(Config.option),
+  ]).pipe(Config.map(([current, legacy]) => Option.orElse(current, () => legacy)));
+
+const trimmedOrUndefined = (value: Option.Option<string>) =>
+  Option.match(value, {
+    onNone: () => undefined,
+    onSome: (raw) => {
+      const trimmed = raw.trim();
+      return trimmed.length > 0 ? trimmed : undefined;
+    },
+  });
+
+const appStackString = (name: string) =>
+  appStackEnv(Config.string, name).pipe(Config.map(trimmedOrUndefined));
+
+const appStackUrl = (name: string) =>
+  appStackEnv(Config.url, name).pipe(Config.map(Option.getOrUndefined));
+
+const appStackRedacted = (name: string) =>
+  appStackEnv(Config.redacted, name).pipe(
+    Config.map((value) =>
+      Option.match(value, {
+        onNone: () => undefined,
+        onSome: (redacted) => {
+          const trimmed = Redacted.value(redacted).trim();
+          return trimmed.length > 0 ? Redacted.make(trimmed) : undefined;
+        },
+      }),
+    ),
+  );
+
 const deriveOidcTokenUrl = (tokenUrl: URL | undefined, issuer: URL | undefined) => {
   if (tokenUrl !== undefined) return tokenUrl;
   if (issuer === undefined) return undefined;
@@ -148,60 +192,47 @@ const EnvServerConfig = Config.all({
   host: Config.string("T3CODE_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
   t3Home: Config.string("T3CODE_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devUrl: Config.url("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
-  appDevStackBackendUrl: Config.url("T3CODE_APP_DEV_STACK_BACKEND_URL").pipe(
-    Config.option,
-    Config.map(Option.getOrUndefined),
+  appStackBackendUrl: appStackUrl("T3CODE_APP_STACK_BACKEND_URL"),
+  appStackBackendBearerToken: appStackRedacted("T3CODE_APP_STACK_BACKEND_BEARER_TOKEN"),
+  appStackBackendOidcTokenUrl: appStackUrl("T3CODE_APP_STACK_BACKEND_OIDC_TOKEN_URL"),
+  appStackBackendOidcIssuer: appStackUrl("T3CODE_APP_STACK_BACKEND_OIDC_ISSUER"),
+  appStackBackendOidcClientId: appStackString("T3CODE_APP_STACK_BACKEND_OIDC_CLIENT_ID"),
+  appStackBackendOidcClientSecret: appStackRedacted("T3CODE_APP_STACK_BACKEND_OIDC_CLIENT_SECRET"),
+  appStackNativeEnabled: appStackEnv(Config.boolean, "T3CODE_APP_STACK_NATIVE_ENABLED").pipe(
+    Config.map(Option.getOrElse(() => false)),
   ),
-  appDevStackBackendBearerToken: optionalRedactedString(
-    "T3CODE_APP_DEV_STACK_BACKEND_BEARER_TOKEN",
+  appStackNativeId: appStackString("T3CODE_APP_STACK_NATIVE_ID"),
+  appStackNativeNamespace: appStackString("T3CODE_APP_STACK_NATIVE_NAMESPACE"),
+  appStackNativeWorktreePath: appStackString("T3CODE_APP_STACK_NATIVE_WORKTREE_PATH"),
+  appStackNativeComposePath: appStackString("T3CODE_APP_STACK_NATIVE_COMPOSE_PATH"),
+  appStackNativeDisplayName: appStackString("T3CODE_APP_STACK_NATIVE_DISPLAY_NAME"),
+  appStackNativeDisplaySlug: appStackString("T3CODE_APP_STACK_NATIVE_DISPLAY_SLUG"),
+  appStackNativeRepoName: appStackString("T3CODE_APP_STACK_NATIVE_REPO_NAME"),
+  appStackNativeBranchName: appStackString("T3CODE_APP_STACK_NATIVE_BRANCH_NAME"),
+  appStackNativeKubectlPath: appStackString("T3CODE_APP_STACK_NATIVE_KUBECTL"),
+  appStackNativeDockerPath: appStackString("T3CODE_APP_STACK_NATIVE_DOCKER"),
+  appStackNativeBuildctlPath: appStackString("T3CODE_APP_STACK_NATIVE_BUILDCTL"),
+  appStackNativeImageBuilder: appStackEnv(
+    (name) => Config.schema(ServerConfig.NativeAppStackImageBuilder, name),
+    "T3CODE_APP_STACK_NATIVE_IMAGE_BUILDER",
+  ).pipe(Config.map(Option.getOrElse(() => "auto" as const))),
+  appStackNativeImageRegistry: appStackString("T3CODE_APP_STACK_NATIVE_IMAGE_REGISTRY"),
+  appStackNativeImagePushRegistry: appStackString("T3CODE_APP_STACK_NATIVE_IMAGE_PUSH_REGISTRY"),
+  appStackNativeImageProject: appStackString("T3CODE_APP_STACK_NATIVE_IMAGE_PROJECT"),
+  appStackNativeBuildkitAddr: appStackString("T3CODE_APP_STACK_NATIVE_BUILDKIT_ADDR"),
+  appStackNativeBuildkitDockerConfig: appStackString(
+    "T3CODE_APP_STACK_NATIVE_BUILDKIT_DOCKER_CONFIG",
   ),
-  appDevStackBackendOidcTokenUrl: optionalUrl("T3CODE_APP_DEV_STACK_BACKEND_OIDC_TOKEN_URL"),
-  appDevStackBackendOidcIssuer: optionalUrl("T3CODE_APP_DEV_STACK_BACKEND_OIDC_ISSUER"),
-  appDevStackBackendOidcClientId: optionalTrimmedString(
-    "T3CODE_APP_DEV_STACK_BACKEND_OIDC_CLIENT_ID",
+  appStackNativeBuildkitDockerConfigsDir: appStackString(
+    "T3CODE_APP_STACK_NATIVE_BUILDKIT_DOCKER_CONFIGS_DIR",
   ),
-  appDevStackBackendOidcClientSecret: optionalRedactedString(
-    "T3CODE_APP_DEV_STACK_BACKEND_OIDC_CLIENT_SECRET",
+  appStackNativeBuildkitHarborCaCert: appStackString(
+    "T3CODE_APP_STACK_NATIVE_BUILDKIT_HARBOR_CA_CERT",
   ),
-  appDevStackNativeEnabled: Config.boolean("T3CODE_APP_DEV_STACK_NATIVE_ENABLED").pipe(
-    Config.withDefault(false),
-  ),
-  appDevStackNativeId: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_ID"),
-  appDevStackNativeNamespace: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_NAMESPACE"),
-  appDevStackNativeWorktreePath: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_WORKTREE_PATH"),
-  appDevStackNativeComposePath: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_COMPOSE_PATH"),
-  appDevStackNativeDisplayName: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_DISPLAY_NAME"),
-  appDevStackNativeDisplaySlug: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_DISPLAY_SLUG"),
-  appDevStackNativeRepoName: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_REPO_NAME"),
-  appDevStackNativeBranchName: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_BRANCH_NAME"),
-  appDevStackNativeKubectlPath: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_KUBECTL"),
-  appDevStackNativeDockerPath: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_DOCKER"),
-  appDevStackNativeBuildctlPath: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_BUILDCTL"),
-  appDevStackNativeImageBuilder: Config.schema(
-    ServerConfig.NativeAppDevStackImageBuilder,
-    "T3CODE_APP_DEV_STACK_NATIVE_IMAGE_BUILDER",
-  ).pipe(Config.withDefault("auto")),
-  appDevStackNativeImageRegistry: optionalTrimmedString(
-    "T3CODE_APP_DEV_STACK_NATIVE_IMAGE_REGISTRY",
-  ),
-  appDevStackNativeImagePushRegistry: optionalTrimmedString(
-    "T3CODE_APP_DEV_STACK_NATIVE_IMAGE_PUSH_REGISTRY",
-  ),
-  appDevStackNativeImageProject: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_IMAGE_PROJECT"),
-  appDevStackNativeBuildkitAddr: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_BUILDKIT_ADDR"),
-  appDevStackNativeBuildkitDockerConfig: optionalTrimmedString(
-    "T3CODE_APP_DEV_STACK_NATIVE_BUILDKIT_DOCKER_CONFIG",
-  ),
-  appDevStackNativeBuildkitDockerConfigsDir: optionalTrimmedString(
-    "T3CODE_APP_DEV_STACK_NATIVE_BUILDKIT_DOCKER_CONFIGS_DIR",
-  ),
-  appDevStackNativeBuildkitHarborCaCert: optionalTrimmedString(
-    "T3CODE_APP_DEV_STACK_NATIVE_BUILDKIT_HARBOR_CA_CERT",
-  ),
-  appDevStackNativeFrontendUrl: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_FRONTEND_URL"),
-  appDevStackNativeBackendUrl: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_BACKEND_URL"),
-  appDevStackNativeKeycloakUrl: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_KEYCLOAK_URL"),
-  appDevStackNativeMinioUrl: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_MINIO_URL"),
+  appStackNativeFrontendUrl: appStackString("T3CODE_APP_STACK_NATIVE_FRONTEND_URL"),
+  appStackNativeBackendUrl: appStackString("T3CODE_APP_STACK_NATIVE_BACKEND_URL"),
+  appStackNativeKeycloakUrl: appStackString("T3CODE_APP_STACK_NATIVE_KEYCLOAK_URL"),
+  appStackNativeMinioUrl: appStackString("T3CODE_APP_STACK_NATIVE_MINIO_URL"),
   codeOidcIssuer: optionalUrl("CODE_OIDC_ISSUER"),
   codeOidcClientId: optionalTrimmedString("CODE_OIDC_CLIENT_ID"),
   codeOidcClientSecret: optionalRedactedString("CODE_OIDC_CLIENT_SECRET"),
@@ -488,39 +519,38 @@ export const resolveServerConfig = (
       () => (mode === "desktop" ? "127.0.0.1" : undefined),
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
-    const appDevStackBackendOidcIssuer = env.appDevStackBackendOidcIssuer ?? env.codeOidcIssuer;
-    const appDevStackNativeWorktreePath =
-      env.appDevStackNativeWorktreePath === undefined
+    const appStackBackendOidcIssuer = env.appStackBackendOidcIssuer ?? env.codeOidcIssuer;
+    const appStackNativeWorktreePath =
+      env.appStackNativeWorktreePath === undefined
         ? undefined
-        : path.resolve(yield* expandHomePath(env.appDevStackNativeWorktreePath));
-    const appDevStackNative: ServerConfig.NativeAppDevStackConfig | undefined =
-      env.appDevStackNativeEnabled
-        ? {
-            id: env.appDevStackNativeId,
-            namespace: env.appDevStackNativeNamespace,
-            worktreePath: appDevStackNativeWorktreePath,
-            composePath: env.appDevStackNativeComposePath ?? "infra/compose/compose.app-dev.yml",
-            displayName: env.appDevStackNativeDisplayName,
-            displaySlug: env.appDevStackNativeDisplaySlug,
-            repoName: env.appDevStackNativeRepoName,
-            branchName: env.appDevStackNativeBranchName,
-            kubectlPath: env.appDevStackNativeKubectlPath ?? "kubectl",
-            dockerPath: env.appDevStackNativeDockerPath ?? "docker",
-            buildctlPath: env.appDevStackNativeBuildctlPath ?? "buildctl",
-            imageBuilder: env.appDevStackNativeImageBuilder,
-            imageRegistry: env.appDevStackNativeImageRegistry ?? "harbor.nightingale-ai.com",
-            imagePushRegistry: env.appDevStackNativeImagePushRegistry,
-            imageProject: env.appDevStackNativeImageProject,
-            buildkitAddr: env.appDevStackNativeBuildkitAddr,
-            buildkitDockerConfig: env.appDevStackNativeBuildkitDockerConfig,
-            buildkitDockerConfigsDir: env.appDevStackNativeBuildkitDockerConfigsDir,
-            buildkitHarborCaCert: env.appDevStackNativeBuildkitHarborCaCert,
-            frontendUrl: env.appDevStackNativeFrontendUrl,
-            backendUrl: env.appDevStackNativeBackendUrl,
-            keycloakUrl: env.appDevStackNativeKeycloakUrl,
-            minioUrl: env.appDevStackNativeMinioUrl,
-          }
-        : undefined;
+        : path.resolve(yield* expandHomePath(env.appStackNativeWorktreePath));
+    const appStackNative: ServerConfig.NativeAppStackConfig | undefined = env.appStackNativeEnabled
+      ? {
+          id: env.appStackNativeId,
+          namespace: env.appStackNativeNamespace,
+          worktreePath: appStackNativeWorktreePath,
+          composePath: env.appStackNativeComposePath ?? "infra/compose/compose.app-dev.yml",
+          displayName: env.appStackNativeDisplayName,
+          displaySlug: env.appStackNativeDisplaySlug,
+          repoName: env.appStackNativeRepoName,
+          branchName: env.appStackNativeBranchName,
+          kubectlPath: env.appStackNativeKubectlPath ?? "kubectl",
+          dockerPath: env.appStackNativeDockerPath ?? "docker",
+          buildctlPath: env.appStackNativeBuildctlPath ?? "buildctl",
+          imageBuilder: env.appStackNativeImageBuilder,
+          imageRegistry: env.appStackNativeImageRegistry ?? "harbor.nightingale-ai.com",
+          imagePushRegistry: env.appStackNativeImagePushRegistry,
+          imageProject: env.appStackNativeImageProject,
+          buildkitAddr: env.appStackNativeBuildkitAddr,
+          buildkitDockerConfig: env.appStackNativeBuildkitDockerConfig,
+          buildkitDockerConfigsDir: env.appStackNativeBuildkitDockerConfigsDir,
+          buildkitHarborCaCert: env.appStackNativeBuildkitHarborCaCert,
+          frontendUrl: env.appStackNativeFrontendUrl,
+          backendUrl: env.appStackNativeBackendUrl,
+          keycloakUrl: env.appStackNativeKeycloakUrl,
+          minioUrl: env.appStackNativeMinioUrl,
+        }
+      : undefined;
 
     const config: ServerConfig.ServerConfig["Service"] = {
       logLevel,
@@ -548,16 +578,16 @@ export const resolveServerConfig = (
       host,
       staticDir,
       devUrl,
-      appDevStackBackendUrl: env.appDevStackBackendUrl,
-      appDevStackBackendBearerToken: env.appDevStackBackendBearerToken,
-      appDevStackBackendOidcTokenUrl: deriveOidcTokenUrl(
-        env.appDevStackBackendOidcTokenUrl,
-        appDevStackBackendOidcIssuer,
+      appStackBackendUrl: env.appStackBackendUrl,
+      appStackBackendBearerToken: env.appStackBackendBearerToken,
+      appStackBackendOidcTokenUrl: deriveOidcTokenUrl(
+        env.appStackBackendOidcTokenUrl,
+        appStackBackendOidcIssuer,
       ),
-      appDevStackBackendOidcClientId: env.appDevStackBackendOidcClientId ?? env.codeOidcClientId,
-      appDevStackBackendOidcClientSecret:
-        env.appDevStackBackendOidcClientSecret ?? env.codeOidcClientSecret,
-      appDevStackNative,
+      appStackBackendOidcClientId: env.appStackBackendOidcClientId ?? env.codeOidcClientId,
+      appStackBackendOidcClientSecret:
+        env.appStackBackendOidcClientSecret ?? env.codeOidcClientSecret,
+      appStackNative,
       devAllowedOrigins: env.devAllowedOrigins,
       noBrowser,
       startupPresentation,

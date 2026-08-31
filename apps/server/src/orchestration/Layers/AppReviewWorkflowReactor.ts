@@ -1,5 +1,5 @@
 import {
-  type AppDevStackStatus,
+  type AppStackStatus,
   APP_REVIEW_PREVIEW_URL_ENV,
   type AppReviewScope,
   CommandId,
@@ -47,7 +47,7 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Stream from "effect/Stream";
 
-import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
+import { AppStackManager } from "../../appStack/AppStackManager.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
 import { ServerActivation } from "../../serverActivation.ts";
@@ -234,11 +234,11 @@ export function appReviewPhaseModelStepWorkflowPromptId(
     : WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex;
 }
 
-interface AppDevStackPreviewLookup {
+interface AppStackPreviewLookup {
   readonly stack: {
     readonly id: string;
     readonly displayName: string | null;
-    readonly status: AppDevStackStatus;
+    readonly status: AppStackStatus;
     readonly services: ReadonlyArray<{
       readonly name: string;
       readonly status: string;
@@ -254,12 +254,12 @@ export type StandalonePreviewTargetResolution =
   | { readonly _tag: "Blocked"; readonly detailMarkdown: string };
 
 export function selectStandalonePreviewTargets(input: {
-  readonly lookup: AppDevStackPreviewLookup | null;
+  readonly lookup: AppStackPreviewLookup | null;
   readonly lookupError: string | null;
   readonly fallbackTargets: ReadonlyArray<string>;
   /**
    * Targets the user named at launch. They review exactly what they asked for,
-   * so a matching App Dev Stack does not get to substitute its own frontend.
+   * so a matching App Stack does not get to substitute its own frontend.
    */
   readonly pinnedTargets?: ReadonlyArray<string>;
 }): StandalonePreviewTargetResolution {
@@ -276,7 +276,7 @@ export function selectStandalonePreviewTargets(input: {
     if (stack !== null && stack.status !== "running") {
       return {
         _tag: "Blocked",
-        detailMarkdown: `The App Dev Stack '${stack.displayName ?? stack.id}' for this worktree is '${stack.status}', not 'running'.`,
+        detailMarkdown: `The App Stack '${stack.displayName ?? stack.id}' for this worktree is '${stack.status}', not 'running'.`,
       };
     }
     const failedService = stack?.services?.find(
@@ -289,13 +289,13 @@ export function selectStandalonePreviewTargets(input: {
     if (failedService !== undefined) {
       return {
         _tag: "Blocked",
-        detailMarkdown: `The App Dev Stack service '${failedService.name}' is unhealthy (${failedService.error ?? failedService.health ?? failedService.status}).`,
+        detailMarkdown: `The App Stack service '${failedService.name}' is unhealthy (${failedService.error ?? failedService.health ?? failedService.status}).`,
       };
     }
     if (input.lookup.frontendUrl === null) {
       return {
         _tag: "Blocked",
-        detailMarkdown: "The App Dev Stack for this worktree has no frontend URL.",
+        detailMarkdown: "The App Stack for this worktree has no frontend URL.",
       };
     }
     return { _tag: "Resolved", previewTargets: [input.lookup.frontendUrl] };
@@ -307,8 +307,8 @@ export function selectStandalonePreviewTargets(input: {
     _tag: "Blocked",
     detailMarkdown:
       input.lookupError === null
-        ? "No App Dev Stack or fallback preview URL was found for this worktree. Start the App Dev Stack, then retry App Review."
-        : `The App Dev Stack for this worktree could not be resolved, and no fallback preview URL is available. ${input.lookupError}`,
+        ? "No App Stack or fallback preview URL was found for this worktree. Start the App Stack, then retry App Review."
+        : `The App Stack for this worktree could not be resolved, and no fallback preview URL is available. ${input.lookupError}`,
   };
 }
 
@@ -1238,7 +1238,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const gitWorkflow = yield* GitWorkflowService;
-  const appDevStackManager = yield* AppDevStackManager;
+  const appStackManager = yield* AppStackManager;
   const reviewService = yield* ReviewService;
   const serverSettingsService = yield* ServerSettingsService;
   const projectFileLoader = yield* T3ProjectFileLoader;
@@ -1459,7 +1459,7 @@ const make = Effect.gen(function* () {
     const lookupResult =
       run.previewTargetsPinned === true
         ? null
-        : yield* appDevStackManager.getByWorktree({ worktreePath: cwd }).pipe(Effect.result);
+        : yield* appStackManager.getByWorktree({ worktreePath: cwd }).pipe(Effect.result);
     const resolution = selectStandalonePreviewTargets({
       lookup: lookupResult?._tag === "Success" ? lookupResult.success : null,
       lookupError:

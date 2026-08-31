@@ -1046,7 +1046,7 @@ it("selects only the latest idle run for a new review cycle", () => {
   expect(selectReviewRunToStart(staleEventRun.id, [staleEventRun])).toBe(staleEventRun);
 });
 
-it("resolves standalone previews from the matching running App Dev Stack", () => {
+it("resolves standalone previews from the matching running App Stack", () => {
   expect(
     selectStandalonePreviewTargets({
       lookup: {
@@ -1064,7 +1064,7 @@ it("resolves standalone previews from the matching running App Dev Stack", () =>
   ).toEqual({ _tag: "Resolved", previewTargets: ["https://feature.example.test"] });
 });
 
-it("keeps manual preview targets as a fallback when no App Dev Stack matches", () => {
+it("keeps manual preview targets as a fallback when no App Stack matches", () => {
   expect(
     selectStandalonePreviewTargets({
       lookup: { stack: null, frontendUrl: null },
@@ -1074,7 +1074,7 @@ it("keeps manual preview targets as a fallback when no App Dev Stack matches", (
   ).toEqual({ _tag: "Resolved", previewTargets: ["http://localhost:3000"] });
 });
 
-it("reviews a pinned target instead of the worktree's App Dev Stack", () => {
+it("reviews a pinned target instead of the worktree's App Stack", () => {
   expect(
     selectStandalonePreviewTargets({
       lookup: {
@@ -1093,7 +1093,7 @@ it("reviews a pinned target instead of the worktree's App Dev Stack", () => {
   ).toEqual({ _tag: "Resolved", previewTargets: ["https://staging.example.test"] });
 });
 
-it("keeps a pinned target usable while the worktree's App Dev Stack is unhealthy", () => {
+it("keeps a pinned target usable while the worktree's App Stack is unhealthy", () => {
   expect(
     selectStandalonePreviewTargets({
       lookup: {
@@ -1107,7 +1107,7 @@ it("keeps a pinned target usable while the worktree's App Dev Stack is unhealthy
   ).toEqual({ _tag: "Resolved", previewTargets: ["https://staging.example.test"] });
 });
 
-it("blocks before launching a reviewer when the matching App Dev Stack is not ready", () => {
+it("blocks before launching a reviewer when the matching App Stack is not ready", () => {
   const resolution = selectStandalonePreviewTargets({
     lookup: {
       stack: {
@@ -1127,7 +1127,7 @@ it("blocks before launching a reviewer when the matching App Dev Stack is not re
   }
 });
 
-it("blocks with an actionable message when neither App Dev Stack nor fallback exists", () => {
+it("blocks with an actionable message when neither App Stack nor fallback exists", () => {
   const resolution = selectStandalonePreviewTargets({
     lookup: { stack: null, frontendUrl: null },
     lookupError: null,
@@ -1135,11 +1135,11 @@ it("blocks with an actionable message when neither App Dev Stack nor fallback ex
   });
   expect(resolution._tag).toBe("Blocked");
   if (resolution._tag === "Blocked") {
-    expect(resolution.detailMarkdown).toContain("Start the App Dev Stack");
+    expect(resolution.detailMarkdown).toContain("Start the App Stack");
   }
 });
 
-it("waits for Implementation to refresh AppDevStack after an embedded repair", () => {
+it("waits for Implementation to refresh AppStack after an embedded repair", () => {
   const embedded = run({
     caller: {
       type: "implementation",

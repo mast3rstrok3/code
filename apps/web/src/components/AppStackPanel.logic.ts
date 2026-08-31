@@ -1,19 +1,19 @@
 import type {
-  AppDevStack,
-  AppDevStackListResult,
-  AppDevStackAutoCreateResult,
-  AppDevStackPod,
-  AppDevStackService,
+  AppStack,
+  AppStackListResult,
+  AppStackAutoCreateResult,
+  AppStackPod,
+  AppStackService,
 } from "@t3tools/contracts";
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
 
-type WorkflowConflict = NonNullable<AppDevStackListResult["workflowConflicts"]>[number];
+type WorkflowConflict = NonNullable<AppStackListResult["workflowConflicts"]>[number];
 
-export function appDevStackOwnershipLabel(stack: AppDevStack): string | null {
+export function appStackOwnershipLabel(stack: AppStack): string | null {
   return stack.workflowId ? "Workflow-owned" : null;
 }
 
-export function isProtectedAppDevStack(stack: AppDevStack): boolean {
+export function isProtectedAppStack(stack: AppStack): boolean {
   return stack.protected === true;
 }
 
@@ -22,13 +22,13 @@ export function isProtectedAppDevStack(stack: AppDevStack): boolean {
  * and is the last one the environment sheds under memory pressure, so the
  * button says what pressing it gives up.
  */
-export function appDevStackProtectionAction(stack: AppDevStack): {
+export function appStackProtectionAction(stack: AppStack): {
   readonly label: string;
   readonly ariaLabel: string;
   readonly nextProtected: boolean;
 } {
   const stackName = stack.displayName?.trim() || stack.namespace || stack.id;
-  return isProtectedAppDevStack(stack)
+  return isProtectedAppStack(stack)
     ? {
         label: "Protected",
         ariaLabel: `Stop protecting ${stackName} from automatic teardown`,
@@ -41,7 +41,7 @@ export function appDevStackProtectionAction(stack: AppDevStack): {
       };
 }
 
-export function appDevStackWorkflowConflictSummary(conflict: WorkflowConflict): string {
+export function appStackWorkflowConflictSummary(conflict: WorkflowConflict): string {
   return `${conflict.stackIds.length} stacks · ${conflict.workflowId}`;
 }
 
@@ -51,13 +51,13 @@ export interface PreviewCandidate {
 }
 
 const PRIMARY_PREVIEW_SERVICE_NAMES = ["frontend-dev", "frontend", "web", "app"] as const;
-const TRANSITIONING_STACK_STATUSES = new Set<AppDevStack["status"]>([
+const TRANSITIONING_STACK_STATUSES = new Set<AppStack["status"]>([
   "pending",
   "starting",
   "stopping",
 ]);
 
-export function isTransitioningAppDevStackStatus(status: AppDevStack["status"]): boolean {
+export function isTransitioningAppStackStatus(status: AppStack["status"]): boolean {
   return TRANSITIONING_STACK_STATUSES.has(status);
 }
 
@@ -68,17 +68,17 @@ export interface AutoCreateNotice {
   readonly stackId: string | null;
 }
 
-export interface AppDevStackSelectionState {
+export interface AppStackSelectionState {
   readonly checked: boolean;
   readonly indeterminate: boolean;
 }
 
-export interface AppDevStackDeleteFailure {
-  readonly stack: AppDevStack;
+export interface AppStackDeleteFailure {
+  readonly stack: AppStack;
   readonly message: string;
 }
 
-function stackUpdatedTime(stack: AppDevStack): number {
+function stackUpdatedTime(stack: AppStack): number {
   const timestamp = Date.parse(stack.updatedAt);
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
@@ -88,13 +88,13 @@ function normalizeWorktreePath(value: string): string {
   return normalized === "" ? "/" : normalized;
 }
 
-export function orderAppDevStacksForPanel(input: {
-  readonly currentStack: AppDevStack | null | undefined;
-  readonly listedStacks: ReadonlyArray<AppDevStack>;
+export function orderAppStacksForPanel(input: {
+  readonly currentStack: AppStack | null | undefined;
+  readonly listedStacks: ReadonlyArray<AppStack>;
   readonly currentWorktreePath: string;
-}): AppDevStack[] {
+}): AppStack[] {
   const currentPath = normalizeWorktreePath(input.currentWorktreePath);
-  const ordered: AppDevStack[] = [];
+  const ordered: AppStack[] = [];
   const seenIds = new Set<string>();
 
   if (input.currentStack) {
@@ -123,18 +123,18 @@ export function orderAppDevStacksForPanel(input: {
   });
 }
 
-export function reconcileAppDevStackIds(
+export function reconcileAppStackIds(
   ids: ReadonlySet<string>,
-  stacks: ReadonlyArray<AppDevStack>,
+  stacks: ReadonlyArray<AppStack>,
 ): Set<string> {
   const availableIds = new Set(stacks.map((stack) => stack.id));
   return new Set([...ids].filter((id) => availableIds.has(id)));
 }
 
-export function appDevStackSelectionState(
+export function appStackSelectionState(
   selectedIds: ReadonlySet<string>,
-  stacks: ReadonlyArray<AppDevStack>,
-): AppDevStackSelectionState {
+  stacks: ReadonlyArray<AppStack>,
+): AppStackSelectionState {
   if (stacks.length === 0) return { checked: false, indeterminate: false };
   const selectedCount = stacks.reduce(
     (count, stack) => count + (selectedIds.has(stack.id) ? 1 : 0),
@@ -146,15 +146,15 @@ export function appDevStackSelectionState(
   };
 }
 
-export function appDevStackBulkDeleteConfirmation(count: number): string {
+export function appStackBulkDeleteConfirmation(count: number): string {
   return [
     `Delete ${count} App Stack${count === 1 ? "" : "s"}?`,
     `This will remove ${count === 1 ? "its" : "their"} Kubernetes namespace${count === 1 ? "" : "s"}.`,
   ].join("\n");
 }
 
-export function appDevStackBulkDeleteFailureMessage(
-  failures: ReadonlyArray<AppDevStackDeleteFailure>,
+export function appStackBulkDeleteFailureMessage(
+  failures: ReadonlyArray<AppStackDeleteFailure>,
   totalCount: number,
 ): string | null {
   if (failures.length === 0) return null;
@@ -165,7 +165,7 @@ export function appDevStackBulkDeleteFailureMessage(
 }
 
 /** Informational (non-error) notice when auto-create returned an existing stack. */
-export function autoCreateNotice(result: AppDevStackAutoCreateResult): AutoCreateNotice | null {
+export function autoCreateNotice(result: AppStackAutoCreateResult): AutoCreateNotice | null {
   if (result.created) return null;
   const message = result.message?.trim();
   if (result.reserved === true) {
@@ -180,22 +180,21 @@ export function autoCreateNotice(result: AppDevStackAutoCreateResult): AutoCreat
   return {
     kind: "already-running",
     message:
-      message ||
-      "An app dev stack for this worktree is already running; showing the existing stack.",
+      message || "An app stack for this worktree is already running; showing the existing stack.",
     url: result.frontendUrl,
     stackId: result.stack?.id ?? null,
   };
 }
 
-export function shouldPollAppDevStacks(
-  currentStack: AppDevStack | null | undefined,
-  listedStacks: ReadonlyArray<AppDevStack>,
+export function shouldPollAppStacks(
+  currentStack: AppStack | null | undefined,
+  listedStacks: ReadonlyArray<AppStack>,
 ): boolean {
   return (
     (currentStack !== null &&
       currentStack !== undefined &&
-      isTransitioningAppDevStackStatus(currentStack.status)) ||
-    listedStacks.some((stack) => isTransitioningAppDevStackStatus(stack.status))
+      isTransitioningAppStackStatus(currentStack.status)) ||
+    listedStacks.some((stack) => isTransitioningAppStackStatus(stack.status))
   );
 }
 
@@ -227,7 +226,7 @@ export function normalizePreviewHref(rawUrl: string | null | undefined): string 
   }
 }
 
-export function collectPreviewCandidates(stack: AppDevStack): readonly PreviewCandidate[] {
+export function collectPreviewCandidates(stack: AppStack): readonly PreviewCandidate[] {
   const candidates: PreviewCandidate[] = [];
   const seen = new Set<string>();
   const previewUrls = stack.previewUrls ?? {};
@@ -251,7 +250,7 @@ export function collectPreviewCandidates(stack: AppDevStack): readonly PreviewCa
   return candidates;
 }
 
-export function primaryPreviewForStack(stack: AppDevStack): PreviewCandidate | null {
+export function primaryPreviewForStack(stack: AppStack): PreviewCandidate | null {
   const candidates = collectPreviewCandidates(stack);
   for (const serviceName of PRIMARY_PREVIEW_SERVICE_NAMES) {
     const serviceKey = serviceLookupKey(serviceName);
@@ -261,17 +260,14 @@ export function primaryPreviewForStack(stack: AppDevStack): PreviewCandidate | n
   return candidates[0] ?? null;
 }
 
-export function previewUrlForService(
-  service: AppDevStackService,
-  stack: AppDevStack,
-): string | null {
+export function previewUrlForService(service: AppStackService, stack: AppStack): string | null {
   return (
     normalizePreviewHref(service.previewUrl) ??
     normalizePreviewHref(stack.previewUrls?.[service.name])
   );
 }
 
-function previewForServiceName(stack: AppDevStack, serviceName: string): PreviewCandidate | null {
+function previewForServiceName(stack: AppStack, serviceName: string): PreviewCandidate | null {
   const serviceKey = serviceLookupKey(serviceName);
   return (
     collectPreviewCandidates(stack).find(
@@ -280,7 +276,7 @@ function previewForServiceName(stack: AppDevStack, serviceName: string): Preview
   );
 }
 
-export function previewForPod(pod: AppDevStackPod, stack: AppDevStack): PreviewCandidate | null {
+export function previewForPod(pod: AppStackPod, stack: AppStack): PreviewCandidate | null {
   const explicitUrl = normalizePreviewHref(pod.previewUrl);
   if (explicitUrl !== null) {
     return {

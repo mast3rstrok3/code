@@ -1,11 +1,11 @@
 import type {
-  AppDevStack,
-  AppDevStackDiscoveredStackPodLogs,
-  AppDevStackGetAllStackPodLogsResult,
-  AppDevStackGetStackPodLogsResult,
-  AppDevStackLogReadLimit,
-  AppDevStackPod,
-  AppDevStackPodLogEntry,
+  AppStack,
+  AppStackDiscoveredStackPodLogs,
+  AppStackGetAllStackPodLogsResult,
+  AppStackGetStackPodLogsResult,
+  AppStackLogReadLimit,
+  AppStackPod,
+  AppStackPodLogEntry,
 } from "@t3tools/contracts";
 
 export interface CurrentStackPathInput {
@@ -23,7 +23,7 @@ export type StackLogTailSelection = 100 | 300 | 1000 | 5000 | "all";
 
 export interface StackPodLogPodGroup {
   readonly podName: string;
-  readonly entries: AppDevStackPodLogEntry[];
+  readonly entries: AppStackPodLogEntry[];
 }
 
 export interface StackPodLogServiceGroup {
@@ -36,9 +36,9 @@ export interface StackPodLogServiceGroup {
 }
 
 export interface StackPodLogStackView {
-  readonly stack: AppDevStackDiscoveredStackPodLogs;
+  readonly stack: AppStackDiscoveredStackPodLogs;
   readonly stackName: string;
-  readonly filteredEntries: AppDevStackPodLogEntry[];
+  readonly filteredEntries: AppStackPodLogEntry[];
   readonly serviceGroups: StackPodLogServiceGroup[];
   readonly podCount: number;
   readonly containerCount: number;
@@ -110,7 +110,7 @@ export function displayNameFromStackPath(worktreePath: string): string {
   return normalized.slice(lastSlashIndex + 1) || "App Stack";
 }
 
-export function displayStackName(stack: AppDevStack): string {
+export function displayStackName(stack: AppStack): string {
   return (
     nonEmpty(stack.displayName) ??
     nonEmpty(stack.repoName) ??
@@ -118,7 +118,7 @@ export function displayStackName(stack: AppDevStack): string {
   );
 }
 
-export function displayDiscoveredStackName(stack: AppDevStackDiscoveredStackPodLogs): string {
+export function displayDiscoveredStackName(stack: AppStackDiscoveredStackPodLogs): string {
   return (
     nonEmpty(stack.displayName) ??
     nonEmpty(stack.repoName) ??
@@ -132,7 +132,7 @@ export function stackLogTailSelectionLabel(selection: StackLogTailSelection): st
   return selection === "all" ? "All" : `${String(selection)} lines`;
 }
 
-export function stackLogReadLimitLabel(limit: AppDevStackLogReadLimit): string {
+export function stackLogReadLimitLabel(limit: AppStackLogReadLimit): string {
   return limit.mode === "all"
     ? "All available current logs"
     : `${String(limit.tailLines ?? 300)} lines`;
@@ -140,12 +140,12 @@ export function stackLogReadLimitLabel(limit: AppDevStackLogReadLimit): string {
 
 export function stackLogTailSelectionToReadLimit(
   selection: StackLogTailSelection,
-): AppDevStackLogReadLimit {
+): AppStackLogReadLimit {
   return selection === "all" ? { mode: "all" } : { mode: "tail", tailLines: selection };
 }
 
 export function stackPodLogOwnerLabel(
-  entry: Pick<AppDevStackPodLogEntry, "ownerKind" | "ownerName">,
+  entry: Pick<AppStackPodLogEntry, "ownerKind" | "ownerName">,
 ): string | null {
   const ownerKind = nonEmpty(entry.ownerKind);
   const ownerName = nonEmpty(entry.ownerName);
@@ -153,11 +153,11 @@ export function stackPodLogOwnerLabel(
   return ownerName ?? ownerKind;
 }
 
-export function countStackLogContainers(pods: ReadonlyArray<AppDevStackPod>): number {
+export function countStackLogContainers(pods: ReadonlyArray<AppStackPod>): number {
   return pods.reduce((total, pod) => total + pod.containers.length, 0);
 }
 
-function entryIsEmpty(entry: AppDevStackPodLogEntry): boolean {
+function entryIsEmpty(entry: AppStackPodLogEntry): boolean {
   return entry.logs.trim().length === 0 && nonEmpty(entry.error) === null;
 }
 
@@ -187,7 +187,7 @@ function titleCaseServiceName(serviceKey: string): string {
     .join(" ");
 }
 
-function stackPodLogServiceKey(entry: AppDevStackPodLogEntry): string {
+function stackPodLogServiceKey(entry: AppStackPodLogEntry): string {
   const ownerName = nonEmpty(entry.ownerName);
   if (ownerName) {
     return entry.ownerKind === "ReplicaSet" ? stripGeneratedReplicaSetHash(ownerName) : ownerName;
@@ -200,11 +200,11 @@ function stackPodLogServiceName(serviceKey: string): string {
 }
 
 export function groupStackPodLogEntriesByService(
-  entries: ReadonlyArray<AppDevStackPodLogEntry>,
+  entries: ReadonlyArray<AppStackPodLogEntry>,
 ): StackPodLogServiceGroup[] {
   const groups: MutableStackPodLogServiceGroup[] = [];
   const groupsByServiceKey = new Map<string, MutableStackPodLogServiceGroup>();
-  const podEntriesByServiceKey = new Map<string, Map<string, AppDevStackPodLogEntry[]>>();
+  const podEntriesByServiceKey = new Map<string, Map<string, AppStackPodLogEntry[]>>();
 
   for (const entry of entries) {
     const serviceKey = stackPodLogServiceKey(entry);
@@ -239,7 +239,7 @@ export function groupStackPodLogEntriesByService(
   return groups;
 }
 
-function searchableEntryText(entry: AppDevStackPodLogEntry): string {
+function searchableEntryText(entry: AppStackPodLogEntry): string {
   return [
     entry.podName,
     entry.containerName,
@@ -256,7 +256,7 @@ function searchableEntryText(entry: AppDevStackPodLogEntry): string {
     .toLowerCase();
 }
 
-function searchableStackText(stack: AppDevStackDiscoveredStackPodLogs): string {
+function searchableStackText(stack: AppStackDiscoveredStackPodLogs): string {
   return [
     stack.stackId,
     stack.namespace,
@@ -274,9 +274,9 @@ function searchableStackText(stack: AppDevStackDiscoveredStackPodLogs): string {
 }
 
 export function filterStackPodLogEntries(
-  entries: ReadonlyArray<AppDevStackPodLogEntry>,
+  entries: ReadonlyArray<AppStackPodLogEntry>,
   options: StackPodLogFilterOptions,
-): AppDevStackPodLogEntry[] {
+): AppStackPodLogEntry[] {
   const query = options.search.trim().toLowerCase();
   return entries.filter((entry) => {
     if (options.hideEmpty && entryIsEmpty(entry)) return false;
@@ -286,9 +286,9 @@ export function filterStackPodLogEntries(
 }
 
 export function filterStackPodLogEntriesForStack(
-  stack: AppDevStackDiscoveredStackPodLogs,
+  stack: AppStackDiscoveredStackPodLogs,
   options: StackPodLogFilterOptions,
-): AppDevStackPodLogEntry[] {
+): AppStackPodLogEntry[] {
   const query = options.search.trim().toLowerCase();
   const stackMatches = query.length > 0 && searchableStackText(stack).includes(query);
   return stack.entries.filter((entry) => {
@@ -299,7 +299,7 @@ export function filterStackPodLogEntriesForStack(
 }
 
 export function buildStackPodLogViews(
-  stacks: ReadonlyArray<AppDevStackDiscoveredStackPodLogs>,
+  stacks: ReadonlyArray<AppStackDiscoveredStackPodLogs>,
   options: StackPodLogFilterOptions,
 ): StackPodLogStackView[] {
   return stacks
@@ -325,10 +325,10 @@ export function buildStackPodLogViews(
 }
 
 export function stackPodLogsResultToDiscoveredStack(input: {
-  readonly stack: AppDevStack;
-  readonly result: AppDevStackGetStackPodLogsResult;
-  readonly limit: AppDevStackLogReadLimit;
-}): AppDevStackDiscoveredStackPodLogs {
+  readonly stack: AppStack;
+  readonly result: AppStackGetStackPodLogsResult;
+  readonly limit: AppStackLogReadLimit;
+}): AppStackDiscoveredStackPodLogs {
   return {
     stackId: input.result.stackId,
     namespace: input.result.namespace,
@@ -347,10 +347,10 @@ export function stackPodLogsResultToDiscoveredStack(input: {
 }
 
 export function buildAssociatedStackPodLogsResult(input: {
-  readonly stack: AppDevStack;
-  readonly result: AppDevStackGetStackPodLogsResult;
-  readonly limit: AppDevStackLogReadLimit;
-}): AppDevStackGetAllStackPodLogsResult {
+  readonly stack: AppStack;
+  readonly result: AppStackGetStackPodLogsResult;
+  readonly limit: AppStackLogReadLimit;
+}): AppStackGetAllStackPodLogsResult {
   return {
     limit: input.limit,
     stacks: [
@@ -366,8 +366,8 @@ export function buildAssociatedStackPodLogsResult(input: {
 
 export function formatStackPodLogsForClipboard(input: {
   readonly stackName: string;
-  readonly result: Pick<AppDevStackGetStackPodLogsResult, "namespace" | "tailLines" | "fetchedAt">;
-  readonly entries: ReadonlyArray<AppDevStackPodLogEntry>;
+  readonly result: Pick<AppStackGetStackPodLogsResult, "namespace" | "tailLines" | "fetchedAt">;
+  readonly entries: ReadonlyArray<AppStackPodLogEntry>;
 }): string {
   const lines: string[] = [
     `App Stack Pod Logs: ${input.stackName}`,
@@ -402,7 +402,7 @@ export function formatStackPodLogsForClipboard(input: {
 }
 
 export function formatAllStackPodLogsForClipboard(input: {
-  readonly result: Pick<AppDevStackGetAllStackPodLogsResult, "limit" | "stacks" | "fetchedAt">;
+  readonly result: Pick<AppStackGetAllStackPodLogsResult, "limit" | "stacks" | "fetchedAt">;
 }): string {
   const lines: string[] = [
     "App Stack Pod Logs",

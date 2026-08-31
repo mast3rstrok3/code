@@ -151,7 +151,7 @@ One of the composer configurations defined in [workflowPresets.ts][25]. Quick Pl
 
 #### Workflow ID
 
-The durable identity of one workflow run. A top-level controller creates the ID and its owned children inherit it. A nested workflow creates a new ID and records its enclosing run as `parentWorkflowId`. Workflow links and AppDevStack ownership use this identity rather than a thread ID or preset name.
+The durable identity of one workflow run. A top-level controller creates the ID and its owned children inherit it. A nested workflow creates a new ID and records its enclosing run as `parentWorkflowId`. Workflow links and AppStack ownership use this identity rather than a thread ID or preset name.
 
 #### App Review Workflow
 
@@ -207,7 +207,7 @@ The durable map of decision tickets for efforts too large to specify in one pass
 
 #### App review
 
-The bounded QA stage of an implementation run. A run may use up to ten cycles. Each cycle has an E2E and browser review thread, a gap-analysis thread when actionable findings exist, and a TDD repair thread. A passing review stops the run early. Budget exhaustion records unresolved findings and lets Implementation continue to Code Review. Ticket App Review resolves its effective scope before creating a ticket App Dev Stack. A missing preview, stale workspace, dirty embedded worktree, or invalid workspace identity still requires human attention.
+The bounded QA stage of an implementation run. A run may use up to ten cycles. Each cycle has an E2E and browser review thread, a gap-analysis thread when actionable findings exist, and a TDD repair thread. A passing review stops the run early. Budget exhaustion records unresolved findings and lets Implementation continue to Code Review. Ticket App Review resolves its effective scope before creating a ticket App Stack. A missing preview, stale workspace, dirty embedded worktree, or invalid workspace identity still requires human attention.
 
 #### Code review
 
@@ -249,14 +249,16 @@ One orchestrated execution of a Spec's tickets: a dedicated worktree, dependency
 
 The provider-facing part of stage recovery. It resumes the primary model once, resolves the run or standing `workflow.recovery-fallback` pin, and can replace the provider-native session while retaining the T3 thread and workspace. Usage limits then park until `retryAt` or five hours and may repeat without an attempt ceiling. Transport failures remain bounded to eight hours. Unknown historical failures keep two compatibility attempts. Authentication, configuration, pauses, live turns, approvals, user-input waits, and deliberate interruptions do not enter automatic retry. [StaleTurnReconciler.ts][32] records provider evidence; the stage execution owns the canonical recovery state.
 
-#### App dev stack
+#### App stack
 
 A Kubernetes development deployment for a worktree. One workflow may own a shared stack and several
 ticket stacks, each identified by the durable workflow ID and a distinct normalized worktree path.
 A matching stack can be reused after restart. Duplicate stacks for one worktree and ownership
-mismatches are reported instead of stopped automatically.
+mismatches are reported instead of stopped automatically. A stack has a variant, `dev` (the
+default, hot reload over the mounted worktree) or `prod` (the production build in a baked image);
+a worktree can hold one of each. Workflows only ever create dev stacks.
 
-The per-worktree development stack (dev servers, preview) that implementation runs start only after Build or worker integration has produced a stable worktree. Transitional `pending` and `starting` states are retried as waiting states, while controller visibility failures and unhealthy non-optional services block before Browser App Review. App Review then uses its live surface. See [app-dev-stacks.md][30].
+The per-worktree development stack (dev servers, preview) that implementation runs start only after Build or worker integration has produced a stable worktree. Transitional `pending` and `starting` states are retried as waiting states, while controller visibility failures and unhealthy non-optional services block before Browser App Review. App Review then uses its live surface. See [app-stacks.md][30].
 
 ## Practical Shortcuts
 
@@ -304,7 +306,7 @@ The per-worktree development stack (dev servers, preview) that implementation ru
 [27]: ../../apps/server/src/orchestration/workflowDirectives.ts
 [28]: ./workflow-catalog.md
 [29]: ../../apps/server/src/orchestration/Layers/ImplementationWorkflowReactor.ts
-[30]: ../user/app-dev-stacks.md
+[30]: ../user/app-stacks.md
 [31]: ../user/workflow-catalog.md
 [32]: ../../apps/server/src/orchestration/Layers/StaleTurnReconciler.ts
 [33]: ../../apps/server/src/orchestration/workflowNudge.ts

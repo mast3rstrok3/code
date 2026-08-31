@@ -1062,7 +1062,7 @@ it.effect("accepts Browser App Review launch commands", () =>
   }),
 );
 
-it.effect("accepts App Review Workflow launches before App Dev Stack resolution", () =>
+it.effect("accepts App Review Workflow launches before App Stack resolution", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeOrchestrationCommand({
       type: "thread.app-review-workflow.launch",

@@ -104,10 +104,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /mount.*`\/app`/);
     NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /separate pod volumes/);
     NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /ticket workers/);
-    NodeAssert.match(
-      resolveWorkflowDoc("app-dev-stack")?.content ?? "",
-      /worktree-owned AppDevStack/,
-    );
+    NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /worktree-owned AppStack/);
     NodeAssert.deepEqual(resolveWorkflowDoc("context-format")?.skillIds, [
       "matt-pocock.grill-with-docs",
       "matt-pocock.domain-modeling",

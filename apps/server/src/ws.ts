@@ -77,8 +77,8 @@ import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/uns
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
-import * as AppDevStackManager from "./appDevStack/AppDevStackManager.ts";
-import { appDevStackWorkflowConflicts } from "./appDevStack/workflowOwnership.ts";
+import * as AppStackManager from "./appStack/AppStackManager.ts";
+import { appStackWorkflowConflicts } from "./appStack/workflowOwnership.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -604,7 +604,7 @@ const makeWsRpcLayer = (
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
       const previewCoordinator = yield* PreviewCoordinator.PreviewCoordinator;
-      const appDevStackManager = yield* AppDevStackManager.AppDevStackManager;
+      const appStackManager = yield* AppStackManager.AppStackManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
@@ -803,7 +803,7 @@ const makeWsRpcLayer = (
           ),
         );
 
-      const appendWorkflowAppDevStackActivity = (input: {
+      const appendWorkflowAppStackActivity = (input: {
         readonly threadId: ThreadId;
         readonly kind:
           | "workflow-app-dev-stack.requested"
@@ -1466,7 +1466,7 @@ const makeWsRpcLayer = (
               );
             };
 
-            const provisionWorkflowAppDevStack = (finalBranch: string) =>
+            const provisionWorkflowAppStack = (finalBranch: string) =>
               preparedWorkflowWorkspace === null
                 ? Effect.void
                 : Effect.gen(function* () {
@@ -1480,15 +1480,15 @@ const makeWsRpcLayer = (
                       workflowPreset: workflowPreset ?? null,
                       workflowId: workflowId ?? null,
                     };
-                    yield* appendWorkflowAppDevStackActivity({
+                    yield* appendWorkflowAppStackActivity({
                       threadId,
                       kind: "workflow-app-dev-stack.requested",
-                      summary: "Starting workflow App Dev Stack",
+                      summary: "Starting workflow App Stack",
                       createdAt: requestedAt,
                       payload: identity,
                       tone: "info",
                     }).pipe(Effect.ignoreCause({ log: true }));
-                    const outcome = yield* appDevStackManager
+                    const outcome = yield* appStackManager
                       .autoCreate({
                         worktreePath: preparedWorkflowWorkspace.worktreePath,
                         displayName: finalBranch,
@@ -1498,10 +1498,10 @@ const makeWsRpcLayer = (
                       .pipe(Effect.result);
                     const updatedAt = yield* nowIso;
                     if (outcome._tag === "Failure") {
-                      yield* appendWorkflowAppDevStackActivity({
+                      yield* appendWorkflowAppStackActivity({
                         threadId,
                         kind: "workflow-app-dev-stack.failed",
-                        summary: "Workflow App Dev Stack failed to start",
+                        summary: "Workflow App Stack failed to start",
                         createdAt: updatedAt,
                         payload: { ...identity, detail: outcome.failure.message },
                         tone: "error",
@@ -1520,14 +1520,12 @@ const makeWsRpcLayer = (
                       result.frontendUrl !== null &&
                       (result.stack === null || result.stack.status === "running") &&
                       unhealthyService === undefined;
-                    yield* appendWorkflowAppDevStackActivity({
+                    yield* appendWorkflowAppStackActivity({
                       threadId,
                       kind: ready
                         ? "workflow-app-dev-stack.ready"
                         : "workflow-app-dev-stack.starting",
-                      summary: ready
-                        ? "Workflow App Dev Stack ready"
-                        : "Workflow App Dev Stack starting",
+                      summary: ready ? "Workflow App Stack ready" : "Workflow App Stack starting",
                       createdAt: updatedAt,
                       payload: {
                         ...identity,
@@ -1550,7 +1548,7 @@ const makeWsRpcLayer = (
               yield* runSetupProgram().pipe(
                 Effect.flatMap((dependenciesReady) =>
                   dependenciesReady
-                    ? awaitFinalWorkflowBranch().pipe(Effect.flatMap(provisionWorkflowAppDevStack))
+                    ? awaitFinalWorkflowBranch().pipe(Effect.flatMap(provisionWorkflowAppStack))
                     : Effect.void,
                 ),
                 Effect.ignoreCause({ log: true }),
@@ -2959,79 +2957,73 @@ const makeWsRpcLayer = (
             previewAutomationBroker.focusHost(input),
             { "rpc.aggregate": "preview-automation" },
           ),
-        [WS_METHODS.appDevStackStatus]: (_input) =>
-          observeRpcEffect(WS_METHODS.appDevStackStatus, appDevStackManager.status, {
-            "rpc.aggregate": "app-dev-stack",
+        [WS_METHODS.appStackStatus]: (_input) =>
+          observeRpcEffect(WS_METHODS.appStackStatus, appStackManager.status, {
+            "rpc.aggregate": "app-stack",
           }),
-        [WS_METHODS.appDevStackList]: (input) =>
+        [WS_METHODS.appStackList]: (input) =>
           observeRpcEffect(
-            WS_METHODS.appDevStackList,
+            WS_METHODS.appStackList,
             Effect.gen(function* () {
-              const result = yield* appDevStackManager.list(input);
+              const result = yield* appStackManager.list(input);
               const readModel = yield* projectionSnapshotQuery
                 .getCommandReadModel()
                 .pipe(Effect.orElseSucceed(() => null));
               return {
                 ...result,
                 workflowConflicts:
-                  readModel === null ? [] : appDevStackWorkflowConflicts(result.stacks, readModel),
+                  readModel === null ? [] : appStackWorkflowConflicts(result.stacks, readModel),
               };
             }),
-            { "rpc.aggregate": "app-dev-stack" },
+            { "rpc.aggregate": "app-stack" },
           ),
-        [WS_METHODS.appDevStackGetByWorktree]: (input) =>
+        [WS_METHODS.appStackGetByWorktree]: (input) =>
+          observeRpcEffect(WS_METHODS.appStackGetByWorktree, appStackManager.getByWorktree(input), {
+            "rpc.aggregate": "app-stack",
+          }),
+        [WS_METHODS.appStackGet]: (input) =>
+          observeRpcEffect(WS_METHODS.appStackGet, appStackManager.get(input), {
+            "rpc.aggregate": "app-stack",
+          }),
+        [WS_METHODS.appStackAutoCreate]: (input) =>
+          observeRpcEffect(WS_METHODS.appStackAutoCreate, appStackManager.autoCreate(input), {
+            "rpc.aggregate": "app-stack",
+          }),
+        [WS_METHODS.appStackStop]: (input) =>
+          observeRpcEffect(WS_METHODS.appStackStop, appStackManager.stop(input), {
+            "rpc.aggregate": "app-stack",
+          }),
+        [WS_METHODS.appStackSetProtected]: (input) =>
+          observeRpcEffect(WS_METHODS.appStackSetProtected, appStackManager.setProtected(input), {
+            "rpc.aggregate": "app-stack",
+          }),
+        [WS_METHODS.appStackRestart]: (input) =>
+          observeRpcEffect(WS_METHODS.appStackRestart, appStackManager.restart(input), {
+            "rpc.aggregate": "app-stack",
+          }),
+        [WS_METHODS.appStackDelete]: (input) =>
+          observeRpcEffect(WS_METHODS.appStackDelete, appStackManager.delete(input), {
+            "rpc.aggregate": "app-stack",
+          }),
+        [WS_METHODS.appStackListPods]: (input) =>
+          observeRpcEffect(WS_METHODS.appStackListPods, appStackManager.listPods(input), {
+            "rpc.aggregate": "app-stack",
+          }),
+        [WS_METHODS.appStackGetPodLogs]: (input) =>
+          observeRpcEffect(WS_METHODS.appStackGetPodLogs, appStackManager.getPodLogs(input), {
+            "rpc.aggregate": "app-stack",
+          }),
+        [WS_METHODS.appStackGetStackPodLogs]: (input) =>
           observeRpcEffect(
-            WS_METHODS.appDevStackGetByWorktree,
-            appDevStackManager.getByWorktree(input),
-            {
-              "rpc.aggregate": "app-dev-stack",
-            },
+            WS_METHODS.appStackGetStackPodLogs,
+            appStackManager.getStackPodLogs(input),
+            { "rpc.aggregate": "app-stack" },
           ),
-        [WS_METHODS.appDevStackGet]: (input) =>
-          observeRpcEffect(WS_METHODS.appDevStackGet, appDevStackManager.get(input), {
-            "rpc.aggregate": "app-dev-stack",
-          }),
-        [WS_METHODS.appDevStackAutoCreate]: (input) =>
-          observeRpcEffect(WS_METHODS.appDevStackAutoCreate, appDevStackManager.autoCreate(input), {
-            "rpc.aggregate": "app-dev-stack",
-          }),
-        [WS_METHODS.appDevStackStop]: (input) =>
-          observeRpcEffect(WS_METHODS.appDevStackStop, appDevStackManager.stop(input), {
-            "rpc.aggregate": "app-dev-stack",
-          }),
-        [WS_METHODS.appDevStackSetProtected]: (input) =>
+        [WS_METHODS.appStackGetAllStackPodLogs]: (input) =>
           observeRpcEffect(
-            WS_METHODS.appDevStackSetProtected,
-            appDevStackManager.setProtected(input),
-            { "rpc.aggregate": "app-dev-stack" },
-          ),
-        [WS_METHODS.appDevStackRestart]: (input) =>
-          observeRpcEffect(WS_METHODS.appDevStackRestart, appDevStackManager.restart(input), {
-            "rpc.aggregate": "app-dev-stack",
-          }),
-        [WS_METHODS.appDevStackDelete]: (input) =>
-          observeRpcEffect(WS_METHODS.appDevStackDelete, appDevStackManager.delete(input), {
-            "rpc.aggregate": "app-dev-stack",
-          }),
-        [WS_METHODS.appDevStackListPods]: (input) =>
-          observeRpcEffect(WS_METHODS.appDevStackListPods, appDevStackManager.listPods(input), {
-            "rpc.aggregate": "app-dev-stack",
-          }),
-        [WS_METHODS.appDevStackGetPodLogs]: (input) =>
-          observeRpcEffect(WS_METHODS.appDevStackGetPodLogs, appDevStackManager.getPodLogs(input), {
-            "rpc.aggregate": "app-dev-stack",
-          }),
-        [WS_METHODS.appDevStackGetStackPodLogs]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.appDevStackGetStackPodLogs,
-            appDevStackManager.getStackPodLogs(input),
-            { "rpc.aggregate": "app-dev-stack" },
-          ),
-        [WS_METHODS.appDevStackGetAllStackPodLogs]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.appDevStackGetAllStackPodLogs,
-            appDevStackManager.getAllStackPodLogs(input),
-            { "rpc.aggregate": "app-dev-stack" },
+            WS_METHODS.appStackGetAllStackPodLogs,
+            appStackManager.getAllStackPodLogs(input),
+            { "rpc.aggregate": "app-stack" },
           ),
         [WS_METHODS.subscribePreviewEvents]: (_input) =>
           observeRpcStream(WS_METHODS.subscribePreviewEvents, previewManager.events, {

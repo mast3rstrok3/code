@@ -489,7 +489,7 @@ function buildPlanningTicketsStagePrompt(spec: OrchestrationPlanningSpec): strin
             appReviewEligible: true,
             appReviewScope: "both",
             appReviewPlanMarkdown:
-              "Start the ticket worktree's App Dev Stack, open the affected UI, exercise the primary flow, and capture the expected visible result.",
+              "Start the ticket worktree's App Stack, open the affected UI, exercise the primary flow, and capture the expected visible result.",
           },
         ],
       },

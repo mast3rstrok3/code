@@ -557,7 +557,7 @@ describe("ProductWorkflowReactor", () => {
             payload: {
               requestId: "request-product-question",
               answers: {
-                target_environment: "App dev stack",
+                target_environment: "App stack",
                 landing_identity: "Exact Home overview",
               },
             },
@@ -580,7 +580,7 @@ describe("ProductWorkflowReactor", () => {
         );
         expect(recoveryMessage?.type).toBe("thread.message-sent");
         if (recoveryMessage?.type === "thread.message-sent") {
-          expect(recoveryMessage.payload.text).toContain('"target_environment": "App dev stack"');
+          expect(recoveryMessage.payload.text).toContain('"target_environment": "App stack"');
           expect(recoveryMessage.payload.text).toContain(
             '"landing_identity": "Exact Home overview"',
           );

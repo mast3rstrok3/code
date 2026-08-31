@@ -1,11 +1,11 @@
-import type { AppDevStack } from "@t3tools/contracts";
+import type { AppStack } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  AppDevStackWorkflowConflictWarning,
-  AppDevStackWorkflowOwnershipBadge,
-} from "./AppDevStackWorkflowOwnership";
+  AppStackWorkflowConflictWarning,
+  AppStackWorkflowOwnershipBadge,
+} from "./AppStackWorkflowOwnership";
 
 const stack = {
   id: "stack-1",
@@ -22,23 +22,23 @@ const stack = {
   errorCount: 0,
   createdAt: "2026-08-11T00:00:00.000Z",
   updatedAt: "2026-08-11T00:00:00.000Z",
-} satisfies AppDevStack;
+} satisfies AppStack;
 
-describe("AppDevStackWorkflowOwnershipBadge", () => {
+describe("AppStackWorkflowOwnershipBadge", () => {
   it("renders ownership only for workflow-owned stacks", () => {
     expect(
       renderToStaticMarkup(
-        <AppDevStackWorkflowOwnershipBadge stack={{ ...stack, workflowId: "workflow-calendar" }} />,
+        <AppStackWorkflowOwnershipBadge stack={{ ...stack, workflowId: "workflow-calendar" }} />,
       ),
     ).toContain("Workflow-owned");
-    expect(renderToStaticMarkup(<AppDevStackWorkflowOwnershipBadge stack={stack} />)).toBe("");
+    expect(renderToStaticMarkup(<AppStackWorkflowOwnershipBadge stack={stack} />)).toBe("");
   });
 });
 
-describe("AppDevStackWorkflowConflictWarning", () => {
+describe("AppStackWorkflowConflictWarning", () => {
   it("renders the affected workflow and makes non-destructive behavior explicit", () => {
     const markup = renderToStaticMarkup(
-      <AppDevStackWorkflowConflictWarning
+      <AppStackWorkflowConflictWarning
         conflicts={[
           {
             workflowId: "workflow-calendar",
@@ -56,6 +56,6 @@ describe("AppDevStackWorkflowConflictWarning", () => {
   });
 
   it("renders nothing when there are no conflicts", () => {
-    expect(renderToStaticMarkup(<AppDevStackWorkflowConflictWarning conflicts={[]} />)).toBe("");
+    expect(renderToStaticMarkup(<AppStackWorkflowConflictWarning conflicts={[]} />)).toBe("");
   });
 });

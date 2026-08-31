@@ -1,5 +1,5 @@
 import {
-  type AppDevStackAutoCreateResult,
+  type AppStackAutoCreateResult,
   applyImplementationSkip,
   type AppReviewWorkflowRun,
   AppReviewWorkflowRunId,
@@ -57,8 +57,8 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
-import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
-import { normalizeWorkflowWorktreePath } from "../../appDevStack/workflowOwnership.ts";
+import { AppStackManager } from "../../appStack/AppStackManager.ts";
+import { normalizeWorkflowWorktreePath } from "../../appStack/workflowOwnership.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import {
@@ -1147,7 +1147,7 @@ function buildMergeGatePrompt(input: {
     `Run ${input.kind} gate for implementation run ${input.run.id}.`,
     "",
     ...integrationInstructions,
-    "Use the repository's existing focused validation setup. Do not start a competing development server or replace dependency paths in the shared worktree: its workflow-owned AppDevStack was created during workspace bootstrap and is reused here. If validation cannot run with the prepared workspace, report the setup failure explicitly.",
+    "Use the repository's existing focused validation setup. Do not start a competing development server or replace dependency paths in the shared worktree: its workflow-owned AppStack was created during workspace bootstrap and is reused here. If validation cannot run with the prepared workspace, report the setup failure explicitly.",
     "",
     ...validationInstructions,
     ...continuationInstructions,
@@ -1179,7 +1179,7 @@ function buildBrowserAppReviewPrompt(input: {
     input.frontendUrl === null
       ? "No frontend URL was resolved. If the app cannot be opened, mark the review blocked with concrete details."
       : `Feature URL: ${input.frontendUrl}`,
-    "The Feature URL above is the authoritative frontend for the App Dev Stack associated with this implementation worktree. Do not substitute a deployment URL from repository documentation, source-thread messages, browser history, or environment conventions. If the authoritative target is unavailable, mark the review blocked.",
+    "The Feature URL above is the authoritative frontend for the App Stack associated with this implementation worktree. Do not substitute a deployment URL from repository documentation, source-thread messages, browser history, or environment conventions. If the authoritative target is unavailable, mark the review blocked.",
     `Worktree: ${input.run.orchestratorWorktreePath}`,
     `Diff command: git diff ${input.run.pinnedCommit}...HEAD`,
     "",
@@ -1210,18 +1210,18 @@ function buildFixPrompt(input: {
   ].join("\n");
 }
 
-function buildAppDevStackFixPrompt(input: {
+function buildAppStackFixPrompt(input: {
   readonly run: OrchestrationImplementationRun;
   readonly diagnosticsMarkdown: string;
 }): string {
   return [
-    `Repair the AppDevStack failure for implementation run ${input.run.id}.`,
+    `Repair the AppStack failure for implementation run ${input.run.id}.`,
     "",
     `This is QA repair ${input.run.qaCycleCount} of ${IMPLEMENTATION_RUN_MAX_QA_REPAIRS}. Treat the supplied failure as a code problem in this worktree, even when it looks like controller, authentication, configuration, or deployment infrastructure. Do not ask the user questions.`,
     "",
-    "Use a focused red-green TDD loop at the failing application or stack-contract seam. Make the smallest reliable code or configuration change that can make the AppDevStack start and its frontend serve.",
+    "Use a focused red-green TDD loop at the failing application or stack-contract seam. Make the smallest reliable code or configuration change that can make the AppStack start and its frontend serve.",
     "",
-    "Programmatic AppDevStack diagnostics:",
+    "Programmatic AppStack diagnostics:",
     input.diagnosticsMarkdown,
     "",
     "Run focused validation or a documented sub-minute fast check. Do not run launch-level complete validation commands or full test suites; Final Code Review owns complete validation on the new HEAD.",
@@ -1373,13 +1373,13 @@ function completeValidationCommandsForFiles(
  * App Review skip provisioning, so reviewers were sent at a URL that never came up. A reserved
  * branch has no stack of its own — a standing deployment serves it, so a URL is enough.
  */
-function appDevStackReadiness(result: AppDevStackAutoCreateResult): "ready" | "ensuring" {
+function appStackReadiness(result: AppStackAutoCreateResult): "ready" | "ensuring" {
   if (result.frontendUrl === null) return "ensuring";
   return result.stack === null || result.stack.status === "running" ? "ready" : "ensuring";
 }
 
-function isAppDevStackInfrastructureFailure(detail: string): boolean {
-  return detail.toLowerCase().includes("not visible to the app dev stack controller");
+function isAppStackInfrastructureFailure(detail: string): boolean {
+  return detail.toLowerCase().includes("not visible to the app stack controller");
 }
 
 function fastFeatureExampleDirective(run: OrchestrationImplementationRun) {
@@ -1406,9 +1406,9 @@ function fastFeatureExecutionContract(run: OrchestrationImplementationRun): Read
     `- branch: ${run.orchestratorBranch}`,
     `- worktree: ${run.orchestratorWorktreePath}`,
     `- fixed source commit: ${run.pinnedCommit}`,
-    "- App Dev Stack: created by workflow workspace bootstrap after dependency setup; Build reuses it",
+    "- App Stack: created by workflow workspace bootstrap after dependency setup; Build reuses it",
     "",
-    "Use the repository dependencies prepared during workflow workspace bootstrap. Do not start a competing development server or replace dependency paths mounted by the workflow-owned App Dev Stack.",
+    "Use the repository dependencies prepared during workflow workspace bootstrap. Do not start a competing development server or replace dependency paths mounted by the workflow-owned App Stack.",
     "",
     "## Pre-review validation",
     "Run focused tests and affected-file checks. A documented sub-minute fast command such as `pnpm check` is allowed.",
@@ -1538,7 +1538,7 @@ function changeRequestReviewNote(run: OrchestrationImplementationRun): string {
     lines.push(
       run.appReviewStrategy === "nested-workflow" && gate === "app-review"
         ? `- ⚠️ Nested App Review '${run.appReviewWorkflowRunIds.at(-1) ?? "unknown"}' **exhausted after ${run.qaAttemptCount} complete cycle(s)**. Latest review: ${run.lastQaFailure?.reviewId ?? "unknown"}. This change request was published best-effort with unresolved findings; manually verify the affected flow before merging.`
-        : `- ⚠️ Automated QA: **did not pass; exhausted ${run.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS} fresh repairs**. Last unsatisfied gate: ${gate === "app-dev-stack" ? "AppDevStack" : "Browser App Review"}. This change request was published best-effort; manually verify the affected flow before merging.`,
+        : `- ⚠️ Automated QA: **did not pass; exhausted ${run.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS} fresh repairs**. Last unsatisfied gate: ${gate === "app-dev-stack" ? "AppStack" : "Browser App Review"}. This change request was published best-effort; manually verify the affected flow before merging.`,
     );
     if (run.lastQaFailure !== null) {
       lines.push(`- Last QA failure: ${run.lastQaFailure.detailMarkdown.slice(0, 1_000)}`);
@@ -1742,9 +1742,9 @@ export function workerReportedCurrentAttempt(
 }
 
 const FRONTEND_PROBE_TIMEOUT = Duration.seconds(10);
-const APP_DEV_STACK_DIAGNOSTIC_LIMIT = 24 * 1_024;
+const APP_STACK_DIAGNOSTIC_LIMIT = 24 * 1_024;
 
-export function appDevStackBackendHealthUrl(frontendUrl: string): string {
+export function appStackBackendHealthUrl(frontendUrl: string): string {
   return new URL("/api/health", frontendUrl).href;
 }
 
@@ -1761,7 +1761,7 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const gitWorkflow = yield* GitWorkflowService;
-  const appDevStackManager = yield* AppDevStackManager;
+  const appStackManager = yield* AppStackManager;
   const serverSettingsService = yield* ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
   const changeRequestLocks = yield* SynchronizedRef.make(
@@ -1793,7 +1793,7 @@ const make = Effect.gen(function* () {
       : { ok: false, detail: `returned HTTP ${outcome.success.status}` };
   });
 
-  const appDevStackDiagnostics = Effect.fn("ImplementationWorkflowReactor.appDevStackDiagnostics")(
+  const appStackDiagnostics = Effect.fn("ImplementationWorkflowReactor.appStackDiagnostics")(
     function* (input: {
       readonly run: OrchestrationImplementationRun;
       readonly stackId: string | null;
@@ -1802,11 +1802,11 @@ const make = Effect.gen(function* () {
       const stackResult =
         input.stackId === null
           ? null
-          : yield* appDevStackManager.get({ stackId: input.stackId }).pipe(Effect.result);
+          : yield* appStackManager.get({ stackId: input.stackId }).pipe(Effect.result);
       const logsResult =
         input.stackId === null
           ? null
-          : yield* appDevStackManager
+          : yield* appStackManager
               .getStackPodLogs({ stackId: input.stackId, tailLines: 300 })
               .pipe(Effect.result);
       const stack = stackResult?._tag === "Success" ? stackResult.success : null;
@@ -1849,9 +1849,9 @@ const make = Effect.gen(function* () {
       const redacted = diagnostics
         .replace(/((?:authorization|password|secret|token)\s*[:=]\s*)(\S+)/giu, "$1[redacted]")
         .replace(/(bearer\s+)(\S+)/giu, "$1[redacted]");
-      return redacted.length <= APP_DEV_STACK_DIAGNOSTIC_LIMIT
+      return redacted.length <= APP_STACK_DIAGNOSTIC_LIMIT
         ? redacted
-        : `[earlier diagnostics truncated]\n${redacted.slice(-APP_DEV_STACK_DIAGNOSTIC_LIMIT)}`;
+        : `[earlier diagnostics truncated]\n${redacted.slice(-APP_STACK_DIAGNOSTIC_LIMIT)}`;
     },
   );
 
@@ -2186,7 +2186,7 @@ const make = Effect.gen(function* () {
             : "implementation-workflow.needs-human-attention",
       summary:
         input.automaticRecoveryWaiting === true
-          ? "Waiting for App Dev Stack"
+          ? "Waiting for App Stack"
           : input.automaticRecovery === true
             ? "Automated QA remediation requested"
             : "Implementation workflow needs human attention",
@@ -3121,11 +3121,11 @@ const make = Effect.gen(function* () {
               return null;
             }
 
-            const stackLookup = yield* appDevStackManager
+            const stackLookup = yield* appStackManager
               .getByWorktree({ worktreePath: state.worktreePath })
               .pipe(Effect.result);
             if (stackLookup._tag === "Failure") {
-              yield* Effect.logWarning("ticket App Dev Stack lookup failed during cleanup", {
+              yield* Effect.logWarning("ticket App Stack lookup failed during cleanup", {
                 runId: input.run.id,
                 ticketId: state.ticketId,
                 worktreePath: state.worktreePath,
@@ -3143,7 +3143,7 @@ const make = Effect.gen(function* () {
                   threadId: input.run.orchestratorThreadId,
                   tone: "error",
                   kind: "implementation-ticket-stack-ownership-conflict",
-                  summary: `Ticket ${state.ticketId} App Dev Stack ownership is ambiguous`,
+                  summary: `Ticket ${state.ticketId} App Stack ownership is ambiguous`,
                   payload: {
                     runId: input.run.id,
                     ticketId: state.ticketId,
@@ -3157,11 +3157,11 @@ const make = Effect.gen(function* () {
                   createdAt: input.createdAt,
                 });
               } else {
-                const deleted = yield* appDevStackManager
+                const deleted = yield* appStackManager
                   .delete({ stackId: stack.id })
                   .pipe(Effect.result);
                 if (deleted._tag === "Failure") {
-                  yield* Effect.logWarning("ticket App Dev Stack cleanup failed", {
+                  yield* Effect.logWarning("ticket App Stack cleanup failed", {
                     runId: input.run.id,
                     ticketId: state.ticketId,
                     stackId: stack.id,
@@ -3172,7 +3172,7 @@ const make = Effect.gen(function* () {
                     threadId: input.run.orchestratorThreadId,
                     tone: "info",
                     kind: "implementation-ticket-stack-deleted",
-                    summary: `Ticket ${state.ticketId} App Dev Stack deleted`,
+                    summary: `Ticket ${state.ticketId} App Stack deleted`,
                     payload: {
                       runId: input.run.id,
                       ticketId: state.ticketId,
@@ -3826,7 +3826,7 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    const stackResult = yield* appDevStackManager
+    const stackResult = yield* appStackManager
       .autoCreate({
         worktreePath: state.worktreePath,
         displayName: `Ticket ${ticket.key ?? ticket.id}`,
@@ -3849,7 +3849,7 @@ const make = Effect.gen(function* () {
         ticketId: input.ticketId,
         retryableStage: "app-dev-stack",
         haltStage: "app-review",
-        reasonMarkdown: `Ticket App Review found an App Dev Stack ownership mismatch for '${state.worktreePath}'. The existing stack was left untouched.`,
+        reasonMarkdown: `Ticket App Review found an App Stack ownership mismatch for '${state.worktreePath}'. The existing stack was left untouched.`,
         updatedAt: input.createdAt,
         humanBlocked: true,
       });
@@ -3863,7 +3863,7 @@ const make = Effect.gen(function* () {
         ticketId: input.ticketId,
         retryableStage: "app-dev-stack",
         haltStage: "app-review",
-        reasonMarkdown: `Ticket App Review cannot start because its App Dev Stack did not provide a frontend URL${stackResult._tag === "Failure" ? `: ${errorDetail(stackResult.failure)}` : "."}`,
+        reasonMarkdown: `Ticket App Review cannot start because its App Stack did not provide a frontend URL${stackResult._tag === "Failure" ? `: ${errorDetail(stackResult.failure)}` : "."}`,
         updatedAt: input.createdAt,
         humanBlocked: true,
       });
@@ -4584,7 +4584,7 @@ const make = Effect.gen(function* () {
       // Planning, Full Feature, or Fast Feature owns stack creation during workspace bootstrap.
       // Implementation may re-ensure that exact registered stack after integration or repair, but
       // it must never silently manufacture a second runtime when the inherited one is missing.
-      const inheritedLookup = yield* appDevStackManager
+      const inheritedLookup = yield* appStackManager
         .getByWorktree({ worktreePath: cycleRun.orchestratorWorktreePath })
         .pipe(Effect.result);
       const inheritedStackMissing =
@@ -4592,7 +4592,7 @@ const make = Effect.gen(function* () {
       const stackResult =
         inheritedLookup._tag === "Failure" || inheritedStackMissing
           ? null
-          : yield* appDevStackManager
+          : yield* appStackManager
               .autoCreate({
                 worktreePath: cycleRun.orchestratorWorktreePath,
                 displayName:
@@ -4608,15 +4608,15 @@ const make = Effect.gen(function* () {
         inheritedLookup._tag === "Failure"
           ? errorDetail(inheritedLookup.failure)
           : inheritedStackMissing
-            ? `The workflow-owned App Dev Stack is missing for '${cycleRun.orchestratorWorktreePath}'. Planning, Full Feature, or Fast Feature must create it after workspace dependency setup; Implementation will not create a replacement.`
+            ? `The workflow-owned App Stack is missing for '${cycleRun.orchestratorWorktreePath}'. Planning, Full Feature, or Fast Feature must create it after workspace dependency setup; Implementation will not create a replacement.`
             : stackResult?._tag === "Failure"
               ? errorDetail(stackResult.failure)
               : null;
       const stack = stackResult?._tag === "Success" ? stackResult.success : null;
       if (stackFailureDetail !== null) {
         const infrastructureBlocked =
-          inheritedStackMissing || isAppDevStackInfrastructureFailure(stackFailureDetail);
-        const diagnostics = yield* appDevStackDiagnostics({
+          inheritedStackMissing || isAppStackInfrastructureFailure(stackFailureDetail);
+        const diagnostics = yield* appStackDiagnostics({
           run: ensuringRun,
           stackId: ensuringRun.appDevStack.stackId,
           detail: stackFailureDetail,
@@ -4685,7 +4685,7 @@ const make = Effect.gen(function* () {
         const transitioning =
           failedService === undefined &&
           (pendingStackStatus === "pending" || pendingStackStatus === "starting");
-        const diagnostics = yield* appDevStackDiagnostics({
+        const diagnostics = yield* appStackDiagnostics({
           run: ensuringRun,
           stackId,
           detail,
@@ -4739,12 +4739,12 @@ const make = Effect.gen(function* () {
       // The controller's own status is a claim about the stack, not about the edge. The frontend
       // can keep serving its static shell while its backend has no ready pod, so probing only `/`
       // sends reviewers into a login flow that can only return 502. Probe both surfaces on the
-      // cached path too; a failed runtime probe is routed through AppDevStack diagnostics and TDD
+      // cached path too; a failed runtime probe is routed through AppStack diagnostics and TDD
       // repair before another Browser App Review is launched.
       if (frontendUrl !== null) {
         const probes = [
           { label: "frontend", url: frontendUrl },
-          { label: "backend health", url: appDevStackBackendHealthUrl(frontendUrl) },
+          { label: "backend health", url: appStackBackendHealthUrl(frontendUrl) },
         ];
         let failedProbe: {
           readonly label: string;
@@ -4760,7 +4760,7 @@ const make = Effect.gen(function* () {
         }
         if (failedProbe !== null) {
           const detail = `${failedProbe.label} ${failedProbe.url} ${failedProbe.detail}`;
-          const diagnostics = yield* appDevStackDiagnostics({
+          const diagnostics = yield* appStackDiagnostics({
             run: ensuringRun,
             stackId: stack?.stack?.id ?? ensuringRun.appDevStack.stackId,
             detail,
@@ -4854,7 +4854,7 @@ const make = Effect.gen(function* () {
             stack === null
               ? ensuringRun.appDevStack
               : {
-                  status: appDevStackReadiness(stack),
+                  status: appStackReadiness(stack),
                   stackId: stack.stack?.id ?? null,
                   stackStatus: stack.stack?.status ?? null,
                   frontendUrl,
@@ -4955,7 +4955,7 @@ const make = Effect.gen(function* () {
           stack === null
             ? ensuringRun.appDevStack
             : {
-                status: appDevStackReadiness(stack),
+                status: appStackReadiness(stack),
                 stackId: stack.stack?.id ?? null,
                 stackStatus: stack.stack?.status ?? null,
                 frontendUrl,
@@ -6041,7 +6041,7 @@ const make = Effect.gen(function* () {
         createdAt: input.createdAt,
       });
 
-      // Workspace bootstrap already owns App Dev Stack creation. `startBrowserReview` requires and
+      // Workspace bootstrap already owns App Stack creation. `startBrowserReview` requires and
       // probes that inherited stack after Build reports a clean committed HEAD.
     },
   );
@@ -7246,7 +7246,7 @@ const make = Effect.gen(function* () {
       run: exhaustedRun,
       reasonMarkdown:
         exhaustedRun.lastQaFailure?.detailMarkdown ??
-        `${input.gate === "app-review" ? "App Review" : "App Dev Stack validation"} exhausted its repair budget.`,
+        `${input.gate === "app-review" ? "App Review" : "App Stack validation"} exhausted its repair budget.`,
       updatedAt: input.createdAt,
       haltCategory: "review-blocked",
       haltStage: "app-review",
@@ -7293,10 +7293,10 @@ const make = Effect.gen(function* () {
       run: repairRun,
       status: "fixing",
       origin: input.origin,
-      title: `TDD repair ${repairRun.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS} · ${input.origin === "app-dev-stack" ? "AppDevStack" : "App Review"}`,
+      title: `TDD repair ${repairRun.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS} · ${input.origin === "app-dev-stack" ? "AppStack" : "App Review"}`,
       promptText:
         input.origin === "app-dev-stack"
-          ? buildAppDevStackFixPrompt({
+          ? buildAppStackFixPrompt({
               run: repairRun,
               diagnosticsMarkdown: input.failureMarkdown,
             })
@@ -8560,7 +8560,7 @@ const make = Effect.gen(function* () {
    *
    * The combined post-merge review gets its preview refresh from
    * `startBrowserReview`; this is the ticket-scoped counterpart. Re-ensure the
-   * ticket worktree's App Dev Stack so the next cycle reviews the repaired
+   * ticket worktree's App Stack so the next cycle reviews the repaired
    * code, then resume the parked run with the refreshed frontend URL. A stack
    * that yields no frontend cancels the review instead, which routes the
    * ticket to Code Review with a warning the same way a launch without a
@@ -8584,7 +8584,7 @@ const make = Effect.gen(function* () {
         (candidate) => candidate.ticketId === input.ticketId,
       );
       if (orchestratorThread === null || state?.worktreePath == null) return;
-      const stackResult = yield* appDevStackManager
+      const stackResult = yield* appStackManager
         .autoCreate({
           worktreePath: state.worktreePath,
           displayName: `Ticket ${input.ticketId}`,
@@ -8597,7 +8597,7 @@ const make = Effect.gen(function* () {
         yield* cancelTicketAppReview({
           run: input.run,
           ticketId: input.ticketId,
-          reason: `Ticket App Review could not resume after its repair because the App Dev Stack did not provide a frontend URL${stackResult._tag === "Failure" ? `: ${errorDetail(stackResult.failure)}` : "."}`,
+          reason: `Ticket App Review could not resume after its repair because the App Stack did not provide a frontend URL${stackResult._tag === "Failure" ? `: ${errorDetail(stackResult.failure)}` : "."}`,
           createdAt: input.createdAt,
         });
         return;
@@ -9418,13 +9418,13 @@ const make = Effect.gen(function* () {
     }) {
       const workflowId = workflowIdForRun(input.readModel, input.run);
       if (workflowId === undefined) return;
-      const result = yield* appDevStackManager.workflowTeardown({ workflowId }).pipe(Effect.result);
+      const result = yield* appStackManager.workflowTeardown({ workflowId }).pipe(Effect.result);
       if (result._tag === "Failure") {
         yield* appendActivity({
           threadId: input.run.orchestratorThreadId,
           tone: "info",
           kind: "implementation-run-stack-teardown-failed",
-          summary: `App Dev Stack teardown failed: ${errorDetail(result.failure)}`,
+          summary: `App Stack teardown failed: ${errorDetail(result.failure)}`,
           payload: { runId: input.run.id, workflowId },
           createdAt: input.createdAt,
         });
@@ -9440,7 +9440,7 @@ const make = Effect.gen(function* () {
       ) {
         return;
       }
-      const parts = [`Stopped ${stoppedStackIds.length} workflow App Dev Stack(s)`];
+      const parts = [`Stopped ${stoppedStackIds.length} workflow App Stack(s)`];
       if (skippedProtectedStackIds.length > 0) {
         parts.push(`left ${skippedProtectedStackIds.length} protected`);
       }
@@ -9698,8 +9698,8 @@ const make = Effect.gen(function* () {
           (thread) =>
             thread.parentThreadId === persistedRun.orchestratorThreadId &&
             thread.workflowRole === "implementation-fixer" &&
-            (/^TDD repair \d+\/10 · (?:AppDevStack|App Review)$/u.test(thread.title) ||
-              /(?:AppDevStack|browser app review)/iu.test(thread.title)),
+            (/^TDD repair \d+\/10 · (?:AppStack|App Review)$/u.test(thread.title) ||
+              /(?:AppStack|browser app review)/iu.test(thread.title)),
         );
         const normalizedRepairCount = Math.min(
           IMPLEMENTATION_RUN_MAX_QA_REPAIRS,

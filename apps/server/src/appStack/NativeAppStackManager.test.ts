@@ -5,12 +5,12 @@ import * as NodePath from "node:path";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
-import type { NativeAppDevStackConfig } from "../config.ts";
-import { makeNativeAppDevStackService, type KubectlRunner } from "./NativeAppDevStackManager.ts";
+import type { NativeAppStackConfig } from "../config.ts";
+import { makeNativeAppStackService, type KubectlRunner } from "./NativeAppStackManager.ts";
 import {
-  generateNativeAppDevStackManifests,
+  generateNativeAppStackManifests,
   type NativeCommandRunner,
-} from "./nativeAppDevStackProvisioning.ts";
+} from "./nativeAppStackProvisioning.ts";
 
 const nativeConfig = {
   id: "rudi-dev",
@@ -36,7 +36,7 @@ const nativeConfig = {
   backendUrl: "https://api-rudi-dev.nightingale-ai.com",
   keycloakUrl: "https://rudi-dev-keycloak.nightingale-ai.com",
   minioUrl: "https://minio-rudi-dev.nightingale-ai.com",
-} satisfies NativeAppDevStackConfig;
+} satisfies NativeAppStackConfig;
 
 const namespaceJson = JSON.stringify({
   metadata: { creationTimestamp: "2026-06-25T15:50:50.000Z" },
@@ -116,11 +116,12 @@ it.effect("stamps stack identity on the namespace so discovery can name it", () 
 
   return Effect.gen(function* () {
     const documents = yield* Effect.promise(() =>
-      generateNativeAppDevStackManifests({
+      generateNativeAppStackManifests({
         id: "hero-dev",
         namespace: "hero-dev",
         worktreePath: tempDir,
         composePath: "infra/compose/compose.app-dev.yml",
+        variant: "dev",
         displayName: "hero fix-auth",
         displaySlug: "hero-fix-auth",
         repoName: "hero",
@@ -151,6 +152,7 @@ it.effect("stamps stack identity on the namespace so discovery can name it", () 
       "cortex.ai/display-name": "hero fix-auth",
       "cortex.ai/worktree-path": tempDir,
       "cortex.ai/compose-path": "infra/compose/compose.app-dev.yml",
+      "cortex.ai/variant": "dev",
       "cortex.ai/display-slug": "hero-fix-auth",
       "cortex.ai/repo-name": "hero",
       "cortex.ai/branch-name": "fix-auth",
@@ -189,7 +191,7 @@ it.effect("names a discovered stack from its namespace annotations", () => {
     if (args.join(" ") === "-n hero-dev get deployments -o json") return deploymentsJson;
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(
+  const service = makeNativeAppStackService(
     {
       ...nativeConfig,
       id: undefined,
@@ -235,7 +237,7 @@ it.effect("drops a discovered stack once its namespace leaves the cluster", () =
     if (args.join(" ") === "-n hero-dev get deployments -o json") return deploymentsJson;
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(
+  const service = makeNativeAppStackService(
     {
       ...nativeConfig,
       id: undefined,
@@ -289,7 +291,7 @@ it.effect("keeps a terminating namespace out of the list after delete", () => {
     if (args.join(" ") === "-n hero-dev get deployments -o json") return deploymentsJson;
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(
+  const service = makeNativeAppStackService(
     {
       ...nativeConfig,
       id: undefined,
@@ -324,11 +326,12 @@ it.effect("translates interpolated bind mounts and string commands for Kubernete
 
   return Effect.gen(function* () {
     const documents = yield* Effect.promise(() =>
-      generateNativeAppDevStackManifests({
+      generateNativeAppStackManifests({
         id: "hero-dev",
         namespace: "hero-dev",
         worktreePath: tempDir,
         composePath: "infra/compose/compose.app-dev.yml",
+        variant: "dev",
         displayName: "hero",
         displaySlug: undefined,
         repoName: "hero",
@@ -392,11 +395,12 @@ it.effect("rewrites Compose host port references to Kubernetes service DNS", () 
 
   return Effect.gen(function* () {
     const documents = yield* Effect.promise(() =>
-      generateNativeAppDevStackManifests({
+      generateNativeAppStackManifests({
         id: "hero-dev",
         namespace: "hero-dev",
         worktreePath: tempDir,
         composePath: "infra/compose/compose.app-dev.yml",
+        variant: "dev",
         displayName: "hero",
         displaySlug: undefined,
         repoName: "hero",
@@ -469,11 +473,12 @@ it.effect("seeds anonymous Compose volumes from the container image", () => {
 
   return Effect.gen(function* () {
     const documents = yield* Effect.promise(() =>
-      generateNativeAppDevStackManifests({
+      generateNativeAppStackManifests({
         id: "hero-dev",
         namespace: "hero-dev",
         worktreePath: tempDir,
         composePath: "infra/compose/compose.app-dev.yml",
+        variant: "dev",
         displayName: "hero",
         displaySlug: undefined,
         repoName: "hero",
@@ -556,7 +561,7 @@ it.effect("reports the configured Rudi stack from Kubernetes deployments", () =>
     if (args.join(" ") === "-n rudi-dev get deployments -o json") return deploymentsJson;
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+  const service = makeNativeAppStackService(nativeConfig, runKubectl);
 
   return Effect.gen(function* () {
     const result = yield* service.getByWorktree({ worktreePath: "/home/nils/repos/nils/rudi/" });
@@ -618,7 +623,7 @@ it.effect(
       }
       throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
     };
-    const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+    const service = makeNativeAppStackService(nativeConfig, runKubectl);
 
     return Effect.gen(function* () {
       const result = yield* service.getByWorktree({ worktreePath: "/home/nils/repos/nils/hero" });
@@ -672,7 +677,7 @@ it.effect("keeps derived worktree preview URLs scoped to their namespace", () =>
     }
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+  const service = makeNativeAppStackService(nativeConfig, runKubectl);
 
   return Effect.gen(function* () {
     const result = yield* service.getByWorktree({ worktreePath: "/home/nils/repos/nils/hero" });
@@ -692,7 +697,7 @@ it.effect("lists pods with container readiness and restart counts", () => {
     if (args.join(" ") === "-n rudi-dev get pods -o json") return podsJson;
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+  const service = makeNativeAppStackService(nativeConfig, runKubectl);
 
   return Effect.gen(function* () {
     const result = yield* service.listPods({ stackId: "rudi-dev" });
@@ -747,7 +752,7 @@ it.effect("reads bounded logs for a validated pod container", () => {
     }
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+  const service = makeNativeAppStackService(nativeConfig, runKubectl);
 
   return Effect.gen(function* () {
     const result = yield* service.getPodLogs({
@@ -781,7 +786,7 @@ it.effect("aggregates logs for every reported pod container with the default tai
     }
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+  const service = makeNativeAppStackService(nativeConfig, runKubectl);
 
   return Effect.gen(function* () {
     const result = yield* service.getStackPodLogs({ stackId: "rudi-dev" });
@@ -850,7 +855,7 @@ it.effect("honors bounded aggregate log tail values", () => {
     }
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+  const service = makeNativeAppStackService(nativeConfig, runKubectl);
 
   return Effect.gen(function* () {
     const result = yield* service.getStackPodLogs({ stackId: "rudi-dev", tailLines: 5000 });
@@ -877,7 +882,7 @@ it.effect("keeps successful aggregate log entries when a container log read fail
     }
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+  const service = makeNativeAppStackService(nativeConfig, runKubectl);
 
   return Effect.gen(function* () {
     const result = yield* service.getStackPodLogs({ stackId: "rudi-dev", tailLines: 1000 });
@@ -902,7 +907,7 @@ it.effect("keeps successful aggregate log entries when a container log read fail
 });
 
 it.effect(
-  "discovers app-dev stack namespaces by component label and includes t3code and tilt stacks",
+  "discovers app stack namespaces by component label and includes t3code and tilt stacks",
   () => {
     const calls: Array<ReadonlyArray<string>> = [];
     const namespacesJson = JSON.stringify({
@@ -942,7 +947,7 @@ it.effect(
       if (args.join(" ") === "-n rudi-dev get deployments -o json") return deploymentsJson;
       throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
     };
-    const service = makeNativeAppDevStackService(
+    const service = makeNativeAppStackService(
       {
         ...nativeConfig,
         id: undefined,
@@ -1001,7 +1006,7 @@ it.effect("resolves an unknown stack id after app-dev namespace discovery", () =
     if (args.join(" ") === "-n hero-dev get pods -o json") return podsJson;
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(
+  const service = makeNativeAppStackService(
     {
       ...nativeConfig,
       id: undefined,
@@ -1071,7 +1076,7 @@ it.effect(
       }
       throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
     };
-    const service = makeNativeAppDevStackService(
+    const service = makeNativeAppStackService(
       {
         ...nativeConfig,
         id: undefined,
@@ -1147,7 +1152,7 @@ it.effect("omits kubectl --tail when reading all available discovered stack logs
     }
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(
+  const service = makeNativeAppStackService(
     {
       ...nativeConfig,
       id: undefined,
@@ -1182,7 +1187,7 @@ it.effect("scales deployments when auto-creating an existing native stack", () =
     if (args.join(" ") === "-n rudi-dev scale deployment --all --replicas=1") return "";
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(
+  const service = makeNativeAppStackService(
     {
       ...nativeConfig,
       worktreePath: tempDir,
@@ -1226,7 +1231,7 @@ it.effect("derives a native namespace for a different worktree instead of reject
     if (args.join(" ") === "-n hero-dev scale deployment --all --replicas=1") return "";
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+  const service = makeNativeAppStackService(nativeConfig, runKubectl);
 
   return Effect.gen(function* () {
     const result = yield* service.autoCreate({
@@ -1270,7 +1275,7 @@ it.effect("uses an explicit native namespace for a new worktree when provided", 
     if (args.join(" ") === "-n hero-preview scale deployment --all --replicas=1") return "";
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(
+  const service = makeNativeAppStackService(
     {
       ...nativeConfig,
       id: undefined,
@@ -1340,7 +1345,7 @@ it.effect("provisions Kubernetes resources when auto-creating a missing native n
     if (args.join(" ") === "-n hero-dev get deployments -o json") return deploymentsJson;
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(
+  const service = makeNativeAppStackService(
     {
       ...nativeConfig,
       id: undefined,
@@ -1434,7 +1439,7 @@ it.effect("builds and pushes compose build services before applying Kubernetes r
     commandCalls.push({ command, args, cwd: options?.cwd });
     return "";
   };
-  const service = makeNativeAppDevStackService(
+  const service = makeNativeAppStackService(
     {
       ...nativeConfig,
       id: undefined,
@@ -1553,7 +1558,7 @@ it.effect("can build and push compose build services through BuildKit", () => {
     commandCalls.push({ command, args, cwd: options?.cwd, env: options?.env });
     return "";
   };
-  const service = makeNativeAppDevStackService(
+  const service = makeNativeAppStackService(
     {
       ...nativeConfig,
       id: undefined,
@@ -1630,7 +1635,7 @@ it.effect("finds the app-dev compose file from a nested worktree path", () => {
     if (args.join(" ") === "-n hero-dev get deployments -o json") return deploymentsJson;
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(
+  const service = makeNativeAppStackService(
     {
       ...nativeConfig,
       id: undefined,
@@ -1676,7 +1681,7 @@ it.effect("reports a clear error when the worktree is missing an app-dev compose
     }
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(
+  const service = makeNativeAppStackService(
     {
       ...nativeConfig,
       id: undefined,
@@ -1705,7 +1710,7 @@ it.effect("reports a clear error when the worktree is missing an app-dev compose
 
     assert.include(error.message, "App-dev compose file not found");
     assert.include(error.message, expectedComposePath);
-    assert.include(error.message, "T3CODE_APP_DEV_STACK_NATIVE_COMPOSE_PATH");
+    assert.include(error.message, "T3CODE_APP_STACK_NATIVE_COMPOSE_PATH");
     assert.deepEqual(calls, [["get", "namespace", "hero-dev", "-o", "json"]]);
   }).pipe(
     Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { force: true, recursive: true }))),
@@ -1730,7 +1735,7 @@ it.effect("restores Kubernetes resources when auto-creating an empty native name
     if (args.join(" ") === "-n hero-dev scale deployment --all --replicas=1") return "";
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(
+  const service = makeNativeAppStackService(
     {
       ...nativeConfig,
       id: undefined,
@@ -1784,7 +1789,7 @@ it.effect("does not report a derived worktree stack before its namespace exists"
     }
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(
+  const service = makeNativeAppStackService(
     {
       ...nativeConfig,
       id: undefined,
@@ -1820,7 +1825,7 @@ it.effect("scales native deployments down and back up when restarting", () => {
     if (args.join(" ") === "-n rudi-dev get deployments -o json") return deploymentsJson;
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+  const service = makeNativeAppStackService(nativeConfig, runKubectl);
 
   return Effect.gen(function* () {
     const result = yield* service.restart({ stackId: "rudi-dev" });
@@ -1852,11 +1857,12 @@ it.effect("wires the backend's OpenBao-backed Google OAuth credentials", () => {
 
   return Effect.gen(function* () {
     const documents = yield* Effect.promise(() =>
-      generateNativeAppDevStackManifests({
+      generateNativeAppStackManifests({
         id: "rudi-dev",
         namespace: "rudi-dev",
         worktreePath: tempDir,
         composePath: "infra/compose/compose.app-dev.yml",
+        variant: "dev",
         displayName: "rudi",
         displaySlug: undefined,
         repoName: "rudi",
@@ -1943,11 +1949,12 @@ it.effect("omits the credential wiring for stacks without a backend service", ()
 
   return Effect.gen(function* () {
     const documents = yield* Effect.promise(() =>
-      generateNativeAppDevStackManifests({
+      generateNativeAppStackManifests({
         id: "hero-dev",
         namespace: "hero-dev",
         worktreePath: tempDir,
         composePath: "infra/compose/compose.app-dev.yml",
+        variant: "dev",
         displayName: "hero",
         displaySlug: undefined,
         repoName: "hero",
@@ -2038,7 +2045,7 @@ it.effect("workflow teardown scales down only the workflow's unprotected stacks"
     if (call === "-n ticket-a-dev scale deployment --all --replicas=0") return "";
     throw new Error(`unexpected kubectl call: ${call}`);
   };
-  const service = makeNativeAppDevStackService(
+  const service = makeNativeAppStackService(
     {
       ...nativeConfig,
       id: undefined,
@@ -2092,7 +2099,7 @@ it.effect("protection is stored as a namespace annotation and read back", () => 
     if (call.startsWith("-n ticket-a-dev get ingressroutes")) return JSON.stringify({ items: [] });
     throw new Error(`unexpected kubectl call: ${call}`);
   };
-  const service = makeNativeAppDevStackService(
+  const service = makeNativeAppStackService(
     {
       ...nativeConfig,
       id: undefined,
@@ -2113,4 +2120,170 @@ it.effect("protection is stored as a namespace annotation and read back", () => 
     assert.equal(stack.protected, true);
     assert.equal(stack.workflowId, "workflow-123");
   });
+});
+
+const makeTempProdComposeWorktree = (basename: string) => {
+  const tempDir = makeTempHeroComposeWorktree(undefined, basename);
+  NodeFS.writeFileSync(
+    NodePath.join(tempDir, "infra", "compose", "compose.app-prod.yml"),
+    [
+      "services:",
+      "  app:",
+      "    image: hero-app-prod:latest",
+      "    build:",
+      "      context: ../..",
+      "      dockerfile: Dockerfile",
+      "    environment:",
+      "      NODE_ENV: production",
+      "    ports:",
+      "      - '5733:5733'",
+      "",
+    ].join("\n"),
+  );
+  NodeFS.writeFileSync(NodePath.join(tempDir, "Dockerfile"), "FROM scratch\n");
+  return tempDir;
+};
+
+it.effect("provisions a prod stack from the prod contract in its own namespace", () => {
+  const tempDir = makeTempProdComposeWorktree("hero");
+  const commandCalls: Array<{ readonly command: string; readonly args: ReadonlyArray<string> }> =
+    [];
+  let appliedManifest = "";
+  const runKubectl: KubectlRunner = async (args) => {
+    if (args.join(" ") === "get namespace hero-prod -o json") {
+      if (appliedManifest.length === 0) throw new Error('namespaces "hero-prod" not found');
+      return namespaceJson;
+    }
+    if (args[0] === "apply" && args[1] === "-f" && typeof args[2] === "string") {
+      appliedManifest = NodeFS.readFileSync(args[2], "utf8");
+      return "";
+    }
+    if (args.join(" ") === "-n hero-prod scale deployment --all --replicas=1") return "";
+    if (args.join(" ") === "-n hero-prod get deployments -o json") return deploymentsJson;
+    if (args.join(" ") === "-n hero-prod get ingressroutes.traefik.io -o json") {
+      return JSON.stringify({ items: [] });
+    }
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const runCommand: NativeCommandRunner = async (command, args) => {
+    commandCalls.push({ command, args });
+    if (command === "git" && args.includes("rev-parse")) return "abcdef123456\n";
+    if (command === "git" && args.includes("status")) return "";
+    return "";
+  };
+  const service = makeNativeAppStackService(
+    { ...nativeConfig, id: undefined, namespace: undefined, worktreePath: undefined },
+    runKubectl,
+    runCommand,
+  );
+
+  return Effect.gen(function* () {
+    const result = yield* service.autoCreate({
+      worktreePath: tempDir,
+      displayName: "hero",
+      gitBranch: "rc-1",
+      variant: "prod",
+    });
+
+    assert.equal(result.created, true);
+    assert.equal(result.stack?.namespace, "hero-prod");
+    assert.equal(result.stack?.variant, "prod");
+    assert.equal(result.stack?.composePath, "infra/compose/compose.app-prod.yml");
+    assert.equal(result.stack?.repoName, "hero");
+    assert.include(appliedManifest, "name: hero-prod");
+    assert.include(appliedManifest, "cortex.ai/variant: prod");
+    assert.include(appliedManifest, "cortex.ai/compose-path: infra/compose/compose.app-prod.yml");
+    // The image carries the worktree commit, so a rebuilt candidate rolls out.
+    assert.include(
+      appliedManifest,
+      "image: harbor.nightingale-ai.com/hero/hero-app-prod:abcdef123456",
+    );
+    assert.include(appliedManifest, "imagePullPolicy: IfNotPresent");
+    assert.deepEqual(
+      commandCalls.map((call) => [call.command, ...call.args.slice(0, 2)]),
+      [
+        ["git", "-C", tempDir],
+        ["git", "-C", tempDir],
+        ["docker", "build", "-t"],
+        ["docker", "push", "harbor.nightingale-ai.com/hero/hero-app-prod:abcdef123456"],
+      ],
+    );
+  }).pipe(
+    Effect.ensuring(
+      Effect.sync(() => NodeFS.rmSync(NodePath.dirname(tempDir), { force: true, recursive: true })),
+    ),
+  );
+});
+
+it.effect("keeps a worktree's dev and prod stacks apart", () => {
+  const tempDir = makeTempProdComposeWorktree("hero");
+  const liveNamespaces = new Set<string>();
+  const runKubectl: KubectlRunner = async (args) => {
+    const line = args.join(" ");
+    const match = /^get namespace (\S+) -o json$/u.exec(line);
+    if (match !== null) {
+      if (!liveNamespaces.has(match[1] ?? ""))
+        throw new Error(`namespaces "${match[1]}" not found`);
+      return namespaceJson;
+    }
+    if (args[0] === "apply") {
+      liveNamespaces.add("hero-dev");
+      return "";
+    }
+    if (line.endsWith("scale deployment --all --replicas=1")) return "";
+    if (line.endsWith("get deployments -o json")) return deploymentsJson;
+    if (line.endsWith("get ingressroutes.traefik.io -o json")) {
+      return JSON.stringify({ items: [] });
+    }
+    throw new Error(`unexpected kubectl call: ${line}`);
+  };
+  const service = makeNativeAppStackService(
+    { ...nativeConfig, id: undefined, namespace: undefined, worktreePath: undefined },
+    runKubectl,
+  );
+
+  return Effect.gen(function* () {
+    const dev = yield* service.autoCreate({ worktreePath: tempDir, displayName: "hero" });
+    assert.equal(dev.stack?.namespace, "hero-dev");
+    assert.equal(dev.stack?.variant, "dev");
+
+    // The running dev stack is not an answer for the prod lookup.
+    const byProd = yield* service.getByWorktree({ worktreePath: tempDir, variant: "prod" });
+    assert.equal(byProd.stack, null);
+    const byDev = yield* service.getByWorktree({ worktreePath: tempDir });
+    assert.equal(byDev.stack?.namespace, "hero-dev");
+  }).pipe(
+    Effect.ensuring(
+      Effect.sync(() => NodeFS.rmSync(NodePath.dirname(tempDir), { force: true, recursive: true })),
+    ),
+  );
+});
+
+it.effect("reports a clear error when the worktree has no prod contract", () => {
+  const tempDir = makeTempHeroComposeWorktree(undefined, "hero");
+  const runKubectl: KubectlRunner = async (args) => {
+    if (args.join(" ") === "get namespace hero-prod -o json") {
+      throw new Error('namespaces "hero-prod" not found');
+    }
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppStackService(
+    { ...nativeConfig, id: undefined, namespace: undefined, worktreePath: undefined },
+    runKubectl,
+  );
+
+  return Effect.gen(function* () {
+    const result = yield* service
+      .autoCreate({ worktreePath: tempDir, displayName: "hero", variant: "prod" })
+      .pipe(Effect.result);
+    assert.equal(result._tag, "Failure");
+    if (result._tag === "Failure") {
+      assert.include(result.failure.message, "App-prod compose file not found");
+      assert.include(result.failure.message, "infra/compose/compose.app-prod.yml");
+    }
+  }).pipe(
+    Effect.ensuring(
+      Effect.sync(() => NodeFS.rmSync(NodePath.dirname(tempDir), { force: true, recursive: true })),
+    ),
+  );
 });

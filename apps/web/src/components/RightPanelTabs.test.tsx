@@ -107,7 +107,7 @@ function renderTabs(
       onAddTerminal={() => undefined}
       onAddReview={() => undefined}
       onAddLogs={() => undefined}
-      onAddAppDevStack={() => undefined}
+      onAddAppStack={() => undefined}
       onAddPullRequest={() => undefined}
       onAddDiff={() => undefined}
       onAddFiles={() => undefined}
@@ -122,7 +122,7 @@ function renderTabs(
       logsAvailable={false}
       diffAvailable={false}
       filesAvailable={false}
-      appDevStackAvailable={false}
+      appStackAvailable={false}
       pullRequestAvailable={false}
       agentsAvailable={false}
       workflowsAvailable={false}

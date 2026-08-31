@@ -1,24 +1,24 @@
-# App Dev Stack agent prompt
+# App Stack agent prompt
 
 Copy the prompt below into the coding agent that is working inside the target application
 repository.
 
 ```text
-You are preparing this repository so T3 Code can run it in an App Dev Stack.
+You are preparing this repository so T3 Code can run it in an App Stack.
 
 Outcome:
 - The repository must contain a container entrypoint for the app.
-- The repository must contain an App Dev Stack manifest at infra/compose/compose.app-dev.yml.
+- The repository must contain an App Stack manifest at infra/compose/compose.app-dev.yml.
 - T3 Code must be able to start one isolated Kubernetes stack per worktree.
 - The stack must expose the frontend at the URL that T3 Code derives for the worktree namespace.
-- If this is a TanStack Start app, the TanStack Start server must run inside the App Dev Stack.
+- If this is a TanStack Start app, the TanStack Start server must run inside the App Stack.
 
 Important constraints:
 - Read the repository before editing. Do not guess the package manager, app framework, port, or
   build command.
 - Do not hard-code a worktree name, namespace, or preview host in application code.
 - Do not add secrets to Dockerfiles, compose files, or README examples.
-- Prefer a production-style container for App Dev Stack. Do not run a Vite dev server in the
+- Prefer a production-style container for App Stack. Do not run a Vite dev server in the
   Kubernetes stack unless the repo explicitly has no production server yet.
 - Preserve the repository's existing deployment setup. If the repo already has a deployment
   Dockerfile, add Dockerfile.app-dev instead of replacing it.
@@ -36,10 +36,10 @@ Discovery:
    - vite.config.* imports @tanstack/react-start/plugin/vite.
 
 TanStack Start requirements:
-- The App Dev Stack must run the built TanStack Start server, not only static files.
+- The App Stack must run the built TanStack Start server, not only static files.
 - Ensure package.json has a build script. For Vite-based TanStack Start this is usually:
   "build": "vite build"
-- Add a start script for the App Dev Stack when one is missing:
+- Add a start script for the App Stack when one is missing:
   "start:app-dev": "node .output/server/index.mjs"
 - TanStack Start/Vinxi/Nitro commonly emits .output/server/index.mjs for the Node server. After
   running the build, verify the actual emitted server entry. If the path differs, use the emitted
@@ -52,7 +52,7 @@ TanStack Start requirements:
   PORT=3000
   NITRO_PORT=3000
 - If the app is configured only for an edge adapter such as Cloudflare Workers, add an app-dev Node
-  runtime path without breaking the existing edge deployment. The App Dev Stack target is a
+  runtime path without breaking the existing edge deployment. The App Stack target is a
   Kubernetes container.
 - Server functions run on the Node server. Put server-only configuration in non-VITE environment
   variables. Only use VITE_ variables for values that are safe to bake into the client build.
@@ -113,9 +113,9 @@ Dockerfile requirements:
    userdata
    caches
 
-App Dev Stack manifest requirements:
+App Stack manifest requirements:
 1. Create infra/compose/compose.app-dev.yml.
-2. Treat this file as T3 Code's App Dev Stack manifest. It is docker-compose-shaped YAML, but T3
+2. Treat this file as T3 Code's App Stack manifest. It is docker-compose-shaped YAML, but T3
    Code uses it to generate Kubernetes resources.
 3. Name the public frontend service web, frontend, or app. Prefer web for a single TanStack Start
    frontend.
@@ -184,14 +184,14 @@ URL and namespace contract:
   https://<namespace>-keycloak.nightingale-ai.com
 - MinIO, if present, is:
   https://minio-<namespace>.nightingale-ai.com
-- Do not hard-code those URLs in the repo. The App Dev Stack system owns them.
+- Do not hard-code those URLs in the repo. The App Stack system owns them.
 
 Repository README note:
-Add a short section called "App Dev Stack" that states:
+Add a short section called "App Stack" that states:
 - The manifest path is infra/compose/compose.app-dev.yml.
 - T3 Code derives one namespace per worktree.
 - The public frontend service is web and listens on port 3000.
-- For TanStack Start apps, App Dev Stack runs the built server at .output/server/index.mjs.
+- For TanStack Start apps, App Stack runs the built server at .output/server/index.mjs.
 - Required non-secret environment variables, if any.
 
 Validation:
@@ -220,14 +220,21 @@ Final response:
 
 ## Why these instructions are strict
 
-TanStack Start applications are full-stack servers, not static SPAs. The App Dev Stack must run the
+TanStack Start applications are full-stack servers, not static SPAs. The App Stack must run the
 server output so SSR, server functions, and server routes work. Current TanStack Start deployment
 guidance describes Start as a full-stack framework with server functions and SSR, and common Node
 deployments use the generated `.output/server/index.mjs` server entry.
 
-The App Dev Stack also relies on service names and worktree-derived namespaces for predictable
+The App Stack also relies on service names and worktree-derived namespaces for predictable
 preview URLs. The target repository should describe services and container entrypoints; T3 Code and
-the App Dev Stack controller own namespace creation and public hostnames.
+the App Stack controller own namespace creation and public hostnames.
+
+## Optional: a prod contract
+
+If the repository should also support prod stacks (the production build, no source mounts), add
+`infra/compose/compose.app-prod.yml` next to the dev one: same schema, but each service points at
+a multi-stage Dockerfile that builds the release and runs it, with no worktree bind mounts and no
+dev-server environment. It is only used when a stack is started with the Prod variant.
 
 ## References
 

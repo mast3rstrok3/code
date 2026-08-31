@@ -72,10 +72,10 @@ describe("buildWorktreeRuntimeContext", () => {
       },
     });
 
-    expect(context).toContain("App Dev Stack id: stack-123");
-    expect(context).toContain("App Dev Stack name: Verify email capabilities");
-    expect(context).toContain("App Dev Stack status: running");
-    expect(context).toContain("App Dev Stack URL: https://verify-email.example.test");
+    expect(context).toContain("App Stack id: stack-123");
+    expect(context).toContain("App Stack name: Verify email capabilities");
+    expect(context).toContain("App Stack status: running");
+    expect(context).toContain("App Stack URL: https://verify-email.example.test");
     expect(context).toContain("only authoritative runtime and browser target");
   });
 
@@ -106,8 +106,8 @@ describe("buildWorktreeRuntimeContext", () => {
       },
     });
 
-    expect(context).toContain("App Dev Stack status: starting");
-    expect(context).toContain("Until this worktree's App Dev Stack is healthy");
+    expect(context).toContain("App Stack status: starting");
+    expect(context).toContain("Until this worktree's App Stack is healthy");
     expect(context).not.toContain("only authoritative runtime and browser target");
   });
 });

@@ -4,7 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import {
-  type AppDevStackByWorktreeResult,
+  type AppStackByWorktreeResult,
   ModelSelection,
   ProviderRuntimeEvent,
   ProviderSession,
@@ -69,7 +69,7 @@ import * as Clock from "effect/Clock";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
-import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
+import { AppStackManager } from "../../appStack/AppStackManager.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
@@ -187,7 +187,7 @@ describe("ProviderCommandReactor", () => {
     readonly threadWorkflowPreset?: WorkflowPreset;
     readonly threadWorkflowRole?: OrchestrationThreadWorkflowRole;
     readonly pendingWorkflowTurnBeforeStart?: "active" | "paused";
-    readonly appDevStackByWorktreeResult?: AppDevStackByWorktreeResult;
+    readonly appStackByWorktreeResult?: AppStackByWorktreeResult;
     readonly startSessionEffect?: (
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderAdapterRequestError>;
@@ -344,7 +344,7 @@ describe("ProviderCommandReactor", () => {
     );
     const getByWorktree = vi.fn((_input: { readonly worktreePath: string }) =>
       Effect.succeed(
-        input?.appDevStackByWorktreeResult ?? {
+        input?.appStackByWorktreeResult ?? {
           stack: null,
           frontendUrl: null,
           frontendServiceName: null,
@@ -471,9 +471,9 @@ describe("ProviderCommandReactor", () => {
       ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(
-        Layer.mock(AppDevStackManager)({
+        Layer.mock(AppStackManager)({
           getByWorktree,
-        } satisfies Partial<AppDevStackManager["Service"]>),
+        } satisfies Partial<AppStackManager["Service"]>),
       ),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
@@ -1743,7 +1743,7 @@ describe("ProviderCommandReactor", () => {
     expect(renameInput.newBranch).toBe("please-check-if-our-email-capabilities");
   });
 
-  it("injects authoritative worktree and App Dev Stack state into provider turns", async () => {
+  it("injects authoritative worktree and App Stack state into provider turns", async () => {
     const harness = await createHarness({ threadWorkflowPreset: "fast-feature" });
     const now = "2026-01-01T00:00:00.000Z";
 
@@ -1780,7 +1780,7 @@ describe("ProviderCommandReactor", () => {
     const request = harness.sendTurn.mock.calls[0]?.[0] as { readonly input?: string };
     expect(request.input).toContain("Worktree path: /tmp/worktrees/rudi/worktree-1234abcd");
     expect(request.input).toContain("Git branch: verify-email-capabilities");
-    expect(request.input).toContain("App Dev Stack status: pending workspace dependency readiness");
+    expect(request.input).toContain("App Stack status: pending workspace dependency readiness");
     expect(request.input).toContain("do not substitute another runtime");
     expect(request.input).toMatch(/Check the email capabilities\.$/);
   });

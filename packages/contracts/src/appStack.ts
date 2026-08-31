@@ -11,7 +11,7 @@ import {
 const NullableString = Schema.NullOr(Schema.String);
 const NullableTrimmedNonEmptyString = Schema.NullOr(TrimmedNonEmptyString);
 
-export const AppDevStackStatus = Schema.Literals([
+export const AppStackStatus = Schema.Literals([
   "pending",
   "starting",
   "running",
@@ -19,9 +19,17 @@ export const AppDevStackStatus = Schema.Literals([
   "stopped",
   "error",
 ]);
-export type AppDevStackStatus = typeof AppDevStackStatus.Type;
+export type AppStackStatus = typeof AppStackStatus.Type;
 
-export const AppDevStackService = Schema.Struct({
+/**
+ * Which compose contract a stack runs. `dev` is the hot-reload contract
+ * (`compose.app-dev.yml`); `prod` is the production build
+ * (`compose.app-prod.yml`). A worktree can have one stack of each.
+ */
+export const AppStackVariant = Schema.Literals(["dev", "prod"]);
+export type AppStackVariant = typeof AppStackVariant.Type;
+
+export const AppStackService = Schema.Struct({
   name: TrimmedNonEmptyString,
   status: TrimmedNonEmptyString,
   containerPort: Schema.optionalKey(Schema.NullOr(PortSchema)),
@@ -29,9 +37,9 @@ export const AppDevStackService = Schema.Struct({
   error: Schema.optionalKey(NullableString),
   previewUrl: Schema.optionalKey(NullableTrimmedNonEmptyString),
 });
-export type AppDevStackService = typeof AppDevStackService.Type;
+export type AppStackService = typeof AppStackService.Type;
 
-export const AppDevStackOwner = Schema.Struct({
+export const AppStackOwner = Schema.Struct({
   id: Schema.optionalKey(NullableTrimmedNonEmptyString),
   userId: Schema.optionalKey(NullableTrimmedNonEmptyString),
   label: Schema.optionalKey(NullableString),
@@ -39,17 +47,17 @@ export const AppDevStackOwner = Schema.Struct({
   username: Schema.optionalKey(NullableString),
   email: Schema.optionalKey(NullableString),
 });
-export type AppDevStackOwner = typeof AppDevStackOwner.Type;
+export type AppStackOwner = typeof AppStackOwner.Type;
 
-export const AppDevStackPreviewUrls = Schema.Record(TrimmedNonEmptyString, TrimmedNonEmptyString);
-export type AppDevStackPreviewUrls = typeof AppDevStackPreviewUrls.Type;
+export const AppStackPreviewUrls = Schema.Record(TrimmedNonEmptyString, TrimmedNonEmptyString);
+export type AppStackPreviewUrls = typeof AppStackPreviewUrls.Type;
 
-export const AppDevStack = Schema.Struct({
+export const AppStack = Schema.Struct({
   id: TrimmedNonEmptyString,
   uuid: TrimmedNonEmptyString,
   userId: TrimmedNonEmptyString,
-  user: Schema.optionalKey(Schema.NullOr(AppDevStackOwner)),
-  owner: Schema.optionalKey(Schema.NullOr(AppDevStackOwner)),
+  user: Schema.optionalKey(Schema.NullOr(AppStackOwner)),
+  owner: Schema.optionalKey(Schema.NullOr(AppStackOwner)),
   userLabel: Schema.optionalKey(NullableString),
   userDisplayName: Schema.optionalKey(NullableString),
   userUsername: Schema.optionalKey(NullableString),
@@ -60,15 +68,17 @@ export const AppDevStack = Schema.Struct({
   ownerEmail: Schema.optionalKey(NullableString),
   worktreePath: TrimmedNonEmptyString,
   composePath: TrimmedNonEmptyString,
+  // Servers derive this from composePath; older servers omit it.
+  variant: Schema.optionalKey(AppStackVariant),
   displayName: NullableString,
   displaySlug: Schema.optionalKey(NullableString),
   description: NullableString,
   repoName: Schema.optionalKey(NullableString),
   branchName: Schema.optionalKey(NullableString),
   workflowId: Schema.optionalKey(NullableTrimmedNonEmptyString),
-  status: AppDevStackStatus,
+  status: AppStackStatus,
   namespace: Schema.optionalKey(NullableTrimmedNonEmptyString),
-  services: Schema.NullOr(Schema.Array(AppDevStackService)),
+  services: Schema.NullOr(Schema.Array(AppStackService)),
   serviceCount: NonNegativeInt,
   selectedServices: Schema.optionalKey(Schema.NullOr(Schema.Array(TrimmedNonEmptyString))),
   lastError: NullableString,
@@ -77,26 +87,26 @@ export const AppDevStack = Schema.Struct({
   updatedAt: IsoDateTime,
   lastStartedAt: Schema.optionalKey(Schema.NullOr(IsoDateTime)),
   lastStoppedAt: Schema.optionalKey(Schema.NullOr(IsoDateTime)),
-  previewUrls: Schema.optionalKey(Schema.NullOr(AppDevStackPreviewUrls)),
+  previewUrls: Schema.optionalKey(Schema.NullOr(AppStackPreviewUrls)),
   // Protected stacks survive workflow teardown and are the last thing the
   // environment sheds under memory pressure. Older servers omit the field.
   protected: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
 });
-export type AppDevStack = typeof AppDevStack.Type;
+export type AppStack = typeof AppStack.Type;
 
-export const AppDevStackBackendStatus = Schema.Struct({
+export const AppStackBackendStatus = Schema.Struct({
   enabled: Schema.Boolean,
   backendUrl: Schema.NullOr(TrimmedNonEmptyString),
 });
-export type AppDevStackBackendStatus = typeof AppDevStackBackendStatus.Type;
+export type AppStackBackendStatus = typeof AppStackBackendStatus.Type;
 
-export const AppDevStackListInput = Schema.Struct({
+export const AppStackListInput = Schema.Struct({
   userId: Schema.optional(NullableTrimmedNonEmptyString),
 });
-export type AppDevStackListInput = typeof AppDevStackListInput.Type;
+export type AppStackListInput = typeof AppStackListInput.Type;
 
-export const AppDevStackListResult = Schema.Struct({
-  stacks: Schema.Array(AppDevStack),
+export const AppStackListResult = Schema.Struct({
+  stacks: Schema.Array(AppStack),
   workflowConflicts: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({
@@ -109,56 +119,61 @@ export const AppDevStackListResult = Schema.Struct({
     ),
   ),
 });
-export type AppDevStackListResult = typeof AppDevStackListResult.Type;
+export type AppStackListResult = typeof AppStackListResult.Type;
 
-export const AppDevStackByWorktreeInput = Schema.Struct({
+export const AppStackByWorktreeInput = Schema.Struct({
   worktreePath: TrimmedNonEmptyString,
+  // Defaults to dev.
+  variant: Schema.optional(AppStackVariant),
 });
-export type AppDevStackByWorktreeInput = typeof AppDevStackByWorktreeInput.Type;
+export type AppStackByWorktreeInput = typeof AppStackByWorktreeInput.Type;
 
-export const AppDevStackByWorktreeResult = Schema.Struct({
-  stack: Schema.NullOr(AppDevStack),
+export const AppStackByWorktreeResult = Schema.Struct({
+  stack: Schema.NullOr(AppStack),
   frontendUrl: Schema.NullOr(TrimmedNonEmptyString),
   frontendServiceName: Schema.NullOr(TrimmedNonEmptyString),
 });
-export type AppDevStackByWorktreeResult = typeof AppDevStackByWorktreeResult.Type;
+export type AppStackByWorktreeResult = typeof AppStackByWorktreeResult.Type;
 
-export const AppDevStackGetInput = Schema.Struct({
+export const AppStackGetInput = Schema.Struct({
   stackId: TrimmedNonEmptyString,
 });
-export type AppDevStackGetInput = typeof AppDevStackGetInput.Type;
+export type AppStackGetInput = typeof AppStackGetInput.Type;
 
-export const AppDevStackSetProtectedInput = Schema.Struct({
+export const AppStackSetProtectedInput = Schema.Struct({
   stackId: TrimmedNonEmptyString,
   protected: Schema.Boolean,
 });
-export type AppDevStackSetProtectedInput = typeof AppDevStackSetProtectedInput.Type;
+export type AppStackSetProtectedInput = typeof AppStackSetProtectedInput.Type;
 
-export const AppDevStackWorkflowTeardownInput = Schema.Struct({
+export const AppStackWorkflowTeardownInput = Schema.Struct({
   workflowId: TrimmedNonEmptyString,
 });
-export type AppDevStackWorkflowTeardownInput = typeof AppDevStackWorkflowTeardownInput.Type;
+export type AppStackWorkflowTeardownInput = typeof AppStackWorkflowTeardownInput.Type;
 
-export const AppDevStackWorkflowTeardownResult = Schema.Struct({
+export const AppStackWorkflowTeardownResult = Schema.Struct({
   stoppedStackIds: Schema.Array(TrimmedNonEmptyString),
   skippedProtectedStackIds: Schema.Array(TrimmedNonEmptyString),
   failedStackIds: Schema.Array(TrimmedNonEmptyString),
 });
-export type AppDevStackWorkflowTeardownResult = typeof AppDevStackWorkflowTeardownResult.Type;
+export type AppStackWorkflowTeardownResult = typeof AppStackWorkflowTeardownResult.Type;
 
-export const AppDevStackAutoCreateInput = Schema.Struct({
+export const AppStackAutoCreateInput = Schema.Struct({
   worktreePath: TrimmedNonEmptyString,
   displayName: TrimmedNonEmptyString,
   gitBranch: Schema.optional(NullableTrimmedNonEmptyString),
   namespace: Schema.optional(NullableTrimmedNonEmptyString),
   workflowId: Schema.optional(NullableTrimmedNonEmptyString),
+  // Defaults to dev. Nothing picks prod on the caller's behalf: workflows
+  // never set it, and the panel asks for it explicitly.
+  variant: Schema.optional(AppStackVariant),
 });
-export type AppDevStackAutoCreateInput = typeof AppDevStackAutoCreateInput.Type;
+export type AppStackAutoCreateInput = typeof AppStackAutoCreateInput.Type;
 
-export const AppDevStackAutoCreateResult = Schema.Struct({
+export const AppStackAutoCreateResult = Schema.Struct({
   // Null only for reserved branches, which are served by a standing
   // deployment (frontendUrl) instead of a per-worktree stack.
-  stack: Schema.NullOr(AppDevStack),
+  stack: Schema.NullOr(AppStack),
   created: Schema.Boolean,
   alreadyRunning: Schema.optional(Schema.Boolean),
   reserved: Schema.optional(Schema.Boolean),
@@ -166,22 +181,22 @@ export const AppDevStackAutoCreateResult = Schema.Struct({
   frontendUrl: Schema.NullOr(TrimmedNonEmptyString),
   frontendServiceName: Schema.NullOr(TrimmedNonEmptyString),
 });
-export type AppDevStackAutoCreateResult = typeof AppDevStackAutoCreateResult.Type;
+export type AppStackAutoCreateResult = typeof AppStackAutoCreateResult.Type;
 
-export const AppDevStackDeleteResult = Schema.Struct({
+export const AppStackDeleteResult = Schema.Struct({
   deleted: Schema.Literal(true),
 });
-export type AppDevStackDeleteResult = typeof AppDevStackDeleteResult.Type;
+export type AppStackDeleteResult = typeof AppStackDeleteResult.Type;
 
-export const AppDevStackPodContainer = Schema.Struct({
+export const AppStackPodContainer = Schema.Struct({
   name: TrimmedNonEmptyString,
   ready: Schema.Boolean,
   restartCount: NonNegativeInt,
   state: Schema.NullOr(TrimmedNonEmptyString),
 });
-export type AppDevStackPodContainer = typeof AppDevStackPodContainer.Type;
+export type AppStackPodContainer = typeof AppStackPodContainer.Type;
 
-export const AppDevStackPod = Schema.Struct({
+export const AppStackPod = Schema.Struct({
   name: TrimmedNonEmptyString,
   phase: TrimmedNonEmptyString,
   readyContainerCount: NonNegativeInt,
@@ -193,26 +208,26 @@ export const AppDevStackPod = Schema.Struct({
   ownerName: Schema.optionalKey(NullableTrimmedNonEmptyString),
   previewUrl: Schema.optionalKey(NullableTrimmedNonEmptyString),
   previewServiceName: Schema.optionalKey(NullableTrimmedNonEmptyString),
-  containers: Schema.Array(AppDevStackPodContainer),
+  containers: Schema.Array(AppStackPodContainer),
 });
-export type AppDevStackPod = typeof AppDevStackPod.Type;
+export type AppStackPod = typeof AppStackPod.Type;
 
-export const AppDevStackListPodsInput = Schema.Struct({
+export const AppStackListPodsInput = Schema.Struct({
   stackId: TrimmedNonEmptyString,
 });
-export type AppDevStackListPodsInput = typeof AppDevStackListPodsInput.Type;
+export type AppStackListPodsInput = typeof AppStackListPodsInput.Type;
 
-export const AppDevStackListPodsResult = Schema.Struct({
+export const AppStackListPodsResult = Schema.Struct({
   stackId: TrimmedNonEmptyString,
   namespace: TrimmedNonEmptyString,
-  pods: Schema.Array(AppDevStackPod),
+  pods: Schema.Array(AppStackPod),
 });
-export type AppDevStackListPodsResult = typeof AppDevStackListPodsResult.Type;
+export type AppStackListPodsResult = typeof AppStackListPodsResult.Type;
 
-export const AppDevStackPodLogTailLines = PositiveInt.check(Schema.isLessThanOrEqualTo(5_000));
-export type AppDevStackPodLogTailLines = typeof AppDevStackPodLogTailLines.Type;
+export const AppStackPodLogTailLines = PositiveInt.check(Schema.isLessThanOrEqualTo(5_000));
+export type AppStackPodLogTailLines = typeof AppStackPodLogTailLines.Type;
 
-export const AppDevStackLogReadLimit = Schema.Union([
+export const AppStackLogReadLimit = Schema.Union([
   Schema.Struct({
     mode: Schema.Literal("tail"),
     tailLines: Schema.optional(
@@ -225,28 +240,28 @@ export const AppDevStackLogReadLimit = Schema.Union([
     mode: Schema.Literal("all"),
   }),
 ]);
-export type AppDevStackLogReadLimit = typeof AppDevStackLogReadLimit.Type;
+export type AppStackLogReadLimit = typeof AppStackLogReadLimit.Type;
 
-export const AppDevStackGetPodLogsInput = Schema.Struct({
+export const AppStackGetPodLogsInput = Schema.Struct({
   stackId: TrimmedNonEmptyString,
   podName: TrimmedNonEmptyString,
   containerName: Schema.optional(NullableTrimmedNonEmptyString),
-  tailLines: Schema.optional(AppDevStackPodLogTailLines),
+  tailLines: Schema.optional(AppStackPodLogTailLines),
 });
-export type AppDevStackGetPodLogsInput = typeof AppDevStackGetPodLogsInput.Type;
+export type AppStackGetPodLogsInput = typeof AppStackGetPodLogsInput.Type;
 
-export const AppDevStackGetPodLogsResult = Schema.Struct({
+export const AppStackGetPodLogsResult = Schema.Struct({
   stackId: TrimmedNonEmptyString,
   namespace: TrimmedNonEmptyString,
   podName: TrimmedNonEmptyString,
   containerName: Schema.NullOr(TrimmedNonEmptyString),
-  tailLines: AppDevStackPodLogTailLines,
+  tailLines: AppStackPodLogTailLines,
   logs: Schema.String,
   fetchedAt: IsoDateTime,
 });
-export type AppDevStackGetPodLogsResult = typeof AppDevStackGetPodLogsResult.Type;
+export type AppStackGetPodLogsResult = typeof AppStackGetPodLogsResult.Type;
 
-export const AppDevStackPodLogEntry = Schema.Struct({
+export const AppStackPodLogEntry = Schema.Struct({
   podName: TrimmedNonEmptyString,
   containerName: TrimmedNonEmptyString,
   phase: TrimmedNonEmptyString,
@@ -259,25 +274,25 @@ export const AppDevStackPodLogEntry = Schema.Struct({
   error: Schema.NullOr(TrimmedNonEmptyString),
   fetchedAt: IsoDateTime,
 });
-export type AppDevStackPodLogEntry = typeof AppDevStackPodLogEntry.Type;
+export type AppStackPodLogEntry = typeof AppStackPodLogEntry.Type;
 
-export const AppDevStackGetStackPodLogsInput = Schema.Struct({
+export const AppStackGetStackPodLogsInput = Schema.Struct({
   stackId: TrimmedNonEmptyString,
-  tailLines: Schema.optional(AppDevStackPodLogTailLines),
+  tailLines: Schema.optional(AppStackPodLogTailLines),
 });
-export type AppDevStackGetStackPodLogsInput = typeof AppDevStackGetStackPodLogsInput.Type;
+export type AppStackGetStackPodLogsInput = typeof AppStackGetStackPodLogsInput.Type;
 
-export const AppDevStackGetStackPodLogsResult = Schema.Struct({
+export const AppStackGetStackPodLogsResult = Schema.Struct({
   stackId: TrimmedNonEmptyString,
   namespace: TrimmedNonEmptyString,
-  tailLines: AppDevStackPodLogTailLines,
-  pods: Schema.Array(AppDevStackPod),
-  entries: Schema.Array(AppDevStackPodLogEntry),
+  tailLines: AppStackPodLogTailLines,
+  pods: Schema.Array(AppStackPod),
+  entries: Schema.Array(AppStackPodLogEntry),
   fetchedAt: IsoDateTime,
 });
-export type AppDevStackGetStackPodLogsResult = typeof AppDevStackGetStackPodLogsResult.Type;
+export type AppStackGetStackPodLogsResult = typeof AppStackGetStackPodLogsResult.Type;
 
-export const AppDevStackDiscoveredStackPodLogs = Schema.Struct({
+export const AppStackDiscoveredStackPodLogs = Schema.Struct({
   stackId: TrimmedNonEmptyString,
   namespace: TrimmedNonEmptyString,
   displayName: Schema.optionalKey(NullableString),
@@ -286,33 +301,30 @@ export const AppDevStackDiscoveredStackPodLogs = Schema.Struct({
   branchName: Schema.optionalKey(NullableString),
   worktreePath: Schema.optionalKey(NullableString),
   managedBy: Schema.optionalKey(NullableTrimmedNonEmptyString),
-  limit: AppDevStackLogReadLimit,
-  pods: Schema.Array(AppDevStackPod),
-  entries: Schema.Array(AppDevStackPodLogEntry),
+  limit: AppStackLogReadLimit,
+  pods: Schema.Array(AppStackPod),
+  entries: Schema.Array(AppStackPodLogEntry),
   error: Schema.NullOr(TrimmedNonEmptyString),
   fetchedAt: IsoDateTime,
 });
-export type AppDevStackDiscoveredStackPodLogs = typeof AppDevStackDiscoveredStackPodLogs.Type;
+export type AppStackDiscoveredStackPodLogs = typeof AppStackDiscoveredStackPodLogs.Type;
 
-export const AppDevStackGetAllStackPodLogsInput = Schema.Struct({
-  limit: Schema.optional(AppDevStackLogReadLimit),
+export const AppStackGetAllStackPodLogsInput = Schema.Struct({
+  limit: Schema.optional(AppStackLogReadLimit),
 });
-export type AppDevStackGetAllStackPodLogsInput = typeof AppDevStackGetAllStackPodLogsInput.Type;
+export type AppStackGetAllStackPodLogsInput = typeof AppStackGetAllStackPodLogsInput.Type;
 
-export const AppDevStackGetAllStackPodLogsResult = Schema.Struct({
-  limit: AppDevStackLogReadLimit,
-  stacks: Schema.Array(AppDevStackDiscoveredStackPodLogs),
+export const AppStackGetAllStackPodLogsResult = Schema.Struct({
+  limit: AppStackLogReadLimit,
+  stacks: Schema.Array(AppStackDiscoveredStackPodLogs),
   fetchedAt: IsoDateTime,
 });
-export type AppDevStackGetAllStackPodLogsResult = typeof AppDevStackGetAllStackPodLogsResult.Type;
+export type AppStackGetAllStackPodLogsResult = typeof AppStackGetAllStackPodLogsResult.Type;
 
-export class AppDevStackError extends Schema.TaggedErrorClass<AppDevStackError>()(
-  "AppDevStackError",
-  {
-    operation: TrimmedNonEmptyString,
-    reason: Schema.optional(Schema.Literals(["disabled", "request_failed", "invalid_response"])),
-    status: Schema.optional(NonNegativeInt),
-    message: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class AppStackError extends Schema.TaggedErrorClass<AppStackError>()("AppStackError", {
+  operation: TrimmedNonEmptyString,
+  reason: Schema.optional(Schema.Literals(["disabled", "request_failed", "invalid_response"])),
+  status: Schema.optional(NonNegativeInt),
+  message: TrimmedNonEmptyString,
+  cause: Schema.optional(Schema.Defect()),
+}) {}

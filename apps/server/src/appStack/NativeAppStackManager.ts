@@ -1,35 +1,39 @@
 import {
-  type AppDevStack,
-  type AppDevStackAutoCreateInput,
-  type AppDevStackAutoCreateResult,
-  type AppDevStackBackendStatus,
-  type AppDevStackByWorktreeResult,
-  type AppDevStackDeleteResult,
-  AppDevStackError,
-  type AppDevStackGetAllStackPodLogsInput,
-  type AppDevStackGetAllStackPodLogsResult,
-  type AppDevStackGetPodLogsInput,
-  type AppDevStackGetPodLogsResult,
-  type AppDevStackGetStackPodLogsInput,
-  type AppDevStackGetStackPodLogsResult,
-  type AppDevStackGetInput,
-  type AppDevStackListPodsInput,
-  type AppDevStackListPodsResult,
-  type AppDevStackListInput,
-  type AppDevStackListResult,
-  type AppDevStackPod,
-  type AppDevStackPodContainer,
-  type AppDevStackPodLogEntry,
-  type AppDevStackService,
-  type AppDevStackSetProtectedInput,
-  type AppDevStackWorkflowTeardownInput,
-  type AppDevStackWorkflowTeardownResult,
+  type AppStack,
+  type AppStackAutoCreateInput,
+  type AppStackAutoCreateResult,
+  type AppStackBackendStatus,
+  type AppStackByWorktreeResult,
+  type AppStackDeleteResult,
+  AppStackError,
+  type AppStackGetAllStackPodLogsInput,
+  type AppStackGetAllStackPodLogsResult,
+  type AppStackGetPodLogsInput,
+  type AppStackGetPodLogsResult,
+  type AppStackGetStackPodLogsInput,
+  type AppStackGetStackPodLogsResult,
+  type AppStackGetInput,
+  type AppStackListPodsInput,
+  type AppStackListPodsResult,
+  type AppStackListInput,
+  type AppStackListResult,
+  type AppStackPod,
+  type AppStackPodContainer,
+  type AppStackPodLogEntry,
+  type AppStackService,
+  type AppStackSetProtectedInput,
+  type AppStackWorkflowTeardownInput,
+  type AppStackWorkflowTeardownResult,
+  type AppStackVariant,
 } from "@t3tools/contracts";
 import {
-  appDevStackPreviewUrlForService,
-  deriveAppDevStackNamespaceFromPath,
+  appStackComposePathForVariant,
+  appStackPreviewUrlForService,
+  appStackVariantForComposePath,
+  appStackVariantForNamespace,
+  deriveAppStackNamespaceFromPath,
   normalizeKubernetesNamespace,
-} from "@t3tools/shared/appDevStack";
+} from "@t3tools/shared/appStack";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -37,22 +41,23 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import type { NativeAppDevStackConfig } from "../config.ts";
+import type { NativeAppStackConfig } from "../config.ts";
 import {
-  provisionNativeAppDevStack,
+  provisionNativeAppStack,
   type NativeCommandRunner,
-} from "./nativeAppDevStackProvisioning.ts";
+  APP_STACK_VARIANT_ANNOTATION,
+} from "./nativeAppStackProvisioning.ts";
 
 const NATIVE_USER_ID = "00000000-0000-0000-0000-000000000000";
 const DEFAULT_LOG_TAIL_LINES = 300;
 const POD_LOG_FETCH_CONCURRENCY = 4;
 const STACK_LOG_FETCH_CONCURRENCY = 3;
-const APP_DEV_STACK_COMPONENT_LABEL = "cortex.ai/component";
-const APP_DEV_STACK_COMPONENT_VALUE = "app-dev-stack";
-const APP_DEV_STACK_STACK_ID_LABEL = "cortex.ai/stack-id";
-const APP_DEV_STACK_WORKFLOW_ANNOTATION = "cortex.ai/workflow-id";
-const APP_DEV_STACK_PROTECTED_ANNOTATION = "cortex.ai/protected";
-const APP_DEV_STACK_MANAGED_BY_LABEL = "app.kubernetes.io/managed-by";
+const APP_STACK_COMPONENT_LABEL = "cortex.ai/component";
+const APP_STACK_COMPONENT_VALUE = "app-dev-stack";
+const APP_STACK_STACK_ID_LABEL = "cortex.ai/stack-id";
+const APP_STACK_WORKFLOW_ANNOTATION = "cortex.ai/workflow-id";
+const APP_STACK_PROTECTED_ANNOTATION = "cortex.ai/protected";
+const APP_STACK_MANAGED_BY_LABEL = "app.kubernetes.io/managed-by";
 
 interface KubectlDeploymentList {
   readonly items?: ReadonlyArray<{
@@ -167,11 +172,12 @@ interface KubectlContainerStatus {
 
 export type KubectlRunner = (args: ReadonlyArray<string>) => Promise<string>;
 
-interface ResolvedNativeAppDevStackConfig {
+interface ResolvedNativeAppStackConfig {
   readonly id: string;
   readonly namespace: string;
   readonly worktreePath: string;
   readonly composePath: string;
+  readonly variant: AppStackVariant;
   readonly displayName: string;
   readonly displaySlug: string | undefined;
   readonly repoName: string | undefined;
@@ -181,7 +187,7 @@ interface ResolvedNativeAppDevStackConfig {
   readonly kubectlPath: string;
   readonly dockerPath: string;
   readonly buildctlPath: string;
-  readonly imageBuilder: NativeAppDevStackConfig["imageBuilder"];
+  readonly imageBuilder: NativeAppStackConfig["imageBuilder"];
   readonly imageRegistry: string | undefined;
   readonly imagePushRegistry: string | undefined;
   readonly imageProject: string | undefined;
@@ -196,41 +202,38 @@ interface ResolvedNativeAppDevStackConfig {
   readonly preferStackScopedUrls: boolean;
 }
 
-export interface NativeAppDevStackService {
-  readonly status: Effect.Effect<AppDevStackBackendStatus>;
-  readonly list: (
-    input: AppDevStackListInput,
-  ) => Effect.Effect<AppDevStackListResult, AppDevStackError>;
+export interface NativeAppStackService {
+  readonly status: Effect.Effect<AppStackBackendStatus>;
+  readonly list: (input: AppStackListInput) => Effect.Effect<AppStackListResult, AppStackError>;
   readonly getByWorktree: (input: {
     readonly worktreePath: string;
-  }) => Effect.Effect<AppDevStackByWorktreeResult, AppDevStackError>;
-  readonly get: (input: AppDevStackGetInput) => Effect.Effect<AppDevStack, AppDevStackError>;
+    readonly variant?: AppStackVariant | undefined;
+  }) => Effect.Effect<AppStackByWorktreeResult, AppStackError>;
+  readonly get: (input: AppStackGetInput) => Effect.Effect<AppStack, AppStackError>;
   readonly autoCreate: (
-    input: AppDevStackAutoCreateInput,
-  ) => Effect.Effect<AppDevStackAutoCreateResult, AppDevStackError>;
-  readonly stop: (input: AppDevStackGetInput) => Effect.Effect<AppDevStack, AppDevStackError>;
+    input: AppStackAutoCreateInput,
+  ) => Effect.Effect<AppStackAutoCreateResult, AppStackError>;
+  readonly stop: (input: AppStackGetInput) => Effect.Effect<AppStack, AppStackError>;
   readonly setProtected: (
-    input: AppDevStackSetProtectedInput,
-  ) => Effect.Effect<AppDevStack, AppDevStackError>;
+    input: AppStackSetProtectedInput,
+  ) => Effect.Effect<AppStack, AppStackError>;
   readonly workflowTeardown: (
-    input: AppDevStackWorkflowTeardownInput,
-  ) => Effect.Effect<AppDevStackWorkflowTeardownResult, AppDevStackError>;
-  readonly restart: (input: AppDevStackGetInput) => Effect.Effect<AppDevStack, AppDevStackError>;
-  readonly delete: (
-    input: AppDevStackGetInput,
-  ) => Effect.Effect<AppDevStackDeleteResult, AppDevStackError>;
+    input: AppStackWorkflowTeardownInput,
+  ) => Effect.Effect<AppStackWorkflowTeardownResult, AppStackError>;
+  readonly restart: (input: AppStackGetInput) => Effect.Effect<AppStack, AppStackError>;
+  readonly delete: (input: AppStackGetInput) => Effect.Effect<AppStackDeleteResult, AppStackError>;
   readonly listPods: (
-    input: AppDevStackListPodsInput,
-  ) => Effect.Effect<AppDevStackListPodsResult, AppDevStackError>;
+    input: AppStackListPodsInput,
+  ) => Effect.Effect<AppStackListPodsResult, AppStackError>;
   readonly getPodLogs: (
-    input: AppDevStackGetPodLogsInput,
-  ) => Effect.Effect<AppDevStackGetPodLogsResult, AppDevStackError>;
+    input: AppStackGetPodLogsInput,
+  ) => Effect.Effect<AppStackGetPodLogsResult, AppStackError>;
   readonly getStackPodLogs: (
-    input: AppDevStackGetStackPodLogsInput,
-  ) => Effect.Effect<AppDevStackGetStackPodLogsResult, AppDevStackError>;
+    input: AppStackGetStackPodLogsInput,
+  ) => Effect.Effect<AppStackGetStackPodLogsResult, AppStackError>;
   readonly getAllStackPodLogs: (
-    input: AppDevStackGetAllStackPodLogsInput,
-  ) => Effect.Effect<AppDevStackGetAllStackPodLogsResult, AppDevStackError>;
+    input: AppStackGetAllStackPodLogsInput,
+  ) => Effect.Effect<AppStackGetAllStackPodLogsResult, AppStackError>;
 }
 
 const collectProcessOutput = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.Effect<string, E> =>
@@ -305,6 +308,9 @@ const parseJson = <Value>(raw: string): Value => JSON.parse(raw) as Value;
 
 const normalizePath = (path: string) => path.trim().replace(/[/\\]+$/u, "") || path.trim();
 
+const worktreeKey = (path: string, variant: AppStackVariant) =>
+  `${normalizePath(path)}\u0000${variant}`;
+
 const pathBasename = (path: string) => {
   const normalized = normalizePath(path);
   const slashIndex = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"));
@@ -317,12 +323,9 @@ const normalizeOptionalNamespace = (namespace: string | null | undefined) => {
 };
 
 const optionalConfiguredUrls = (
-  config: NativeAppDevStackConfig,
+  config: NativeAppStackConfig,
   namespace: string,
-): Pick<
-  ResolvedNativeAppDevStackConfig,
-  "frontendUrl" | "backendUrl" | "keycloakUrl" | "minioUrl"
-> =>
+): Pick<ResolvedNativeAppStackConfig, "frontendUrl" | "backendUrl" | "keycloakUrl" | "minioUrl"> =>
   config.namespace !== undefined && normalizeKubernetesNamespace(config.namespace) === namespace
     ? {
         frontendUrl: config.frontendUrl,
@@ -353,19 +356,19 @@ const annotationValue = (
 ): string | undefined => nonEmptyString(annotations?.[key]);
 
 const displayNameFromNamespace = (namespace: string): string =>
-  namespace.replace(/-dev$/u, "") || namespace;
+  namespace.replace(/-(?:dev|prod)$/u, "") || namespace;
 
 const resolveNativeConfigForNamespace = (
-  config: NativeAppDevStackConfig,
+  config: NativeAppStackConfig,
   namespace: KubectlNamespace,
-): ResolvedNativeAppDevStackConfig | null => {
+): ResolvedNativeAppStackConfig | null => {
   const rawNamespace = namespace.metadata?.name;
   const normalizedNamespace = normalizeOptionalNamespace(rawNamespace);
   if (normalizedNamespace === undefined) return null;
 
   const labels = namespace.metadata?.labels;
   const annotations = namespace.metadata?.annotations;
-  const stackId = labelValue(labels, APP_DEV_STACK_STACK_ID_LABEL) ?? normalizedNamespace;
+  const stackId = labelValue(labels, APP_STACK_STACK_ID_LABEL) ?? normalizedNamespace;
   const repoName =
     annotationValue(annotations, "cortex.ai/repo-name") ??
     labelValue(labels, "cortex.ai/repo-name") ??
@@ -379,14 +382,24 @@ const resolveNativeConfigForNamespace = (
     labelValue(labels, "cortex.ai/worktree-path") ??
     `/app-dev-stacks/${normalizedNamespace}`;
 
+  const composePathAnnotation =
+    annotationValue(annotations, "cortex.ai/compose-path") ??
+    labelValue(labels, "cortex.ai/compose-path");
+  const annotatedVariant = annotationValue(annotations, APP_STACK_VARIANT_ANNOTATION);
+  const variant: AppStackVariant =
+    annotatedVariant === "dev" || annotatedVariant === "prod"
+      ? annotatedVariant
+      : composePathAnnotation !== undefined
+        ? appStackVariantForComposePath(composePathAnnotation)
+        : appStackVariantForNamespace(normalizedNamespace);
+
   return {
     id: stackId,
     namespace: normalizedNamespace,
     worktreePath,
     composePath:
-      annotationValue(annotations, "cortex.ai/compose-path") ??
-      labelValue(labels, "cortex.ai/compose-path") ??
-      config.composePath,
+      composePathAnnotation ?? appStackComposePathForVariant(config.composePath, variant),
+    variant,
     displayName,
     displaySlug:
       annotationValue(annotations, "cortex.ai/display-slug") ??
@@ -395,8 +408,8 @@ const resolveNativeConfigForNamespace = (
     branchName:
       annotationValue(annotations, "cortex.ai/branch-name") ??
       labelValue(labels, "cortex.ai/branch-name"),
-    workflowId: annotationValue(annotations, APP_DEV_STACK_WORKFLOW_ANNOTATION),
-    protected: annotationValue(annotations, APP_DEV_STACK_PROTECTED_ANNOTATION) === "true",
+    workflowId: annotationValue(annotations, APP_STACK_WORKFLOW_ANNOTATION),
+    protected: annotationValue(annotations, APP_STACK_PROTECTED_ANNOTATION) === "true",
     kubectlPath: config.kubectlPath,
     dockerPath: config.dockerPath,
     buildctlPath: config.buildctlPath,
@@ -416,29 +429,37 @@ const resolveNativeConfigForNamespace = (
 };
 
 const resolveNativeConfigForWorktree = (
-  config: NativeAppDevStackConfig,
+  config: NativeAppStackConfig,
   input: {
     readonly worktreePath: string;
     readonly displayName?: string | null | undefined;
     readonly gitBranch?: string | null | undefined;
     readonly namespace?: string | null | undefined;
     readonly workflowId?: string | null | undefined;
+    readonly variant?: AppStackVariant | null | undefined;
     readonly preferConfiguredNamespace?: boolean;
   },
-): ResolvedNativeAppDevStackConfig => {
+): ResolvedNativeAppStackConfig => {
   const worktreePath = normalizePath(input.worktreePath);
+  const variant = input.variant ?? "dev";
+  // The env-configured stack (namespace, URLs, metadata) describes one
+  // variant; the other variant of the same worktree gets its own derived
+  // namespace so both can run side by side.
+  const configuredVariant = appStackVariantForComposePath(config.composePath);
   const configuredWorktreeMatches =
+    variant === configuredVariant &&
     config.worktreePath !== undefined &&
     normalizePath(config.worktreePath) === normalizePath(input.worktreePath);
   const configuredNamespace =
-    configuredWorktreeMatches || input.preferConfiguredNamespace === true
+    variant === configuredVariant &&
+    (configuredWorktreeMatches || input.preferConfiguredNamespace === true)
       ? normalizeOptionalNamespace(config.namespace)
       : undefined;
   const namespace =
     normalizeOptionalNamespace(input.namespace) ??
     configuredNamespace ??
-    deriveAppDevStackNamespaceFromPath(worktreePath);
-  const repoName = pathBasename(worktreePath) || namespace.replace(/-dev$/u, "");
+    deriveAppStackNamespaceFromPath(worktreePath, variant);
+  const repoName = pathBasename(worktreePath) || namespace.replace(/-(?:dev|prod)$/u, "");
   const useConfiguredMetadata = configuredWorktreeMatches || configuredNamespace === namespace;
   const displayName =
     input.displayName?.trim() || (useConfiguredMetadata ? config.displayName : undefined);
@@ -447,7 +468,8 @@ const resolveNativeConfigForWorktree = (
     id: useConfiguredMetadata && config.id !== undefined ? config.id : namespace,
     namespace,
     worktreePath,
-    composePath: config.composePath,
+    composePath: appStackComposePathForVariant(config.composePath, variant),
+    variant,
     displayName: displayName?.trim() || repoName,
     displaySlug: useConfiguredMetadata ? config.displaySlug : undefined,
     repoName: useConfiguredMetadata && config.repoName !== undefined ? config.repoName : repoName,
@@ -473,14 +495,15 @@ const resolveNativeConfigForWorktree = (
 };
 
 const resolveConfiguredNativeConfig = (
-  config: NativeAppDevStackConfig,
-): ResolvedNativeAppDevStackConfig | null => {
+  config: NativeAppStackConfig,
+): ResolvedNativeAppStackConfig | null => {
   if (config.worktreePath === undefined) return null;
   return resolveNativeConfigForWorktree(config, {
     worktreePath: config.worktreePath,
     displayName: config.displayName,
     gitBranch: config.branchName,
     namespace: config.namespace,
+    variant: appStackVariantForComposePath(config.composePath),
     preferConfiguredNamespace: true,
   });
 };
@@ -501,11 +524,11 @@ const serviceLookupKey = (value: string): string =>
     .replace(/^-+|-+$/gu, "");
 
 const previewUrlForService = (
-  config: ResolvedNativeAppDevStackConfig,
+  config: ResolvedNativeAppStackConfig,
   discoveredPreviewUrls: ReadonlyMap<string, string>,
   name: string,
 ): string | undefined => {
-  const stackScopedUrl = appDevStackPreviewUrlForService({
+  const stackScopedUrl = appStackPreviewUrlForService({
     namespace: config.namespace,
     serviceName: name,
     frontendUrl: config.frontendUrl,
@@ -554,7 +577,7 @@ const hostsFromTraefikMatch = (match: string | null | undefined): ReadonlyArray<
 };
 
 const readTraefikPreviewUrls = async (
-  config: ResolvedNativeAppDevStackConfig,
+  config: ResolvedNativeAppStackConfig,
   runKubectl: KubectlRunner,
 ): Promise<Map<string, string> | null> => {
   try {
@@ -579,7 +602,7 @@ const readTraefikPreviewUrls = async (
 };
 
 const readIngressPreviewUrls = async (
-  config: ResolvedNativeAppDevStackConfig,
+  config: ResolvedNativeAppStackConfig,
   runKubectl: KubectlRunner,
 ): Promise<Map<string, string>> => {
   try {
@@ -605,7 +628,7 @@ const readIngressPreviewUrls = async (
 };
 
 const readPreviewUrls = async (
-  config: ResolvedNativeAppDevStackConfig,
+  config: ResolvedNativeAppStackConfig,
   runKubectl: KubectlRunner,
 ): Promise<Map<string, string>> => {
   const traefikPreviewUrls = await readTraefikPreviewUrls(config, runKubectl);
@@ -618,13 +641,13 @@ const readPreviewUrls = async (
 const stripReplicaSetHash = (value: string): string => value.replace(/-[a-z0-9]{8,10}$/u, "");
 
 interface PodPreviewContext {
-  readonly config: ResolvedNativeAppDevStackConfig;
+  readonly config: ResolvedNativeAppStackConfig;
   readonly discoveredPreviewUrls: ReadonlyMap<string, string>;
 }
 
 const resolvePodPreview = (
   pod: KubectlPod,
-  containers: ReadonlyArray<AppDevStackPodContainer>,
+  containers: ReadonlyArray<AppStackPodContainer>,
   ownerName: string | null,
   previewContext: PodPreviewContext | undefined,
 ): { readonly serviceName: string; readonly url: string } | null => {
@@ -691,7 +714,7 @@ const isTerminatingNamespace = (namespace: KubectlNamespace): boolean =>
   namespace.status?.phase?.trim().toLowerCase() === "terminating";
 
 const readNamespace = async (
-  config: ResolvedNativeAppDevStackConfig,
+  config: ResolvedNativeAppStackConfig,
   runKubectl: KubectlRunner,
 ): Promise<KubectlNamespace | null> => {
   try {
@@ -705,7 +728,7 @@ const readNamespace = async (
   }
 };
 
-const readAppDevStackNamespaces = async (
+const readAppStackNamespaces = async (
   runKubectl: KubectlRunner,
 ): Promise<ReadonlyArray<KubectlNamespace>> => {
   const list = parseJson<KubectlNamespaceList>(
@@ -713,7 +736,7 @@ const readAppDevStackNamespaces = async (
       "get",
       "namespaces",
       "-l",
-      `${APP_DEV_STACK_COMPONENT_LABEL}=${APP_DEV_STACK_COMPONENT_VALUE}`,
+      `${APP_STACK_COMPONENT_LABEL}=${APP_STACK_COMPONENT_VALUE}`,
       "-o",
       "json",
     ]),
@@ -726,7 +749,7 @@ const readAppDevStackNamespaces = async (
 };
 
 const readDeployments = async (
-  config: ResolvedNativeAppDevStackConfig,
+  config: ResolvedNativeAppStackConfig,
   runKubectl: KubectlRunner,
 ): Promise<KubectlDeploymentList> => {
   try {
@@ -740,7 +763,7 @@ const readDeployments = async (
 };
 
 const readPodList = async (
-  config: ResolvedNativeAppDevStackConfig,
+  config: ResolvedNativeAppStackConfig,
   runKubectl: KubectlRunner,
 ): Promise<KubectlPodList> => {
   try {
@@ -769,7 +792,7 @@ const containerState = (status: KubectlContainerStatus | undefined): string | nu
 const buildPodContainer = (
   container: { readonly name?: string },
   statusByName: ReadonlyMap<string, KubectlContainerStatus>,
-): AppDevStackPodContainer | null => {
+): AppStackPodContainer | null => {
   const name = container.name?.trim();
   if (!name) return null;
   const status = statusByName.get(name);
@@ -784,7 +807,7 @@ const buildPodContainer = (
 const buildPods = (
   podList: KubectlPodList,
   previewContext?: PodPreviewContext,
-): Array<AppDevStackPod> =>
+): Array<AppStackPod> =>
   (podList.items ?? [])
     .flatMap((pod) => {
       const name = pod.metadata?.name?.trim();
@@ -829,14 +852,13 @@ const buildPods = (
     .sort((left, right) => left.name.localeCompare(right.name));
 
 const readPods = async (
-  config: ResolvedNativeAppDevStackConfig,
+  config: ResolvedNativeAppStackConfig,
   runKubectl: KubectlRunner,
   previewContext?: PodPreviewContext,
-): Promise<Array<AppDevStackPod>> =>
-  buildPods(await readPodList(config, runKubectl), previewContext);
+): Promise<Array<AppStackPod>> => buildPods(await readPodList(config, runKubectl), previewContext);
 
 const findPodForLogs = async (
-  config: ResolvedNativeAppDevStackConfig,
+  config: ResolvedNativeAppStackConfig,
   runKubectl: KubectlRunner,
   podName: string,
   containerName: string | null | undefined,
@@ -865,8 +887,8 @@ const normalizeTailLines = (tailLines: number | undefined): number =>
     : Math.min(5_000, Math.max(1, Math.trunc(tailLines)));
 
 const normalizeAllStackLogLimit = (
-  limit: AppDevStackGetAllStackPodLogsInput["limit"] | undefined,
-): AppDevStackGetAllStackPodLogsResult["limit"] =>
+  limit: AppStackGetAllStackPodLogsInput["limit"] | undefined,
+): AppStackGetAllStackPodLogsResult["limit"] =>
   limit?.mode === "all"
     ? { mode: "all" }
     : {
@@ -877,7 +899,7 @@ const normalizeAllStackLogLimit = (
         ),
       };
 
-const tailLinesFromLimit = (limit: AppDevStackGetAllStackPodLogsResult["limit"]): number | null =>
+const tailLinesFromLimit = (limit: AppStackGetAllStackPodLogsResult["limit"]): number | null =>
   limit.mode === "all" ? null : normalizeTailLines(limit.tailLines ?? DEFAULT_LOG_TAIL_LINES);
 
 const kubectlLogArgs = (
@@ -900,12 +922,12 @@ const logFailureMessage = (cause: unknown): string =>
     : "Failed to fetch container logs.";
 
 const buildPodLogEntry = (
-  pod: AppDevStackPod,
-  container: AppDevStackPodContainer,
+  pod: AppStackPod,
+  container: AppStackPodContainer,
   logs: string,
   error: string | null,
   fetchedAt: string,
-): AppDevStackPodLogEntry => ({
+): AppStackPodLogEntry => ({
   podName: pod.name,
   containerName: container.name,
   phase: pod.phase,
@@ -920,9 +942,9 @@ const buildPodLogEntry = (
 });
 
 const buildStack = async (
-  config: ResolvedNativeAppDevStackConfig,
+  config: ResolvedNativeAppStackConfig,
   runKubectl: KubectlRunner,
-): Promise<AppDevStack> => {
+): Promise<AppStack> => {
   const namespace = await readNamespace(config, runKubectl);
   const now = DateTime.formatIso(DateTime.nowUnsafe());
   if (namespace === null) {
@@ -932,6 +954,7 @@ const buildStack = async (
       userId: NATIVE_USER_ID,
       worktreePath: config.worktreePath,
       composePath: config.composePath,
+      variant: config.variant,
       displayName: config.displayName,
       displaySlug: config.displaySlug ?? null,
       repoName: config.repoName ?? null,
@@ -958,7 +981,7 @@ const buildStack = async (
     readDeployments(config, runKubectl),
     readPreviewUrls(config, runKubectl),
   ]);
-  const services: Array<AppDevStackService> = (deployments.items ?? [])
+  const services: Array<AppStackService> = (deployments.items ?? [])
     .map((deployment) => {
       const name = deployment.metadata?.name ?? "unknown";
       const desired = deployment.spec?.replicas ?? 1;
@@ -992,6 +1015,7 @@ const buildStack = async (
     userId: NATIVE_USER_ID,
     worktreePath: config.worktreePath,
     composePath: config.composePath,
+    variant: config.variant,
     displayName: config.displayName,
     displaySlug: config.displaySlug ?? null,
     repoName: config.repoName ?? null,
@@ -1010,17 +1034,16 @@ const buildStack = async (
     lastStoppedAt: status === "stopped" ? now : null,
     previewUrls: Object.keys(previewUrls).length > 0 ? previewUrls : null,
     workflowId:
-      annotationValue(namespace.metadata?.annotations, APP_DEV_STACK_WORKFLOW_ANNOTATION) ??
+      annotationValue(namespace.metadata?.annotations, APP_STACK_WORKFLOW_ANNOTATION) ??
       config.workflowId ??
       null,
     protected:
-      annotationValue(namespace.metadata?.annotations, APP_DEV_STACK_PROTECTED_ANNOTATION) ===
-      "true",
+      annotationValue(namespace.metadata?.annotations, APP_STACK_PROTECTED_ANNOTATION) === "true",
   };
 };
 
 const frontendPreviewForStack = (
-  stack: AppDevStack,
+  stack: AppStack,
   configuredFrontendUrl: string | undefined,
 ): { readonly frontendUrl: string | null; readonly frontendServiceName: string | null } => {
   if (configuredFrontendUrl !== undefined) {
@@ -1039,53 +1062,52 @@ const frontendPreviewForStack = (
   return { frontendUrl: null, frontendServiceName: null };
 };
 
-const isAppDevStackError = Schema.is(AppDevStackError);
+const isAppStackError = Schema.is(AppStackError);
 
-const appDevStackError = (operation: string, cause: unknown) =>
-  isAppDevStackError(cause)
+const appStackError = (operation: string, cause: unknown) =>
+  isAppStackError(cause)
     ? cause
-    : new AppDevStackError({
+    : new AppStackError({
         operation,
         reason: "request_failed",
-        message:
-          cause instanceof Error ? cause.message : `Native app-dev stack ${operation} failed.`,
+        message: cause instanceof Error ? cause.message : `Native app stack ${operation} failed.`,
         cause,
       });
 
 const nativeOperation = <Value>(
   operation: string,
   run: () => Promise<Value>,
-): Effect.Effect<Value, AppDevStackError> =>
+): Effect.Effect<Value, AppStackError> =>
   Effect.tryPromise({
     try: run,
-    catch: (cause) => appDevStackError(operation, cause),
+    catch: (cause) => appStackError(operation, cause),
   });
 
 const unknownStackError = (operation: string, stackId: string) =>
-  new AppDevStackError({
+  new AppStackError({
     operation,
     reason: "request_failed",
     status: 404,
-    message: `Native app-dev stack "${stackId}" is not configured in this Code server session.`,
+    message: `Native app stack "${stackId}" is not configured in this Code server session.`,
   });
 
-export const makeNativeAppDevStackService = (
-  config: NativeAppDevStackConfig,
+export const makeNativeAppStackService = (
+  config: NativeAppStackConfig,
   runKubectl: KubectlRunner,
   runCommand?: NativeCommandRunner,
-): NativeAppDevStackService => {
+): NativeAppStackService => {
   const configuredStack = resolveConfiguredNativeConfig(config);
-  const knownByStackId = new Map<string, ResolvedNativeAppDevStackConfig>();
-  const knownByWorktreePath = new Map<string, ResolvedNativeAppDevStackConfig>();
+  const knownByStackId = new Map<string, ResolvedNativeAppStackConfig>();
+  const knownByWorktreePath = new Map<string, ResolvedNativeAppStackConfig>();
   const knownNamespaceMetadata = new Map<string, KubectlNamespace>();
 
   const rememberStack = (
-    resolved: ResolvedNativeAppDevStackConfig,
+    resolved: ResolvedNativeAppStackConfig,
     namespace?: KubectlNamespace | undefined,
   ) => {
     knownByStackId.set(resolved.id, resolved);
     knownByStackId.set(resolved.namespace, resolved);
-    knownByWorktreePath.set(normalizePath(resolved.worktreePath), resolved);
+    knownByWorktreePath.set(worktreeKey(resolved.worktreePath, resolved.variant), resolved);
     if (namespace !== undefined) {
       knownNamespaceMetadata.set(resolved.namespace, namespace);
     }
@@ -1101,7 +1123,7 @@ export const makeNativeAppDevStackService = (
       left.namespace.localeCompare(right.namespace),
     );
 
-  const forgetStack = (resolved: ResolvedNativeAppDevStackConfig) => {
+  const forgetStack = (resolved: ResolvedNativeAppStackConfig) => {
     for (const [key, value] of knownByStackId) {
       if (value.namespace === resolved.namespace) knownByStackId.delete(key);
     }
@@ -1131,8 +1153,8 @@ export const makeNativeAppDevStackService = (
     );
   };
 
-  const discoverAppDevStacks = async () => {
-    const namespaces = await readAppDevStackNamespaces(runKubectl);
+  const discoverAppStacks = async () => {
+    const namespaces = await readAppStackNamespaces(runKubectl);
     const liveNamespaces = new Set<string>();
     for (const namespace of namespaces) {
       const resolved = resolveNativeConfigForNamespace(config, namespace);
@@ -1148,13 +1170,13 @@ export const makeNativeAppDevStackService = (
   const resolveKnownStack = (
     operation: string,
     stackId: string,
-  ): Effect.Effect<ResolvedNativeAppDevStackConfig, AppDevStackError> =>
+  ): Effect.Effect<ResolvedNativeAppStackConfig, AppStackError> =>
     Effect.gen(function* () {
       const known = knownByStackId.get(stackId);
       if (known !== undefined) return known;
 
       return yield* nativeOperation(operation, async () => {
-        await discoverAppDevStacks();
+        await discoverAppStacks();
         const discovered = knownByStackId.get(stackId);
         if (discovered === undefined) {
           throw unknownStackError(operation, stackId);
@@ -1163,12 +1185,12 @@ export const makeNativeAppDevStackService = (
       });
     });
 
-  const readStack = (operation: string, resolved: ResolvedNativeAppDevStackConfig) =>
+  const readStack = (operation: string, resolved: ResolvedNativeAppStackConfig) =>
     nativeOperation(operation, () => buildStack(resolved, runKubectl));
 
   const readStackPodLogsForResolved = (
     operation: string,
-    resolved: ResolvedNativeAppDevStackConfig,
+    resolved: ResolvedNativeAppStackConfig,
     tailLines: number | null,
   ) =>
     Effect.gen(function* () {
@@ -1219,7 +1241,7 @@ export const makeNativeAppDevStackService = (
           : `native://${configuredStack.namespace}`,
     }),
     list: () =>
-      nativeOperation("list", discoverAppDevStacks).pipe(
+      nativeOperation("list", discoverAppStacks).pipe(
         Effect.flatMap((resolvedStacks) =>
           Effect.forEach(resolvedStacks, (resolved) => readStack("list", resolved), {
             concurrency: 4,
@@ -1229,12 +1251,13 @@ export const makeNativeAppDevStackService = (
       ),
     getByWorktree: (input) =>
       nativeOperation("getByWorktree", async () => {
-        const normalizedPath = normalizePath(input.worktreePath);
-        const known = knownByWorktreePath.get(normalizedPath);
+        const variant = input.variant ?? "dev";
+        const known = knownByWorktreePath.get(worktreeKey(input.worktreePath, variant));
         const resolved =
           known ??
           resolveNativeConfigForWorktree(config, {
             worktreePath: input.worktreePath,
+            variant,
           });
         if (known === undefined) {
           const namespace = await readNamespace(resolved, runKubectl);
@@ -1262,16 +1285,17 @@ export const makeNativeAppDevStackService = (
           gitBranch: input.gitBranch,
           namespace: input.namespace,
           workflowId: input.workflowId,
+          variant: input.variant,
           preferConfiguredNamespace: config.worktreePath === undefined,
         });
         const namespace = await readNamespace(resolved, runKubectl);
         const existingWorkflowId = annotationValue(
           namespace?.metadata?.annotations,
-          APP_DEV_STACK_WORKFLOW_ANNOTATION,
+          APP_STACK_WORKFLOW_ANNOTATION,
         );
         const deployments = namespace === null ? null : await readDeployments(resolved, runKubectl);
         const shouldProvision = namespace === null || (deployments?.items ?? []).length === 0;
-        await provisionNativeAppDevStack(resolved, runKubectl, runCommand);
+        await provisionNativeAppStack(resolved, runKubectl, runCommand);
         rememberStack(resolved);
         await runKubectl([
           "-n",
@@ -1289,7 +1313,7 @@ export const makeNativeAppDevStackService = (
             "annotate",
             "namespace",
             resolved.namespace,
-            `${APP_DEV_STACK_WORKFLOW_ANNOTATION}=${workflowId}`,
+            `${APP_STACK_WORKFLOW_ANNOTATION}=${workflowId}`,
             "--overwrite",
           ]);
         }
@@ -1325,7 +1349,7 @@ export const makeNativeAppDevStackService = (
               "annotate",
               "namespace",
               resolved.namespace,
-              `${APP_DEV_STACK_PROTECTED_ANNOTATION}=${input.protected ? "true" : "false"}`,
+              `${APP_STACK_PROTECTED_ANNOTATION}=${input.protected ? "true" : "false"}`,
               "--overwrite",
             ]);
             return buildStack({ ...resolved, protected: input.protected }, runKubectl);
@@ -1334,13 +1358,13 @@ export const makeNativeAppDevStackService = (
       ),
     workflowTeardown: (input) =>
       nativeOperation("workflowTeardown", async () => {
-        const namespaces = await readAppDevStackNamespaces(runKubectl);
+        const namespaces = await readAppStackNamespaces(runKubectl);
         const stoppedStackIds: Array<string> = [];
         const skippedProtectedStackIds: Array<string> = [];
         const failedStackIds: Array<string> = [];
         for (const namespace of namespaces) {
           const annotations = namespace.metadata?.annotations;
-          if (annotationValue(annotations, APP_DEV_STACK_WORKFLOW_ANNOTATION) !== input.workflowId)
+          if (annotationValue(annotations, APP_STACK_WORKFLOW_ANNOTATION) !== input.workflowId)
             continue;
           const resolved = resolveNativeConfigForNamespace(config, namespace);
           if (resolved === null) continue;
@@ -1464,7 +1488,7 @@ export const makeNativeAppDevStackService = (
       Effect.gen(function* () {
         const limit = normalizeAllStackLogLimit(input.limit);
         const tailLines = tailLinesFromLimit(limit);
-        const resolvedStacks = yield* nativeOperation("getAllStackPodLogs", discoverAppDevStacks);
+        const resolvedStacks = yield* nativeOperation("getAllStackPodLogs", discoverAppStacks);
         const stacks = yield* Effect.forEach(
           resolvedStacks,
           (resolved) =>
@@ -1472,7 +1496,7 @@ export const makeNativeAppDevStackService = (
               Effect.map(({ pods, entries, fetchedAt }) => {
                 const namespace = knownNamespaceMetadata.get(resolved.namespace);
                 const managedBy =
-                  labelValue(namespace?.metadata?.labels, APP_DEV_STACK_MANAGED_BY_LABEL) ?? null;
+                  labelValue(namespace?.metadata?.labels, APP_STACK_MANAGED_BY_LABEL) ?? null;
                 return {
                   stackId: resolved.id,
                   namespace: resolved.namespace,
@@ -1492,7 +1516,7 @@ export const makeNativeAppDevStackService = (
               Effect.catch((error) => {
                 const namespace = knownNamespaceMetadata.get(resolved.namespace);
                 const managedBy =
-                  labelValue(namespace?.metadata?.labels, APP_DEV_STACK_MANAGED_BY_LABEL) ?? null;
+                  labelValue(namespace?.metadata?.labels, APP_STACK_MANAGED_BY_LABEL) ?? null;
                 return Effect.succeed({
                   stackId: resolved.id,
                   namespace: resolved.namespace,

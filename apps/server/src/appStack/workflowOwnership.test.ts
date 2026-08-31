@@ -1,9 +1,9 @@
-import type { AppDevStack, OrchestrationReadModel } from "@t3tools/contracts";
+import type { AppStack, OrchestrationReadModel } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { appDevStackWorkflowConflicts } from "./workflowOwnership.ts";
+import { appStackWorkflowConflicts } from "./workflowOwnership.ts";
 
-const stack = (id: string, worktreePath: string, workflowId?: string): AppDevStack => ({
+const stack = (id: string, worktreePath: string, workflowId?: string): AppStack => ({
   id,
   uuid: id,
   userId: "user-1",
@@ -21,7 +21,7 @@ const stack = (id: string, worktreePath: string, workflowId?: string): AppDevSta
   updatedAt: "2026-08-11T00:00:00.000Z",
 });
 
-describe("appDevStackWorkflowConflicts", () => {
+describe("appStackWorkflowConflicts", () => {
   it("accepts a stack inherited from the parent workflow", () => {
     const readModel = {
       threads: [
@@ -45,7 +45,7 @@ describe("appDevStackWorkflowConflicts", () => {
     } as unknown as OrchestrationReadModel;
 
     expect(
-      appDevStackWorkflowConflicts(
+      appStackWorkflowConflicts(
         [stack("stack-1", "/repo/worktrees/ticket-1", "workflow-root-1")],
         readModel,
       ),
@@ -80,7 +80,7 @@ describe("appDevStackWorkflowConflicts", () => {
     } as unknown as OrchestrationReadModel;
 
     expect(
-      appDevStackWorkflowConflicts(
+      appStackWorkflowConflicts(
         [
           stack("stack-1", "/repo/worktrees/feature/", "workflow-1"),
           stack("stack-2", "/repo/worktrees/ticket-1", "workflow-1"),
@@ -93,7 +93,7 @@ describe("appDevStackWorkflowConflicts", () => {
 
   it("accepts distinct explicit worktrees without run history", () => {
     expect(
-      appDevStackWorkflowConflicts(
+      appStackWorkflowConflicts(
         [stack("stack-1", "/repo/one", "workflow-1"), stack("stack-2", "/repo/two", "workflow-1")],
         { threads: [], implementationRuns: [] } as unknown as OrchestrationReadModel,
       ),
@@ -102,7 +102,7 @@ describe("appDevStackWorkflowConflicts", () => {
 
   it("reports duplicate stacks for one normalized worktree", () => {
     expect(
-      appDevStackWorkflowConflicts(
+      appStackWorkflowConflicts(
         [
           stack("stack-1", "/repo/one/", "workflow-1"),
           stack("stack-2", "/repo//one", "workflow-1"),
@@ -138,7 +138,7 @@ describe("appDevStackWorkflowConflicts", () => {
       ],
     } as unknown as OrchestrationReadModel;
     expect(
-      appDevStackWorkflowConflicts([stack("stack-1", "/repo/wrong", "workflow-1")], readModel),
+      appStackWorkflowConflicts([stack("stack-1", "/repo/wrong", "workflow-1")], readModel),
     ).toEqual([
       {
         kind: "ownership-mismatch",

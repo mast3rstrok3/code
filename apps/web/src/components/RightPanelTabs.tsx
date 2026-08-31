@@ -83,7 +83,7 @@ export interface RightPanelTabsProps {
   onAddLogs: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
-  onAddAppDevStack: () => void;
+  onAddAppStack: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
   onAddWorkflows: () => void;
@@ -94,7 +94,7 @@ export interface RightPanelTabsProps {
   logsAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
-  appDevStackAvailable: boolean;
+  appStackAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
   workflowsAvailable: boolean;
@@ -119,7 +119,7 @@ const SURFACE_DISABLED_REASONS = {
   terminal: "Terminal surfaces are only available from a project thread.",
   review: "App review is only available for server threads in Git repositories.",
   logs: "App Stack pod logs require a project with an app-stack context.",
-  appDevStack: "App stacks are only available when a project is open.",
+  appStack: "App stacks are only available when a project is open.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
   pullRequest: "This thread's branch has no pull request yet.",
@@ -276,7 +276,7 @@ function RightPanelEmptyState(props: {
   onAddLogs: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
-  onAddAppDevStack: () => void;
+  onAddAppStack: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
   onAddWorkflows: () => void;
@@ -287,7 +287,7 @@ function RightPanelEmptyState(props: {
   logsAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
-  appDevStackAvailable: boolean;
+  appStackAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
   workflowsAvailable: boolean;
@@ -319,13 +319,13 @@ function RightPanelEmptyState(props: {
       badgeCount: 0,
     },
     {
-      label: "App Dev Stack",
+      label: "App Stack",
       description: "Run Kubernetes dev stacks by worktree.",
       icon: Boxes,
       shortcut: "S",
-      available: props.appDevStackAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.appDevStack,
-      onClick: props.onAddAppDevStack,
+      available: props.appStackAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.appStack,
+      onClick: props.onAddAppStack,
       badgeCount: 0,
     },
     {
@@ -574,8 +574,8 @@ function surfaceTitle(
       return "Diff";
     case "files":
       return "Files";
-    case "app-dev-stack":
-      return "App Dev Stack";
+    case "app-stack":
+      return "App Stack";
     case "file":
       return surface.relativePath.slice(surface.relativePath.lastIndexOf("/") + 1);
     case "terminal":
@@ -653,7 +653,7 @@ function SurfaceIcon({
       return <FileDiff className="size-3 shrink-0" />;
     case "files":
       return <Files className="size-3.5 shrink-0" />;
-    case "app-dev-stack":
+    case "app-stack":
       return <Boxes className="size-3.5 shrink-0" />;
     case "file":
       return (
@@ -733,12 +733,12 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: props.onAddLogs,
     },
     {
-      label: "App Dev Stack",
+      label: "App Stack",
       icon: Boxes,
       shortcut: "S",
-      available: props.appDevStackAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.appDevStack,
-      onClick: props.onAddAppDevStack,
+      available: props.appStackAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.appStack,
+      onClick: props.onAddAppStack,
     },
     {
       label: "Files",
@@ -1073,7 +1073,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddLogs={props.onAddLogs}
             onAddDiff={props.onAddDiff}
             onAddFiles={props.onAddFiles}
-            onAddAppDevStack={props.onAddAppDevStack}
+            onAddAppStack={props.onAddAppStack}
             onAddPullRequest={props.onAddPullRequest}
             onAddAgents={props.onAddAgents}
             onAddWorkflows={props.onAddWorkflows}
@@ -1084,7 +1084,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             logsAvailable={props.logsAvailable}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
-            appDevStackAvailable={props.appDevStackAvailable}
+            appStackAvailable={props.appStackAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
             agentsAvailable={props.agentsAvailable}
             workflowsAvailable={props.workflowsAvailable}

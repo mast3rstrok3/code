@@ -1,8 +1,4 @@
-import type {
-  AppDevStack,
-  AppDevStackListResult,
-  OrchestrationReadModel,
-} from "@t3tools/contracts";
+import type { AppStack, AppStackListResult, OrchestrationReadModel } from "@t3tools/contracts";
 
 export const normalizeWorkflowWorktreePath = (value: string) =>
   value
@@ -11,13 +7,13 @@ export const normalizeWorkflowWorktreePath = (value: string) =>
     .replace(/\/{2,}/gu, "/")
     .replace(/\/+$/u, "");
 
-type WorkflowConflict = NonNullable<AppDevStackListResult["workflowConflicts"]>[number];
+type WorkflowConflict = NonNullable<AppStackListResult["workflowConflicts"]>[number];
 
 /** Report only ownership shapes that can stop or reuse the wrong stack. */
-export function appDevStackWorkflowConflicts(
-  stacks: ReadonlyArray<AppDevStack>,
+export function appStackWorkflowConflicts(
+  stacks: ReadonlyArray<AppStack>,
   readModel: OrchestrationReadModel,
-): NonNullable<AppDevStackListResult["workflowConflicts"]> {
+): NonNullable<AppStackListResult["workflowConflicts"]> {
   const threadsById = new Map(readModel.threads.map((thread) => [thread.id, thread] as const));
   const expectedByWorkflow = new Map<
     string,
@@ -56,7 +52,7 @@ export function appDevStackWorkflowConflicts(
   }
 
   const conflicts: WorkflowConflict[] = [];
-  const explicitGroups = new Map<string, AppDevStack[]>();
+  const explicitGroups = new Map<string, AppStack[]>();
   for (const stack of stacks) {
     if (!stack.workflowId) continue;
     const path = normalizeWorkflowWorktreePath(stack.worktreePath);

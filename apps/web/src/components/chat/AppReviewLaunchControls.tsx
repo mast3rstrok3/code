@@ -13,7 +13,7 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
  */
 export function appReviewTargetLabel(reviewUrl: string): string {
   const normalized = normalizeAppReviewPreviewTarget(reviewUrl);
-  if (normalized === null) return "App Dev Stack";
+  if (normalized === null) return "App Stack";
   try {
     return new URL(normalized).host;
   } catch {
@@ -116,9 +116,9 @@ export function AppReviewLaunchControls(props: {
             value={props.reviewUrl}
           />
           <span className="text-[11px] leading-relaxed text-muted-foreground">
-            {targetLabel === "App Dev Stack"
-              ? "Empty reviews this worktree's App Dev Stack."
-              : `Reviews ${targetLabel} as given, without resolving an App Dev Stack.`}
+            {targetLabel === "App Stack"
+              ? "Empty reviews this worktree's App Stack."
+              : `Reviews ${targetLabel} as given, without resolving an App Stack.`}
           </span>
         </label>
       </PopoverPopup>

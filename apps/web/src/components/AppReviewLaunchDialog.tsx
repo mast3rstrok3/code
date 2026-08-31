@@ -133,8 +133,8 @@ export function AppReviewLaunchDialog(props: AppReviewLaunchDialogProps) {
             />
             <span className="text-xs text-muted-foreground">
               {pinnedTarget === null
-                ? "Leave empty to resolve this worktree's App Dev Stack."
-                : `Reviews ${pinnedTarget} as given, without resolving an App Dev Stack.`}
+                ? "Leave empty to resolve this worktree's App Stack."
+                : `Reviews ${pinnedTarget} as given, without resolving an App Stack.`}
             </span>
           </label>
           {pinnedTarget === null ? (
@@ -150,7 +150,7 @@ export function AppReviewLaunchDialog(props: AppReviewLaunchDialogProps) {
                 </ul>
               ) : (
                 <p className="mt-2 text-xs text-muted-foreground">
-                  The matching App Dev Stack will be resolved from this worktree when the workflow
+                  The matching App Stack will be resolved from this worktree when the workflow
                   starts.
                 </p>
               )}

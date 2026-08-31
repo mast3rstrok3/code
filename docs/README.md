@@ -12,8 +12,8 @@
 - [Remote access](./user/remote-access.md)
 - [Keeping app and server in sync](./user/updating.md)
 - [Source control integrations](./user/source-control.md)
-- [App Dev stack integration](./user/app-dev-stacks.md)
-- [Copy/paste App Dev stack agent prompt](./user/app-dev-stack-agent-prompt.md)
+- [App Stack integration](./user/app-stacks.md)
+- [Copy/paste App Stack agent prompt](./user/app-stack-agent-prompt.md)
 - [Background service (Linux)](./user/background-service.md)
 - Providers: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md)
 

@@ -1,24 +1,24 @@
-import type { AppDevStack, AppDevStackAutoCreateResult, AppDevStackPod } from "@t3tools/contracts";
+import type { AppStack, AppStackAutoCreateResult, AppStackPod } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  appDevStackBulkDeleteConfirmation,
-  appDevStackBulkDeleteFailureMessage,
-  appDevStackOwnershipLabel,
-  appDevStackProtectionAction,
-  appDevStackSelectionState,
-  appDevStackWorkflowConflictSummary,
+  appStackBulkDeleteConfirmation,
+  appStackBulkDeleteFailureMessage,
+  appStackOwnershipLabel,
+  appStackProtectionAction,
+  appStackSelectionState,
+  appStackWorkflowConflictSummary,
   autoCreateNotice,
-  isProtectedAppDevStack,
+  isProtectedAppStack,
   normalizePreviewHref,
-  orderAppDevStacksForPanel,
+  orderAppStacksForPanel,
   previewForPod,
   primaryPreviewForStack,
-  reconcileAppDevStackIds,
-  shouldPollAppDevStacks,
-} from "./AppDevStackPanel.logic";
+  reconcileAppStackIds,
+  shouldPollAppStacks,
+} from "./AppStackPanel.logic";
 
-const makeStack = (input: Partial<AppDevStack> = {}): AppDevStack => ({
+const makeStack = (input: Partial<AppStack> = {}): AppStack => ({
   id: "hero-dev",
   uuid: "hero-dev",
   userId: "user-1",
@@ -37,7 +37,7 @@ const makeStack = (input: Partial<AppDevStack> = {}): AppDevStack => ({
   ...input,
 });
 
-const makePod = (input: Partial<AppDevStackPod> = {}): AppDevStackPod => ({
+const makePod = (input: Partial<AppStackPod> = {}): AppStackPod => ({
   name: "web-7cdbbbfdd8-l9mpx",
   phase: "Running",
   readyContainerCount: 1,
@@ -49,11 +49,11 @@ const makePod = (input: Partial<AppDevStackPod> = {}): AppDevStackPod => ({
   ...input,
 });
 
-describe("AppDevStackPanel URL helpers", () => {
+describe("AppStackPanel URL helpers", () => {
   it("polls while a current or listed stack is transitioning", () => {
-    expect(shouldPollAppDevStacks(makeStack({ status: "starting" }), [])).toBe(true);
-    expect(shouldPollAppDevStacks(makeStack(), [makeStack({ status: "stopping" })])).toBe(true);
-    expect(shouldPollAppDevStacks(makeStack(), [makeStack()])).toBe(false);
+    expect(shouldPollAppStacks(makeStack({ status: "starting" }), [])).toBe(true);
+    expect(shouldPollAppStacks(makeStack(), [makeStack({ status: "stopping" })])).toBe(true);
+    expect(shouldPollAppStacks(makeStack(), [makeStack()])).toBe(false);
   });
 
   it("prefers frontend aliases when choosing the primary stack preview", () => {
@@ -121,14 +121,12 @@ describe("AppDevStackPanel URL helpers", () => {
   });
 });
 
-describe("AppDevStackPanel list management", () => {
+describe("AppStackPanel list management", () => {
   it("labels workflow ownership and summarizes non-destructive conflicts", () => {
-    expect(appDevStackOwnershipLabel(makeStack({ workflowId: "workflow-1" }))).toBe(
-      "Workflow-owned",
-    );
-    expect(appDevStackOwnershipLabel(makeStack({}))).toBeNull();
+    expect(appStackOwnershipLabel(makeStack({ workflowId: "workflow-1" }))).toBe("Workflow-owned");
+    expect(appStackOwnershipLabel(makeStack({}))).toBeNull();
     expect(
-      appDevStackWorkflowConflictSummary({
+      appStackWorkflowConflictSummary({
         workflowId: "workflow-1",
         stackIds: ["one", "two"],
         runIds: ["run-one", "run-two"],
@@ -151,7 +149,7 @@ describe("AppDevStackPanel list management", () => {
     });
 
     expect(
-      orderAppDevStacksForPanel({
+      orderAppStacksForPanel({
         currentStack: current,
         listedStacks: [older, current, newer],
         currentWorktreePath: "/repo/current/",
@@ -164,7 +162,7 @@ describe("AppDevStackPanel list management", () => {
     const other = makeStack({ id: "other", worktreePath: "/repo/other" });
 
     expect(
-      orderAppDevStacksForPanel({
+      orderAppStacksForPanel({
         currentStack: current,
         listedStacks: [other],
         currentWorktreePath: "/repo/current",
@@ -175,44 +173,42 @@ describe("AppDevStackPanel list management", () => {
   it("reconciles stale selection and derives tri-state select-all state", () => {
     const first = makeStack({ id: "first" });
     const second = makeStack({ id: "second" });
-    const reconciled = reconcileAppDevStackIds(new Set(["first", "missing"]), [first, second]);
+    const reconciled = reconcileAppStackIds(new Set(["first", "missing"]), [first, second]);
 
     expect(reconciled).toEqual(new Set(["first"]));
-    expect(appDevStackSelectionState(reconciled, [first, second])).toEqual({
+    expect(appStackSelectionState(reconciled, [first, second])).toEqual({
       checked: false,
       indeterminate: true,
     });
-    expect(appDevStackSelectionState(new Set(["first", "second"]), [first, second])).toEqual({
+    expect(appStackSelectionState(new Set(["first", "second"]), [first, second])).toEqual({
       checked: true,
       indeterminate: false,
     });
-    expect(appDevStackSelectionState(new Set(), [first, second])).toEqual({
+    expect(appStackSelectionState(new Set(), [first, second])).toEqual({
       checked: false,
       indeterminate: false,
     });
   });
 
   it("builds bulk-delete confirmation and partial failure copy", () => {
-    expect(appDevStackBulkDeleteConfirmation(2)).toBe(
+    expect(appStackBulkDeleteConfirmation(2)).toBe(
       "Delete 2 App Stacks?\nThis will remove their Kubernetes namespaces.",
     );
-    expect(appDevStackBulkDeleteConfirmation(1)).toBe(
+    expect(appStackBulkDeleteConfirmation(1)).toBe(
       "Delete 1 App Stack?\nThis will remove its Kubernetes namespace.",
     );
     expect(
-      appDevStackBulkDeleteFailureMessage(
+      appStackBulkDeleteFailureMessage(
         [{ stack: makeStack({ id: "broken", displayName: "Broken stack" }), message: "Denied" }],
         3,
       ),
     ).toBe("Failed to delete 1 of 3 App Stacks. Broken stack: Denied");
-    expect(appDevStackBulkDeleteFailureMessage([], 2)).toBeNull();
+    expect(appStackBulkDeleteFailureMessage([], 2)).toBeNull();
   });
 });
 
 describe("autoCreateNotice", () => {
-  const makeResult = (
-    input: Partial<AppDevStackAutoCreateResult> = {},
-  ): AppDevStackAutoCreateResult => ({
+  const makeResult = (input: Partial<AppStackAutoCreateResult> = {}): AppStackAutoCreateResult => ({
     stack: makeStack(),
     created: true,
     frontendUrl: null,
@@ -229,14 +225,14 @@ describe("autoCreateNotice", () => {
       makeResult({
         created: false,
         alreadyRunning: true,
-        message: "An app dev stack for this worktree/branch is already running.",
+        message: "An app stack for this worktree/branch is already running.",
         frontendUrl: "https://code-feat-x-frontend-a1b2c3d4-dev.example.test",
       }),
     );
 
     expect(notice).toEqual({
       kind: "already-running",
-      message: "An app dev stack for this worktree/branch is already running.",
+      message: "An app stack for this worktree/branch is already running.",
       url: "https://code-feat-x-frontend-a1b2c3d4-dev.example.test",
       stackId: "hero-dev",
     });
@@ -262,22 +258,20 @@ describe("autoCreateNotice", () => {
   });
 });
 
-describe("app dev stack protection", () => {
+describe("app stack protection", () => {
   it("reads protection defensively so an older server is not shown as protected", () => {
-    expect(isProtectedAppDevStack(makeStack({}))).toBe(false);
-    expect(isProtectedAppDevStack(makeStack({ protected: null }))).toBe(false);
-    expect(isProtectedAppDevStack(makeStack({ protected: true }))).toBe(true);
+    expect(isProtectedAppStack(makeStack({}))).toBe(false);
+    expect(isProtectedAppStack(makeStack({ protected: null }))).toBe(false);
+    expect(isProtectedAppStack(makeStack({ protected: true }))).toBe(true);
   });
 
   it("labels the toggle by what pressing it does", () => {
-    const unprotected = appDevStackProtectionAction(makeStack({ displayName: "hero" }));
+    const unprotected = appStackProtectionAction(makeStack({ displayName: "hero" }));
     expect(unprotected.label).toBe("Protect");
     expect(unprotected.nextProtected).toBe(true);
     expect(unprotected.ariaLabel).toBe("Protect hero from automatic teardown");
 
-    const guarded = appDevStackProtectionAction(
-      makeStack({ displayName: "hero", protected: true }),
-    );
+    const guarded = appStackProtectionAction(makeStack({ displayName: "hero", protected: true }));
     expect(guarded.label).toBe("Protected");
     expect(guarded.nextProtected).toBe(false);
     expect(guarded.ariaLabel).toBe("Stop protecting hero from automatic teardown");

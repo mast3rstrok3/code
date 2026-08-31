@@ -618,7 +618,7 @@ export const OrchestrationPlanningSpecBundle = Schema.Struct({
 });
 export type OrchestrationPlanningSpecBundle = typeof OrchestrationPlanningSpecBundle.Type;
 
-/** Maximum number of fresh automated AppDevStack/App Review repair agents per run. */
+/** Maximum number of fresh automated AppStack/App Review repair agents per run. */
 export const IMPLEMENTATION_RUN_MAX_QA_REPAIRS = 10;
 /** Maximum number of fresh nested App Review runs launched after consecutive blocked outcomes. */
 export const IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS = 3;
@@ -1051,14 +1051,14 @@ export const OrchestrationImplementationTicketState = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   /**
-   * Legacy desired-state stamp for ticket App Dev Stack teardown. New runs leave this null.
+   * Legacy desired-state stamp for ticket App Stack teardown. New runs leave this null.
    */
   appDevStackTierDownAt: Schema.NullOr(IsoDateTime).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   /**
    * Desired-state stamp written after the ticket commit reaches the integrated branch.
-   * The implementation reactor retries App Dev Stack and safe worktree cleanup after a restart.
+   * The implementation reactor retries App Stack and safe worktree cleanup after a restart.
    */
   resourceCleanupAt: Schema.NullOr(IsoDateTime).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
@@ -2627,7 +2627,7 @@ export const ThreadAppReviewWorkflowLaunchCommand = Schema.Struct({
   briefMarkdown: TrimmedNonEmptyString,
   supportingContextMarkdown: Schema.optionalKey(Schema.NullOr(Schema.String)),
   previewTargets: Schema.Array(TrimmedNonEmptyString),
-  /** Reviews `previewTargets` as given instead of resolving an App Dev Stack. */
+  /** Reviews `previewTargets` as given instead of resolving an App Stack. */
   previewTargetsPinned: Schema.optionalKey(Schema.Boolean),
   /** Reviews and writes repair tickets once, without repairing. Forces one cycle. */
   reviewOnly: Schema.optionalKey(Schema.Boolean),

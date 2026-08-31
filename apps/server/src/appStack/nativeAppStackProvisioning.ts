@@ -5,16 +5,21 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeHttps from "node:https";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import { appDevStackPreviewUrlForService } from "@t3tools/shared/appDevStack";
+import {
+  appStackPreviewUrlForService,
+  type AppStackVariant,
+  DEFAULT_APP_STACK_COMPOSE_PATHS,
+} from "@t3tools/shared/appStack";
 import { parseYamlValue, stringifyYamlValue } from "@t3tools/shared/schemaYaml";
 
-import type { KubectlRunner } from "./NativeAppDevStackManager.ts";
+import type { KubectlRunner } from "./NativeAppStackManager.ts";
 
 interface NativeProvisionConfig {
   readonly id: string;
   readonly namespace: string;
   readonly worktreePath: string;
   readonly composePath: string;
+  readonly variant: AppStackVariant;
   readonly displayName: string;
   readonly displaySlug: string | undefined;
   readonly repoName: string | undefined;
@@ -86,9 +91,11 @@ export type NativeCommandRunner = (
 ) => Promise<string>;
 
 const APP_LABEL_PREFIXES = ["cortex.appDevStack", "rudi.appDevStack"] as const;
+/** Namespace annotation naming the contract a stack runs: dev or prod. */
+export const APP_STACK_VARIANT_ANNOTATION = "cortex.ai/variant";
 
 /**
- * Shared credentials the backend of an app-dev stack reads from OpenBao through
+ * Shared credentials the backend of an app stack reads from OpenBao through
  * External Secrets. The names match the ExternalSecret already deployed in the
  * rudi-dev namespace, so re-provisioning adopts it in place rather than adding a
  * second one.
@@ -383,7 +390,7 @@ const rewriteComposeHostReferences = (
   const publicUrlReplacements = services
     .flatMap((service) => {
       const configuredHost = firstAppLabel(service.labels, ["hostname", "host"]);
-      const stackScopedUrl = appDevStackPreviewUrlForService({
+      const stackScopedUrl = appStackPreviewUrlForService({
         namespace: config.namespace,
         serviceName: service.name,
         frontendUrl: config.frontendUrl,
@@ -464,7 +471,7 @@ const readComposeFile = async (config: NativeProvisionConfig, composePath: strin
   } catch (cause) {
     if (!isMissingFileError(cause)) throw cause;
     throw new Error(
-      `App-dev compose file not found for ${config.worktreePath}: ${composePath}. Add infra/compose/compose.app-dev.yml to the repository or set T3CODE_APP_DEV_STACK_NATIVE_COMPOSE_PATH to an existing compose file.`,
+      `App-${config.variant} compose file not found for ${config.worktreePath}: ${composePath}. Add ${DEFAULT_APP_STACK_COMPOSE_PATHS[config.variant]} to the repository${config.variant === "dev" ? " or set T3CODE_APP_STACK_NATIVE_COMPOSE_PATH to an existing compose file" : ""}.`,
       { cause },
     );
   }
@@ -487,7 +494,7 @@ const configuredPreviewUrl = (
   config: NativeProvisionConfig,
   service: ParsedComposeService,
 ): string | undefined => {
-  const stackScopedUrl = appDevStackPreviewUrlForService({
+  const stackScopedUrl = appStackPreviewUrlForService({
     namespace: config.namespace,
     serviceName: service.name,
     frontendUrl: config.frontendUrl,
@@ -645,13 +652,14 @@ const deriveRepositoryPrefix = (config: NativeProvisionConfig): string =>
 const targetImageForBuildService = (
   config: NativeProvisionConfig,
   service: ParsedComposeService,
+  tagOverride?: string,
 ): string => {
   if (isRegistryQualifiedImage(service.image)) return service.image;
 
   const registry = normalizeRegistry(config.imageRegistry);
   if (registry === undefined) {
     throw new Error(
-      `Compose service "${service.name}" has a build definition but image "${service.image}" is not registry-qualified. Set T3CODE_APP_DEV_STACK_NATIVE_IMAGE_REGISTRY so Kubernetes can pull the built image.`,
+      `Compose service "${service.name}" has a build definition but image "${service.image}" is not registry-qualified. Set T3CODE_APP_STACK_NATIVE_IMAGE_REGISTRY so Kubernetes can pull the built image.`,
     );
   }
 
@@ -660,7 +668,7 @@ const targetImageForBuildService = (
   const repository = service.imageWasExplicit
     ? sanitizeKubernetesName(imageRepositoryName(service.image))
     : sanitizeKubernetesName(`${repoPrefix}-${serviceName}`);
-  return `${registry}/${deriveImageProject(config)}/${repository}:${imageTag(service.image) ?? "latest"}`;
+  return `${registry}/${deriveImageProject(config)}/${repository}:${tagOverride ?? imageTag(service.image) ?? "latest"}`;
 };
 
 const dockerBuildArgsForService = (
@@ -923,11 +931,35 @@ const ensureHarborProjectForImage = async (
   }
 };
 
+/**
+ * A prod image is the code, so a rebuilt release candidate has to roll out: a
+ * reused tag would leave the node on its cached image. The tag is the
+ * worktree's commit, which also means a clean checkout rebuilt twice lands on
+ * one tag. Dirty worktrees (and worktrees git cannot describe) get a fresh
+ * tag per build.
+ */
+const prodBuildTag = async (
+  config: NativeProvisionConfig,
+  runCommand: NativeCommandRunner,
+): Promise<string> => {
+  const git = (args: ReadonlyArray<string>) =>
+    runCommand("git", ["-C", config.worktreePath, ...args]);
+  const nonce = () => NodeCrypto.randomBytes(4).toString("hex");
+  try {
+    const sha = (await git(["rev-parse", "--short=12", "HEAD"])).trim();
+    const dirty = (await git(["status", "--porcelain"])).trim().length > 0;
+    return dirty ? `${sha}-dirty-${nonce()}` : sha;
+  } catch {
+    return `build-${nonce()}`;
+  }
+};
+
 const prepareServiceImage = async (
   config: NativeProvisionConfig,
   service: ParsedComposeService,
   composeDir: string,
   runCommand: NativeCommandRunner | undefined,
+  buildTag: string | undefined,
 ): Promise<ParsedComposeService> => {
   if (service.build === undefined) return service;
   if (runCommand === undefined) {
@@ -936,7 +968,7 @@ const prepareServiceImage = async (
     );
   }
 
-  const targetImage = targetImageForBuildService(config, service);
+  const targetImage = targetImageForBuildService(config, service, buildTag);
   await ensureHarborProjectForImage(config, targetImage);
   if (shouldUseBuildkit(config)) {
     const { args, contextPath } = buildkitBuildArgsForService(
@@ -963,9 +995,15 @@ const prepareServices = async (
   composeDir: string,
   runCommand: NativeCommandRunner | undefined,
 ): Promise<ReadonlyArray<ParsedComposeService>> => {
+  const buildTag =
+    config.variant === "prod" &&
+    runCommand !== undefined &&
+    services.some((service) => service.build !== undefined)
+      ? await prodBuildTag(config, runCommand)
+      : undefined;
   const prepared: Array<ParsedComposeService> = [];
   for (const service of services) {
-    prepared.push(await prepareServiceImage(config, service, composeDir, runCommand));
+    prepared.push(await prepareServiceImage(config, service, composeDir, runCommand, buildTag));
   }
   return prepared;
 };
@@ -1206,6 +1244,7 @@ const buildNamespaceAnnotations = (config: NativeProvisionConfig): Record<string
     "cortex.ai/display-name": config.displayName,
     "cortex.ai/worktree-path": config.worktreePath,
     "cortex.ai/compose-path": config.composePath,
+    [APP_STACK_VARIANT_ANNOTATION]: config.variant,
   };
   if (config.displaySlug !== undefined) annotations["cortex.ai/display-slug"] = config.displaySlug;
   if (config.repoName !== undefined) annotations["cortex.ai/repo-name"] = config.repoName;
@@ -1407,7 +1446,7 @@ const buildIngressRoute = (
   };
 };
 
-export const generateNativeAppDevStackManifests = async (
+export const generateNativeAppStackManifests = async (
   config: NativeProvisionConfig,
   runCommand?: NativeCommandRunner,
 ): Promise<ReadonlyArray<KubernetesDocument>> => {
@@ -1452,13 +1491,13 @@ const stringifyDocuments = (documents: ReadonlyArray<KubernetesDocument>): strin
     .map((document) => `---\n${stringifyYamlValue(document, { lineWidth: 1000, version: "1.1" })}`)
     .join("");
 
-export const provisionNativeAppDevStack = async (
+export const provisionNativeAppStack = async (
   config: NativeProvisionConfig,
   runKubectl: KubectlRunner,
   runCommand?: NativeCommandRunner,
 ): Promise<void> => {
-  const documents = await generateNativeAppDevStackManifests(config, runCommand);
-  const tempDir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-app-dev-stack-"));
+  const documents = await generateNativeAppStackManifests(config, runCommand);
+  const tempDir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-app-stack-"));
   const manifestPath = NodePath.join(tempDir, `${config.namespace}.yaml`);
   try {
     await NodeFSP.writeFile(manifestPath, stringifyDocuments(documents));

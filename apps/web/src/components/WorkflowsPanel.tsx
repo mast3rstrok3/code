@@ -653,7 +653,7 @@ function resolveStepRestart(input: {
     const restart = input.onRestartPlanningStage;
     return { run: () => restart(stage), disabledReason: null };
   }
-  // A paused run keeps its worktrees, branches, App Dev Stack, and active
+  // A paused run keeps its worktrees, branches, App Stack, and active
   // stage threads. Resuming continues the stage in its recorded thread.
   if (input.workflowPaused) {
     if (input.isResumeStep && input.onResumeWorkflow !== undefined) {

@@ -1,7 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
-  AppDevStackError,
+  AppStackError,
   CommandId,
   DEFAULT_WORKSPACE_USER_ID,
   AppReviewId,
@@ -46,7 +46,7 @@ import type * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { describe } from "vite-plus/test";
 
-import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
+import { AppStackManager } from "../../appStack/AppStackManager.ts";
 import { ServerConfig } from "../../config.ts";
 import { GitWorkflowService, type GitMergeRefInput } from "../../git/GitWorkflowService.ts";
 import { layerTest as serverSettingsLayerTest } from "../../serverSettings.ts";
@@ -58,7 +58,7 @@ import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunne
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
 import {
-  appDevStackBackendHealthUrl,
+  appStackBackendHealthUrl,
   automationHaltMatchesTicketRerun,
   cleanDescendantAppReviewFailureCanRestart,
   fastFeatureBuildContractProblems,
@@ -1042,7 +1042,7 @@ function makeTestLayer(
         }),
       ),
       Layer.provide(
-        Layer.mock(AppDevStackManager)({
+        Layer.mock(AppStackManager)({
           getByWorktree: (input) =>
             Effect.gen(function* () {
               const isTicketWorktree = input.worktreePath.includes("-ticket-");
@@ -1190,7 +1190,7 @@ function makeTestLayer(
                     : configuredFrontendUrl;
                 return failAutoCreate || inputs.length <= failAutoCreateAttempts
                   ? Effect.fail(
-                      new AppDevStackError({
+                      new AppStackError({
                         operation: "autoCreate",
                         reason: "request_failed",
                         message: autoCreateFailureMessage,
@@ -1511,7 +1511,7 @@ function launchRun(
 }
 
 /**
- * Stand a ticket's App Dev Stack up, owned by the run, the way ticket App Review
+ * Stand a ticket's App Stack up, owned by the run, the way ticket App Review
  * does. Cleanup only deletes a stack whose workflow matches the run's, so a
  * ticket that never had one has nothing to delete.
  */
@@ -2222,7 +2222,7 @@ it("ignores terminal updates from a superseded nested App Review", () => {
 describe("ImplementationWorkflowReactor", () => {
   it("derives backend health from the authoritative frontend origin", () => {
     expect(
-      appDevStackBackendHealthUrl("https://feature-frontend.example.test/calendar?view=month"),
+      appStackBackendHealthUrl("https://feature-frontend.example.test/calendar?view=month"),
     ).toBe("https://feature-frontend.example.test/api/health");
   });
 
@@ -2811,13 +2811,13 @@ describe("ImplementationWorkflowReactor", () => {
             (activity) => activity.kind === "implementation-app-dev-stack-waiting",
           );
           expect(waiting?.tone).toBe("info");
-          expect(waiting?.summary).toBe("Waiting for App Dev Stack");
+          expect(waiting?.summary).toBe("Waiting for App Stack");
         }),
       { autoCreateStackStatus: "starting" },
     ),
   );
 
-  it.effect("re-ensures AppDevStack directly after a focused repair", () =>
+  it.effect("re-ensures AppStack directly after a focused repair", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -3353,7 +3353,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("starts Fast Build before requesting the app dev stack", () =>
+  it.effect("starts Fast Build before requesting the app stack", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         yield* dispatchFastFeatureLaunch(system);
@@ -3396,7 +3396,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("starts planning-spec workers before requesting the shared app dev stack", () =>
+  it.effect("starts planning-spec workers before requesting the shared app stack", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { spec } = yield* seedPlanning(system);
@@ -3463,41 +3463,39 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect(
-    "does not provision the app dev stack when implementation is canceled before review",
-    () =>
-      withSystem((system) =>
-        Effect.gen(function* () {
-          const { run } = yield* launchRun(system);
-          yield* system.engine.dispatch({
-            type: "thread.implementation-run.cancel",
-            commandId: commandId("implementation-cancel-before-review"),
-            threadId: sourceThreadId,
-            runId: run.id,
-            reason: "Stop before review.",
-            createdAt: "2026-01-01T00:00:01.000Z",
-          });
-          yield* system.reactor.drain;
+  it.effect("does not provision the app stack when implementation is canceled before review", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.cancel",
+          commandId: commandId("implementation-cancel-before-review"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          reason: "Stop before review.",
+          createdAt: "2026-01-01T00:00:01.000Z",
+        });
+        yield* system.reactor.drain;
 
-          const settled = (yield* system.query.getSnapshot()).implementationRuns[0];
-          expect(settled?.status).toBe("canceled");
-          expect(settled?.appDevStack.status).toBe("not-requested");
-          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
+        const settled = (yield* system.query.getSnapshot()).implementationRuns[0];
+        expect(settled?.status).toBe("canceled");
+        expect(settled?.appDevStack.status).toBe("not-requested");
+        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
 
-          const rerun = yield* system.engine.dispatch({
-            type: "thread.implementation-run.rerun",
-            commandId: commandId("implementation-rerun-canceled-before-review"),
-            threadId: sourceThreadId,
-            runId: run.id,
-            target: { kind: "run", stage: "code-review" },
-            createdAt: "2026-01-01T00:00:02.000Z",
-          });
-          expect(rerun.outcome).toMatchObject({
-            type: "rejected",
-            reasonCode: "wrong-stage",
-          });
-        }),
-      ),
+        const rerun = yield* system.engine.dispatch({
+          type: "thread.implementation-run.rerun",
+          commandId: commandId("implementation-rerun-canceled-before-review"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "run", stage: "code-review" },
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+        expect(rerun.outcome).toMatchObject({
+          type: "rejected",
+          reasonCode: "wrong-stage",
+        });
+      }),
+    ),
   );
 
   it.effect("does not re-ensure the inherited stack before Fast Build completes", () =>
@@ -3515,7 +3513,7 @@ describe("ImplementationWorkflowReactor", () => {
           if (!implementer) throw new Error("Fast feature implementer missing.");
           expect(implementer.messages.at(-1)?.text).toContain("# Fast checkout");
           expect(implementer.messages.at(-1)?.text).toContain(
-            "App Dev Stack: created by workflow workspace bootstrap after dependency setup; Build reuses it",
+            "App Stack: created by workflow workspace bootstrap after dependency setup; Build reuses it",
           );
           expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
 
@@ -3669,7 +3667,7 @@ describe("ImplementationWorkflowReactor", () => {
             "Feature URL: https://fast-checkout-dev.nightingale-ai.com",
           );
           expect(reviewThread?.messages.at(-1)?.text).toContain(
-            "authoritative frontend for the App Dev Stack associated with this implementation worktree",
+            "authoritative frontend for the App Stack associated with this implementation worktree",
           );
           expect(reviewThread?.messages.at(-1)?.text).toContain(
             "Do not substitute a deployment URL from repository documentation",
@@ -3721,7 +3719,7 @@ describe("ImplementationWorkflowReactor", () => {
           expect(settled?.retryableFailure?.stage).toBe("app-dev-stack");
           expect(settled?.retryableFailure?.humanBlocked).toBe(true);
           expect(settled?.lastQaFailure?.detailMarkdown).toContain(
-            "workflow-owned App Dev Stack is missing",
+            "workflow-owned App Stack is missing",
           );
           expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
         }),
@@ -3775,7 +3773,7 @@ describe("ImplementationWorkflowReactor", () => {
             (thread) => thread.workflowRole === "implementation-fixer",
           );
           expect(repair?.messages.at(-1)?.text).toContain("Orchestrated QA Repair Result");
-          expect(repair?.messages.at(-1)?.text).toContain("Programmatic AppDevStack diagnostics");
+          expect(repair?.messages.at(-1)?.text).toContain("Programmatic AppStack diagnostics");
           expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
         }),
       { failAutoCreate: true },
@@ -3821,7 +3819,7 @@ describe("ImplementationWorkflowReactor", () => {
           expect(blocked?.status).toBe("needs-human-attention");
           expect(blocked?.retryableFailure?.humanBlocked).toBe(true);
           expect(blocked?.retryableFailure?.detail).toContain(
-            "not visible to the App Dev Stack controller",
+            "not visible to the App Stack controller",
           );
           expect(
             snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
@@ -3830,7 +3828,7 @@ describe("ImplementationWorkflowReactor", () => {
       {
         failAutoCreate: true,
         autoCreateFailureMessage:
-          "Worktree path is not visible to the App Dev Stack controller: /var/lib/code/worktrees/feature.",
+          "Worktree path is not visible to the App Stack controller: /var/lib/code/worktrees/feature.",
       },
     ),
   );
@@ -6394,7 +6392,7 @@ describe("ImplementationWorkflowReactor", () => {
         );
         expect(validator).toBeDefined();
         expect(validator?.messages.at(-1)?.text).toContain(
-          "its workflow-owned AppDevStack was created during workspace bootstrap and is reused here",
+          "its workflow-owned AppStack was created during workspace bootstrap and is reused here",
         );
         expect(validator?.messages.at(-1)?.text).toContain(
           "integration gate before App Review and Code Review",
@@ -6499,9 +6497,7 @@ describe("ImplementationWorkflowReactor", () => {
         const teardownActivity = snapshot.threads
           .find((thread) => thread.id === run.orchestratorThreadId)
           ?.activities.find((entry) => entry.kind === "implementation-run-stacks-torn-down");
-        expect(teardownActivity?.summary).toBe(
-          "Stopped 1 workflow App Dev Stack(s); left 2 protected",
-        );
+        expect(teardownActivity?.summary).toBe("Stopped 1 workflow App Stack(s); left 2 protected");
         expect(completedRun?.mergeGateAttemptCount).toBe(1);
         expect(completedRun?.validatedHeadSha).toBe("def456");
         expect(completedRun?.changeRequest?.url).toBe("https://example.test/pr/1");
@@ -6602,7 +6598,7 @@ describe("ImplementationWorkflowReactor", () => {
           );
           expect(repair?.workflowRole).toBe("implementation-fixer");
           expect(repair?.messages.at(-1)?.text).toContain("Orchestrated QA Repair Result");
-          expect(repair?.messages.at(-1)?.text).toContain("Programmatic AppDevStack diagnostics");
+          expect(repair?.messages.at(-1)?.text).toContain("Programmatic AppStack diagnostics");
         }),
       { failAutoCreate: true },
     ),
@@ -7390,7 +7386,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("halts when AppDevStack exhausts ten QA repairs", () =>
+  it.effect("halts when AppStack exhausts ten QA repairs", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -7436,7 +7432,7 @@ describe("ImplementationWorkflowReactor", () => {
                 runId: run.id,
                 status: "blocked",
                 validations: [],
-                notesMarkdown: "AppDevStack remains unavailable.",
+                notesMarkdown: "AppStack remains unavailable.",
               },
               turnId: null,
               createdAt: "2026-01-01T00:00:04.000Z",

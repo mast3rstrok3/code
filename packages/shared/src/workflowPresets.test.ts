@@ -87,7 +87,7 @@ describe("workflow presets", () => {
   it("shows the eleven Engineering Workflow phases in order", () => {
     const steps = WORKFLOW_PRESET_DEFINITION_BY_ID.planning.helpSteps;
     expect(steps.map((step) => step.label)).toEqual([
-      "Prepare shared worktree and App Dev Stack",
+      "Prepare shared worktree and App Stack",
       "Grill with Docs",
       "Spec authoring",
       "Ticket authoring",

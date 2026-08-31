@@ -1,29 +1,31 @@
 import {
-  AppDevStack,
-  AppDevStackAutoCreateResult,
-  AppDevStackByWorktreeResult,
-  AppDevStackDeleteResult,
-  AppDevStackError,
-  type AppDevStackGetAllStackPodLogsInput,
-  type AppDevStackGetAllStackPodLogsResult,
-  AppDevStackGetPodLogsResult,
-  type AppDevStackGetStackPodLogsResult,
-  AppDevStackListResult,
-  type AppDevStackAutoCreateInput,
-  type AppDevStackBackendStatus,
-  type AppDevStackGetPodLogsInput,
-  type AppDevStackGetStackPodLogsInput,
-  type AppDevStackGetInput,
-  type AppDevStackListPodsInput,
-  type AppDevStackListInput,
-  AppDevStackListPodsResult,
-  type AppDevStackPod,
-  type AppDevStackPodContainer,
-  type AppDevStackPodLogEntry,
-  type AppDevStackSetProtectedInput,
-  type AppDevStackWorkflowTeardownInput,
-  AppDevStackWorkflowTeardownResult,
+  AppStack,
+  AppStackAutoCreateResult,
+  AppStackByWorktreeResult,
+  AppStackDeleteResult,
+  AppStackError,
+  type AppStackGetAllStackPodLogsInput,
+  type AppStackGetAllStackPodLogsResult,
+  AppStackGetPodLogsResult,
+  type AppStackGetStackPodLogsResult,
+  AppStackListResult,
+  type AppStackAutoCreateInput,
+  type AppStackBackendStatus,
+  type AppStackGetPodLogsInput,
+  type AppStackGetStackPodLogsInput,
+  type AppStackGetInput,
+  type AppStackListPodsInput,
+  type AppStackListInput,
+  AppStackListPodsResult,
+  type AppStackPod,
+  type AppStackPodContainer,
+  type AppStackPodLogEntry,
+  type AppStackSetProtectedInput,
+  type AppStackWorkflowTeardownInput,
+  AppStackWorkflowTeardownResult,
+  type AppStackVariant,
 } from "@t3tools/contracts";
+import { appStackVariantForComposePath } from "@t3tools/shared/appStack";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -39,21 +41,21 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as ServerConfig from "../config.ts";
 import {
   makeKubectlRunner,
-  makeNativeAppDevStackService,
+  makeNativeAppStackService,
   makeNativeCommandRunner,
-} from "./NativeAppDevStackManager.ts";
+} from "./NativeAppStackManager.ts";
 
-const BACKEND_TOKEN_ENV = "T3CODE_APP_DEV_STACK_BACKEND_BEARER_TOKEN";
-const OIDC_TOKEN_URL_ENV = "T3CODE_APP_DEV_STACK_BACKEND_OIDC_TOKEN_URL";
-const OIDC_ISSUER_ENV = "T3CODE_APP_DEV_STACK_BACKEND_OIDC_ISSUER";
-const OIDC_CLIENT_ID_ENV = "T3CODE_APP_DEV_STACK_BACKEND_OIDC_CLIENT_ID";
-const OIDC_CLIENT_SECRET_ENV = "T3CODE_APP_DEV_STACK_BACKEND_OIDC_CLIENT_SECRET";
+const BACKEND_TOKEN_ENV = "T3CODE_APP_STACK_BACKEND_BEARER_TOKEN";
+const OIDC_TOKEN_URL_ENV = "T3CODE_APP_STACK_BACKEND_OIDC_TOKEN_URL";
+const OIDC_ISSUER_ENV = "T3CODE_APP_STACK_BACKEND_OIDC_ISSUER";
+const OIDC_CLIENT_ID_ENV = "T3CODE_APP_STACK_BACKEND_OIDC_CLIENT_ID";
+const OIDC_CLIENT_SECRET_ENV = "T3CODE_APP_STACK_BACKEND_OIDC_CLIENT_SECRET";
 const CODE_OIDC_ISSUER_ENV = "CODE_OIDC_ISSUER";
 const CODE_OIDC_CLIENT_ID_ENV = "CODE_OIDC_CLIENT_ID";
 const CODE_OIDC_CLIENT_SECRET_ENV = "CODE_OIDC_CLIENT_SECRET";
 const OIDC_REFRESH_EARLY_MS = 60_000;
 const DISABLED_MESSAGE =
-  "App Dev Stack handling is not configured. Enable T3CODE_APP_DEV_STACK_NATIVE_ENABLED or set T3CODE_APP_DEV_STACK_BACKEND_URL to a controller API that serves /api/app-dev-stacks.";
+  "App Stack handling is not configured. Enable T3CODE_APP_STACK_NATIVE_ENABLED or set T3CODE_APP_STACK_BACKEND_URL to a controller API that serves /api/app-dev-stacks.";
 const DEFAULT_LOG_TAIL_LINES = 300;
 const POD_LOG_FETCH_CONCURRENCY = 4;
 
@@ -63,76 +65,75 @@ const OAuthTokenResponse = Schema.Struct({
   token_type: Schema.optional(Schema.String),
 });
 
-export class AppDevStackManager extends Context.Service<
-  AppDevStackManager,
+export class AppStackManager extends Context.Service<
+  AppStackManager,
   {
-    readonly status: Effect.Effect<AppDevStackBackendStatus>;
-    readonly list: (
-      input: AppDevStackListInput,
-    ) => Effect.Effect<AppDevStackListResult, AppDevStackError>;
+    readonly status: Effect.Effect<AppStackBackendStatus>;
+    readonly list: (input: AppStackListInput) => Effect.Effect<AppStackListResult, AppStackError>;
     readonly getByWorktree: (input: {
       readonly worktreePath: string;
-    }) => Effect.Effect<AppDevStackByWorktreeResult, AppDevStackError>;
-    readonly get: (input: AppDevStackGetInput) => Effect.Effect<AppDevStack, AppDevStackError>;
+      readonly variant?: AppStackVariant | undefined;
+    }) => Effect.Effect<AppStackByWorktreeResult, AppStackError>;
+    readonly get: (input: AppStackGetInput) => Effect.Effect<AppStack, AppStackError>;
     readonly autoCreate: (
-      input: AppDevStackAutoCreateInput,
-    ) => Effect.Effect<AppDevStackAutoCreateResult, AppDevStackError>;
-    readonly stop: (input: AppDevStackGetInput) => Effect.Effect<AppDevStack, AppDevStackError>;
+      input: AppStackAutoCreateInput,
+    ) => Effect.Effect<AppStackAutoCreateResult, AppStackError>;
+    readonly stop: (input: AppStackGetInput) => Effect.Effect<AppStack, AppStackError>;
     readonly setProtected: (
-      input: AppDevStackSetProtectedInput,
-    ) => Effect.Effect<AppDevStack, AppDevStackError>;
+      input: AppStackSetProtectedInput,
+    ) => Effect.Effect<AppStack, AppStackError>;
     /** Stops every unprotected stack a finished workflow owns. */
     readonly workflowTeardown: (
-      input: AppDevStackWorkflowTeardownInput,
-    ) => Effect.Effect<AppDevStackWorkflowTeardownResult, AppDevStackError>;
-    readonly restart: (input: AppDevStackGetInput) => Effect.Effect<AppDevStack, AppDevStackError>;
+      input: AppStackWorkflowTeardownInput,
+    ) => Effect.Effect<AppStackWorkflowTeardownResult, AppStackError>;
+    readonly restart: (input: AppStackGetInput) => Effect.Effect<AppStack, AppStackError>;
     readonly delete: (
-      input: AppDevStackGetInput,
-    ) => Effect.Effect<AppDevStackDeleteResult, AppDevStackError>;
+      input: AppStackGetInput,
+    ) => Effect.Effect<AppStackDeleteResult, AppStackError>;
     readonly listPods: (
-      input: AppDevStackListPodsInput,
-    ) => Effect.Effect<AppDevStackListPodsResult, AppDevStackError>;
+      input: AppStackListPodsInput,
+    ) => Effect.Effect<AppStackListPodsResult, AppStackError>;
     readonly getPodLogs: (
-      input: AppDevStackGetPodLogsInput,
-    ) => Effect.Effect<AppDevStackGetPodLogsResult, AppDevStackError>;
+      input: AppStackGetPodLogsInput,
+    ) => Effect.Effect<AppStackGetPodLogsResult, AppStackError>;
     readonly getStackPodLogs: (
-      input: AppDevStackGetStackPodLogsInput,
-    ) => Effect.Effect<AppDevStackGetStackPodLogsResult, AppDevStackError>;
+      input: AppStackGetStackPodLogsInput,
+    ) => Effect.Effect<AppStackGetStackPodLogsResult, AppStackError>;
     readonly getAllStackPodLogs: (
-      input: AppDevStackGetAllStackPodLogsInput,
-    ) => Effect.Effect<AppDevStackGetAllStackPodLogsResult, AppDevStackError>;
+      input: AppStackGetAllStackPodLogsInput,
+    ) => Effect.Effect<AppStackGetAllStackPodLogsResult, AppStackError>;
   }
->()("t3/appDevStack/AppDevStackManager") {
+>()("t3/appStack/AppStackManager") {
   static readonly layer = Layer.effect(
-    AppDevStackManager,
+    AppStackManager,
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const httpClient = yield* HttpClient.HttpClient;
-      const baseUrl = config.appDevStackBackendUrl?.href.replace(/\/+$/u, "") ?? null;
+      const baseUrl = config.appStackBackendUrl?.href.replace(/\/+$/u, "") ?? null;
 
-      if (config.appDevStackNative !== undefined && baseUrl === null) {
+      if (config.appStackNative !== undefined && baseUrl === null) {
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        return AppDevStackManager.of(
-          makeNativeAppDevStackService(
-            config.appDevStackNative,
-            makeKubectlRunner(config.appDevStackNative.kubectlPath, spawner),
+        return AppStackManager.of(
+          makeNativeAppStackService(
+            config.appStackNative,
+            makeKubectlRunner(config.appStackNative.kubectlPath, spawner),
             makeNativeCommandRunner(spawner),
           ),
         );
       }
 
       const bearerToken =
-        config.appDevStackBackendBearerToken === undefined
+        config.appStackBackendBearerToken === undefined
           ? null
-          : Redacted.value(config.appDevStackBackendBearerToken);
+          : Redacted.value(config.appStackBackendBearerToken);
       const oidcConfig =
-        config.appDevStackBackendOidcTokenUrl !== undefined &&
-        config.appDevStackBackendOidcClientId !== undefined &&
-        config.appDevStackBackendOidcClientSecret !== undefined
+        config.appStackBackendOidcTokenUrl !== undefined &&
+        config.appStackBackendOidcClientId !== undefined &&
+        config.appStackBackendOidcClientSecret !== undefined
           ? {
-              tokenUrl: config.appDevStackBackendOidcTokenUrl.href,
-              clientId: config.appDevStackBackendOidcClientId,
-              clientSecret: Redacted.value(config.appDevStackBackendOidcClientSecret),
+              tokenUrl: config.appStackBackendOidcTokenUrl.href,
+              clientId: config.appStackBackendOidcClientId,
+              clientSecret: Redacted.value(config.appStackBackendOidcClientSecret),
             }
           : null;
       let cachedOidcToken: {
@@ -151,7 +152,7 @@ export class AppDevStackManager extends Context.Service<
       const requireBaseUrl = (operation: string) =>
         baseUrl === null
           ? Effect.fail(
-              new AppDevStackError({
+              new AppStackError({
                 operation,
                 reason: "disabled",
                 message: DISABLED_MESSAGE,
@@ -159,7 +160,14 @@ export class AppDevStackManager extends Context.Service<
             )
           : Effect.succeed(baseUrl);
 
-      const appDevStackUrl = (base: string, path: string) => `${base}/api/app-dev-stacks${path}`;
+      const appStackUrl = (base: string, path: string) => `${base}/api/app-dev-stacks${path}`;
+
+      // The controller does not report the variant; its compose file name is
+      // the record, the same rule the controller applies on restart.
+      const withVariant = (stack: AppStack): AppStack =>
+        stack.variant === undefined
+          ? { ...stack, variant: appStackVariantForComposePath(stack.composePath) }
+          : stack;
 
       const oidcConfigDescription = () =>
         `${OIDC_TOKEN_URL_ENV} or ${OIDC_ISSUER_ENV}, ${OIDC_CLIENT_ID_ENV}, and ${OIDC_CLIENT_SECRET_ENV} (or ${CODE_OIDC_ISSUER_ENV}, ${CODE_OIDC_CLIENT_ID_ENV}, and ${CODE_OIDC_CLIENT_SECRET_ENV})`;
@@ -169,20 +177,20 @@ export class AppDevStackManager extends Context.Service<
           Effect.map((body) => {
             const trimmed = body.trim();
             return trimmed.length > 0
-              ? `App Dev Stack OIDC token endpoint responded with ${response.status}: ${trimmed}`
-              : `App Dev Stack OIDC token endpoint responded with ${response.status}.`;
+              ? `App Stack OIDC token endpoint responded with ${response.status}: ${trimmed}`
+              : `App Stack OIDC token endpoint responded with ${response.status}.`;
           }),
           Effect.orElseSucceed(
-            () => `App Dev Stack OIDC token endpoint responded with ${response.status}.`,
+            () => `App Stack OIDC token endpoint responded with ${response.status}.`,
           ),
         );
 
-      const getOidcAccessToken = Effect.fn("AppDevStackManager.getOidcAccessToken")(function* () {
+      const getOidcAccessToken = Effect.fn("AppStackManager.getOidcAccessToken")(function* () {
         if (oidcConfig === null) {
-          return yield* new AppDevStackError({
+          return yield* new AppStackError({
             operation: "authenticate",
             reason: "request_failed",
-            message: `App Dev Stack backend auth is not configured. Set ${BACKEND_TOKEN_ENV} or configure ${oidcConfigDescription()}.`,
+            message: `App Stack backend auth is not configured. Set ${BACKEND_TOKEN_ENV} or configure ${oidcConfigDescription()}.`,
           });
         }
 
@@ -203,10 +211,10 @@ export class AppDevStackManager extends Context.Service<
           httpClient.execute,
           Effect.mapError(
             (cause) =>
-              new AppDevStackError({
+              new AppStackError({
                 operation: "authenticate",
                 reason: "request_failed",
-                message: "Failed to reach App Dev Stack OIDC token endpoint.",
+                message: "Failed to reach App Stack OIDC token endpoint.",
                 cause,
               }),
           ),
@@ -215,7 +223,7 @@ export class AppDevStackManager extends Context.Service<
           return yield* tokenRequestMessage(response).pipe(
             Effect.flatMap((message) =>
               Effect.fail(
-                new AppDevStackError({
+                new AppStackError({
                   operation: "authenticate",
                   reason: "request_failed",
                   status: response.status,
@@ -229,22 +237,22 @@ export class AppDevStackManager extends Context.Service<
         const token = yield* HttpClientResponse.schemaBodyJson(OAuthTokenResponse)(response).pipe(
           Effect.mapError(
             (cause) =>
-              new AppDevStackError({
+              new AppStackError({
                 operation: "authenticate",
                 reason: "invalid_response",
                 status: response.status,
-                message: "Failed to decode App Dev Stack OIDC token response.",
+                message: "Failed to decode App Stack OIDC token response.",
                 cause,
               }),
           ),
         );
         const accessToken = token.access_token.trim();
         if (accessToken.length === 0) {
-          return yield* new AppDevStackError({
+          return yield* new AppStackError({
             operation: "authenticate",
             reason: "invalid_response",
             status: response.status,
-            message: "App Dev Stack OIDC token response did not include an access token.",
+            message: "App Stack OIDC token response did not include an access token.",
           });
         }
         cachedOidcToken = {
@@ -268,10 +276,10 @@ export class AppDevStackManager extends Context.Service<
 
       const unauthorizedMessage = () =>
         bearerToken !== null
-          ? `App Dev Stack backend responded with 401. The configured ${BACKEND_TOKEN_ENV} was rejected or expired; refresh it on the server.`
+          ? `App Stack backend responded with 401. The configured ${BACKEND_TOKEN_ENV} was rejected or expired; refresh it on the server.`
           : oidcConfig !== null
-            ? `App Dev Stack backend responded with 401. The service token minted from the configured OIDC client credentials was rejected; check ${oidcConfigDescription()}.`
-            : `App Dev Stack backend responded with 401. Set ${BACKEND_TOKEN_ENV} or configure ${oidcConfigDescription()}.`;
+            ? `App Stack backend responded with 401. The service token minted from the configured OIDC client credentials was rejected; check ${oidcConfigDescription()}.`
+            : `App Stack backend responded with 401. Set ${BACKEND_TOKEN_ENV} or configure ${oidcConfigDescription()}.`;
 
       const responseMessage = (response: HttpClientResponse.HttpClientResponse) =>
         response.text.pipe(
@@ -282,13 +290,13 @@ export class AppDevStackManager extends Context.Service<
               return trimmed.length > 0 ? `${message} Backend response: ${trimmed}` : message;
             }
             return trimmed.length > 0
-              ? `App Dev Stack backend responded with ${response.status}: ${trimmed}`
-              : `App Dev Stack backend responded with ${response.status}.`;
+              ? `App Stack backend responded with ${response.status}: ${trimmed}`
+              : `App Stack backend responded with ${response.status}.`;
           }),
           Effect.orElseSucceed(() =>
             response.status === 401
               ? unauthorizedMessage()
-              : `App Dev Stack backend responded with ${response.status}.`,
+              : `App Stack backend responded with ${response.status}.`,
           ),
         );
 
@@ -296,12 +304,12 @@ export class AppDevStackManager extends Context.Service<
         operation: string,
         schema: S,
         response: HttpClientResponse.HttpClientResponse,
-      ): Effect.Effect<S["Type"], AppDevStackError, S["DecodingServices"]> => {
+      ): Effect.Effect<S["Type"], AppStackError, S["DecodingServices"]> => {
         if (response.status < 200 || response.status >= 300) {
           return responseMessage(response).pipe(
             Effect.flatMap((message) =>
               Effect.fail(
-                new AppDevStackError({
+                new AppStackError({
                   operation,
                   reason: "request_failed",
                   status: response.status,
@@ -314,11 +322,11 @@ export class AppDevStackManager extends Context.Service<
         return HttpClientResponse.schemaBodyJson(schema)(response).pipe(
           Effect.mapError(
             (cause) =>
-              new AppDevStackError({
+              new AppStackError({
                 operation,
                 reason: "invalid_response",
                 status: response.status,
-                message: "Failed to decode App Dev Stack backend response.",
+                message: "Failed to decode App Stack backend response.",
                 cause,
               }),
           ),
@@ -329,16 +337,16 @@ export class AppDevStackManager extends Context.Service<
         operation: string,
         request: HttpClientRequest.HttpClientRequest,
         schema: S,
-      ): Effect.Effect<S["Type"], AppDevStackError, S["DecodingServices"]> =>
+      ): Effect.Effect<S["Type"], AppStackError, S["DecodingServices"]> =>
         authorizeBackendRequest(request).pipe(
           Effect.flatMap((authorizedRequest) =>
             httpClient.execute(authorizedRequest.pipe(HttpClientRequest.acceptJson)).pipe(
               Effect.mapError(
                 (cause) =>
-                  new AppDevStackError({
+                  new AppStackError({
                     operation,
                     reason: "request_failed",
-                    message: "Failed to reach App Dev Stack backend.",
+                    message: "Failed to reach App Stack backend.",
                     cause,
                   }),
               ),
@@ -350,16 +358,16 @@ export class AppDevStackManager extends Context.Service<
       const executeEmpty = (
         operation: string,
         request: HttpClientRequest.HttpClientRequest,
-      ): Effect.Effect<AppDevStackDeleteResult, AppDevStackError> =>
+      ): Effect.Effect<AppStackDeleteResult, AppStackError> =>
         authorizeBackendRequest(request).pipe(
           Effect.flatMap((authorizedRequest) =>
             httpClient.execute(authorizedRequest.pipe(HttpClientRequest.acceptJson)).pipe(
               Effect.mapError(
                 (cause) =>
-                  new AppDevStackError({
+                  new AppStackError({
                     operation,
                     reason: "request_failed",
-                    message: "Failed to reach App Dev Stack backend.",
+                    message: "Failed to reach App Stack backend.",
                     cause,
                   }),
               ),
@@ -371,7 +379,7 @@ export class AppDevStackManager extends Context.Service<
               : responseMessage(response).pipe(
                   Effect.flatMap((message) =>
                     Effect.fail(
-                      new AppDevStackError({
+                      new AppStackError({
                         operation,
                         reason: "request_failed",
                         status: response.status,
@@ -383,9 +391,9 @@ export class AppDevStackManager extends Context.Service<
           ),
         );
 
-      const list = Effect.fn("AppDevStackManager.list")(function* (input: AppDevStackListInput) {
+      const list = Effect.fn("AppStackManager.list")(function* (input: AppStackListInput) {
         const base = yield* requireBaseUrl("list");
-        const url = new URL(appDevStackUrl(base, ""));
+        const url = new URL(appStackUrl(base, ""));
         const userId = input.userId?.trim();
         if (userId) {
           url.searchParams.set("userId", userId);
@@ -393,37 +401,49 @@ export class AppDevStackManager extends Context.Service<
         const stacks = yield* executeJson(
           "list",
           HttpClientRequest.get(url.toString()),
-          Schema.Array(AppDevStack),
+          Schema.Array(AppStack),
         );
-        return { stacks };
+        return { stacks: stacks.map(withVariant) };
       });
 
-      const getByWorktree = Effect.fn("AppDevStackManager.getByWorktree")(function* (input: {
+      const getByWorktree = Effect.fn("AppStackManager.getByWorktree")(function* (input: {
         readonly worktreePath: string;
+        readonly variant?: AppStackVariant | undefined;
       }) {
         const base = yield* requireBaseUrl("getByWorktree");
-        const url = new URL(appDevStackUrl(base, "/by-worktree"));
+        const url = new URL(appStackUrl(base, "/by-worktree"));
         url.searchParams.set("worktreePath", input.worktreePath);
-        return yield* executeJson(
+        const result = yield* executeJson(
           "getByWorktree",
           HttpClientRequest.get(url.toString()),
-          AppDevStackByWorktreeResult,
+          AppStackByWorktreeResult,
         );
+        const stack = result.stack === null ? null : withVariant(result.stack);
+        // The controller keys this lookup on the worktree alone, so the stack
+        // it returns may be the other variant's. That one is not ours.
+        if (stack === null || stack.variant !== (input.variant ?? "dev")) {
+          return { stack: null, frontendUrl: null, frontendServiceName: null };
+        }
+        return { ...result, stack };
       });
 
-      const get = Effect.fn("AppDevStackManager.get")(function* (input: AppDevStackGetInput) {
+      const get = Effect.fn("AppStackManager.get")(function* (input: AppStackGetInput) {
         const base = yield* requireBaseUrl("get");
-        return yield* executeJson(
+        const stack = yield* executeJson(
           "get",
-          HttpClientRequest.get(appDevStackUrl(base, `/${encodeURIComponent(input.stackId)}`)),
-          AppDevStack,
+          HttpClientRequest.get(appStackUrl(base, `/${encodeURIComponent(input.stackId)}`)),
+          AppStack,
         );
+        return withVariant(stack);
       });
 
-      const autoCreateRequest = Effect.fn("AppDevStackManager.autoCreateRequest")(function* (
-        input: AppDevStackAutoCreateInput,
+      const autoCreateRequest = Effect.fn("AppStackManager.autoCreateRequest")(function* (
+        input: AppStackAutoCreateInput,
       ) {
-        const existing = yield* getByWorktree({ worktreePath: input.worktreePath });
+        const existing = yield* getByWorktree({
+          worktreePath: input.worktreePath,
+          variant: input.variant,
+        });
         if (
           existing.stack !== null &&
           ["pending", "starting", "running", "stopping"].includes(existing.stack.status)
@@ -433,25 +453,27 @@ export class AppDevStackManager extends Context.Service<
             created: false,
             alreadyRunning: true,
             reserved: false,
-            message: "An app dev stack for this worktree already exists; returning it.",
+            message: "An app stack for this worktree already exists; returning it.",
             frontendUrl: existing.frontendUrl,
             frontendServiceName: existing.frontendServiceName,
           };
         }
         const base = yield* requireBaseUrl("autoCreate");
-        return yield* executeJson(
+        const result = yield* executeJson(
           "autoCreate",
-          HttpClientRequest.post(appDevStackUrl(base, "/auto-create")).pipe(
+          HttpClientRequest.post(appStackUrl(base, "/auto-create")).pipe(
             HttpClientRequest.bodyJsonUnsafe({
               worktree_path: input.worktreePath,
               display_name: input.displayName,
               git_branch: input.gitBranch ?? null,
+              variant: input.variant ?? "dev",
               ...(input.namespace === undefined ? {} : { namespace: input.namespace }),
               ...(input.workflowId === undefined ? {} : { workflow_id: input.workflowId }),
             }),
           ),
-          AppDevStackAutoCreateResult,
+          AppStackAutoCreateResult,
         );
+        return { ...result, stack: result.stack === null ? null : withVariant(result.stack) };
       });
 
       const getAutoCreateSemaphore = (key: string) =>
@@ -481,8 +503,8 @@ export class AppDevStackManager extends Context.Service<
           return next;
         });
 
-      const autoCreate = Effect.fn("AppDevStackManager.autoCreate")(function* (
-        input: AppDevStackAutoCreateInput,
+      const autoCreate = Effect.fn("AppStackManager.autoCreate")(function* (
+        input: AppStackAutoCreateInput,
       ) {
         const normalizedPath = input.worktreePath.trim().replace(/[\\/]+$/u, "");
         const key = `${input.workflowId?.trim() ?? "manual"}\u0000${normalizedPath}`;
@@ -492,46 +514,44 @@ export class AppDevStackManager extends Context.Service<
           .pipe(Effect.ensuring(releaseAutoCreateSemaphore(key)));
       });
 
-      const stop = Effect.fn("AppDevStackManager.stop")(function* (input: AppDevStackGetInput) {
+      const stop = Effect.fn("AppStackManager.stop")(function* (input: AppStackGetInput) {
         const base = yield* requireBaseUrl("stop");
-        return yield* executeJson(
+        const stack = yield* executeJson(
           "stop",
-          HttpClientRequest.post(
-            appDevStackUrl(base, `/${encodeURIComponent(input.stackId)}/stop`),
-          ),
-          AppDevStack,
+          HttpClientRequest.post(appStackUrl(base, `/${encodeURIComponent(input.stackId)}/stop`)),
+          AppStack,
         );
+        return withVariant(stack);
       });
 
-      const setProtected = Effect.fn("AppDevStackManager.setProtected")(function* (
-        input: AppDevStackSetProtectedInput,
+      const setProtected = Effect.fn("AppStackManager.setProtected")(function* (
+        input: AppStackSetProtectedInput,
       ) {
         const base = yield* requireBaseUrl("setProtected");
-        return yield* executeJson(
+        const stack = yield* executeJson(
           "setProtected",
           HttpClientRequest.post(
-            appDevStackUrl(base, `/${encodeURIComponent(input.stackId)}/protection`),
+            appStackUrl(base, `/${encodeURIComponent(input.stackId)}/protection`),
           ).pipe(HttpClientRequest.bodyJsonUnsafe({ protected: input.protected })),
-          AppDevStack,
+          AppStack,
         );
+        return withVariant(stack);
       });
 
-      const workflowTeardown = Effect.fn("AppDevStackManager.workflowTeardown")(function* (
-        input: AppDevStackWorkflowTeardownInput,
+      const workflowTeardown = Effect.fn("AppStackManager.workflowTeardown")(function* (
+        input: AppStackWorkflowTeardownInput,
       ) {
         const base = yield* requireBaseUrl("workflowTeardown");
         return yield* executeJson(
           "workflowTeardown",
-          HttpClientRequest.post(appDevStackUrl(base, "/workflow-teardown")).pipe(
+          HttpClientRequest.post(appStackUrl(base, "/workflow-teardown")).pipe(
             HttpClientRequest.bodyJsonUnsafe({ workflow_id: input.workflowId }),
           ),
-          AppDevStackWorkflowTeardownResult,
+          AppStackWorkflowTeardownResult,
         );
       });
 
-      const restart = Effect.fn("AppDevStackManager.restart")(function* (
-        input: AppDevStackGetInput,
-      ) {
+      const restart = Effect.fn("AppStackManager.restart")(function* (input: AppStackGetInput) {
         const stack = yield* get(input);
         yield* stop(input);
         const result = yield* autoCreate({
@@ -539,9 +559,10 @@ export class AppDevStackManager extends Context.Service<
           displayName: displayNameForRestart(stack),
           gitBranch: stack.branchName ?? null,
           workflowId: stack.workflowId ?? undefined,
+          variant: stack.variant,
         });
         if (result.stack === null) {
-          return yield* new AppDevStackError({
+          return yield* new AppStackError({
             operation: "restart",
             reason: "invalid_response",
             message:
@@ -552,33 +573,31 @@ export class AppDevStackManager extends Context.Service<
         return result.stack;
       });
 
-      const deleteStack = Effect.fn("AppDevStackManager.delete")(function* (
-        input: AppDevStackGetInput,
-      ) {
+      const deleteStack = Effect.fn("AppStackManager.delete")(function* (input: AppStackGetInput) {
         const base = yield* requireBaseUrl("delete");
         return yield* executeEmpty(
           "delete",
-          HttpClientRequest.delete(appDevStackUrl(base, `/${encodeURIComponent(input.stackId)}`)),
+          HttpClientRequest.delete(appStackUrl(base, `/${encodeURIComponent(input.stackId)}`)),
         );
       });
 
-      const listPods = Effect.fn("AppDevStackManager.listPods")(function* (
-        input: AppDevStackListPodsInput,
+      const listPods = Effect.fn("AppStackManager.listPods")(function* (
+        input: AppStackListPodsInput,
       ) {
         const base = yield* requireBaseUrl("listPods");
         return yield* executeJson(
           "listPods",
-          HttpClientRequest.get(appDevStackUrl(base, `/${encodeURIComponent(input.stackId)}/pods`)),
-          AppDevStackListPodsResult,
+          HttpClientRequest.get(appStackUrl(base, `/${encodeURIComponent(input.stackId)}/pods`)),
+          AppStackListPodsResult,
         );
       });
 
-      const getPodLogs = Effect.fn("AppDevStackManager.getPodLogs")(function* (
-        input: AppDevStackGetPodLogsInput,
+      const getPodLogs = Effect.fn("AppStackManager.getPodLogs")(function* (
+        input: AppStackGetPodLogsInput,
       ) {
         const base = yield* requireBaseUrl("getPodLogs");
         const url = new URL(
-          appDevStackUrl(
+          appStackUrl(
             base,
             `/${encodeURIComponent(input.stackId)}/pods/${encodeURIComponent(input.podName)}/logs`,
           ),
@@ -593,12 +612,12 @@ export class AppDevStackManager extends Context.Service<
         return yield* executeJson(
           "getPodLogs",
           HttpClientRequest.get(url.toString()),
-          AppDevStackGetPodLogsResult,
+          AppStackGetPodLogsResult,
         );
       });
 
-      const getStackPodLogs = Effect.fn("AppDevStackManager.getStackPodLogs")(function* (
-        input: AppDevStackGetStackPodLogsInput,
+      const getStackPodLogs = Effect.fn("AppStackManager.getStackPodLogs")(function* (
+        input: AppStackGetStackPodLogsInput,
       ) {
         const tailLines = input.tailLines ?? DEFAULT_LOG_TAIL_LINES;
         const podList = yield* listPods({ stackId: input.stackId });
@@ -641,16 +660,16 @@ export class AppDevStackManager extends Context.Service<
         };
       });
 
-      const getAllStackPodLogs = Effect.fn("AppDevStackManager.getAllStackPodLogs")(function* (
-        input: AppDevStackGetAllStackPodLogsInput,
+      const getAllStackPodLogs = Effect.fn("AppStackManager.getAllStackPodLogs")(function* (
+        input: AppStackGetAllStackPodLogsInput,
       ) {
         const limit = normalizeAllStackLogLimit(input.limit);
         if (limit.mode === "all") {
-          return yield* new AppDevStackError({
+          return yield* new AppStackError({
             operation: "getAllStackPodLogs",
             reason: "request_failed",
             message:
-              "Reading all App Dev Stack logs is not supported by the configured remote App Dev Stack backend.",
+              "Reading all App Stack logs is not supported by the configured remote App Stack backend.",
           });
         }
         const tailLines = limit.tailLines;
@@ -701,7 +720,7 @@ export class AppDevStackManager extends Context.Service<
         };
       });
 
-      return AppDevStackManager.of({
+      return AppStackManager.of({
         status,
         list,
         getByWorktree,
@@ -722,12 +741,12 @@ export class AppDevStackManager extends Context.Service<
 }
 
 const stackPodLogEntryFromResult = (
-  pod: AppDevStackPod,
-  container: AppDevStackPodContainer,
+  pod: AppStackPod,
+  container: AppStackPodContainer,
   logs: string,
   error: string | null,
   fetchedAt: string,
-): AppDevStackPodLogEntry => ({
+): AppStackPodLogEntry => ({
   podName: pod.name,
   containerName: container.name,
   phase: pod.phase,
@@ -742,8 +761,8 @@ const stackPodLogEntryFromResult = (
 });
 
 const normalizeAllStackLogLimit = (
-  limit: AppDevStackGetAllStackPodLogsInput["limit"] | undefined,
-): AppDevStackGetAllStackPodLogsResult["limit"] =>
+  limit: AppStackGetAllStackPodLogsInput["limit"] | undefined,
+): AppStackGetAllStackPodLogsResult["limit"] =>
   limit?.mode === "all"
     ? { mode: "all" }
     : {
@@ -754,7 +773,7 @@ const normalizeAllStackLogLimit = (
         ),
       };
 
-const displayNameForRestart = (stack: AppDevStack): string => {
+const displayNameForRestart = (stack: AppStack): string => {
   const candidates = [
     stack.displayName,
     stack.displaySlug,

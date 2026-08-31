@@ -1,0 +1,61 @@
+# T3 Code app-prod stack for the homedev Kubernetes cluster.
+#
+# The prod variant of infra/compose/compose.app-dev.yml: the production build,
+# baked into an image, no source mounts. Selected only by an explicit
+# variant: "prod" request (App Stack panel, or the Stacks API), never by a
+# workflow. Every code change needs a new image build; that is the point.
+#
+# T3 Code in production is one process: `t3 serve` serves the built web client
+# from dist/client and the API and WebSocket on the same port, so this is one
+# service. It is named `app` because both URL helpers map that name to the
+# frontend URL.
+#
+# IMPORTANT: do NOT add x-stacks-app-dev.namespace here. Each stack must get
+# its generated namespace — the standing code-dev / code-main deployments own
+# code-dev.nightingale-ai.com and code.nightingale-ai.com.
+
+x-stacks-app-dev:
+  harborProject: code
+
+services:
+  app:
+    # The native provisioner replaces the tag with the worktree's commit.
+    image: code-app-prod:latest
+    build:
+      context: ../..
+      dockerfile: infra/docker/app-prod/Dockerfile
+      args:
+        # Build-time public config only. Nothing stack-specific belongs here:
+        # the bundle is single-origin and talks to whatever host serves it.
+        VITE_CODE_APP_DEV_STACKS_ENABLED: "true"
+    labels:
+      stacks.appDevStack.expose: "true"
+    command:
+      [
+        "node",
+        "apps/server/dist/bin.mjs",
+        "serve",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "5733",
+        "--base-dir",
+        "/var/lib/t3code",
+      ]
+    environment:
+      - NODE_ENV=production
+      - T3CODE_NO_BROWSER=1
+    volumes:
+      # Server state (threads DB). emptyDir in K8s — previews are stateless.
+      - t3-data:/var/lib/t3code
+    ports:
+      - "5733:5733"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5733/"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+volumes:
+  t3-data:

@@ -172,8 +172,8 @@ import {
   usePreviewMiniPlayerStore,
 } from "../previewMiniPlayerStore";
 import { RightPanelTabs, type PullRequestTabStatus } from "./RightPanelTabs";
-import { AppDevStackPanel } from "./AppDevStackPanel";
-import { AppDevStackLogsPanel } from "./AppDevStackLogsPanel";
+import { AppStackPanel } from "./AppStackPanel";
+import { AppStackLogsPanel } from "./AppStackLogsPanel";
 import { isThreadOwnPullRequest } from "./pullRequest/pullRequestDetail.logic";
 import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
@@ -4262,9 +4262,9 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
   }, [activeProject, activeThreadRef]);
-  const addAppDevStackSurface = useCallback(() => {
+  const addAppStackSurface = useCallback(() => {
     if (!activeThreadRef || !activeProject) return;
-    useRightPanelStore.getState().open(activeThreadRef, "app-dev-stack");
+    useRightPanelStore.getState().open(activeThreadRef, "app-stack");
   }, [activeProject, activeThreadRef]);
   const addAgentsSurface = useCallback(() => {
     if (!activeThreadRef) return;
@@ -7430,10 +7430,8 @@ function ChatViewContent(props: ChatViewProps) {
           workflowArtifacts={displayedWorkflowArtifacts}
         />
       </Suspense>
-    ) : activeRightPanelSurface?.kind === "app-dev-stack" &&
-      activeProject &&
-      activeWorkspaceRoot ? (
-      <AppDevStackPanel
+    ) : activeRightPanelSurface?.kind === "app-stack" && activeProject && activeWorkspaceRoot ? (
+      <AppStackPanel
         environmentId={activeProject.environmentId}
         threadRef={activeThreadRef}
         activeThread={activeThread}
@@ -7444,7 +7442,7 @@ function ChatViewContent(props: ChatViewProps) {
       />
     ) : activeRightPanelSurface?.kind === "logs" &&
       activeEnvironmentConnectionPhase === "connected" ? (
-      <AppDevStackLogsPanel
+      <AppStackLogsPanel
         environmentId={activeThread.environmentId}
         timestampFormat={timestampFormat}
         activeThreadWorktreePath={activeThread.worktreePath}
@@ -8053,7 +8051,7 @@ function ChatViewContent(props: ChatViewProps) {
           onAddLogs={addLogsSurface}
           onAddDiff={addDiffSurface}
           onAddFiles={addFilesSurface}
-          onAddAppDevStack={addAppDevStackSurface}
+          onAddAppStack={addAppStackSurface}
           onAddPullRequest={addPullRequestSurface}
           onAddAgents={addAgentsSurface}
           onAddWorkflows={addWorkflowsSurface}
@@ -8066,7 +8064,7 @@ function ChatViewContent(props: ChatViewProps) {
           logsAvailable={activeEnvironmentConnectionPhase === "connected"}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
-          appDevStackAvailable={activeProject !== null}
+          appStackAvailable={activeProject !== null}
           pullRequestAvailable={pullRequestSurfaceAvailable}
           agentsAvailable
           workflowsAvailable={workflowsAvailable}
@@ -8105,7 +8103,7 @@ function ChatViewContent(props: ChatViewProps) {
             onAddLogs={addLogsSurface}
             onAddDiff={addDiffSurface}
             onAddFiles={addFilesSurface}
-            onAddAppDevStack={addAppDevStackSurface}
+            onAddAppStack={addAppStackSurface}
             onAddPullRequest={addPullRequestSurface}
             onAddAgents={addAgentsSurface}
             onAddWorkflows={addWorkflowsSurface}
@@ -8118,7 +8116,7 @@ function ChatViewContent(props: ChatViewProps) {
             logsAvailable={activeEnvironmentConnectionPhase === "connected"}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
-            appDevStackAvailable={activeProject !== null}
+            appStackAvailable={activeProject !== null}
             pullRequestAvailable={pullRequestSurfaceAvailable}
             agentsAvailable
             workflowsAvailable={workflowsAvailable}

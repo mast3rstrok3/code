@@ -253,9 +253,9 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         threadBoundary: "new child thread",
         note: "automatic",
       },
-      { label: "Start and probe AppDevStack from the integrated worktree", note: "automatic" },
+      { label: "Start and probe AppStack from the integrated worktree", note: "automatic" },
       {
-        label: "Nested App Review against the shared AppDevStack",
+        label: "Nested App Review against the shared AppStack",
         skillId: "implementation.browser-app-review.codex",
         threadBoundary: "new review thread",
         note: "automatic; App Review has its own cycle budget",
@@ -417,7 +417,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     availability: "available",
     implementationDefaults: FULL_IMPLEMENTATION_DEFAULTS,
     helpSteps: [
-      { label: "Prepare shared worktree and App Dev Stack", note: "automatic" },
+      { label: "Prepare shared worktree and App Stack", note: "automatic" },
       {
         label: "Grill with Docs",
         skillId: "planning.grill-stage.codex",

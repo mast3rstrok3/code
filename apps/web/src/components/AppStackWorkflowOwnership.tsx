@@ -1,15 +1,12 @@
-import type { AppDevStack, AppDevStackListResult } from "@t3tools/contracts";
+import type { AppStack, AppStackListResult } from "@t3tools/contracts";
 import { TriangleAlertIcon } from "lucide-react";
 
-import {
-  appDevStackOwnershipLabel,
-  appDevStackWorkflowConflictSummary,
-} from "./AppDevStackPanel.logic";
+import { appStackOwnershipLabel, appStackWorkflowConflictSummary } from "./AppStackPanel.logic";
 
-type WorkflowConflict = NonNullable<AppDevStackListResult["workflowConflicts"]>[number];
+type WorkflowConflict = NonNullable<AppStackListResult["workflowConflicts"]>[number];
 
-export function AppDevStackWorkflowOwnershipBadge(props: { readonly stack: AppDevStack }) {
-  const label = appDevStackOwnershipLabel(props.stack);
+export function AppStackWorkflowOwnershipBadge(props: { readonly stack: AppStack }) {
+  const label = appStackOwnershipLabel(props.stack);
   if (label === null) return null;
 
   return (
@@ -19,7 +16,7 @@ export function AppDevStackWorkflowOwnershipBadge(props: { readonly stack: AppDe
   );
 }
 
-export function AppDevStackWorkflowConflictWarning(props: {
+export function AppStackWorkflowConflictWarning(props: {
   readonly conflicts: ReadonlyArray<WorkflowConflict>;
 }) {
   if (props.conflicts.length === 0) return null;
@@ -33,7 +30,7 @@ export function AppDevStackWorkflowConflictWarning(props: {
           <div
             key={`${conflict.workflowId}:${conflict.kind ?? "legacy"}:${conflict.worktreePaths.join(":")}`}
           >
-            {appDevStackWorkflowConflictSummary(conflict)}
+            {appStackWorkflowConflictSummary(conflict)}
           </div>
         ))}
         <div>No stacks were stopped or deleted automatically.</div>

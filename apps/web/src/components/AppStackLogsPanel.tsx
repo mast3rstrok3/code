@@ -1,4 +1,4 @@
-import type { AppDevStackPodLogEntry, EnvironmentId, TimestampFormat } from "@t3tools/contracts";
+import type { AppStackPodLogEntry, EnvironmentId, TimestampFormat } from "@t3tools/contracts";
 import {
   ChevronDownIcon,
   ChevronRightIcon,
@@ -14,7 +14,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react
 
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
-import { appDevStackEnvironment } from "~/state/appDevStacks";
+import { appStackEnvironment } from "~/state/appStacks";
 import { useEnvironmentQuery } from "~/state/query";
 import { formatShortTimestamp } from "~/timestampFormat";
 
@@ -29,7 +29,7 @@ import {
   stackLogTailSelectionToReadLimit,
   type StackLogTailSelection,
   stackPodLogOwnerLabel,
-} from "./AppDevStackLogsPanel.logic";
+} from "./AppStackLogsPanel.logic";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
@@ -39,7 +39,7 @@ import { Switch } from "./ui/switch";
 
 const TAIL_LINE_OPTIONS = [100, 300, 1000, 5000, "all"] as const;
 
-interface AppDevStackLogsPanelProps {
+interface AppStackLogsPanelProps {
   readonly environmentId: EnvironmentId;
   readonly timestampFormat: TimestampFormat;
   readonly activeThreadWorktreePath?: string | null | undefined;
@@ -78,7 +78,7 @@ function formatFetchedAt(value: string, timestampFormat: TimestampFormat): strin
   return formatShortTimestamp(value, timestampFormat);
 }
 
-function readyLabel(entry: AppDevStackPodLogEntry): string {
+function readyLabel(entry: AppStackPodLogEntry): string {
   return entry.ready ? "ready" : "not ready";
 }
 
@@ -94,7 +94,7 @@ function containerCountLabel(count: number): string {
   return count === 1 ? "1 container" : `${String(count)} containers`;
 }
 
-function ContainerLogBlock({ entry }: { readonly entry: AppDevStackPodLogEntry }) {
+function ContainerLogBlock({ entry }: { readonly entry: AppStackPodLogEntry }) {
   const owner = stackPodLogOwnerLabel(entry);
   const logText = entry.logs.length > 0 ? entry.logs : "No log lines returned.";
 
@@ -150,7 +150,7 @@ function ContainerLogBlock({ entry }: { readonly entry: AppDevStackPodLogEntry }
   );
 }
 
-export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
+export function AppStackLogsPanel(props: AppStackLogsPanelProps) {
   const [tailSelection, setTailSelection] = useState<StackLogTailSelection>(300);
   const [search, setSearch] = useState("");
   const [hideEmpty, setHideEmpty] = useState(false);
@@ -172,7 +172,7 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
   );
 
   const statusQuery = useEnvironmentQuery(
-    appDevStackEnvironment.status({
+    appStackEnvironment.status({
       environmentId: props.environmentId,
       input: {},
     }),
@@ -180,7 +180,7 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
   const backendEnabled = statusQuery.data?.enabled === true;
   const associatedStackQuery = useEnvironmentQuery(
     backendEnabled && associatedWorktreePath !== null
-      ? appDevStackEnvironment.byWorktree({
+      ? appStackEnvironment.byWorktree({
           environmentId: props.environmentId,
           input: { worktreePath: associatedWorktreePath },
         })
@@ -189,7 +189,7 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
   const associatedStack = associatedStackQuery.data?.stack ?? null;
   const stackLogsQuery = useEnvironmentQuery(
     backendEnabled && associatedStack !== null && readLimit.mode === "tail"
-      ? appDevStackEnvironment.getStackPodLogs({
+      ? appStackEnvironment.getStackPodLogs({
           environmentId: props.environmentId,
           input: {
             stackId: associatedStack.id,
@@ -200,7 +200,7 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
   );
   const allLogsQuery = useEnvironmentQuery(
     backendEnabled && associatedStack !== null && readLimit.mode === "all"
-      ? appDevStackEnvironment.getAllStackPodLogs({
+      ? appStackEnvironment.getAllStackPodLogs({
           environmentId: props.environmentId,
           input: { limit: readLimit },
         })
@@ -314,7 +314,7 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
     return (
       <PanelState
         title="No thread worktree"
-        description="This thread is not associated with a worktree that can be resolved to an App Dev Stack."
+        description="This thread is not associated with a worktree that can be resolved to an App Stack."
       />
     );
   }
@@ -323,7 +323,7 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
       <PanelState
         icon="loading"
         title="Loading App Stack"
-        description="Resolving the App Dev Stack for this thread worktree."
+        description="Resolving the App Stack for this thread worktree."
       />
     );
   }
@@ -340,7 +340,7 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
     return (
       <PanelState
         title="No App Stack"
-        description={`No App Dev Stack is associated with ${associatedWorktreePath}.`}
+        description={`No App Stack is associated with ${associatedWorktreePath}.`}
       />
     );
   }
@@ -508,7 +508,7 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
       {totalStackCount === 0 ? (
         <PanelState
           title="No App Stack logs"
-          description="No pod log result was returned for the App Dev Stack associated with this worktree."
+          description="No pod log result was returned for the App Stack associated with this worktree."
         />
       ) : visiblePodCount === 0 && stackFailureCount === 0 ? (
         <PanelState

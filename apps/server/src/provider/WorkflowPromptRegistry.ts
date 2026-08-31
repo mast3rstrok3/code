@@ -55,24 +55,24 @@ List the implementation workstreams in the order one Build thread should execute
 
 ## App Review topology
 
-List the acceptance lanes in the order the durable App Review thread should exercise them against the shared AppDevStack Feature URL. For each lane include a stable id, covered user flow or acceptance criteria, required setup, test-state or account reset needs, and expected observations.
+List the acceptance lanes in the order the durable App Review thread should exercise them against the shared AppStack Feature URL. For each lane include a stable id, covered user flow or acceptance criteria, required setup, test-state or account reset needs, and expected observations.
 
-The workflow starts or reuses the AppDevStack for this exact worktree and branch after repository setup succeeds, then injects its status and Feature URL into later stages. Do not plan a competing dev server or a second stack. The durable Browser App Review thread executes the lanes in order and owns recording, screenshots, durable findings, the final verdict, and repair cycles.
+The workflow starts or reuses the AppStack for this exact worktree and branch after repository setup succeeds, then injects its status and Feature URL into later stages. Do not plan a competing dev server or a second stack. The durable Browser App Review thread executes the lanes in order and owns recording, screenshots, durable findings, the final verdict, and repair cycles.
 
 Everything after Planning is unattended. Do not ask for implementation approval in the final response; finish with the native CLI Plan-mode proposed plan handoff.
 </collaboration_mode>`;
 
-const APP_DEV_STACK_ASSOCIATED_DOC_CONTENT = `# AppDevStack
+const APP_STACK_ASSOCIATED_DOC_CONTENT = `# AppStack
 
-An AppDevStack is T3's Kubernetes-backed development environment for one workflow worktree: service pods mount that worktree at \`/app\`, while dependency paths such as \`node_modules\` can be separate pod volumes. Planning, Full Feature, and Fast Feature create their shared worktree before the first model turn, run its repository-declared dependency setup, and start AppDevStack immediately after that setup succeeds. The workflow thread itself starts immediately while this happens. Every later Planning, Build, Integration, and combined App Review stage reuses that exact worktree, branch, and stack. Treat the injected stack status, id, and Feature URL as authoritative; do not use another worktree's runtime, start a competing dev server, or replace dependency paths in the shared worktree while its stack is active.
+An AppStack is T3's Kubernetes-backed development environment for one workflow worktree: service pods mount that worktree at \`/app\`, while dependency paths such as \`node_modules\` can be separate pod volumes. Planning, Full Feature, and Fast Feature create their shared worktree before the first model turn, run its repository-declared dependency setup, and start AppStack immediately after that setup succeeds. The workflow thread itself starts immediately while this happens. Every later Planning, Build, Integration, and combined App Review stage reuses that exact worktree, branch, and stack. Treat the injected stack status, id, and Feature URL as authoritative; do not use another worktree's runtime, start a competing dev server, or replace dependency paths in the shared worktree while its stack is active.
 
-Implementation ticket workers branch downward into child worktrees. A ticket with \`appReviewEligible: true\` receives its own worktree-owned AppDevStack after implementation so its attached \`appReviewPlanMarkdown\` can be exercised in isolation. Ineligible tickets do not start a ticket stack. Ticket stacks never replace the shared integration stack, which remains the authoritative target after integration for cross-ticket App Review.`;
+Implementation ticket workers branch downward into child worktrees. A ticket with \`appReviewEligible: true\` receives its own worktree-owned AppStack after implementation so its attached \`appReviewPlanMarkdown\` can be exercised in isolation. Ineligible tickets do not start a ticket stack. Ticket stacks never replace the shared integration stack, which remains the authoritative target after integration for cross-ticket App Review.`;
 
-const APP_DEV_STACK_ASSOCIATED_DOC = {
+const APP_STACK_ASSOCIATED_DOC = {
   id: "app-dev-stack",
-  title: "AppDevStack",
+  title: "AppStack",
   path: "app-dev-stack.md",
-  content: APP_DEV_STACK_ASSOCIATED_DOC_CONTENT,
+  content: APP_STACK_ASSOCIATED_DOC_CONTENT,
 } as const;
 
 // Keep workflow-specific behavior in trailing adapters so every grill shares this block.
@@ -208,7 +208,7 @@ A prototype is **throwaway code that answers a question**. The question decides 
 
 ## Full fidelity on the real application
 
-T3 prototypes are built on the real application, not as low-fidelity stand-ins. Work in a dedicated prototype worktree and branch created from the current branch, and start the app dev stack for that worktree when none is running — the running app on the prototype branch *is* the prototype. Do not build toy terminal apps, mock pages, or sandboxes outside the repository: a branch of the real application answers the same question with more truth, and the app dev stack makes it just as easy to run and share.
+T3 prototypes are built on the real application, not as low-fidelity stand-ins. Work in a dedicated prototype worktree and branch created from the current branch, and start the app stack for that worktree when none is running — the running app on the prototype branch *is* the prototype. Do not build toy terminal apps, mock pages, or sandboxes outside the repository: a branch of the real application answers the same question with more truth, and the app stack makes it just as easy to run and share.
 
 Load \`app-dev-stack.md\` before creating or diagnosing the prototype stack.
 
@@ -217,14 +217,14 @@ Load \`app-dev-stack.md\` before creating or diagnosing the prototype stack.
 Identify which question is being answered — from the user's prompt, the surrounding code, or by asking if the user is around:
 
 - **"Does this logic / state model feel right?"** → the Logic Prototype document loaded with workflow_doc_get. Implement the candidate state model as a portable module in the real codebase and drive it through the application's real seams on the prototype branch.
-- **"What should this look like?"** → the UI Prototype document loaded with workflow_doc_get. Generate several radically different UI variations on the real route, switchable via a URL search param and a floating bottom bar, viewed through the app dev stack.
+- **"What should this look like?"** → the UI Prototype document loaded with workflow_doc_get. Generate several radically different UI variations on the real route, switchable via a URL search param and a floating bottom bar, viewed through the app stack.
 
 The two branches produce very different artifacts — getting this wrong wastes the whole prototype. If the question is genuinely ambiguous and the user isn't reachable, default to whichever branch better matches the surrounding code (a backend module → logic; a page or component → UI) and state the assumption at the top of the prototype.
 
 ## Rules that apply to both
 
 1. **Throwaway from day one, and clearly marked as such.** The prototype lives on its own worktree and branch, named so a casual reader can see it is a prototype (e.g. \`prototype/<question-slug>\`), and never merges to main. Within the branch, locate prototype code close to where it will actually be used and obey the project's existing conventions; don't invent a new top-level structure.
-2. **One step to run.** The app dev stack for the prototype worktree is the run command. Start it when none is running and hand over the preview URL; the user must be able to open the prototype without thinking.
+2. **One step to run.** The app stack for the prototype worktree is the run command. Start it when none is running and hand over the preview URL; the user must be able to open the prototype without thinking.
 3. **No persistence changes by default.** The dev stack's state is isolated to the prototype worktree — keep it wipe-able. Don't run destructive migrations or touch shared state unless persistence is the thing the prototype is _checking_.
 4. **Skip the polish.** No tests, no error handling beyond what makes the prototype _runnable_, no abstractions. The point is to learn something fast.
 5. **Surface the state.** After every action (logic) or on every variant switch (UI), render or log the full relevant state so the user can see what changed.
@@ -234,7 +234,7 @@ The two branches produce very different artifacts — getting this wrong wastes 
 
 There is no external issue tracker. The "implementation issue" that captures the answer is T3's durable planning record: report the verdict, the question it settled, and the prototype-branch pointer in your final workflow-subagent-result so the parent thread can store them on the relevant decision ticket or Spec.
 
-These rules override upstream issue-tracker mechanics and upstream's low-fidelity prototype shapes (standalone terminal apps, isolated throwaway pages): T3 prototypes full-fidelity on worktrees of the real application with app dev stacks. The question-first discipline and capture rules remain authoritative.
+These rules override upstream issue-tracker mechanics and upstream's low-fidelity prototype shapes (standalone terminal apps, isolated throwaway pages): T3 prototypes full-fidelity on worktrees of the real application with app stacks. The question-first discipline and capture rules remain authoritative.
 </collaboration_mode>`;
 
 const PROTOTYPE_LOGIC_DOC_CONTENT = `# Logic Prototype
@@ -277,7 +277,7 @@ This is what makes the prototype useful past its own lifetime: when the question
 
 ### 4. Wire it into the real application
 
-Mount the module at the real seam it would eventually serve on the prototype branch — the actual route, command handler, reducer slot, or service the real feature would use. Start the app dev stack for the prototype worktree when none is running, and drive the model through the running application.
+Mount the module at the real seam it would eventually serve on the prototype branch — the actual route, command handler, reducer slot, or service the real feature would use. Start the app stack for the prototype worktree when none is running, and drive the model through the running application.
 
 Surface the full relevant state after every action so each transition is visible: a debug panel on the affected page, structured logs in the dev-stack console, or the app's existing state inspector — whichever the project already supports. The user should always see one stable, current view of the state, never have to reconstruct it from scattered output.
 
@@ -285,7 +285,7 @@ When the logic genuinely has no reachable surface in the app yet, add the smalle
 
 ### 5. Make it reachable in one step
 
-The app dev stack is the run command. Hand over the preview URL and say exactly where to look — the route, the panel, the log stream. If a script driver was needed instead, register it with the project's existing task runner so one command starts it.
+The app stack is the run command. Hand over the preview URL and say exactly where to look — the route, the panel, the log stream. If a script driver was needed instead, register it with the project's existing task runner so one command starts it.
 
 ### 6. Hand it over
 
@@ -306,7 +306,7 @@ Once the prototype has answered its question, capture the answer, then capture t
 
 const PROTOTYPE_UI_DOC_CONTENT = `# UI Prototype
 
-Generate **several radically different UI variations** on a single route of the real application, switchable from a floating bottom bar. The variants live on the prototype branch and are viewed through the app dev stack for the prototype worktree — real header, real data, real density. The user flips between variants in the browser, picks one (or steals bits from each), then throws the rest away.
+Generate **several radically different UI variations** on a single route of the real application, switchable from a floating bottom bar. The variants live on the prototype branch and are viewed through the app stack for the prototype worktree — real header, real data, real density. The user flips between variants in the browser, picks one (or steals bits from each), then throws the rest away.
 
 If the question is about logic/state rather than what something looks like — wrong branch. Use the Logic Prototype document.
 
@@ -399,7 +399,7 @@ Put the switcher in a single shared component so both sub-shapes can reuse it. L
 
 ### 5. Hand it over
 
-Start the app dev stack for the prototype worktree when none is running, and surface the preview URL (and the \`?variant=\` keys). The user will flip through whenever they get to it. The interesting feedback is usually **"I want the header from B with the sidebar from C"** — that's the actual design they want.
+Start the app stack for the prototype worktree when none is running, and surface the preview URL (and the \`?variant=\` keys). The user will flip through whenever they get to it. The interesting feedback is usually **"I want the header from B with the sidebar from C"** — that's the actual design they want.
 
 ### 6. Capture the answer and clean up
 
@@ -719,7 +719,7 @@ If any of the three is missing, skip the ADR. Use the format in [ADR-FORMAT.md](
 
 The Engineering Grill is represented above by the complete Grilling and Domain Modeling instructions. Load CONTEXT-FORMAT.md or ADR-FORMAT.md with workflow_doc_get only immediately before writing that artifact.
 
-This Planning workflow already owns the current worktree and AppDevStack. Treat them as the shared runtime workspace for every later Planning and Implementation stage. The stack starts programmatically as soon as repository-declared workspace setup succeeds; do not start a competing development server or use another worktree's stack.
+This Planning workflow already owns the current worktree and AppStack. Treat them as the shared runtime workspace for every later Planning and Implementation stage. The stack starts programmatically as soon as repository-declared workspace setup succeeds; do not start a competing development server or use another worktree's stack.
 
 Planning artifact writes during this stage are limited to glossary and ADR updates. Do not make implementation changes. Finish only when the goal, audience, success criteria, scope, non-goals, terminology, decisions, risks, edge cases, failure modes, and acceptance criteria are clear enough for Spec authoring.
 
@@ -965,7 +965,7 @@ T3's Planning workflow owns publication and approval:
 - Classify every ticket programmatically with \`appReviewEligible\`. Set it only when a human-style UI review can verify the ticket in isolation.
 - When the repository declares \`e2eCommands\` in \`t3.json\`, plan verification e2e-first: every UI-verifiable ticket's acceptance criteria must include extending the project's e2e suite with that ticket's flow, written test-first with the implementation. App Review runs those commands as part one of every review cycle against the ticket's own stack, so coverage planned here is what verifies the ticket programmatically.
 - Set \`appReviewScope\` on every eligible ticket: \`"e2e"\` when the planned e2e coverage fully verifies the flow, \`"browser"\` when the flow cannot be meaningfully covered by the suite, and \`"both"\` when the tests prove the functional path but visual or interaction quality still needs eyes. Omit it on ineligible tickets. Without repository \`e2eCommands\` every scope runs as a browser review.
-- Every eligible ticket must carry a concrete \`appReviewPlanMarkdown\`: which App Dev Stack surface to start, the UI entry point, user actions, visible assertions, and required evidence. Scope it to what the ticket's e2e coverage cannot prove — visual and interaction quality, states impractical to automate, and the evidence to capture — and do not restate flows the planned e2e tests already exercise end-to-end. Use \`null\` for ineligible tickets. This is T3's programmatic attachment to the upstream ticket shape.
+- Every eligible ticket must carry a concrete \`appReviewPlanMarkdown\`: which App Stack surface to start, the UI entry point, user actions, visible assertions, and required evidence. Scope it to what the ticket's e2e coverage cannot prove — visual and interaction quality, states impractical to automate, and the evidence to capture — and do not restate flows the planned e2e tests already exercise end-to-end. Use \`null\` for ineligible tickets. This is T3's programmatic attachment to the upstream ticket shape.
 - Stop after drafting. The separate automatic Ticket Review stage owns completeness review, adjustment cycles, and final approval.
 - Do not quiz or ask the user. The preceding Product Grill or interactive Engineering Grill is the workflow's only user gate.
 - Use the repository glossary and ADRs, loading supporting documents through workflow_doc_get only when needed.
@@ -1259,8 +1259,8 @@ This stage orchestrates the upstream implement loop across sub-threads instead o
 - On a fresh prompt-originated Implementation thread with no tickets, do not implement code in this turn. Apply the complete To Tickets discipline, inspect exact planned file paths, and finish with one \`planning-tickets-artifact\` directive. Use a stable prompt-derived \`specId\`, and include \`appReviewEligible\` plus \`appReviewPlanMarkdown\` on every ticket. T3 launches implementation automatically after persisting the ticket graph.
 - Load the durable Spec when present with workflow_spec_get and load tickets with workflow_tickets_list and workflow_ticket_get. The ticket set binds implementation and reviews; a Spec is optional for prompt-originated runs.
 - The run reuses the Planning workflow's dedicated worktree and branch, which were created from the branch the user selected before Planning began. The finished change request is filed back into that original branch.
-- Reuse the AppDevStack created for the Planning worktree as the combined integration stack. Load \`app-dev-stack.md\` before diagnosing it. Ticket App Dev Stacks are separate, worktree-owned runtimes and must never substitute for the combined stack.
-- Run every currently unblocked ticket in parallel. Each ticket owns a child thread, worktree, branch, and—when \`appReviewEligible\`—an App Dev Stack started from that ticket worktree.
+- Reuse the AppStack created for the Planning worktree as the combined integration stack. Load \`app-dev-stack.md\` before diagnosing it. Ticket App Stacks are separate, worktree-owned runtimes and must never substitute for the combined stack.
+- Run every currently unblocked ticket in parallel. Each ticket owns a child thread, worktree, branch, and—when \`appReviewEligible\`—an App Stack started from that ticket worktree.
 - Within each ticket, run exactly one active ticket-scoped step thread at a time. A ticket runs one durable TDD implementation thread, then its attached App Review phases for its configured cycle budget when eligible, then up to five Code Review cycles. Each Code Review cycle uses a fresh thread to review, fix, validate, commit, and report. Stop early when clean. Findings advance to a fresh cycle thread while budget remains. Interrupted turns retry in the same cycle thread and do not consume a logical cycle. App Review or Code Review exhaustion becomes a ticket warning and does not stop the frontier. Ineligible tickets skip only App Review.
 - After every ticket reaches a terminal best-effort state, use one merge-gate thread to finish integration and focused integration validation. Then run one root-scoped combined App Review workflow for its configured cycle budget, focused on cross-ticket flows plus ticket reviews that failed or exhausted their budgets. Its ordered review phases each have one active thread. Continue after either result.
 - Run root-scoped Final Code Review after the combined App Review. It uses one fresh review-and-fix thread per cycle, stops early when clean, and repeats findings for at most five cycles. Earlier findings cycles run focused validation. A clean cycle and cycle five run complete validation on the exact committed HEAD in that same review thread. Do not create a separate final-validation thread for a new run. Pull-request creation and pull-request babysitting are separate workflow stages. The PR body must include ticket and combined App Review warnings, Code Review exhaustion details, and failed validation evidence.
@@ -1559,7 +1559,7 @@ When this prompt is run by an automatic implementation-worker thread, do not ask
 
 ## Orchestrated QA Repair Result
 
-When the launch message identifies an AppDevStack or Browser App Review failure, this is a QA repair thread rather than a planning-ticket worker. Load \`app-dev-stack.md\` before changing dependency or runtime setup. The programmatic diagnostics, original Spec/tickets or proposed plan, and the failed review are the pre-agreed seams. Do not ask the user to confirm them. Work red then green in the orchestrator worktree, run focused validation or a documented sub-minute fast check, commit the repair, leave the worktree clean, and finish with exactly one fenced JSON block using this shape. Final Code Review owns complete validation on the new HEAD; do not run launch-level complete validation commands here.
+When the launch message identifies an AppStack or Browser App Review failure, this is a QA repair thread rather than a planning-ticket worker. Load \`app-dev-stack.md\` before changing dependency or runtime setup. The programmatic diagnostics, original Spec/tickets or proposed plan, and the failed review are the pre-agreed seams. Do not ask the user to confirm them. Work red then green in the orchestrator worktree, run focused validation or a documented sub-minute fast check, commit the repair, leave the worktree clean, and finish with exactly one fenced JSON block using this shape. Final Code Review owns complete validation on the new HEAD; do not run launch-level complete validation commands here.
 
 \`\`\`json
 {
@@ -1662,7 +1662,7 @@ const IMPLEMENTATION_FIX_PROMPT = `<collaboration_mode># Implementation Workflow
 
 Fix the Browser App Review, integration-gate, historical final-gate, or code-review failures in the orchestrator worktree. Do not ask the user questions. Make the smallest reliable change, run focused validation or a documented sub-minute fast check, commit the repair, and report whether the run can continue. Do not run launch-level complete validation commands. Final Code Review owns complete validation on the new HEAD.
 
-When the failure involves an AppDevStack, Feature URL, or preview runtime, load \`app-dev-stack.md\` before changing dependency or runtime setup.
+When the failure involves an AppStack, Feature URL, or preview runtime, load \`app-dev-stack.md\` before changing dependency or runtime setup.
 
 When ready, finish with exactly one fenced JSON block using this shape:
 
@@ -1827,7 +1827,7 @@ Before asking questions, ground yourself in the codebase and existing product co
 
 ${
   input.workspacePrepared
-    ? "This workflow already owns the current worktree. Every later Plan, Build, Implementation, and App Review stage reuses that shared workspace and its AppDevStack. The stack starts programmatically as soon as repository-declared dependency setup succeeds; do not start a competing development server or use another worktree's runtime."
+    ? "This workflow already owns the current worktree. Every later Plan, Build, Implementation, and App Review stage reuses that shared workspace and its AppStack. The stack starts programmatically as soon as repository-declared dependency setup succeeds; do not start a competing development server or use another worktree's runtime."
     : ""
 }
 
@@ -1924,7 +1924,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     title: "Planning",
     description: "Plans ordered Build workstreams and App Review lanes for one stage thread.",
     promptText: FAST_FEATURE_PLANNING_PROMPT,
-    associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
+    associatedDocs: [APP_STACK_ASSOCIATED_DOC],
   },
   ...MATT_POCOCK_ENGINEERING_SKILL_PROMPTS,
   {
@@ -1959,7 +1959,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
       "Asks for product-only or complete engineering grilling, then resolves that decision tree.",
     promptText: ENGINEERING_GRILL_PROMPT,
     associatedDocs: [
-      APP_DEV_STACK_ASSOCIATED_DOC,
+      APP_STACK_ASSOCIATED_DOC,
       {
         id: "context-format",
         title: "CONTEXT.md Format",
@@ -1984,7 +1984,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     description: "Sharpens repository language, contexts, scenarios, and durable decisions.",
     promptText: DOMAIN_MODELING_PROMPT,
     associatedDocs: [
-      APP_DEV_STACK_ASSOCIATED_DOC,
+      APP_STACK_ASSOCIATED_DOC,
       {
         id: "context-format",
         title: "CONTEXT.md Format",
@@ -2010,7 +2010,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
       "Resolves engineering and domain decisions autonomously from locked Product Grill intent.",
     promptText: AUTOMATIC_ENGINEERING_GRILL_PROMPT,
     associatedDocs: [
-      APP_DEV_STACK_ASSOCIATED_DOC,
+      APP_STACK_ASSOCIATED_DOC,
       {
         id: "context-format",
         title: "CONTEXT.md Format",
@@ -2060,7 +2060,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     description: "Builds throwaway logic or UI artifacts to answer one design question.",
     promptText: PROTOTYPE_PROMPT,
     associatedDocs: [
-      APP_DEV_STACK_ASSOCIATED_DOC,
+      APP_STACK_ASSOCIATED_DOC,
       {
         id: "prototype-logic",
         title: "Logic Prototype",
@@ -2105,7 +2105,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     description: "Creates the durable Spec artifact from planning context and locked decisions.",
     promptText: PLANNING_SPEC_PROMPT,
     associatedDocs: [
-      APP_DEV_STACK_ASSOCIATED_DOC,
+      APP_STACK_ASSOCIATED_DOC,
       {
         id: "context-format",
         title: "CONTEXT.md Format",
@@ -2137,7 +2137,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
       "Decomposes the Spec into implementation-ready planning tickets with dependencies and tests.",
     promptText: PLANNING_TICKETS_PROMPT,
     associatedDocs: [
-      APP_DEV_STACK_ASSOCIATED_DOC,
+      APP_STACK_ASSOCIATED_DOC,
       {
         id: "domain-docs",
         title: "Domain Docs",
@@ -2163,7 +2163,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
       "Reviews planning tickets for dependency correctness, readiness, and Spec alignment.",
     promptText: PLANNING_REVIEW_PROMPT,
     associatedDocs: [
-      APP_DEV_STACK_ASSOCIATED_DOC,
+      APP_STACK_ASSOCIATED_DOC,
       {
         id: "agent-brief",
         title: "Writing Agent Briefs",
@@ -2181,7 +2181,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     title: "1. Orchestrator Start",
     description: "Plans a durable implementation orchestration run from a Spec.",
     promptText: IMPLEMENTATION_ORCHESTRATOR_PROMPT,
-    associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
+    associatedDocs: [APP_STACK_ASSOCIATED_DOC],
   },
   {
     id: WORKFLOW_PROMPT_IDS.implementationTddCodex,
@@ -2194,7 +2194,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
       "Implements planning tickets with a red-green-refactor loop and focused validation.",
     promptText: IMPLEMENTATION_TDD_PROMPT,
     associatedDocs: [
-      APP_DEV_STACK_ASSOCIATED_DOC,
+      APP_STACK_ASSOCIATED_DOC,
       {
         id: "tdd-mocking",
         title: "When to Mock",
@@ -2224,7 +2224,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     title: "3. Merge Gate",
     description: "Merges implementation work and fixes validation failures until green.",
     promptText: IMPLEMENTATION_MERGE_GATE_PROMPT,
-    associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC, RESOLVING_MERGE_CONFLICTS_ASSOCIATED_DOC],
+    associatedDocs: [APP_STACK_ASSOCIATED_DOC, RESOLVING_MERGE_CONFLICTS_ASSOCIATED_DOC],
   },
   {
     id: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
@@ -2236,7 +2236,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     description: "Tests a preview target and creates concrete durable App Review findings.",
     promptText: IMPLEMENTATION_BROWSER_APP_REVIEW_PROMPT,
     associatedDocs: [
-      APP_DEV_STACK_ASSOCIATED_DOC,
+      APP_STACK_ASSOCIATED_DOC,
       {
         id: "preview-browser-qa",
         path: "preview-browser-qa.md",
@@ -2254,7 +2254,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     title: "5. Fix",
     description: "Fixes merge-gate and code-review failures before rerunning validation.",
     promptText: IMPLEMENTATION_FIX_PROMPT,
-    associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
+    associatedDocs: [APP_STACK_ASSOCIATED_DOC],
   },
   {
     id: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
@@ -2265,7 +2265,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     title: "6. Code Review",
     description: "Reviews implementation changes along the Standards and Spec axes.",
     promptText: IMPLEMENTATION_CODE_REVIEW_PROMPT,
-    associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
+    associatedDocs: [APP_STACK_ASSOCIATED_DOC],
   },
   {
     id: WORKFLOW_PROMPT_IDS.implementationChangeRequestBabysitterCodex,
@@ -2297,7 +2297,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     title: "Product Grill — Fast Feature",
     description: "Locks feature intent before lightweight Plan, Build, and review orchestration.",
     promptText: PRODUCT_FAST_FEATURE_WORKFLOW_PROMPT,
-    associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
+    associatedDocs: [APP_STACK_ASSOCIATED_DOC],
   },
   {
     id: WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
@@ -2308,7 +2308,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     title: "Product Grill — Full Feature",
     description: "Locks feature intent before complete Planning and Implementation workflows.",
     promptText: PRODUCT_FULL_FEATURE_WORKFLOW_PROMPT,
-    associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
+    associatedDocs: [APP_STACK_ASSOCIATED_DOC],
   },
   {
     id: WORKFLOW_PROMPT_IDS.productPlanningCodex,
@@ -2319,7 +2319,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     title: "Product Grill — Planning",
     description: "Locks product intent before product context, Spec, tickets, and Implementation.",
     promptText: PRODUCT_FULL_FEATURE_WORKFLOW_PROMPT,
-    associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
+    associatedDocs: [APP_STACK_ASSOCIATED_DOC],
   },
 ] as const satisfies ReadonlyArray<WorkflowPromptContract>;
 

@@ -1,9 +1,10 @@
 import {
-  type AppDevStack,
-  type AppDevStackGetPodLogsResult,
-  type AppDevStackPod,
+  type AppStack,
+  type AppStackGetPodLogsResult,
+  type AppStackPod,
   type EnvironmentId,
   type ScopedThreadRef,
+  type AppStackVariant,
 } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
@@ -41,7 +42,7 @@ import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { ensureBrowseDirectoryPath, getBrowseParentPath } from "~/lib/projectPaths";
 import { cn } from "~/lib/utils";
 import { isPreviewSupportedInRuntime } from "~/previewStateStore";
-import { appDevStackEnvironment } from "~/state/appDevStacks";
+import { appStackEnvironment } from "~/state/appStacks";
 import { useServerConfigs } from "~/state/entities";
 import { filesystemEnvironment } from "~/state/filesystem";
 import { useEnvironmentQuery } from "~/state/query";
@@ -50,39 +51,44 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
-import { appDevStackDisplayName } from "@t3tools/shared/appDevStack";
+import {
+  APP_STACK_VARIANTS,
+  appStackDisplayName,
+  appStackVariantForComposePath,
+  deriveAppStackNamespaceFromPath,
+} from "@t3tools/shared/appStack";
 
 import {
-  appDevStackBulkDeleteConfirmation,
-  appDevStackBulkDeleteFailureMessage,
-  appDevStackProtectionAction,
-  appDevStackSelectionState,
+  appStackBulkDeleteConfirmation,
+  appStackBulkDeleteFailureMessage,
+  appStackProtectionAction,
+  appStackSelectionState,
   autoCreateNotice,
-  isProtectedAppDevStack,
-  isTransitioningAppDevStackStatus,
-  orderAppDevStacksForPanel,
+  isProtectedAppStack,
+  isTransitioningAppStackStatus,
+  orderAppStacksForPanel,
   primaryPreviewForStack,
   previewForPod,
   previewUrlForService,
-  reconcileAppDevStackIds,
-  shouldPollAppDevStacks,
+  reconcileAppStackIds,
+  shouldPollAppStacks,
   type AutoCreateNotice,
   type PreviewCandidate,
-} from "./AppDevStackPanel.logic";
+} from "./AppStackPanel.logic";
 import {
-  AppDevStackWorkflowConflictWarning,
-  AppDevStackWorkflowOwnershipBadge,
-} from "./AppDevStackWorkflowOwnership";
+  AppStackWorkflowConflictWarning,
+  AppStackWorkflowOwnershipBadge,
+} from "./AppStackWorkflowOwnership";
 import {
   displayStackName,
   isSameOrChildStackPath,
   normalizeStackWorktreePath as normalizeWorktreePath,
   resolveCurrentStackPath,
-} from "./AppDevStackLogsPanel.logic";
+} from "./AppStackLogsPanel.logic";
 
 const KUBERNETES_NAMESPACE_MAX_LENGTH = 63;
 
-interface AppDevStackPanelProps {
+interface AppStackPanelProps {
   readonly environmentId: EnvironmentId;
   readonly threadRef: ScopedThreadRef;
   readonly activeThread: {
@@ -130,18 +136,7 @@ function normalizeKubernetesNamespace(value: string, fallback = "app-dev"): stri
   return trimKubernetesNamespace(normalized, fallback);
 }
 
-function deriveAppDevStackNamespaceFromPath(worktreePath: string): string {
-  const trimmed = worktreePath.trim().replace(/[\\/]+$/gu, "");
-  const separatorIndex = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
-  const basename = separatorIndex === -1 ? trimmed : trimmed.slice(separatorIndex + 1);
-  const repoSlug = normalizeKubernetesNamespace(basename, "app");
-  const baseSlug = repoSlug.endsWith("-dev") ? repoSlug.slice(0, -4) : repoSlug;
-  const maxBaseLength = KUBERNETES_NAMESPACE_MAX_LENGTH - "-dev".length;
-  const boundedBase = trimKubernetesNamespace(baseSlug.slice(0, maxBaseLength), "app");
-  return `${boundedBase}-dev`;
-}
-
-function stackRepoBranchLabel(stack: AppDevStack): string | null {
+function stackRepoBranchLabel(stack: AppStack): string | null {
   const repo = nonEmpty(stack.repoName);
   const branch = nonEmpty(stack.branchName);
   if (repo && branch) return `${repo} / ${branch}`;
@@ -151,14 +146,14 @@ function stackRepoBranchLabel(stack: AppDevStack): string | null {
 function actionErrorMessage(error: unknown): string {
   return error instanceof Error && error.message.trim().length > 0
     ? error.message
-    : "The App Dev Stack action failed.";
+    : "The App Stack action failed.";
 }
 
 function sameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
   return left.size === right.size && [...left].every((value) => right.has(value));
 }
 
-function StatusBadge({ status }: { readonly status: AppDevStack["status"] }) {
+function StatusBadge({ status }: { readonly status: AppStack["status"] }) {
   return (
     <span
       className={cn(
@@ -166,7 +161,7 @@ function StatusBadge({ status }: { readonly status: AppDevStack["status"] }) {
         status === "running" && "border-emerald-500/30 bg-emerald-500/10 text-emerald-600",
         status === "error" && "border-destructive/30 bg-destructive/10 text-destructive",
         status === "stopped" && "border-border bg-muted text-muted-foreground",
-        isTransitioningAppDevStackStatus(status) &&
+        isTransitioningAppStackStatus(status) &&
           "border-amber-500/30 bg-amber-500/10 text-amber-600",
       )}
     >
@@ -189,7 +184,7 @@ function EmptyPanelState(props: { readonly title: string; readonly description: 
   );
 }
 
-function StackServices({ stack }: { readonly stack: AppDevStack }) {
+function StackServices({ stack }: { readonly stack: AppStack }) {
   const services = stack.services ?? [];
   if (services.length === 0) {
     return <div className="text-xs text-muted-foreground">No services reported.</div>;
@@ -249,7 +244,7 @@ function PodPhaseBadge({ phase }: { readonly phase: string }) {
   );
 }
 
-function podOwnerLabel(pod: AppDevStackPod): string | null {
+function podOwnerLabel(pod: AppStackPod): string | null {
   const ownerName = nonEmpty(pod.ownerName);
   const ownerKind = nonEmpty(pod.ownerKind);
   if (ownerName && ownerKind) return `${ownerKind} ${ownerName}`;
@@ -257,16 +252,16 @@ function podOwnerLabel(pod: AppDevStackPod): string | null {
 }
 
 function StackKubernetesInspect(props: {
-  readonly stack: AppDevStack;
-  readonly pods: ReadonlyArray<AppDevStackPod>;
+  readonly stack: AppStack;
+  readonly pods: ReadonlyArray<AppStackPod>;
   readonly podsError: string | null;
   readonly podsPending: boolean;
-  readonly logs: AppDevStackGetPodLogsResult | null;
+  readonly logs: AppStackGetPodLogsResult | null;
   readonly logsError: string | null;
   readonly logsPending: boolean;
   readonly selectedPodName: string | null;
   readonly selectedContainerName: string | null;
-  readonly onSelectPod: (pod: AppDevStackPod) => void;
+  readonly onSelectPod: (pod: AppStackPod) => void;
   readonly onSelectContainer: (containerName: string) => void;
   readonly onRefresh: () => void;
 }) {
@@ -422,7 +417,7 @@ function StackKubernetesInspect(props: {
   );
 }
 
-export function AppDevStackPanel(props: AppDevStackPanelProps) {
+export function AppStackPanel(props: AppStackPanelProps) {
   const currentWorktreePath = useMemo(
     () =>
       resolveCurrentStackPath({
@@ -433,6 +428,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
     [props.activeThread?.worktreePath, props.gitCwd, props.workspaceRoot],
   );
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [createVariant, setCreateVariant] = useState<AppStackVariant>("dev");
   const [manualPath, setManualPath] = useState(currentWorktreePath);
   const [manualNamespace, setManualNamespace] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
@@ -474,7 +470,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
   }, [currentWorktreePath, props.gitCwd]);
 
   const statusQuery = useEnvironmentQuery(
-    appDevStackEnvironment.status({
+    appStackEnvironment.status({
       environmentId: props.environmentId,
       input: {},
     }),
@@ -486,10 +482,10 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
   const submittedNamespace = submittedPath
     ? manualNamespace.trim()
       ? normalizeKubernetesNamespace(manualNamespace)
-      : deriveAppDevStackNamespaceFromPath(submittedPath)
+      : deriveAppStackNamespaceFromPath(submittedPath, createVariant)
     : null;
   const submittedPathStartKey = submittedPath
-    ? `create:${submittedPath}:${submittedNamespace ?? ""}`
+    ? `create:${submittedPath}:${submittedNamespace ?? ""}:${createVariant}`
     : null;
   const startPathChoices = useMemo(() => {
     const choices: StartPathChoice[] = [];
@@ -523,7 +519,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
     browsePath.length > 0 ? getBrowseParentPath(ensureBrowseDirectoryPath(browsePath)) : null;
   const currentStackQuery = useEnvironmentQuery(
     stackBackendEnabled && currentPath
-      ? appDevStackEnvironment.byWorktree({
+      ? appStackEnvironment.byWorktree({
           environmentId: props.environmentId,
           input: { worktreePath: currentPath },
         })
@@ -531,7 +527,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
   );
   const listQuery = useEnvironmentQuery(
     stackBackendEnabled
-      ? appDevStackEnvironment.list({
+      ? appStackEnvironment.list({
           environmentId: props.environmentId,
           input: {},
         })
@@ -539,7 +535,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
   );
   const podsQuery = useEnvironmentQuery(
     stackBackendEnabled && inspectedStackId !== null
-      ? appDevStackEnvironment.listPods({
+      ? appStackEnvironment.listPods({
           environmentId: props.environmentId,
           input: { stackId: inspectedStackId },
         })
@@ -555,7 +551,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
     null;
   const podLogsQuery = useEnvironmentQuery(
     stackBackendEnabled && inspectedStackId !== null && selectedPod !== null
-      ? appDevStackEnvironment.getPodLogs({
+      ? appStackEnvironment.getPodLogs({
           environmentId: props.environmentId,
           input: {
             stackId: inspectedStackId,
@@ -595,15 +591,15 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
     }
   }, [selectedContainerName, selectedPod]);
 
-  const autoCreateStack = useAtomCommand(appDevStackEnvironment.autoCreate, {
+  const autoCreateStack = useAtomCommand(appStackEnvironment.autoCreate, {
     reportFailure: false,
   });
-  const stopStack = useAtomCommand(appDevStackEnvironment.stop, { reportFailure: false });
-  const restartStack = useAtomCommand(appDevStackEnvironment.restart, { reportFailure: false });
-  const setStackProtected = useAtomCommand(appDevStackEnvironment.setProtected, {
+  const stopStack = useAtomCommand(appStackEnvironment.stop, { reportFailure: false });
+  const restartStack = useAtomCommand(appStackEnvironment.restart, { reportFailure: false });
+  const setStackProtected = useAtomCommand(appStackEnvironment.setProtected, {
     reportFailure: false,
   });
-  const deleteStack = useAtomCommand(appDevStackEnvironment.delete, { reportFailure: false });
+  const deleteStack = useAtomCommand(appStackEnvironment.delete, { reportFailure: false });
 
   const refreshStacks = useCallback(() => {
     statusQuery.refresh();
@@ -613,7 +609,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
     podLogsQuery.refresh();
   }, [currentStackQuery, listQuery, podLogsQuery, podsQuery, statusQuery]);
 
-  const pollTransitioningStacks = shouldPollAppDevStacks(
+  const pollTransitioningStacks = shouldPollAppStacks(
     currentStackQuery.data?.stack,
     listQuery.data?.stacks ?? [],
   );
@@ -630,14 +626,14 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
     null;
   const stacks = useMemo(
     () =>
-      orderAppDevStacksForPanel({
+      orderAppStacksForPanel({
         currentStack,
         listedStacks,
         currentWorktreePath: currentPath,
       }),
     [currentPath, currentStack, listedStacks],
   );
-  const selectionState = appDevStackSelectionState(selectedStackIds, stacks);
+  const selectionState = appStackSelectionState(selectedStackIds, stacks);
   const selectedStacks = stacks.filter((stack) => selectedStackIds.has(stack.id));
   const selectedStackHasPendingAction = selectedStacks.some((stack) =>
     pendingActions.has(stack.id),
@@ -645,11 +641,11 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
 
   useEffect(() => {
     setSelectedStackIds((current) => {
-      const reconciled = reconcileAppDevStackIds(current, stacks);
+      const reconciled = reconcileAppStackIds(current, stacks);
       return sameStringSet(current, reconciled) ? current : reconciled;
     });
     setExpandedStackIds((current) => {
-      const reconciled = reconcileAppDevStackIds(current, stacks);
+      const reconciled = reconcileAppStackIds(current, stacks);
       return sameStringSet(current, reconciled) ? current : reconciled;
     });
   }, [stacks]);
@@ -666,15 +662,20 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
   const runStart = useCallback(
     async (
       worktreePath: string,
-      sourceStack?: AppDevStack | null,
+      sourceStack?: AppStack | null,
       requestedNamespace?: string | null,
+      requestedVariant?: AppStackVariant | null,
     ) => {
       const normalizedPath = normalizeWorktreePath(worktreePath);
       if (!normalizedPath) return;
       const namespace =
         nonEmpty(sourceStack?.namespace) ??
         (requestedNamespace ? normalizeKubernetesNamespace(requestedNamespace) : null);
-      const key = sourceStack?.id ?? `create:${normalizedPath}:${namespace ?? ""}`;
+      // A restarted stack keeps its contract; only a new stack takes the form's choice.
+      const variant = sourceStack
+        ? (sourceStack.variant ?? appStackVariantForComposePath(sourceStack.composePath))
+        : (requestedVariant ?? "dev");
+      const key = sourceStack?.id ?? `create:${normalizedPath}:${namespace ?? ""}:${variant}`;
       const branch = sourceStack?.branchName ?? props.activeThread?.branch ?? null;
       setPendingAction(key, "start");
       setActionError(null);
@@ -684,10 +685,11 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
           environmentId: props.environmentId,
           input: {
             worktreePath: normalizedPath,
-            displayName: sourceStack?.displayName ?? appDevStackDisplayName(normalizedPath, branch),
+            displayName: sourceStack?.displayName ?? appStackDisplayName(normalizedPath, branch),
             gitBranch: branch,
             namespace,
             workflowId: sourceStack?.workflowId ?? undefined,
+            variant,
           },
         });
         if (result._tag === "Failure") {
@@ -721,7 +723,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
   );
 
   const runStop = useCallback(
-    async (stack: AppDevStack) => {
+    async (stack: AppStack) => {
       setPendingAction(stack.id, "stop");
       setActionError(null);
       try {
@@ -744,8 +746,8 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
   );
 
   const runToggleProtection = useCallback(
-    async (stack: AppDevStack) => {
-      const { nextProtected } = appDevStackProtectionAction(stack);
+    async (stack: AppStack) => {
+      const { nextProtected } = appStackProtectionAction(stack);
       setPendingAction(stack.id, "protect");
       setActionError(null);
       try {
@@ -768,7 +770,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
   );
 
   const runRestart = useCallback(
-    async (stack: AppDevStack) => {
+    async (stack: AppStack) => {
       setPendingAction(stack.id, "restart");
       setActionError(null);
       try {
@@ -791,7 +793,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
   );
 
   const executeDelete = useCallback(
-    async (stack: AppDevStack): Promise<string | null> => {
+    async (stack: AppStack): Promise<string | null> => {
       setPendingAction(stack.id, "delete");
       try {
         const result = await deleteStack({
@@ -814,7 +816,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
   );
 
   const runDelete = useCallback(
-    async (stack: AppDevStack) => {
+    async (stack: AppStack) => {
       if (
         !window.confirm(
           `Delete App Stack "${displayStackName(stack)}"? This will remove its Kubernetes namespace.`,
@@ -846,7 +848,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
 
   const runBulkDelete = useCallback(async () => {
     if (selectedStacks.length === 0 || selectedStackHasPendingAction || isBulkDeleting) return;
-    if (!window.confirm(appDevStackBulkDeleteConfirmation(selectedStacks.length))) return;
+    if (!window.confirm(appStackBulkDeleteConfirmation(selectedStacks.length))) return;
 
     setIsBulkDeleting(true);
     setActionError(null);
@@ -868,7 +870,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
         return next;
       });
       if (inspectedStackId && succeededIds.has(inspectedStackId)) setInspectedStackId(null);
-      setActionError(appDevStackBulkDeleteFailureMessage(failures, selectedStacks.length));
+      setActionError(appStackBulkDeleteFailureMessage(failures, selectedStacks.length));
       refreshStacks();
     } finally {
       setIsBulkDeleting(false);
@@ -901,7 +903,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
   const runCreateStart = useCallback(() => {
     if (!stackBackendEnabled || !submittedPath || submittedPathStartKey === null) return;
     if (pendingActions.has(submittedPathStartKey)) return;
-    void runStart(submittedPath, null, submittedNamespace);
+    void runStart(submittedPath, null, submittedNamespace, createVariant);
   }, [
     pendingActions,
     runStart,
@@ -915,19 +917,19 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
     setManualPath(ensureBrowseDirectoryPath(path));
   }, []);
 
-  const toggleInspectStack = useCallback((stack: AppDevStack) => {
+  const toggleInspectStack = useCallback((stack: AppStack) => {
     setInspectedStackId((current) => (current === stack.id ? null : stack.id));
     setSelectedPodName(null);
     setSelectedContainerName(null);
   }, []);
 
-  const selectPod = useCallback((pod: AppDevStackPod) => {
+  const selectPod = useCallback((pod: AppStackPod) => {
     setSelectedPodName(pod.name);
     setSelectedContainerName(pod.containers[0]?.name ?? null);
   }, []);
 
   const toggleStackExpanded = useCallback(
-    (stack: AppDevStack) => {
+    (stack: AppStack) => {
       const collapsing = expandedStackIds.has(stack.id);
       setExpandedStackIds((current) => {
         const next = new Set(current);
@@ -949,7 +951,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
     });
   }, []);
 
-  const renderStackRow = (stack: AppDevStack) => {
+  const renderStackRow = (stack: AppStack) => {
     const preview = primaryPreviewForStack(stack);
     const pendingAction = pendingActions.get(stack.id);
     const inspectSelected = inspectedStackId === stack.id;
@@ -957,6 +959,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
     const selected = selectedStackIds.has(stack.id);
     const isCurrent = normalizeWorktreePath(stack.worktreePath) === currentPath;
     const repoBranch = stackRepoBranchLabel(stack);
+    const variant = stack.variant ?? appStackVariantForComposePath(stack.composePath);
     const stackName = displayStackName(stack);
 
     return (
@@ -992,13 +995,23 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
             <span className="min-w-0 flex-1">
               <span className="flex min-w-0 flex-wrap items-center gap-1.5">
                 <span className="min-w-0 truncate text-sm font-medium">{stackName}</span>
+                <span
+                  className={cn(
+                    "inline-flex h-5 items-center rounded-full border px-2 text-[11px] font-medium uppercase",
+                    variant === "prod"
+                      ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                      : "border-border bg-muted text-muted-foreground",
+                  )}
+                >
+                  {variant}
+                </span>
                 {isCurrent ? (
                   <span className="inline-flex h-5 items-center rounded-full border border-primary/25 bg-primary/10 px-2 text-[11px] font-medium text-primary">
                     Current
                   </span>
                 ) : null}
-                <AppDevStackWorkflowOwnershipBadge stack={stack} />
-                {isProtectedAppDevStack(stack) ? (
+                <AppStackWorkflowOwnershipBadge stack={stack} />
+                {isProtectedAppStack(stack) ? (
                   <span className="inline-flex h-5 items-center gap-1 rounded-full border border-border bg-muted px-2 text-[11px] font-medium text-muted-foreground">
                     <ShieldCheckIcon className="size-3" />
                     Protected
@@ -1114,19 +1127,19 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
                 variant="ghost"
                 onClick={() => void runToggleProtection(stack)}
                 disabled={pendingAction !== undefined}
-                data-pressed={isProtectedAppDevStack(stack) ? "" : undefined}
-                aria-pressed={isProtectedAppDevStack(stack)}
-                aria-label={appDevStackProtectionAction(stack).ariaLabel}
+                data-pressed={isProtectedAppStack(stack) ? "" : undefined}
+                aria-pressed={isProtectedAppStack(stack)}
+                aria-label={appStackProtectionAction(stack).ariaLabel}
                 title="Protected stacks survive workflow teardown and are shed last under memory pressure"
               >
                 {pendingAction === "protect" ? (
                   <LoaderIcon className="size-3.5 animate-spin" />
-                ) : isProtectedAppDevStack(stack) ? (
+                ) : isProtectedAppStack(stack) ? (
                   <ShieldCheckIcon className="size-3.5" />
                 ) : (
                   <ShieldIcon className="size-3.5" />
                 )}
-                {appDevStackProtectionAction(stack).label}
+                {appStackProtectionAction(stack).label}
               </Button>
             </div>
             <div className="mt-2 truncate text-xs text-muted-foreground">{stack.worktreePath}</div>
@@ -1223,7 +1236,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
             </div>
           ) : null}
 
-          <AppDevStackWorkflowConflictWarning conflicts={listQuery.data?.workflowConflicts ?? []} />
+          <AppStackWorkflowConflictWarning conflicts={listQuery.data?.workflowConflicts ?? []} />
 
           {isCreateOpen ? (
             <section className="space-y-3 rounded-lg border border-border bg-card/35 p-3">
@@ -1258,6 +1271,34 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
                   className="min-w-0"
                   aria-label="Worktree path"
                 />
+                <div
+                  role="radiogroup"
+                  aria-label="Stack variant"
+                  className="grid grid-cols-2 gap-0.5 rounded-md border border-border p-0.5"
+                >
+                  {APP_STACK_VARIANTS.map((variant) => (
+                    <button
+                      key={variant}
+                      type="button"
+                      role="radio"
+                      aria-checked={createVariant === variant}
+                      className={cn(
+                        "rounded px-2 py-1 text-xs transition-colors",
+                        createVariant === variant
+                          ? "bg-accent font-medium"
+                          : "text-muted-foreground hover:bg-accent/50",
+                      )}
+                      onClick={() => setCreateVariant(variant)}
+                    >
+                      {variant === "dev" ? "Dev (hot reload)" : "Prod (production build)"}
+                    </button>
+                  ))}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {createVariant === "prod"
+                    ? "Builds the production image from this worktree and runs it without source mounts. Nothing starts it for you; rebuild after every change."
+                    : "Dev servers with hot reload over the mounted worktree."}
+                </div>
                 <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
                   <Input
                     value={manualNamespace}
@@ -1289,9 +1330,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
               {!stackBackendEnabled ? (
                 <div className="flex gap-2 rounded-md border border-amber-500/25 bg-amber-500/5 p-2 text-xs text-amber-700 dark:text-amber-500">
                   <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
-                  <div>
-                    Enable native app-dev stack handling on the server before starting stacks.
-                  </div>
+                  <div>Enable native app stack handling on the server before starting stacks.</div>
                 </div>
               ) : null}
 
@@ -1392,7 +1431,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
           {!stackBackendEnabled ? (
             <EmptyPanelState
               title="Stack backend is not configured"
-              description="Enable native app-dev stack handling on the server or set T3CODE_APP_DEV_STACK_BACKEND_URL to a controller API that serves /api/app-dev-stacks."
+              description="Enable native app stack handling on the server or set T3CODE_APP_STACK_BACKEND_URL to a controller API that serves /api/app-dev-stacks."
             />
           ) : (
             <section className="space-y-2">

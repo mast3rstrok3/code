@@ -29,7 +29,7 @@ import * as Ref from "effect/Ref";
 import type * as Scope from "effect/Scope";
 import { describe } from "vite-plus/test";
 
-import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
+import { AppStackManager } from "../../appStack/AppStackManager.ts";
 import { ServerConfig } from "../../config.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { layerTest as serverSettingsLayerTest } from "../../serverSettings.ts";
@@ -215,7 +215,7 @@ function makeTestLayer(
       }),
     ),
     Layer.provide(
-      Layer.mock(AppDevStackManager)({
+      Layer.mock(AppStackManager)({
         getByWorktree: (input) =>
           Effect.succeed({
             stack: {

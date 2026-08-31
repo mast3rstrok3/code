@@ -7,7 +7,7 @@ import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import * as ServerConfig from "../config.ts";
-import { AppDevStackManager } from "./AppDevStackManager.ts";
+import { AppStackManager } from "./AppStackManager.ts";
 
 const backendUrl = new URL("https://api-code-dev.nightingale-ai.com");
 
@@ -42,6 +42,10 @@ const decodeProtectionRequest = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ protected: Schema.Boolean })),
 );
 
+const decodeVariantRequest = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ variant: Schema.String })),
+);
+
 const derivedPaths = {
   stateDir: "/tmp/t3-app-dev-stack-manager-test/state",
   dbPath: "/tmp/t3-app-dev-stack-manager-test/state/state.sqlite",
@@ -72,7 +76,7 @@ const makeConfigLayer = (input?: {
       }
     | undefined;
   readonly url?: URL | undefined;
-  readonly native?: ServerConfig.NativeAppDevStackConfig | undefined;
+  readonly native?: ServerConfig.NativeAppStackConfig | undefined;
 }) =>
   ServerConfig.layer({
     logLevel: "Error",
@@ -94,14 +98,14 @@ const makeConfigLayer = (input?: {
     staticDir: undefined,
     devUrl: undefined,
     devAllowedOrigins: [],
-    appDevStackBackendUrl: input?.url ?? backendUrl,
-    appDevStackBackendBearerToken:
+    appStackBackendUrl: input?.url ?? backendUrl,
+    appStackBackendBearerToken:
       input?.bearerToken === undefined ? undefined : Redacted.make(input.bearerToken),
-    appDevStackBackendOidcTokenUrl: input?.oidc?.tokenUrl,
-    appDevStackBackendOidcClientId: input?.oidc?.clientId,
-    appDevStackBackendOidcClientSecret:
+    appStackBackendOidcTokenUrl: input?.oidc?.tokenUrl,
+    appStackBackendOidcClientId: input?.oidc?.clientId,
+    appStackBackendOidcClientSecret:
       input?.oidc === undefined ? undefined : Redacted.make(input.oidc.clientSecret),
-    appDevStackNative: input?.native,
+    appStackNative: input?.native,
     noBrowser: true,
     startupPresentation: "browser",
     desktopBootstrapToken: undefined,
@@ -133,9 +137,9 @@ const makeLayer = (input: {
     | undefined;
   readonly response: (request: HttpClientRequest.HttpClientRequest) => Response;
   readonly requests: Array<HttpClientRequest.HttpClientRequest>;
-  readonly native?: ServerConfig.NativeAppDevStackConfig | undefined;
+  readonly native?: ServerConfig.NativeAppStackConfig | undefined;
 }) =>
-  AppDevStackManager.layer.pipe(
+  AppStackManager.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
         NodeServices.layer,
@@ -170,7 +174,7 @@ it.effect("sends the configured backend bearer token when starting a stack", () 
   });
 
   return Effect.gen(function* () {
-    const manager = yield* AppDevStackManager;
+    const manager = yield* AppStackManager;
     yield* manager.autoCreate({
       worktreePath: "/repo/worktrees/feature",
       displayName: "feature",
@@ -180,7 +184,7 @@ it.effect("sends the configured backend bearer token when starting a stack", () 
 
     const request = requests[1];
     if (request === undefined) {
-      assert.fail("expected AppDevStackManager to send a backend request");
+      assert.fail("expected AppStackManager to send a backend request");
     }
     assert.equal(request.method, "POST");
     assert.equal(
@@ -211,7 +215,7 @@ it.effect("reuses an active stack without posting auto-create", () => {
   });
 
   return Effect.gen(function* () {
-    const manager = yield* AppDevStackManager;
+    const manager = yield* AppStackManager;
     const result = yield* manager.autoCreate({
       worktreePath: stackJson.worktreePath,
       displayName: "feature",
@@ -253,7 +257,7 @@ it.effect("serializes concurrent creates so only one controller create is posted
   });
 
   return Effect.gen(function* () {
-    const manager = yield* AppDevStackManager;
+    const manager = yield* AppStackManager;
     yield* Effect.all(
       [
         manager.autoCreate({
@@ -324,7 +328,7 @@ it.effect("uses the configured controller backend before native kubectl mode", (
   });
 
   return Effect.gen(function* () {
-    const manager = yield* AppDevStackManager;
+    const manager = yield* AppStackManager;
     const result = yield* manager.autoCreate({
       worktreePath: "/home/nils/repos/nils/hero",
       displayName: "hero",
@@ -375,7 +379,7 @@ it.effect("restarts a stack through get, stop, and auto-create backend calls", (
   });
 
   return Effect.gen(function* () {
-    const manager = yield* AppDevStackManager;
+    const manager = yield* AppStackManager;
     const stack = yield* manager.restart({ stackId: stackJson.id });
 
     assert.equal(stack.id, stackJson.id);
@@ -427,7 +431,7 @@ it.effect("does not start a stack when restart stop fails", () => {
   });
 
   return Effect.gen(function* () {
-    const manager = yield* AppDevStackManager;
+    const manager = yield* AppStackManager;
     const error = yield* manager.restart({ stackId: stackJson.id }).pipe(Effect.flip);
 
     assert.equal(error.status, 500);
@@ -476,7 +480,7 @@ it.effect("mints and caches an OIDC service token when no static bearer token is
   });
 
   return Effect.gen(function* () {
-    const manager = yield* AppDevStackManager;
+    const manager = yield* AppStackManager;
     yield* manager.autoCreate({
       worktreePath: "/repo/worktrees/feature",
       displayName: "feature",
@@ -499,7 +503,7 @@ it.effect("mints and caches an OIDC service token when no static bearer token is
 });
 
 it.effect(
-  "names the app dev stack token env var when the backend rejects unauthenticated calls",
+  "names the app stack token env var when the backend rejects unauthenticated calls",
   () => {
     const requests: Array<HttpClientRequest.HttpClientRequest> = [];
     const layer = makeLayer({
@@ -508,7 +512,7 @@ it.effect(
     });
 
     return Effect.gen(function* () {
-      const manager = yield* AppDevStackManager;
+      const manager = yield* AppStackManager;
       const error = yield* manager
         .autoCreate({
           worktreePath: "/repo/worktrees/feature",
@@ -519,7 +523,7 @@ it.effect(
 
       assert.equal(requests[0]?.headers.authorization, undefined);
       assert.equal(error.status, 401);
-      assert.include(error.message, "T3CODE_APP_DEV_STACK_BACKEND_BEARER_TOKEN");
+      assert.include(error.message, "T3CODE_APP_STACK_BACKEND_BEARER_TOKEN");
     }).pipe(Effect.provide(layer));
   },
 );
@@ -550,7 +554,7 @@ it.effect("proxies pod list and log reads to the configured backend", () => {
   });
 
   return Effect.gen(function* () {
-    const manager = yield* AppDevStackManager;
+    const manager = yield* AppStackManager;
     yield* manager.listPods({ stackId: "rudi-dev" });
     yield* manager.getPodLogs({
       stackId: "rudi-dev",
@@ -626,7 +630,7 @@ it.effect("aggregates stack pod logs through existing pod endpoints with backend
   });
 
   return Effect.gen(function* () {
-    const manager = yield* AppDevStackManager;
+    const manager = yield* AppStackManager;
     const result = yield* manager.getStackPodLogs({ stackId: "rudi-dev" });
 
     assert.equal(result.stackId, "rudi-dev");
@@ -651,7 +655,7 @@ it.effect("aggregates stack pod logs through existing pod endpoints with backend
           podName: "backend-pod",
           containerName: "sidecar",
           logs: "",
-          error: "App Dev Stack backend responded with 500: sidecar logs unavailable",
+          error: "App Stack backend responded with 500: sidecar logs unavailable",
         },
       ],
     );
@@ -722,7 +726,7 @@ it.effect("aggregates all stack pod logs through remote list and pod endpoints",
   });
 
   return Effect.gen(function* () {
-    const manager = yield* AppDevStackManager;
+    const manager = yield* AppStackManager;
     const result = yield* manager.getAllStackPodLogs({
       limit: { mode: "tail", tailLines: 1000 },
     });
@@ -770,7 +774,7 @@ it.effect("reports all-mode as unsupported for remote all-stack log reads", () =
   });
 
   return Effect.gen(function* () {
-    const manager = yield* AppDevStackManager;
+    const manager = yield* AppStackManager;
     const error = yield* manager.getAllStackPodLogs({ limit: { mode: "all" } }).pipe(Effect.flip);
 
     assert.include(error.message, "not supported");
@@ -787,7 +791,7 @@ it.effect("posts the protection toggle to the controller", () => {
   });
 
   return Effect.gen(function* () {
-    const manager = yield* AppDevStackManager;
+    const manager = yield* AppStackManager;
     const stack = yield* manager.setProtected({ stackId: stackJson.id, protected: true });
 
     assert.equal(stack.protected, true);
@@ -818,7 +822,7 @@ it.effect("tears a workflow's stacks down in one controller call", () => {
   });
 
   return Effect.gen(function* () {
-    const manager = yield* AppDevStackManager;
+    const manager = yield* AppStackManager;
     const result = yield* manager.workflowTeardown({ workflowId: "workflow-123" });
 
     assert.deepStrictEqual(result.stoppedStackIds, ["stack-a"]);
@@ -833,6 +837,79 @@ it.effect("tears a workflow's stacks down in one controller call", () => {
     assert.equal(
       decodeWorkflowRequest(new TextDecoder().decode(request.body.body)).workflow_id,
       "workflow-123",
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("asks the controller for the prod contract and ignores the worktree's dev stack", () => {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const prodStackJson = {
+    ...stackJson,
+    id: "22222222-2222-2222-2222-222222222222",
+    uuid: "22222222-2222-2222-2222-222222222222",
+    composePath: "/repo/worktrees/feature/infra/compose/compose.app-prod.yml",
+  };
+  const layer = makeLayer({
+    requests,
+    response: (request) =>
+      Response.json(
+        new URL(request.url).pathname.endsWith("/by-worktree")
+          ? // The controller keys this on the worktree alone and returns the dev stack.
+            {
+              stack: stackJson,
+              frontendUrl: "https://feature.example.test",
+              frontendServiceName: "frontend",
+            }
+          : { stack: prodStackJson, created: true, frontendUrl: null, frontendServiceName: null },
+      ),
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppStackManager;
+    const byWorktree = yield* manager.getByWorktree({
+      worktreePath: stackJson.worktreePath,
+      variant: "prod",
+    });
+    assert.equal(byWorktree.stack, null);
+
+    const result = yield* manager.autoCreate({
+      worktreePath: stackJson.worktreePath,
+      displayName: "feature",
+      variant: "prod",
+    });
+    assert.equal(result.created, true);
+    assert.equal(result.stack?.variant, "prod");
+
+    const request = requests.at(-1);
+    if (request === undefined || request.body._tag !== "Uint8Array") {
+      assert.fail("expected a JSON auto-create request");
+    }
+    assert.equal(request.method, "POST");
+    assert.equal(decodeVariantRequest(new TextDecoder().decode(request.body.body)).variant, "prod");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("derives the variant from the compose file name for listed stacks", () => {
+  const layer = makeLayer({
+    requests: [],
+    response: () =>
+      Response.json([
+        stackJson,
+        {
+          ...stackJson,
+          id: "33333333-3333-3333-3333-333333333333",
+          uuid: "33333333-3333-3333-3333-333333333333",
+          composePath: "infra/compose/compose.app-prod.yml",
+        },
+      ]),
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppStackManager;
+    const { stacks } = yield* manager.list({});
+    assert.deepEqual(
+      stacks.map((stack) => stack.variant),
+      ["dev", "prod"],
     );
   }).pipe(Effect.provide(layer));
 });

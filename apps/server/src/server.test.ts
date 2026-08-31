@@ -102,7 +102,7 @@ const collectQueueUntil = Effect.fn("TransferBudget.collectQueueUntil")(function
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ServerConfig from "./config.ts";
-import * as AppDevStackManager from "./appDevStack/AppDevStackManager.ts";
+import * as AppStackManager from "./appStack/AppStackManager.ts";
 import { makeRoutesLayer } from "./server.ts";
 import { isThreadDetailEvent, resolveAvailableEditorsForConfig } from "./ws.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
@@ -429,7 +429,7 @@ const buildAppUnderTest = (options?: {
     repositoryIdentityResolver?: Partial<
       RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]
     >;
-    appDevStackManager?: Partial<AppDevStackManager.AppDevStackManager["Service"]>;
+    appStackManager?: Partial<AppStackManager.AppStackManager["Service"]>;
     cloudManagedEndpointRuntime?: Partial<
       CloudManagedEndpointRuntime.CloudManagedEndpointRuntime["Service"]
     >;
@@ -466,12 +466,12 @@ const buildAppUnderTest = (options?: {
       ...derivedPaths,
       staticDir: undefined,
       devUrl,
-      appDevStackBackendUrl: undefined,
-      appDevStackBackendBearerToken: undefined,
-      appDevStackBackendOidcTokenUrl: undefined,
-      appDevStackBackendOidcClientId: undefined,
-      appDevStackBackendOidcClientSecret: undefined,
-      appDevStackNative: undefined,
+      appStackBackendUrl: undefined,
+      appStackBackendBearerToken: undefined,
+      appStackBackendOidcTokenUrl: undefined,
+      appStackBackendOidcClientId: undefined,
+      appStackBackendOidcClientSecret: undefined,
+      appStackNative: undefined,
       devAllowedOrigins: [],
       noBrowser: true,
       startupPresentation: "browser",
@@ -1002,7 +1002,7 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provide(
-        Layer.mock(AppDevStackManager.AppDevStackManager)({
+        Layer.mock(AppStackManager.AppStackManager)({
           status: Effect.succeed({ enabled: false, backendUrl: null }),
           list: () => Effect.succeed({ stacks: [] }),
           getByWorktree: () =>
@@ -1011,10 +1011,10 @@ const buildAppUnderTest = (options?: {
               frontendUrl: null,
               frontendServiceName: null,
             }),
-          get: () => Effect.die("AppDevStackManager.get not stubbed in this test"),
-          autoCreate: () => Effect.die("AppDevStackManager.autoCreate not stubbed in this test"),
-          stop: () => Effect.die("AppDevStackManager.stop not stubbed in this test"),
-          restart: () => Effect.die("AppDevStackManager.restart not stubbed in this test"),
+          get: () => Effect.die("AppStackManager.get not stubbed in this test"),
+          autoCreate: () => Effect.die("AppStackManager.autoCreate not stubbed in this test"),
+          stop: () => Effect.die("AppStackManager.stop not stubbed in this test"),
+          restart: () => Effect.die("AppStackManager.restart not stubbed in this test"),
           delete: () => Effect.succeed({ deleted: true as const }),
           listPods: (input) =>
             Effect.succeed({ stackId: input.stackId, namespace: "test", pods: [] }),
@@ -1043,7 +1043,7 @@ const buildAppUnderTest = (options?: {
               stacks: [],
               fetchedAt: "2026-06-25T00:00:00.000Z",
             }),
-          ...options?.layers?.appDevStackManager,
+          ...options?.layers?.appStackManager,
         }),
       ),
       Layer.provide(
@@ -7912,8 +7912,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             }),
         );
         const stackProvisioned = yield* Deferred.make<void>();
-        const autoCreateAppDevStack = vi.fn(
-          (_: Parameters<AppDevStackManager.AppDevStackManager["Service"]["autoCreate"]>[0]) =>
+        const autoCreateAppStack = vi.fn(
+          (_: Parameters<AppStackManager.AppStackManager["Service"]["autoCreate"]>[0]) =>
             Deferred.succeed(stackProvisioned, undefined).pipe(
               Effect.as({
                 stack: null,
@@ -7950,8 +7950,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             projectSetupScriptRunner: {
               runForThread,
             },
-            appDevStackManager: {
-              autoCreate: autoCreateAppDevStack,
+            appStackManager: {
+              autoCreate: autoCreateAppStack,
             },
           },
         });
@@ -7999,11 +7999,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           ),
         );
         assert.equal(response.sequence, 4);
-        assert.equal(autoCreateAppDevStack.mock.calls.length, 0);
+        assert.equal(autoCreateAppStack.mock.calls.length, 0);
         assert.equal(dispatchedCommands[3]?.type, "thread.turn.start");
         yield* Deferred.succeed(setupCompleted, undefined);
         yield* Effect.yieldNow;
-        assert.equal(autoCreateAppDevStack.mock.calls.length, 0);
+        assert.equal(autoCreateAppStack.mock.calls.length, 0);
         yield* PubSub.publish(workflowEvents, {
           sequence: 5,
           eventId: EventId.make("event-workflow-branch-renamed"),
@@ -8091,8 +8091,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             "workflow-app-dev-stack.ready",
           ],
         );
-        assert.equal(autoCreateAppDevStack.mock.calls.length, 1);
-        assert.deepEqual(autoCreateAppDevStack.mock.calls[0]?.[0], {
+        assert.equal(autoCreateAppStack.mock.calls.length, 1);
+        assert.deepEqual(autoCreateAppStack.mock.calls[0]?.[0], {
           worktreePath: "/tmp/bootstrap-worktree",
           displayName: "verify-email-capabilities",
           gitBranch: "verify-email-capabilities",
@@ -8707,14 +8707,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("routes websocket rpc appDevStack.getAllStackPodLogs", () =>
+  it.effect("routes websocket rpc appStack.getAllStackPodLogs", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
 
       const wsUrl = yield* getWsServerUrl("/ws");
       const result = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
-          client[WS_METHODS.appDevStackGetAllStackPodLogs]({
+          client[WS_METHODS.appStackGetAllStackPodLogs]({
             limit: { mode: "tail", tailLines: 300 },
           }),
         ),

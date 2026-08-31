@@ -69,7 +69,7 @@ export function normalizeAppReviewPreviewTarget(value: string): string | null {
  * What one App Review launch reviews.
  *
  * A target the user named is pinned: the run uses it as given, rather than
- * letting the worktree's App Dev Stack substitute its own frontend. With no
+ * letting the worktree's App Stack substitute its own frontend. With no
  * named target the run keeps the old behavior — resolve the stack first, and
  * fall back to URLs found in the brief or the thread's open browser tab.
  */
@@ -383,7 +383,7 @@ export function collectUserMessageBlobPreviewUrls(message: ChatMessage): string[
 export interface AppReviewWorkflowLaunchRequest {
   readonly brief: string;
   readonly cycleBudget: number;
-  /** Empty means "resolve this worktree's App Dev Stack". */
+  /** Empty means "resolve this worktree's App Stack". */
   readonly reviewUrl: string;
   /** Review and ticket the gaps once, without repairing them. */
   readonly reviewOnly: boolean;

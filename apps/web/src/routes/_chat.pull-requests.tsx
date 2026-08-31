@@ -1580,7 +1580,7 @@ function PullRequestsRouteView() {
             onAddLogs={() => undefined}
             onAddDiff={() => undefined}
             onAddFiles={() => undefined}
-            onAddAppDevStack={() => undefined}
+            onAddAppStack={() => undefined}
             onAddPullRequest={() => undefined}
             onAddAgents={() => undefined}
             onAddWorkflows={() => undefined}
@@ -1591,7 +1591,7 @@ function PullRequestsRouteView() {
             logsAvailable={false}
             diffAvailable={false}
             filesAvailable={false}
-            appDevStackAvailable={false}
+            appStackAvailable={false}
             pullRequestAvailable={false}
             agentsAvailable={false}
             workflowsAvailable={false}

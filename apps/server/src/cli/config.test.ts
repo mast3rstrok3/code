@@ -144,12 +144,12 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: undefined,
-        appDevStackBackendUrl: undefined,
-        appDevStackBackendBearerToken: undefined,
-        appDevStackBackendOidcTokenUrl: undefined,
-        appDevStackBackendOidcClientId: undefined,
-        appDevStackBackendOidcClientSecret: undefined,
-        appDevStackNative: undefined,
+        appStackBackendUrl: undefined,
+        appStackBackendBearerToken: undefined,
+        appStackBackendOidcTokenUrl: undefined,
+        appStackBackendOidcClientId: undefined,
+        appStackBackendOidcClientSecret: undefined,
+        appStackNative: undefined,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: true,
         tailscaleServeEnabled: false,
@@ -159,10 +159,10 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     }),
   );
 
-  it.effect("reads app dev stack backend config from the canonical server env", () =>
+  it.effect("reads app stack backend config from the canonical server env", () =>
     Effect.gen(function* () {
       const { join } = yield* Path.Path;
-      const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-app-dev-stack");
+      const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-app-stack");
       const backendUrl = new URL("https://api-code.nightingale-ai.com");
       const backendBearerToken = "backend-token";
       const derivedPaths = yield* deriveServerPaths(baseDir, undefined);
@@ -189,8 +189,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
             ConfigProvider.layer(
               ConfigProvider.fromEnv({
                 env: {
-                  T3CODE_APP_DEV_STACK_BACKEND_URL: backendUrl.href,
-                  T3CODE_APP_DEV_STACK_BACKEND_BEARER_TOKEN: ` ${backendBearerToken} `,
+                  T3CODE_APP_STACK_BACKEND_URL: backendUrl.href,
+                  T3CODE_APP_STACK_BACKEND_BEARER_TOKEN: ` ${backendBearerToken} `,
                 },
               }),
             ),
@@ -199,12 +199,12 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         ),
       );
 
-      const { appDevStackBackendBearerToken, ...resolvedWithoutBearerToken } = resolved;
-      if (appDevStackBackendBearerToken === undefined) {
-        assert.fail("expected app dev stack backend bearer token to be configured");
+      const { appStackBackendBearerToken, ...resolvedWithoutBearerToken } = resolved;
+      if (appStackBackendBearerToken === undefined) {
+        assert.fail("expected app stack backend bearer token to be configured");
       }
-      assert.equal(Redacted.value(appDevStackBackendBearerToken), backendBearerToken);
-      assert.equal(String(appDevStackBackendBearerToken), "<redacted>");
+      assert.equal(Redacted.value(appStackBackendBearerToken), backendBearerToken);
+      assert.equal(String(appStackBackendBearerToken), "<redacted>");
 
       expect(resolvedWithoutBearerToken).toEqual({
         logLevel: "Info",
@@ -221,11 +221,11 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: false,
         startupPresentation: "browser",
         desktopBootstrapToken: undefined,
-        appDevStackBackendUrl: backendUrl,
-        appDevStackBackendOidcTokenUrl: undefined,
-        appDevStackBackendOidcClientId: undefined,
-        appDevStackBackendOidcClientSecret: undefined,
-        appDevStackNative: undefined,
+        appStackBackendUrl: backendUrl,
+        appStackBackendOidcTokenUrl: undefined,
+        appStackBackendOidcClientId: undefined,
+        appStackBackendOidcClientSecret: undefined,
+        appStackNative: undefined,
         autoBootstrapProjectFromCwd: true,
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
@@ -234,10 +234,10 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     }),
   );
 
-  it.effect("derives app dev stack OIDC service credentials from CODE_OIDC env", () =>
+  it.effect("derives app stack OIDC service credentials from CODE_OIDC env", () =>
     Effect.gen(function* () {
       const { join } = yield* Path.Path;
-      const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-app-dev-stack-oidc");
+      const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-app-stack-oidc");
       const backendUrl = new URL("https://api-code-dev.nightingale-ai.com");
       const issuer = new URL("https://auth-code-dev.nightingale-ai.com/realms/code");
       const clientSecret = "client-secret";
@@ -264,7 +264,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
             ConfigProvider.layer(
               ConfigProvider.fromEnv({
                 env: {
-                  T3CODE_APP_DEV_STACK_BACKEND_URL: backendUrl.href,
+                  T3CODE_APP_STACK_BACKEND_URL: backendUrl.href,
                   CODE_OIDC_ISSUER: issuer.href,
                   CODE_OIDC_CLIENT_ID: "cortex-t3code",
                   CODE_OIDC_CLIENT_SECRET: ` ${clientSecret} `,
@@ -276,24 +276,88 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         ),
       );
 
-      assert.equal(resolved.appDevStackBackendUrl?.href, backendUrl.href);
+      assert.equal(resolved.appStackBackendUrl?.href, backendUrl.href);
       assert.equal(
-        resolved.appDevStackBackendOidcTokenUrl?.href,
+        resolved.appStackBackendOidcTokenUrl?.href,
         `${issuer.href.replace(/\/+$/u, "")}/protocol/openid-connect/token`,
       );
-      assert.equal(resolved.appDevStackBackendOidcClientId, "cortex-t3code");
-      if (resolved.appDevStackBackendOidcClientSecret === undefined) {
-        assert.fail("expected app dev stack OIDC client secret to be configured");
+      assert.equal(resolved.appStackBackendOidcClientId, "cortex-t3code");
+      if (resolved.appStackBackendOidcClientSecret === undefined) {
+        assert.fail("expected app stack OIDC client secret to be configured");
       }
-      assert.equal(Redacted.value(resolved.appDevStackBackendOidcClientSecret), clientSecret);
-      assert.equal(String(resolved.appDevStackBackendOidcClientSecret), "<redacted>");
+      assert.equal(Redacted.value(resolved.appStackBackendOidcClientSecret), clientSecret);
+      assert.equal(String(resolved.appStackBackendOidcClientSecret), "<redacted>");
     }),
   );
 
-  it.effect("enables native app dev stacks without binding to a hard-coded repository", () =>
+  it.effect("enables native app stacks without binding to a hard-coded repository", () =>
     Effect.gen(function* () {
       const { join } = yield* Path.Path;
-      const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-native-app-dev-stack");
+      const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-native-app-stack");
+
+      const resolved = yield* resolveServerConfig(
+        {
+          mode: Option.some("web"),
+          port: Option.some(3773),
+          host: Option.none(),
+          baseDir: Option.some(baseDir),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.none(),
+          bootstrapFd: Option.none(),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+          tailscaleServeEnabled: Option.none(),
+          tailscaleServePort: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: {
+                  T3CODE_APP_STACK_NATIVE_ENABLED: "true",
+                },
+              }),
+            ),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      expect(resolved.appStackNative).toEqual({
+        id: undefined,
+        namespace: undefined,
+        worktreePath: undefined,
+        composePath: "infra/compose/compose.app-dev.yml",
+        displayName: undefined,
+        displaySlug: undefined,
+        repoName: undefined,
+        branchName: undefined,
+        kubectlPath: "kubectl",
+        dockerPath: "docker",
+        buildctlPath: "buildctl",
+        imageBuilder: "auto",
+        imageRegistry: "harbor.nightingale-ai.com",
+        imagePushRegistry: undefined,
+        imageProject: undefined,
+        buildkitAddr: undefined,
+        buildkitDockerConfig: undefined,
+        buildkitDockerConfigsDir: undefined,
+        buildkitHarborCaCert: undefined,
+        frontendUrl: undefined,
+        backendUrl: undefined,
+        keycloakUrl: undefined,
+        minioUrl: undefined,
+      });
+    }),
+  );
+
+  it.effect("reads the pre-rename T3CODE_APP_DEV_STACK_* names when the new name is unset", () =>
+    Effect.gen(function* () {
+      const { join } = yield* Path.Path;
+      const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-legacy-app-stack-env");
 
       const resolved = yield* resolveServerConfig(
         {
@@ -318,6 +382,11 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
               ConfigProvider.fromEnv({
                 env: {
                   T3CODE_APP_DEV_STACK_NATIVE_ENABLED: "true",
+                  T3CODE_APP_DEV_STACK_NATIVE_NAMESPACE: "hero-dev",
+                  T3CODE_APP_DEV_STACK_NATIVE_IMAGE_BUILDER: "buildkit",
+                  // The new name wins when both are set.
+                  T3CODE_APP_DEV_STACK_NATIVE_DISPLAY_NAME: "old",
+                  T3CODE_APP_STACK_NATIVE_DISPLAY_NAME: "new",
                 },
               }),
             ),
@@ -326,30 +395,10 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         ),
       );
 
-      expect(resolved.appDevStackNative).toEqual({
-        id: undefined,
-        namespace: undefined,
-        worktreePath: undefined,
-        composePath: "infra/compose/compose.app-dev.yml",
-        displayName: undefined,
-        displaySlug: undefined,
-        repoName: undefined,
-        branchName: undefined,
-        kubectlPath: "kubectl",
-        dockerPath: "docker",
-        buildctlPath: "buildctl",
-        imageBuilder: "auto",
-        imageRegistry: "harbor.nightingale-ai.com",
-        imagePushRegistry: undefined,
-        imageProject: undefined,
-        buildkitAddr: undefined,
-        buildkitDockerConfig: undefined,
-        buildkitDockerConfigsDir: undefined,
-        buildkitHarborCaCert: undefined,
-        frontendUrl: undefined,
-        backendUrl: undefined,
-        keycloakUrl: undefined,
-        minioUrl: undefined,
+      expect(resolved.appStackNative).toMatchObject({
+        namespace: "hero-dev",
+        imageBuilder: "buildkit",
+        displayName: "new",
       });
     }),
   );
@@ -416,12 +465,12 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: undefined,
-        appDevStackBackendUrl: undefined,
-        appDevStackBackendBearerToken: undefined,
-        appDevStackBackendOidcTokenUrl: undefined,
-        appDevStackBackendOidcClientId: undefined,
-        appDevStackBackendOidcClientSecret: undefined,
-        appDevStackNative: undefined,
+        appStackBackendUrl: undefined,
+        appStackBackendBearerToken: undefined,
+        appStackBackendOidcTokenUrl: undefined,
+        appStackBackendOidcClientId: undefined,
+        appStackBackendOidcClientSecret: undefined,
+        appStackNative: undefined,
         autoBootstrapProjectFromCwd: true,
         logWebSocketEvents: true,
         tailscaleServeEnabled: true,
@@ -496,12 +545,12 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: false,
         startupPresentation: "browser",
         desktopBootstrapToken: "desktop-bootstrap-token",
-        appDevStackBackendUrl: undefined,
-        appDevStackBackendBearerToken: undefined,
-        appDevStackBackendOidcTokenUrl: undefined,
-        appDevStackBackendOidcClientId: undefined,
-        appDevStackBackendOidcClientSecret: undefined,
-        appDevStackNative: undefined,
+        appStackBackendUrl: undefined,
+        appStackBackendBearerToken: undefined,
+        appStackBackendOidcTokenUrl: undefined,
+        appStackBackendOidcClientId: undefined,
+        appStackBackendOidcClientSecret: undefined,
+        appStackNative: undefined,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
@@ -579,12 +628,12 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: "desktop-token",
-        appDevStackBackendUrl: undefined,
-        appDevStackBackendBearerToken: undefined,
-        appDevStackBackendOidcTokenUrl: undefined,
-        appDevStackBackendOidcClientId: undefined,
-        appDevStackBackendOidcClientSecret: undefined,
-        appDevStackNative: undefined,
+        appStackBackendUrl: undefined,
+        appStackBackendBearerToken: undefined,
+        appStackBackendOidcTokenUrl: undefined,
+        appStackBackendOidcClientId: undefined,
+        appStackBackendOidcClientSecret: undefined,
+        appStackNative: undefined,
         desktopTelemetryFd: 4,
         desktopTelemetryControlFd: 5,
         resourceMonitorPath: undefined,
@@ -719,12 +768,12 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: "desktop-token",
-        appDevStackBackendUrl: undefined,
-        appDevStackBackendBearerToken: undefined,
-        appDevStackBackendOidcTokenUrl: undefined,
-        appDevStackBackendOidcClientId: undefined,
-        appDevStackBackendOidcClientSecret: undefined,
-        appDevStackNative: undefined,
+        appStackBackendUrl: undefined,
+        appStackBackendBearerToken: undefined,
+        appStackBackendOidcTokenUrl: undefined,
+        appStackBackendOidcClientId: undefined,
+        appStackBackendOidcClientSecret: undefined,
+        appStackNative: undefined,
         autoBootstrapProjectFromCwd: true,
         logWebSocketEvents: true,
         tailscaleServeEnabled: false,
@@ -795,12 +844,12 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: undefined,
-        appDevStackBackendUrl: undefined,
-        appDevStackBackendBearerToken: undefined,
-        appDevStackBackendOidcTokenUrl: undefined,
-        appDevStackBackendOidcClientId: undefined,
-        appDevStackBackendOidcClientSecret: undefined,
-        appDevStackNative: undefined,
+        appStackBackendUrl: undefined,
+        appStackBackendBearerToken: undefined,
+        appStackBackendOidcTokenUrl: undefined,
+        appStackBackendOidcClientId: undefined,
+        appStackBackendOidcClientSecret: undefined,
+        appStackNative: undefined,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
@@ -865,12 +914,12 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "headless",
         desktopBootstrapToken: undefined,
-        appDevStackBackendUrl: undefined,
-        appDevStackBackendBearerToken: undefined,
-        appDevStackBackendOidcTokenUrl: undefined,
-        appDevStackBackendOidcClientId: undefined,
-        appDevStackBackendOidcClientSecret: undefined,
-        appDevStackNative: undefined,
+        appStackBackendUrl: undefined,
+        appStackBackendBearerToken: undefined,
+        appStackBackendOidcTokenUrl: undefined,
+        appStackBackendOidcClientId: undefined,
+        appStackBackendOidcClientSecret: undefined,
+        appStackNative: undefined,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,

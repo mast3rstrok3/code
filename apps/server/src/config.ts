@@ -36,8 +36,8 @@ export { PreviewRecordingMode };
 export const PreviewBrowserSandbox = Schema.Literals(["auto", "on", "off"]);
 export type PreviewBrowserSandbox = typeof PreviewBrowserSandbox.Type;
 
-export const NativeAppDevStackImageBuilder = Schema.Literals(["auto", "docker", "buildkit"]);
-export type NativeAppDevStackImageBuilder = typeof NativeAppDevStackImageBuilder.Type;
+export const NativeAppStackImageBuilder = Schema.Literals(["auto", "docker", "buildkit"]);
+export type NativeAppStackImageBuilder = typeof NativeAppStackImageBuilder.Type;
 
 /**
  * ServerDerivedPaths - Derived paths from the base directory.
@@ -62,7 +62,7 @@ export interface ServerDerivedPaths {
   readonly secretsDir: string;
 }
 
-export interface NativeAppDevStackConfig {
+export interface NativeAppStackConfig {
   readonly id: string | undefined;
   readonly namespace: string | undefined;
   readonly worktreePath: string | undefined;
@@ -74,7 +74,7 @@ export interface NativeAppDevStackConfig {
   readonly kubectlPath: string;
   readonly dockerPath: string;
   readonly buildctlPath: string;
-  readonly imageBuilder: NativeAppDevStackImageBuilder;
+  readonly imageBuilder: NativeAppStackImageBuilder;
   readonly imageRegistry: string | undefined;
   readonly imagePushRegistry: string | undefined;
   readonly imageProject: string | undefined;
@@ -115,12 +115,12 @@ export class ServerConfig extends Context.Service<
     readonly baseDir: string;
     readonly staticDir: string | undefined;
     readonly devUrl: URL | undefined;
-    readonly appDevStackBackendUrl: URL | undefined;
-    readonly appDevStackBackendBearerToken: Redacted.Redacted<string> | undefined;
-    readonly appDevStackBackendOidcTokenUrl: URL | undefined;
-    readonly appDevStackBackendOidcClientId: string | undefined;
-    readonly appDevStackBackendOidcClientSecret: Redacted.Redacted<string> | undefined;
-    readonly appDevStackNative: NativeAppDevStackConfig | undefined;
+    readonly appStackBackendUrl: URL | undefined;
+    readonly appStackBackendBearerToken: Redacted.Redacted<string> | undefined;
+    readonly appStackBackendOidcTokenUrl: URL | undefined;
+    readonly appStackBackendOidcClientId: string | undefined;
+    readonly appStackBackendOidcClientSecret: Redacted.Redacted<string> | undefined;
+    readonly appStackNative: NativeAppStackConfig | undefined;
     readonly devAllowedOrigins: ReadonlyArray<string>;
     readonly noBrowser: boolean;
     readonly startupPresentation: StartupPresentation;
@@ -265,12 +265,12 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     resourceMonitorPath: undefined,
     staticDir: undefined,
     devUrl,
-    appDevStackBackendUrl: undefined,
-    appDevStackBackendBearerToken: undefined,
-    appDevStackBackendOidcTokenUrl: undefined,
-    appDevStackBackendOidcClientId: undefined,
-    appDevStackBackendOidcClientSecret: undefined,
-    appDevStackNative: undefined,
+    appStackBackendUrl: undefined,
+    appStackBackendBearerToken: undefined,
+    appStackBackendOidcTokenUrl: undefined,
+    appStackBackendOidcClientId: undefined,
+    appStackBackendOidcClientSecret: undefined,
+    appStackNative: undefined,
     devAllowedOrigins: [],
     noBrowser: false,
     startupPresentation: "browser",

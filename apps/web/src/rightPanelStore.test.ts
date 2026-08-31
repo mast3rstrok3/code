@@ -30,6 +30,27 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("renames the persisted app-dev-stack surface to app-stack during migration", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            activeSurfaceId: "app-dev-stack",
+            surfaces: [{ id: "app-dev-stack", kind: "app-dev-stack" }],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: false,
+          activeSurfaceId: null,
+          surfaces: [{ id: "app-stack", kind: "app-stack" }],
+        },
+      },
+    });
+  });
+
   it("drops the legacy singleton terminal surface during migration", () => {
     expect(
       migratePersistedRightPanelState({
@@ -299,14 +320,14 @@ describe("rightPanelStore", () => {
     });
   });
 
-  it("keeps app dev stack as a singleton surface", () => {
-    useRightPanelStore.getState().open(refA, "app-dev-stack");
-    useRightPanelStore.getState().open(refA, "app-dev-stack");
+  it("keeps app stack as a singleton surface", () => {
+    useRightPanelStore.getState().open(refA, "app-stack");
+    useRightPanelStore.getState().open(refA, "app-stack");
 
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: true,
-      activeSurfaceId: "app-dev-stack",
-      surfaces: [{ id: "app-dev-stack", kind: "app-dev-stack" }],
+      activeSurfaceId: "app-stack",
+      surfaces: [{ id: "app-stack", kind: "app-stack" }],
     });
   });
 

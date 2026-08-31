@@ -33,7 +33,7 @@ it("lists the eleven Engineering Workflow steps in phase order", () => {
     "implementation",
   ]);
   expect(targets.map((target) => target.label)).toEqual([
-    "Prepare shared worktree and App Dev Stack",
+    "Prepare shared worktree and App Stack",
     "Grill with Docs",
     "Spec authoring",
     "Ticket authoring",

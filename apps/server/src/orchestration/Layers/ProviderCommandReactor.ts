@@ -55,7 +55,7 @@ import {
 } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
-import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
+import { AppStackManager } from "../../appStack/AppStackManager.ts";
 import { isAppReviewMcpWorkflowPromptId } from "../../provider/WorkflowPromptRegistry.ts";
 import { buildWorktreeRuntimeContext } from "../worktreeRuntimeContext.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
@@ -409,7 +409,7 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
-  const appDevStackManager = yield* AppDevStackManager;
+  const appStackManager = yield* AppStackManager;
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
@@ -434,7 +434,7 @@ const make = Effect.gen(function* () {
       const worktreePath = input.thread.worktreePath?.trim();
       if (!worktreePath) return input.messageText;
 
-      const stackLookup = yield* appDevStackManager.getByWorktree({ worktreePath }).pipe(
+      const stackLookup = yield* appStackManager.getByWorktree({ worktreePath }).pipe(
         Effect.map(Option.some),
         Effect.orElseSucceed(() => Option.none()),
         Effect.timeoutOption("1500 millis"),

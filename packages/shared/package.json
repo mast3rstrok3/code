@@ -23,13 +23,13 @@
       "types": "./src/advertisedEndpoint.ts",
       "import": "./src/advertisedEndpoint.ts"
     },
-    "./appDevStack": {
-      "types": "./src/appDevStack.ts",
-      "module": "./src/appDevStack.ts",
-      "browser": "./src/appDevStack.ts",
-      "development": "./src/appDevStack.ts",
-      "import": "./src/appDevStack.ts",
-      "default": "./src/appDevStack.ts"
+    "./appStack": {
+      "types": "./src/appStack.ts",
+      "module": "./src/appStack.ts",
+      "browser": "./src/appStack.ts",
+      "development": "./src/appStack.ts",
+      "import": "./src/appStack.ts",
+      "default": "./src/appStack.ts"
     },
     "./agentAwareness": {
       "types": "./src/agentAwareness.ts",
