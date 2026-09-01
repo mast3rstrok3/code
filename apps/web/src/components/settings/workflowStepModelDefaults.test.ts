@@ -17,7 +17,7 @@ const selection: ModelSelection = {
   model: "gpt-5.6-sol",
 };
 
-it("lists the eleven Engineering Workflow steps in phase order", () => {
+it("lists the eleven Full Engineering steps in phase order", () => {
   const targets = engineeringWorkflowDefaultSteps();
   expect(targets.map((target) => target.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
   expect(targets.map((target) => target.phase)).toEqual([
@@ -25,7 +25,7 @@ it("lists the eleven Engineering Workflow steps in phase order", () => {
     "planning",
     "planning",
     "planning",
-    "ticket-review",
+    "planning",
     "implementation",
     "implementation",
     "implementation",
@@ -42,6 +42,27 @@ it("lists the eleven Engineering Workflow steps in phase order", () => {
     "Execute ticket waves",
     "Merge ticket branches",
     "Final App Review",
+    "Final Code Review",
+    "Create pull request",
+    "Babysit pull request",
+  ]);
+});
+
+it("groups Quick Feature into one Planning step and five Implementation steps", () => {
+  const targets = engineeringWorkflowDefaultSteps("quick-plan");
+
+  expect(targets.map((target) => target.phase)).toEqual([
+    "planning",
+    "implementation",
+    "implementation",
+    "implementation",
+    "implementation",
+    "implementation",
+  ]);
+  expect(targets.map((target) => target.label)).toEqual([
+    "Planning",
+    "Build",
+    "App Review",
     "Final Code Review",
     "Create pull request",
     "Babysit pull request",

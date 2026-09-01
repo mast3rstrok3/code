@@ -20,7 +20,7 @@ Workflows live in the same separate mode control as Build, Plan, and Skills. Cho
 - **Full Engineering** begins with Grill with Docs, then proceeds through Planning and the full Implementation workflow.
 - **Wayfinder** will replace Grill with Docs with a Wayfinder planning phase. It is under development.
 
-These names are variants of the Engineering workflow, not separate workflow types. You can turn any optional step on or off before starting. Ticket App Review, Final App Review, and Final Code Review have separate switches. Turning pull-request creation off also turns babysitting off; turning babysitting on turns pull-request creation on. The choices are stored with the run and do not change later runs.
+These names are variants of the Engineering workflow, not separate workflow types. Model setup, Planning, and Implementation start collapsed so you can open one section at a time. Remove an optional step with its X button. The row stays in its original position as an Add action, so you can restore it without rebuilding the sequence. Ticket App Review, Final App Review, Final Code Review, pull-request creation, and pull-request babysitting use this control. Each App Review opens into its four ordered steps. You can remove and restore the end-to-end test or browser LLM review inside it. Removing pull-request creation also removes babysitting. Adding babysitting restores pull-request creation. The choices are stored with the run and do not change later runs.
 
 Control the grill in the initial prompt using ordinary language: for example, “ask product questions only,” “focus on engineering decisions,” or “ask at most five questions.” Without a constraint, Grill with Docs covers the complete product, engineering, and domain frontier.
 

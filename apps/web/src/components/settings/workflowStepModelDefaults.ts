@@ -13,7 +13,7 @@ import type { WorkflowModelPinKey } from "../WorkflowModelPins";
  */
 export interface EngineeringWorkflowDefaultStep {
   readonly number: number;
-  readonly phase: "planning" | "ticket-review" | "implementation";
+  readonly phase: "planning" | "implementation";
   readonly label: string;
   readonly note?: string | undefined;
   readonly modelMode: "none" | "workflow" | "configurable";
@@ -55,12 +55,13 @@ function withoutPhasePrefix(label: string): string {
 }
 
 export function engineeringWorkflowDefaultSteps(
-  preset: "planning" | "fast-engineering" = "planning",
+  preset: "quick-plan" | "fast-plan" | "planning" | "fast-engineering" = "planning",
 ): ReadonlyArray<EngineeringWorkflowDefaultStep> {
   const definition = WORKFLOW_PRESET_DEFINITION_BY_ID[preset];
+  const planningStepCount = preset === "quick-plan" || preset === "fast-plan" ? 1 : 5;
   return definition.helpSteps.map((step, index) => {
     const label = withoutPhasePrefix(step.label);
-    const phase = index < 4 ? "planning" : index === 4 ? "ticket-review" : "implementation";
+    const phase = index < planningStepCount ? "planning" : "implementation";
     const configurable = workflowPresetStepCanPinModel(definition.id, step);
     return {
       number: index + 1,

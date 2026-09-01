@@ -154,7 +154,10 @@ export function WorkflowSettingsBody(props: {
   }
 
   if (
-    (props.preset === "planning" || props.preset === "fast-engineering") &&
+    (props.preset === "quick-plan" ||
+      props.preset === "fast-plan" ||
+      props.preset === "planning" ||
+      props.preset === "fast-engineering") &&
     props.onSetStepCycles !== undefined &&
     props.onSetStepReviewParts !== undefined
   ) {
