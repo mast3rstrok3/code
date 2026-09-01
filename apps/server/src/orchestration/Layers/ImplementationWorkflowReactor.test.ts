@@ -1114,11 +1114,19 @@ function makeTestLayer(
             }),
           workflowTeardown: (input) =>
             Ref.update(calls.workflowTeardownInputs, (inputs) => [...inputs, input]).pipe(
-              Effect.as({
-                stoppedStackIds: ["stack-ticket-finished"],
-                skippedProtectedStackIds: ["stack-1", "stack-protected"],
-                failedStackIds: [],
-              }),
+              Effect.as(
+                input.workflowId === `workflow-${sourceThreadId}`
+                  ? {
+                      stoppedStackIds: [],
+                      skippedProtectedStackIds: [],
+                      failedStackIds: [],
+                    }
+                  : {
+                      stoppedStackIds: ["stack-ticket-finished"],
+                      skippedProtectedStackIds: ["stack-1", "stack-protected"],
+                      failedStackIds: [],
+                    },
+              ),
             ),
           stop: (input) =>
             Ref.update(calls.stopStackIds, (stackIds) => [...stackIds, input.stackId]).pipe(
@@ -1520,6 +1528,7 @@ function seedTicketStack(
   input: {
     readonly run: OrchestrationImplementationRun;
     readonly ticketId: string;
+    readonly workflowId?: string | null;
   },
 ) {
   return Effect.gen(function* () {
@@ -1528,10 +1537,12 @@ function seedTicketStack(
       .find((entry) => entry.id === input.run.id)
       ?.ticketStates.find((entry) => entry.ticketId === input.ticketId)?.worktreePath;
     if (worktreePath == null) throw new Error("Ticket worktree missing.");
-    const workflowId = snapshot.threads.find(
-      (thread) => thread.id === input.run.orchestratorThreadId,
-    )?.workflowContext?.workflowId;
-    if (workflowId == null) throw new Error("Run workflow id missing.");
+    const workflowId =
+      input.workflowId === undefined
+        ? snapshot.threads.find((thread) => thread.id === input.run.orchestratorThreadId)
+            ?.workflowContext?.workflowId
+        : input.workflowId;
+    if (workflowId === undefined) throw new Error("Run workflow id missing.");
     yield* Ref.update(system.autoCreateInputs, (inputs) => [
       ...inputs,
       { worktreePath, displayName: "Ticket stack", workflowId },
@@ -4309,6 +4320,19 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("deletes an unowned legacy stack on the exact ticket worktree", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* seedTicketStack(system, { run, ticketId: ticket.id, workflowId: null });
+        yield* passMergeGate(system, run);
+
+        expect(yield* Ref.get(system.deleteStackIds)).toEqual(["stack-ticket"]);
+      }),
+    ),
+  );
+
   it.effect("records a dirty ticket worktree as retained and stops retrying its removal", () =>
     withSystem(
       (system) =>
@@ -6493,6 +6517,7 @@ describe("ImplementationWorkflowReactor", () => {
         expect(orchestratorWorkflowId).toBeDefined();
         expect(yield* Ref.get(system.workflowTeardownInputs)).toEqual([
           { workflowId: orchestratorWorkflowId },
+          { workflowId: `workflow-${sourceThreadId}` },
         ]);
         const teardownActivity = snapshot.threads
           .find((thread) => thread.id === run.orchestratorThreadId)

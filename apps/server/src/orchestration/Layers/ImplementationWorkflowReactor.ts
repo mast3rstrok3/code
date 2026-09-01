@@ -3134,10 +3134,10 @@ const make = Effect.gen(function* () {
             } else if (stackLookup.success.stack !== null) {
               const stack = stackLookup.success.stack;
               if (
-                workflowIds.length === 0 ||
                 normalizeWorkflowWorktreePath(stack.worktreePath) !==
                   normalizeWorkflowWorktreePath(state.worktreePath) ||
-                !workflowOwnsStack(readModel, input.run, stack.workflowId)
+                (stack.workflowId != null &&
+                  !workflowOwnsStack(readModel, input.run, stack.workflowId))
               ) {
                 yield* appendActivity({
                   threadId: input.run.orchestratorThreadId,
@@ -9409,30 +9409,35 @@ const make = Effect.gen(function* () {
     }
   });
 
-  /** Stops every unprotected stack after the workflow completes or is canceled. */
+  /** Stops every unprotected stack owned by the run or its parent workflow. */
   const teardownWorkflowStacks = Effect.fn("ImplementationWorkflowReactor.teardownWorkflowStacks")(
     function* (input: {
       readonly readModel: OrchestrationReadModel;
       readonly run: OrchestrationImplementationRun;
       readonly createdAt: string;
     }) {
-      const workflowId = workflowIdForRun(input.readModel, input.run);
-      if (workflowId === undefined) return;
-      const result = yield* appStackManager.workflowTeardown({ workflowId }).pipe(Effect.result);
-      if (result._tag === "Failure") {
-        yield* appendActivity({
-          threadId: input.run.orchestratorThreadId,
-          tone: "info",
-          kind: "implementation-run-stack-teardown-failed",
-          summary: `App Stack teardown failed: ${errorDetail(result.failure)}`,
-          payload: { runId: input.run.id, workflowId },
-          createdAt: input.createdAt,
-        });
-        return;
+      const workflowIds = workflowIdsForRun(input.readModel, input.run);
+      if (workflowIds.length === 0) return;
+      const stoppedStackIds: string[] = [];
+      const skippedProtectedStackIds: string[] = [];
+      const failedStackIds: string[] = [];
+      for (const workflowId of workflowIds) {
+        const result = yield* appStackManager.workflowTeardown({ workflowId }).pipe(Effect.result);
+        if (result._tag === "Failure") {
+          yield* appendActivity({
+            threadId: input.run.orchestratorThreadId,
+            tone: "info",
+            kind: "implementation-run-stack-teardown-failed",
+            summary: `App Stack teardown failed: ${errorDetail(result.failure)}`,
+            payload: { runId: input.run.id, workflowId },
+            createdAt: input.createdAt,
+          });
+          continue;
+        }
+        stoppedStackIds.push(...result.success.stoppedStackIds);
+        skippedProtectedStackIds.push(...result.success.skippedProtectedStackIds);
+        failedStackIds.push(...result.success.failedStackIds);
       }
-      const stoppedStackIds = [...result.success.stoppedStackIds];
-      const skippedProtectedStackIds = [...result.success.skippedProtectedStackIds];
-      const failedStackIds = [...result.success.failedStackIds];
       if (
         stoppedStackIds.length === 0 &&
         skippedProtectedStackIds.length === 0 &&
@@ -9452,7 +9457,7 @@ const make = Effect.gen(function* () {
         summary: parts.join("; "),
         payload: {
           runId: input.run.id,
-          workflowId,
+          workflowId: workflowIds[0],
           stoppedStackIds,
           skippedProtectedStackIds,
           failedStackIds,
