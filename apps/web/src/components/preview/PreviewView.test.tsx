@@ -1,11 +1,14 @@
 import {
+  BUILT_IN_BROWSER_PROFILES,
+  DEFAULT_BROWSER_PROFILE_ID,
   DEFAULT_PREVIEW_APPEARANCE,
   DEFAULT_PREVIEW_ZOOM_FACTOR,
   EnvironmentId,
   FILL_PREVIEW_VIEWPORT,
   ThreadId,
 } from "@t3tools/contracts";
-import { act, Profiler } from "react";
+import { Profiler } from "react";
+import { flushSync } from "react-dom";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -37,6 +40,15 @@ const mocks = vi.hoisted(() => ({
 
 const EMPTY_HISTORY: never[] = [];
 
+const STUB_BROWSER_DEFAULTS = {
+  viewport: FILL_PREVIEW_VIEWPORT,
+  zoomFactor: DEFAULT_PREVIEW_ZOOM_FACTOR,
+  appearance: DEFAULT_PREVIEW_APPEARANCE,
+  autoShowFloatingPreview: true,
+  profiles: BUILT_IN_BROWSER_PROFILES,
+  profileId: DEFAULT_BROWSER_PROFILE_ID,
+};
+
 vi.mock("~/browserHistoryStore", () => ({
   recordVisitForThread: mocks.recordVisitForThread,
   setTitleForThreadUrl: vi.fn(),
@@ -53,19 +65,10 @@ vi.mock("~/state/session", () => ({
 // `useSettings` -> `state/server`, which would drag the whole settings and
 // connection graph into a test that only cares about the browser chrome.
 vi.mock("~/browser/browserDefaults", () => ({
-  useBrowserDefaults: () => ({
-    viewport: FILL_PREVIEW_VIEWPORT,
-    zoomFactor: DEFAULT_PREVIEW_ZOOM_FACTOR,
-    appearance: DEFAULT_PREVIEW_APPEARANCE,
-    autoShowFloatingPreview: true,
-  }),
-  getBrowserDefaults: () => ({
-    viewport: FILL_PREVIEW_VIEWPORT,
-    zoomFactor: DEFAULT_PREVIEW_ZOOM_FACTOR,
-    appearance: DEFAULT_PREVIEW_APPEARANCE,
-    autoShowFloatingPreview: true,
-  }),
+  useBrowserDefaults: () => STUB_BROWSER_DEFAULTS,
+  getBrowserDefaults: () => STUB_BROWSER_DEFAULTS,
   browserDefaultOpenViewport: () => FILL_PREVIEW_VIEWPORT,
+  browserDefaultOpenProfileId: () => DEFAULT_BROWSER_PROFILE_ID,
   browserDefaultTabState: () => ({
     zoomFactor: DEFAULT_PREVIEW_ZOOM_FACTOR,
     colorScheme: DEFAULT_PREVIEW_APPEARANCE,
@@ -253,7 +256,7 @@ vi.mock("./AgentBrowserCursor", () => ({ AgentBrowserCursor: () => null }));
 vi.mock("~/browser/BrowserSurfaceSlot", () => ({ BrowserSurfaceSlot: () => null }));
 vi.mock("./usePreviewSession", () => ({ usePreviewSession: vi.fn() }));
 
-import { PreviewView } from "./PreviewView";
+import { PreviewView, previewProfileName } from "./PreviewView";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 
 const TEST_THREAD_REF = {
@@ -351,6 +354,12 @@ describe("PreviewView navigation", () => {
     mocks.recordVisitForThread.mockClear();
   });
 
+  it("labels a tab whose saved profile was removed", () => {
+    expect(previewProfileName(BUILT_IN_BROWSER_PROFILES, "profile-removed")).toBe(
+      "Removed profile",
+    );
+  });
+
   it("does not rerender while loading time passes", async () => {
     vi.useFakeTimers();
     mocks.loading = true;
@@ -360,7 +369,7 @@ describe("PreviewView navigation", () => {
     const onRender = vi.fn();
 
     try {
-      await act(() => {
+      flushSync(() => {
         root.render(
           <Profiler id="preview" onRender={onRender}>
             <PreviewView threadRef={TEST_THREAD_REF} tabId="tab-1" visible />
@@ -369,11 +378,11 @@ describe("PreviewView navigation", () => {
       });
       const initialRenderCount = onRender.mock.calls.length;
 
-      await act(() => vi.advanceTimersByTimeAsync(1_000));
+      await vi.advanceTimersByTimeAsync(1_000);
 
       expect(onRender).toHaveBeenCalledTimes(initialRenderCount);
     } finally {
-      await act(() => root.unmount());
+      flushSync(() => root.unmount());
       vi.useRealTimers();
       vi.unstubAllGlobals();
     }

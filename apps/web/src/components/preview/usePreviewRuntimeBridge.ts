@@ -32,8 +32,8 @@ export interface PreviewRuntimeBridge {
   readonly zoomIn: (tabId: string) => Promise<void>;
   readonly zoomOut: (tabId: string) => Promise<void>;
   readonly resetZoom: (tabId: string) => Promise<void>;
-  readonly clearCookies: () => Promise<void>;
-  readonly clearCache: () => Promise<void>;
+  readonly clearCookies: (profileId?: string) => Promise<void>;
+  readonly clearCache: (profileId?: string) => Promise<void>;
   readonly captureScreenshot: (tabId: string) => Promise<ScreenshotArtifact>;
   readonly revealArtifact?: ((path: string) => Promise<void>) | undefined;
   readonly copyArtifactToClipboard?: ((path: string) => Promise<void>) | undefined;
@@ -54,24 +54,25 @@ export function usePreviewRuntimeBridge(threadRef: ScopedThreadRef): PreviewRunt
   });
 
   if (previewBridge) {
+    const desktopBridge = previewBridge;
     return {
       kind: "desktop",
       supportsDevTools: true,
       supportsRecording: true,
       supportsElementPicking: true,
-      navigate: previewBridge.navigate,
-      refresh: previewBridge.refresh,
-      hardReload: previewBridge.hardReload,
-      goBack: previewBridge.goBack,
-      goForward: previewBridge.goForward,
-      zoomIn: previewBridge.zoomIn,
-      zoomOut: previewBridge.zoomOut,
-      resetZoom: previewBridge.resetZoom,
-      clearCookies: previewBridge.clearCookies,
-      clearCache: previewBridge.clearCache,
-      captureScreenshot: previewBridge.captureScreenshot,
-      revealArtifact: previewBridge.revealArtifact,
-      copyArtifactToClipboard: previewBridge.copyArtifactToClipboard,
+      navigate: desktopBridge.navigate,
+      refresh: desktopBridge.refresh,
+      hardReload: desktopBridge.hardReload,
+      goBack: desktopBridge.goBack,
+      goForward: desktopBridge.goForward,
+      zoomIn: desktopBridge.zoomIn,
+      zoomOut: desktopBridge.zoomOut,
+      resetZoom: desktopBridge.resetZoom,
+      clearCookies: (profileId) => desktopBridge.clearCookies(threadRef.environmentId, profileId),
+      clearCache: (profileId) => desktopBridge.clearCache(threadRef.environmentId, profileId),
+      captureScreenshot: desktopBridge.captureScreenshot,
+      revealArtifact: desktopBridge.revealArtifact,
+      copyArtifactToClipboard: desktopBridge.copyArtifactToClipboard,
     };
   }
 

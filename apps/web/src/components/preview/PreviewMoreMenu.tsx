@@ -10,6 +10,8 @@ import {
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
+  MenuGroup,
+  MenuGroupLabel,
   MenuSeparator,
   MenuSub,
   MenuSubPopup,
@@ -57,6 +59,8 @@ interface Props {
   nativePictureInPicture: boolean;
   /** Toggles the optional native always-on-top preview window. */
   onNativePictureInPicture: (() => void) | undefined;
+  /** Profile display name, shown so the menu says which data is being cleared. */
+  profileName: string | undefined;
 }
 
 /**
@@ -80,6 +84,7 @@ export function PreviewMoreMenu({
   onClearCache,
   nativePictureInPicture,
   onNativePictureInPicture,
+  profileName,
 }: Props) {
   const tabDisabled = !tabId || !hasWebContents;
 
@@ -189,8 +194,27 @@ export function PreviewMoreMenu({
           </span>
         </MenuItem>
         <MenuSeparator />
-        <MenuItem onClick={onClearCookies}>Clear cookies</MenuItem>
-        <MenuItem onClick={onClearCache}>Clear cache</MenuItem>
+        {/*
+          Grouped so the heading has a `MenuGroup` ancestor — `MenuGroupLabel`
+          reads its context and throws without one. The heading also answers
+          which profile the tab is in, which is otherwise invisible: it is fixed
+          at open and nothing else in the chrome shows it.
+        */}
+        <MenuGroup>
+          {/*
+            The heading carries the profile so the actions below can keep
+            fixed-length labels: repeating a name of up to 48 characters in
+            each one drove the popup far past its width.
+          */}
+          {profileName ? (
+            // Truncation sits on the label itself: it renders a block box, so
+            // `text-overflow` on an inline child inside it never applies and a
+            // long name would push the popup past its width instead.
+            <MenuGroupLabel className="max-w-64 truncate">Profile: {profileName}</MenuGroupLabel>
+          ) : null}
+          <MenuItem onClick={onClearCookies}>Clear cookies</MenuItem>
+          <MenuItem onClick={onClearCache}>Clear cache</MenuItem>
+        </MenuGroup>
       </MenuPopup>
     </Menu>
   );
