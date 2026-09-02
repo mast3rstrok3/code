@@ -53,6 +53,13 @@ runs it immediately: **Settle** for active or pinned threads, **Un-settle** for 
 **Wake** for snoozed threads. Long-press any thread to open the full action menu. Choose **Delete**
 there to permanently remove the thread after confirmation.
 
+## Panel motion
+
+The main sidebar, right panel, and terminal drawer open and close immediately by default. Under
+**Settings → Appearance → Motion**, move the **Panel animations** slider above 0 ms to add motion.
+The duration can be set up to 400 ms. Clicking the preview replays all three panel transitions; at
+0 ms, it snaps between the same open and closed states.
+
 ## Environment artwork
 
 Dev and Nightly environments can identify themselves with artwork at the top of the sidebar and in
