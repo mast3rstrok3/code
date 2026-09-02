@@ -26,6 +26,14 @@
  * enforced by a test, not by inspection.
  */
 export const CLI_RUNTIME_EXTERNAL_PREFIXES = [
+  // Playwright resolves browser metadata and bundled assets relative to its own
+  // CommonJS files. Inlining those files into the ESM server bundle removes
+  // their module-local __dirname and breaks the first browser launch.
+  "playwright",
+  "playwright-core",
+  // Optional macOS watcher loaded by Playwright when present. It stays in the
+  // external runtime closure with Playwright instead of entering the bundle.
+  "fsevents",
   "node-pty",
   "ffi-rs",
   "@yuuang/",
