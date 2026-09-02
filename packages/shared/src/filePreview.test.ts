@@ -6,6 +6,7 @@ import {
   isWorkspaceMediaPreviewPath,
   isWorkspacePreviewEntryPath,
   isWorkspaceVideoPreviewPath,
+  mediaKindFromPath,
   workspacePreviewMimeType,
 } from "./filePreview.ts";
 
@@ -30,7 +31,7 @@ describe("workspace file previews", () => {
     expect(isWorkspacePreviewEntryPath(path)).toBe(true);
   });
 
-  it.each(["recording.webm", "clip.MP4?download=1"])("recognizes video preview path %s", (path) => {
+  it.each(["recording.webm", "clip.MP4"])("recognizes video preview path %s", (path) => {
     expect(isWorkspaceVideoPreviewPath(path)).toBe(true);
     expect(isWorkspaceMediaPreviewPath(path)).toBe(true);
     expect(isWorkspacePreviewEntryPath(path)).toBe(true);
@@ -62,5 +63,30 @@ describe("workspace file previews", () => {
   it("returns null for unknown preview MIME types", () => {
     expect(workspacePreviewMimeType("src/index.ts")).toBeNull();
     expect(workspacePreviewMimeType("archive.webm.txt")).toBeNull();
+  });
+});
+
+describe("media path parsing", () => {
+  it.each([
+    ["https://cdn.example/clip.webm?download=1#t=2", "video"],
+    ["https://example.com/download?name=recording.mp4", null],
+    ["https://example.png", null],
+    ["images%2Fresult%2Epng", "image"],
+    ["images/result%23v2.png", "image"],
+    ["images/result.png%23secret.txt", null],
+    ["images/result.png%3Fsecret.txt", null],
+    ["/tmp/100%.png", "image"],
+  ])("classifies the decoded pathname of %s", (source, kind) => {
+    expect(mediaKindFromPath(source)).toBe(kind);
+  });
+
+  it.each([
+    ["recording.mp4#t=2", "video", false],
+    ["recording%2Emp4", "video", false],
+    ["recording#take2.mp4", null, true],
+    ["recording?take2.mp4", null, true],
+  ])("distinguishes authored URLs from literal filenames in %s", (source, kind, literalVideo) => {
+    expect(mediaKindFromPath(source)).toBe(kind);
+    expect(isWorkspaceVideoPreviewPath(source)).toBe(literalVideo);
   });
 });

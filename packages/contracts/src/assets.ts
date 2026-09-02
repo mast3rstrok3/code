@@ -16,6 +16,13 @@ export const AssetResource = Schema.Union([
     threadId: ThreadId,
     path: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
   }),
+  // One file served in place from anywhere the environment host can read:
+  // images, videos, HTML, and PDF. An absolute path may lie outside the
+  // workspace; a relative one resolves against the thread's workspace.
+  Schema.TaggedStruct("media-file", {
+    threadId: ThreadId,
+    path: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
+  }),
   Schema.TaggedStruct("attachment", {
     attachmentId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
     /** Display name and mime from the `ChatAttachment` the caller holds. The
@@ -170,7 +177,9 @@ export class AssetWorkspaceAssetInspectionError extends Schema.TaggedErrorClass<
   },
 ) {
   override get message(): string {
-    return "Failed to inspect the workspace asset.";
+    return this.resource._tag === "media-file"
+      ? "Failed to inspect the media file."
+      : "Failed to inspect the workspace asset.";
   }
 }
 
@@ -181,7 +190,9 @@ export class AssetWorkspaceAssetNotFoundError extends Schema.TaggedErrorClass<As
   },
 ) {
   override get message(): string {
-    return "Workspace asset was not found.";
+    return this.resource._tag === "media-file"
+      ? "Media file was not found."
+      : "Workspace asset was not found.";
   }
 }
 

@@ -577,7 +577,9 @@ function surfaceTitle(
     case "app-stack":
       return "App Stack";
     case "file":
-      return surface.relativePath.slice(surface.relativePath.lastIndexOf("/") + 1);
+      return surface.relativePath.slice(
+        Math.max(surface.relativePath.lastIndexOf("/"), surface.relativePath.lastIndexOf("\\")) + 1,
+      );
     case "terminal":
       return (
         terminalLabelsById.get(surface.activeTerminalId) ??
