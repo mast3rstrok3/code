@@ -708,6 +708,7 @@ function makeTestLayer(
   autoCreateGate?: AutoCreateGate,
   autoCreateStackStatus: "running" | "starting" | "error" = "running",
   frontendProbeStatus = 200,
+  frontendProbeBody = "ok",
   backendProbeStatus = frontendProbeStatus,
   backendProbeStatuses: ReadonlyArray<number> = [backendProbeStatus],
   inheritedStackMissing = false,
@@ -788,7 +789,7 @@ function makeTestLayer(
               return [
                 HttpClientResponse.fromWeb(
                   request,
-                  new Response("ok", {
+                  new Response(request.url.endsWith("/api/health") ? "ok" : frontendProbeBody, {
                     status: request.url.endsWith("/api/health")
                       ? backendStatus
                       : frontendProbeStatus,
@@ -1254,6 +1255,8 @@ function withSystem<A, E>(
     readonly autoCreateStackStatus?: "running" | "starting" | "error";
     /** HTTP status the frontend URL answers with when the reactor probes it before App Review. */
     readonly frontendProbeStatus?: number;
+    /** Body the frontend URL returns; the edge fallback still answers HTTP 200. */
+    readonly frontendProbeBody?: string;
     /** HTTP status the same-origin backend health route answers with. */
     readonly backendProbeStatus?: number;
     /** Successive backend health statuses, held at the final value after exhaustion. */
@@ -1383,6 +1386,7 @@ function withSystem<A, E>(
           options?.autoCreateGate,
           options?.autoCreateStackStatus,
           options?.frontendProbeStatus,
+          options?.frontendProbeBody,
           options?.backendProbeStatus,
           options?.backendProbeStatuses,
           options?.inheritedStackMissing,
@@ -2825,6 +2829,59 @@ describe("ImplementationWorkflowReactor", () => {
           expect(waiting?.summary).toBe("Waiting for App Stack");
         }),
       { autoCreateStackStatus: "starting" },
+    ),
+  );
+
+  it.effect("waits when the App Stack gateway has no ready frontend server", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const run = yield* launchFastFeatureRun(system);
+          const implementer = (yield* system.query.getSnapshot()).threads.find(
+            (thread) => thread.workflowRole === "fast-feature-implementer",
+          );
+          if (!implementer) throw new Error("Fast feature implementer missing.");
+
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId("fast-build-gateway-waiting"),
+            threadId: implementer.id,
+            activity: {
+              id: eventId("fast-build-gateway-waiting"),
+              tone: "info",
+              kind: "implementation-fast-build-result",
+              summary: "Fast Build succeeded",
+              payload: {
+                type: "implementation-fast-build-result",
+                runId: run.id,
+                status: "succeeded",
+                commitSha: "def456",
+                validations: requiredValidations(),
+                notesMarkdown: "Implemented and committed.",
+              },
+              turnId: null,
+              createdAt: "2026-01-01T00:00:02.000Z",
+            },
+            createdAt: "2026-01-01T00:00:02.000Z",
+          });
+          yield* system.reactor.drain;
+
+          const snapshot = yield* system.query.getSnapshot();
+          const blocked = snapshot.implementationRuns[0];
+          expect(blocked?.status).toBe("needs-human-attention");
+          expect(blocked?.retryableFailure?.stage).toBe("app-dev-stack");
+          expect(blocked?.retryableFailure?.detail).toContain("no available server");
+          expect(blocked?.lastQaFailure).toBeNull();
+          expect(blocked?.qaAttemptCount).toBe(0);
+          expect(
+            snapshot.threads.some(
+              (thread) =>
+                thread.workflowRole === "implementation-qa-reviewer" ||
+                thread.workflowRole === "implementation-fixer",
+            ),
+          ).toBe(false);
+        }),
+      { frontendProbeBody: "no available server" },
     ),
   );
 
@@ -6563,6 +6620,58 @@ describe("ImplementationWorkflowReactor", () => {
           .sort();
         expect(lifecycleTrail).toEqual([...lifecycleKinds].sort());
       }),
+    ),
+  );
+
+  it.effect("creates the planning-spec orchestrator stack when final review first needs it", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+
+          const integrated = yield* system.query.getSnapshot();
+          const validator = integrated.threads.find(
+            (thread) => thread.workflowRole === "implementation-validator",
+          );
+          if (!validator) throw new Error("Merge gate missing.");
+
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId("merge-gate-pass-without-inherited-stack"),
+            threadId: validator.id,
+            activity: {
+              id: eventId("merge-gate-pass-without-inherited-stack"),
+              tone: "info",
+              kind: "implementation-merge-gate-result",
+              summary: "Merge gate passed",
+              payload: {
+                type: "implementation-merge-gate-result",
+                runId: run.id,
+                status: "passed",
+                validations: requiredValidations(),
+                summaryMarkdown: "ok",
+              },
+              turnId: null,
+              createdAt: "2026-01-01T00:00:02.000Z",
+            },
+            createdAt: "2026-01-01T00:00:02.000Z",
+          });
+          yield* system.reactor.drain;
+
+          const snapshot = yield* system.query.getSnapshot();
+          const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(reviewingRun?.status).toBe("qa-reviewing");
+          expect(reviewingRun?.automationHalt).toBeNull();
+          expect(reviewingRun?.appReviewIds).toHaveLength(1);
+          expect(yield* Ref.get(system.autoCreateInputs)).toContainEqual(
+            expect.objectContaining({
+              worktreePath: run.orchestratorWorktreePath,
+              gitBranch: run.orchestratorBranch,
+            }),
+          );
+        }),
+      { inheritedStackMissing: true },
     ),
   );
 

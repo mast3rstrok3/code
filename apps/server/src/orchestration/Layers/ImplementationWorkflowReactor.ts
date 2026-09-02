@@ -1743,6 +1743,7 @@ export function workerReportedCurrentAttempt(
 
 const FRONTEND_PROBE_TIMEOUT = Duration.seconds(10);
 const APP_STACK_DIAGNOSTIC_LIMIT = 24 * 1_024;
+const APP_STACK_GATEWAY_UNAVAILABLE_BODY = "no available server";
 
 export function appStackBackendHealthUrl(frontendUrl: string): string {
   return new URL("/api/health", frontendUrl).href;
@@ -1782,15 +1783,24 @@ const make = Effect.gen(function* () {
   const probeFrontend = Effect.fn("ImplementationWorkflowReactor.probeFrontend")(function* (
     url: string,
   ) {
-    const outcome = yield* httpClient
-      .get(url)
-      .pipe(Effect.timeout(FRONTEND_PROBE_TIMEOUT), Effect.result);
+    const outcome = yield* Effect.gen(function* () {
+      const response = yield* httpClient.get(url);
+      const body = yield* response.text;
+      return { response, body };
+    }).pipe(Effect.timeout(FRONTEND_PROBE_TIMEOUT), Effect.result);
     if (outcome._tag === "Failure") {
       return { ok: false, detail: `could not be reached (${errorDetail(outcome.failure)})` };
     }
-    return outcome.success.status < 400
-      ? { ok: true, detail: `answered HTTP ${outcome.success.status}` }
-      : { ok: false, detail: `returned HTTP ${outcome.success.status}` };
+    if (outcome.success.body.trim().toLowerCase() === APP_STACK_GATEWAY_UNAVAILABLE_BODY) {
+      return {
+        ok: false,
+        transitioning: true,
+        detail: `returned HTTP ${outcome.success.response.status} with the App Stack gateway fallback '${APP_STACK_GATEWAY_UNAVAILABLE_BODY}'`,
+      };
+    }
+    return outcome.success.response.status < 400
+      ? { ok: true, detail: `answered HTTP ${outcome.success.response.status}` }
+      : { ok: false, detail: `returned HTTP ${outcome.success.response.status}` };
   });
 
   const appStackDiagnostics = Effect.fn("ImplementationWorkflowReactor.appStackDiagnostics")(
@@ -4589,8 +4599,15 @@ const make = Effect.gen(function* () {
         .pipe(Effect.result);
       const inheritedStackMissing =
         inheritedLookup._tag === "Success" && inheritedLookup.success.stack === null;
+      // Planning-spec runs create their orchestrator worktree inside this reactor, after the
+      // outer Planning workspace bootstrap has already finished. Once integration has prepared
+      // that worktree's dependencies, this is the first point where its authoritative stack can
+      // exist. Fast Feature reuses a workspace whose bootstrap already owns stack creation.
+      const mayCreateInitialPlanningSpecStack =
+        inheritedStackMissing && cycleRun.artifactSource === "planning-spec";
       const stackResult =
-        inheritedLookup._tag === "Failure" || inheritedStackMissing
+        inheritedLookup._tag === "Failure" ||
+        (inheritedStackMissing && !mayCreateInitialPlanningSpecStack)
           ? null
           : yield* appStackManager
               .autoCreate({
@@ -4607,7 +4624,7 @@ const make = Effect.gen(function* () {
       const stackFailureDetail =
         inheritedLookup._tag === "Failure"
           ? errorDetail(inheritedLookup.failure)
-          : inheritedStackMissing
+          : inheritedStackMissing && !mayCreateInitialPlanningSpecStack
             ? `The workflow-owned App Stack is missing for '${cycleRun.orchestratorWorktreePath}'. Planning, Full Feature, or Fast Feature must create it after workspace dependency setup; Implementation will not create a replacement.`
             : stackResult?._tag === "Failure"
               ? errorDetail(stackResult.failure)
@@ -4750,11 +4767,12 @@ const make = Effect.gen(function* () {
           readonly label: string;
           readonly url: string;
           readonly detail: string;
+          readonly transitioning?: boolean;
         } | null = null;
         for (const probe of probes) {
           const serving = yield* probeFrontend(probe.url);
           if (!serving.ok) {
-            failedProbe = { ...probe, detail: serving.detail };
+            failedProbe = { ...probe, ...serving };
             break;
           }
         }
@@ -4776,26 +4794,33 @@ const make = Effect.gen(function* () {
                 lastErrorMarkdown: failedProbe.detail,
                 updatedAt: input.createdAt,
               },
-              lastQaFailure: {
-                kind: "app-dev-stack",
-                status:
-                  failedProbe.label === "frontend" ? "frontend-unreachable" : "backend-unreachable",
-                detailMarkdown: diagnostics,
-                reviewId: null,
-                headSha,
-                occurredAt: input.createdAt,
-              },
+              lastQaFailure: failedProbe.transitioning
+                ? null
+                : {
+                    kind: "app-dev-stack",
+                    status:
+                      failedProbe.label === "frontend"
+                        ? "frontend-unreachable"
+                        : "backend-unreachable",
+                    detailMarkdown: diagnostics,
+                    reviewId: null,
+                    headSha,
+                    occurredAt: input.createdAt,
+                  },
             },
             retryableStage: "app-dev-stack",
             automaticRecovery: true,
+            automaticRecoveryWaiting: failedProbe.transitioning === true,
             reasonMarkdown: diagnostics,
             updatedAt: input.createdAt,
           });
-          yield* requestRunRetry({
-            sourceThreadId: input.sourceThreadId,
-            runId: blocked.id,
-            createdAt: input.createdAt,
-          });
+          if (!failedProbe.transitioning) {
+            yield* requestRunRetry({
+              sourceThreadId: input.sourceThreadId,
+              runId: blocked.id,
+              createdAt: input.createdAt,
+            });
+          }
           return;
         }
       }
