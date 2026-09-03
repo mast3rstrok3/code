@@ -55,6 +55,7 @@ function makeLayer(input: {
               defaultModelSelection: null,
               defaultThreadEnvMode: null,
               previewRecordingMode: null,
+              autoPull: false,
               scripts: [],
               createdAt: "2026-08-13T00:00:00.000Z",
               updatedAt: "2026-08-13T00:00:00.000Z",

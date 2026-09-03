@@ -88,6 +88,9 @@ import Migration0080 from "./Migrations/080_ProjectionThreadWorkflowStepReviewPa
 import Migration0082 from "./Migrations/082_ProjectionThreadWorkflowImplementationSettings.ts";
 import Migration0083 from "./Migrations/083_OrchestrationCommandReceiptResults.ts";
 import Migration0084 from "./Migrations/084_AppReviewScope.ts";
+import Migration0088 from "./Migrations/045_ProjectionProjectsAutoPull.ts";
+import Migration0089 from "./Migrations/046_RepairAutomaticSettlementTimestamps.ts";
+import Migration0090 from "./Migrations/047_ProjectionProjectIcon.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -195,6 +198,10 @@ export const migrationEntries = [
   // Upstream assigned this migration ID 44 after the fork had already used
   // that ID. Run the same migration at the next fork-safe ID.
   [87, "ClearAutomaticProjectModelDefaults", Migration0087],
+  // Upstream later reused IDs 45-47. Run those migrations at unused fork IDs.
+  [88, "ProjectionProjectsAutoPull", Migration0088],
+  [89, "RepairAutomaticSettlementTimestamps", Migration0089],
+  [90, "ProjectionProjectIcon", Migration0090],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

@@ -835,6 +835,20 @@ describe("buildThreadFeed", () => {
           payload: {
             title: "Call repository tool",
             itemType: "mcp_tool_call",
+            toolSurface: "computer",
+            toolIcon: {
+              _tag: "native-app",
+              app: { _tag: "app-id", appId: "com.example.Editor" },
+            },
+            toolSource: {
+              key: "native-app:com.example.editor",
+              name: "Computer Use",
+              kind: "computer",
+              icon: {
+                _tag: "native-app",
+                app: { _tag: "app-id", appId: "com.example.Editor" },
+              },
+            },
             detail: "repository.search",
             status: "completed",
             data: {
@@ -855,7 +869,21 @@ describe("buildThreadFeed", () => {
       return;
     }
 
-    expect(group.activities[0]?.icon).toBe("wrench");
+    expect(group.activities[0]?.icon).toBe("computer");
+    expect(group.activities[0]?.workEntry.toolSurface).toBe("computer");
+    expect(group.activities[0]?.workEntry.toolIcon).toEqual({
+      _tag: "native-app",
+      app: { _tag: "app-id", appId: "com.example.Editor" },
+    });
+    expect(group.activities[0]?.workEntry.toolSource).toEqual({
+      key: "native-app:com.example.editor",
+      name: "Computer Use",
+      kind: "computer",
+      icon: {
+        _tag: "native-app",
+        app: { _tag: "app-id", appId: "com.example.Editor" },
+      },
+    });
     expect(group.activities[0]?.getFullDetail()).toContain('"query": "work log"');
     expect(group.activities[0]?.getFullDetail()).toContain("repository.search");
   });
@@ -903,7 +931,7 @@ describe("buildThreadFeed", () => {
       title: "Call MCP tool",
       item: { server: "t3-code", tool: "preview_click" },
       status: undefined,
-      displayName: "Click in the preview browser",
+      displayName: "Clicking in the preview browser",
       liveDisplayName: "Clicking in the preview browser",
       settledDisplayName: "Clicked in the preview browser",
       icon: "browser",
@@ -914,7 +942,7 @@ describe("buildThreadFeed", () => {
       title: "Call MCP tool",
       item: { server: "t3-code", tool: "task_status" },
       status: undefined,
-      displayName: "Get delegated task status",
+      displayName: "Getting delegated task status",
       liveDisplayName: "Getting delegated task status",
       settledDisplayName: "Got delegated task status",
       icon: "t3-code",
@@ -1074,7 +1102,7 @@ describe("buildThreadFeed", () => {
     ).toMatchObject([
       {
         type: "work-toggle",
-        summary: "Clicked in the preview browser",
+        summary: "Clicking in the preview browser",
         summaryToolIcon: "browser",
         live: true,
       },
@@ -1085,18 +1113,20 @@ describe("buildThreadFeed", () => {
     {
       status: "completed",
       displayName: "Clicked in the preview browser",
+      liveDisplayName: "Clicking in the preview browser",
       detail: "Clicked Continue",
       hasFailure: false,
     },
     {
       status: "failed",
       displayName: "Failed to click in the preview browser",
+      liveDisplayName: "Failed to click in the preview browser",
       detail: "Timed out waiting for Continue",
       hasFailure: true,
     },
   ])(
     "uses the browser call label once its action settles as $status",
-    ({ status, displayName, detail, hasFailure }) => {
+    ({ status, displayName, liveDisplayName, detail, hasFailure }) => {
       const turnId = TurnId.make("turn-preview-lifecycle");
       const toolCallId = "preview-click";
       const groupId = `work-group:tool:${turnId}:${toolCallId}`;
@@ -1191,7 +1221,7 @@ describe("buildThreadFeed", () => {
           groupId,
           hiddenCount: 1,
           expanded: true,
-          summary: displayName,
+          summary: liveDisplayName,
           summaryToolIcon: "browser",
           hasFailure,
           live: true,
@@ -1633,6 +1663,8 @@ describe("buildThreadFeed", () => {
       id: string,
       createdAt: string,
       status: ThreadFeedActivity["status"] = "success",
+      toolSurface?: "browser" | "computer",
+      toolIcon?: import("@t3tools/contracts").ToolActivityIcon,
     ): ThreadFeedActivity => ({
       id,
       createdAt,
@@ -1652,6 +1684,8 @@ describe("buildThreadFeed", () => {
         label: `Tool ${id}`,
         command: `command ${id}`,
         tone: "tool",
+        ...(toolSurface ? { toolSurface } : {}),
+        ...(toolIcon ? { toolIcon } : {}),
       },
     });
     const feed: ThreadFeedEntry[] = [
@@ -1663,8 +1697,11 @@ describe("buildThreadFeed", () => {
         activities: [
           activity("activity-1", "2026-04-01T00:00:01.000Z"),
           activity("activity-neutral", "2026-04-01T00:00:02.000Z", "neutral"),
-          activity("activity-2", "2026-04-01T00:00:03.000Z"),
-          activity("activity-3", "2026-04-01T00:00:04.000Z"),
+          activity("activity-2", "2026-04-01T00:00:03.000Z", "success", "browser"),
+          activity("activity-3", "2026-04-01T00:00:04.000Z", "success", "computer", {
+            _tag: "native-app",
+            app: { _tag: "app-id", appId: "com.example.Editor" },
+          }),
         ],
       },
     ];
@@ -1677,6 +1714,11 @@ describe("buildThreadFeed", () => {
       hiddenCount: 3,
       expanded: false,
       summary: "Ran 3 commands",
+      toolSurface: "computer",
+      toolIcon: {
+        _tag: "native-app",
+        app: { _tag: "app-id", appId: "com.example.Editor" },
+      },
     });
 
     const expanded = deriveThreadFeedPresentation(
@@ -1712,7 +1754,7 @@ describe("buildThreadFeed", () => {
       (
         [
           { lifecycleStatus: "inProgress", summary: "Running pnpm", shimmer: true },
-          { lifecycleStatus: "completed", summary: "Ran pnpm", shimmer: false },
+          { lifecycleStatus: "completed", summary: "Running pnpm", shimmer: false },
           { lifecycleStatus: "failed", summary: "Failed pnpm", shimmer: false },
           { lifecycleStatus: "declined", summary: "Declined pnpm", shimmer: false },
           { lifecycleStatus: "stopped", summary: "Stopped pnpm", shimmer: false },

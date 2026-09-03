@@ -1117,6 +1117,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           workspaceRoot: command.workspaceRoot,
           defaultModelSelection: command.defaultModelSelection ?? null,
           faviconPath: null,
+          projectIcon: null,
           scripts: [],
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
@@ -1160,7 +1161,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.previewRecordingMode !== undefined
             ? { previewRecordingMode: command.previewRecordingMode }
             : {}),
+          ...(command.autoPull !== undefined ? { autoPull: command.autoPull } : {}),
           ...(command.faviconPath !== undefined ? { faviconPath: command.faviconPath } : {}),
+          ...(command.projectIcon !== undefined ? { projectIcon: command.projectIcon } : {}),
           ...(command.scripts !== undefined ? { scripts: command.scripts } : {}),
           updatedAt: occurredAt,
         },
@@ -1537,6 +1540,53 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         }
       }
       return events;
+    }
+
+    case "thread.auto-settle": {
+      const thread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (thread.settledOverride !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} changed before automatic settlement`,
+        });
+      }
+      if (thread.session?.status === "starting" || thread.session?.status === "running") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${thread.id} has an active session and cannot be settled`,
+        });
+      }
+      if (hasOpenBlockingRequest(thread)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${thread.id} has a pending approval or user-input request and cannot be settled`,
+        });
+      }
+      const occurredAt = yield* nowIso;
+      if (threadHasQueuedTurnStart(thread, occurredAt)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${thread.id} has a queued turn start and cannot be settled`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: thread.id,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.settled",
+        payload: {
+          threadId: thread.id,
+          settledAt: command.settledAt,
+          updatedAt: occurredAt,
+        },
+      };
     }
 
     case "thread.workflow.pause": {

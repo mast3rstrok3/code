@@ -505,6 +505,7 @@ const SHELL_RESUME_MAX_GAP = 1_000;
 // hundreds of thousands of events behind have OOM-killed servers on large
 // databases. Past this gap the client is reset with a fresh thread snapshot.
 const THREAD_RESUME_MAX_GAP = 1_000;
+const ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES = 8 * 1024 * 1024;
 
 function toAuthAccessStreamEvent(
   change: PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange,
@@ -688,6 +689,39 @@ const makeWsRpcLayer = (
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+      const canReplayPersistedRange = Effect.fnUntraced(function* (
+        afterSequence: number,
+        headSequence: number,
+        maxGap: number,
+      ) {
+        const replayGap = headSequence - afterSequence;
+        if (replayGap < 0 || replayGap > maxGap) return false;
+        if (projectionSnapshotQuery.getEventReplayStats === undefined) return true;
+        const stats = yield* projectionSnapshotQuery
+          .getEventReplayStats({
+            fromSequenceExclusive: afterSequence,
+            toSequenceInclusive: headSequence,
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationGetSnapshotError({
+                  message: "Failed to measure orchestration replay range",
+                  cause,
+                }),
+            ),
+          );
+        if (stats.payloadBytes <= ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES) return true;
+        yield* Effect.logDebug("orchestration replay replaced by snapshot", {
+          afterSequence,
+          headSequence,
+          replayGap,
+          eventCount: stats.eventCount,
+          payloadBytes: stats.payloadBytes,
+          payloadBudgetBytes: ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES,
+        });
+        return false;
+      });
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
@@ -2101,7 +2135,13 @@ const makeWsRpcLayer = (
                 // is also invalid, so reset it with a snapshot. Send the snapshot
                 // followed by the buffered live tail, exactly as the
                 // no-afterSequence path does.
-                if (replayGap < 0 || replayGap > SHELL_RESUME_MAX_GAP) {
+                if (
+                  !(yield* canReplayPersistedRange(
+                    afterSequence,
+                    headSequence,
+                    SHELL_RESUME_MAX_GAP,
+                  ))
+                ) {
                   const snapshot = yield* loadSnapshot;
                   return Stream.concat(
                     Stream.make({ kind: "snapshot" as const, snapshot }),
@@ -2205,7 +2245,9 @@ const makeWsRpcLayer = (
                 const afterSequence = input.afterSequence;
                 const headSequence = yield* orchestrationEngine.latestSequence;
                 const replayGap = headSequence - afterSequence;
-                if (replayGap >= 0 && replayGap <= THREAD_RESUME_MAX_GAP) {
+                if (
+                  yield* canReplayPersistedRange(afterSequence, headSequence, THREAD_RESUME_MAX_GAP)
+                ) {
                   const catchUpStream = orchestrationEngine
                     .readEvents(afterSequence, replayGap)
                     .pipe(
@@ -2351,6 +2393,12 @@ const makeWsRpcLayer = (
                   Effect.forkScoped,
                 ),
             ),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverCommitDesktopUpdate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverCommitDesktopUpdate,
+            serverSelfUpdate.commitDesktopUpdate(input.requestId),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverUpsertKeybinding]: (rule) =>
@@ -2525,6 +2573,10 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.pullRequestsListStats, pullRequests.listStats(input), {
             "rpc.aggregate": "pull-requests",
           }),
+        [WS_METHODS.pullRequestsSummary]: (input) =>
+          observeRpcEffect(WS_METHODS.pullRequestsSummary, pullRequests.summary(input), {
+            "rpc.aggregate": "pull-requests",
+          }),
         [WS_METHODS.pullRequestsDetail]: (input) =>
           observeRpcEffect(WS_METHODS.pullRequestsDetail, pullRequests.detail(input), {
             "rpc.aggregate": "pull-requests",
@@ -2603,6 +2655,16 @@ const makeWsRpcLayer = (
             pullRequests.requestReviewers(input),
             { "rpc.aggregate": "pull-requests" },
           ),
+        [WS_METHODS.pullRequestsLabelCandidates]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pullRequestsLabelCandidates,
+            pullRequests.labelCandidates(input),
+            { "rpc.aggregate": "pull-requests" },
+          ),
+        [WS_METHODS.pullRequestsSetLabels]: (input) =>
+          observeRpcEffect(WS_METHODS.pullRequestsSetLabels, pullRequests.setLabels(input), {
+            "rpc.aggregate": "pull-requests",
+          }),
         [WS_METHODS.sourceControlLookupRepository]: (input) =>
           observeRpcEffect(
             WS_METHODS.sourceControlLookupRepository,
@@ -2744,7 +2806,8 @@ const makeWsRpcLayer = (
             Effect.gen(function* () {
               if (
                 input.resource._tag === "attachment" ||
-                input.resource._tag === "app-review-evidence"
+                input.resource._tag === "app-review-evidence" ||
+                input.resource._tag === "native-app-icon"
               ) {
                 return yield* issueAssetUrl({ resource: input.resource });
               }

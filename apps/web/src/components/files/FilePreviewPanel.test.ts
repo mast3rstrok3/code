@@ -1,14 +1,16 @@
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { FilePreviewMediaContent, resolveWorkspaceMediaAssetPath } from "./FilePreviewPanel";
+import { resolveWorkspaceMediaAssetPath } from "./FilePreviewPanel";
 import {
   formatFileCommentRange,
   normalizeFileCommentRange,
   remapFileCommentAnnotations,
 } from "./fileCommentAnnotations";
-import { isMarkdownPreviewFile, setMarkdownTaskChecked } from "./filePreviewMode";
+import {
+  isMarkdownPreviewFile,
+  setMarkdownTaskChecked,
+  shouldShowFileExplorer,
+} from "./filePreviewMode";
 import { resolveWorkspaceFilePreviewKind } from "./workspaceFilePreviewKind";
 
 describe("file comment annotations", () => {
@@ -89,20 +91,41 @@ describe("workspace media preview assets", () => {
       "/repo/app/recording.webm",
     );
   });
+});
 
-  it("renders URL minting failures with the server error and retry action", () => {
-    const html = renderToStaticMarkup(
-      createElement(FilePreviewMediaContent, {
-        kind: "video",
-        relativePath: ".logs/recordings/page@abcd.webm",
-        mediaUrl: null,
-        errorMessage: "Workspace asset was not found.",
-        onRetry: () => undefined,
+describe("shouldShowFileExplorer", () => {
+  it("hides the workspace tree for host files and attachments", () => {
+    expect(
+      shouldShowFileExplorer({
+        relativePath: "/tmp/report.pdf",
+        explorerOpen: true,
+        attachmentOpen: false,
       }),
-    );
+    ).toBe(false);
+    expect(
+      shouldShowFileExplorer({
+        relativePath: "report.pdf",
+        explorerOpen: true,
+        attachmentOpen: true,
+      }),
+    ).toBe(false);
+  });
 
-    expect(html).toContain("Workspace asset was not found.");
-    expect(html).toContain("Retry");
+  it("keeps the saved explorer preference for workspace files", () => {
+    expect(
+      shouldShowFileExplorer({
+        relativePath: "docs/report.pdf",
+        explorerOpen: true,
+        attachmentOpen: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowFileExplorer({
+        relativePath: "docs/report.pdf",
+        explorerOpen: false,
+        attachmentOpen: false,
+      }),
+    ).toBe(false);
   });
 });
 

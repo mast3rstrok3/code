@@ -31,7 +31,6 @@ import {
   findCancelableImplementationRunForThread,
   ENVIRONMENT_RECONNECT_WARNING_GRACE_MS,
   getStartedThreadModelChangeBlockReason,
-  isVideoPreviewRequestCurrent,
   hasEnvironmentReconnectWarningGraceElapsed,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
@@ -51,6 +50,8 @@ import {
   codexArtifactTemplatePromptToAppend,
   shouldDockDraftHeroForSubmission,
   shouldReleaseTimelineAnchorForToolActivity,
+  shouldOpenProactivePullRequest,
+  shouldOpenProactiveTurnDiff,
   shouldShowBranchMismatchBanner,
   shouldShowPlanFollowUpPrompt,
   shouldWriteThreadErrorToCurrentServerThread,
@@ -94,11 +95,48 @@ describe("agent browser close confirmation", () => {
   });
 });
 
-describe("isVideoPreviewRequestCurrent", () => {
-  it("rejects changed threads and replaced previews", () => {
-    expect(isVideoPreviewRequestCurrent("thread-1", "thread-2", 1, 1)).toBe(false);
-    expect(isVideoPreviewRequestCurrent("thread-1", "thread-1", 1, 2)).toBe(false);
-    expect(isVideoPreviewRequestCurrent("thread-1", "thread-1", 2, 2)).toBe(true);
+describe("proactive panels", () => {
+  it("opens a pull request only after a newly observed link appears", () => {
+    expect(shouldOpenProactivePullRequest(undefined, "project:repo:42")).toBe(false);
+    expect(shouldOpenProactivePullRequest(null, "project:repo:42")).toBe(true);
+    expect(shouldOpenProactivePullRequest("project:repo:42", "project:repo:42")).toBe(false);
+    expect(shouldOpenProactivePullRequest("project:repo:42", null)).toBe(false);
+  });
+
+  it("opens the diff only when the observed running turn settles", () => {
+    const turnId = TurnId.make("turn-1");
+    expect(
+      shouldOpenProactiveTurnDiff({
+        previousRunningTurnId: undefined,
+        runningTurnId: null,
+        settledTurnId: turnId,
+        turnCompleted: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldOpenProactiveTurnDiff({
+        previousRunningTurnId: turnId,
+        runningTurnId: null,
+        settledTurnId: turnId,
+        turnCompleted: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldOpenProactiveTurnDiff({
+        previousRunningTurnId: turnId,
+        runningTurnId: TurnId.make("turn-2"),
+        settledTurnId: turnId,
+        turnCompleted: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldOpenProactiveTurnDiff({
+        previousRunningTurnId: turnId,
+        runningTurnId: null,
+        settledTurnId: turnId,
+        turnCompleted: false,
+      }),
+    ).toBe(false);
   });
 });
 

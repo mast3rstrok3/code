@@ -31,6 +31,7 @@ import {
 } from "./http.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import { openMediaFile } from "./assets/MediaFile.ts";
+import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 
 const configLayer = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-http-asset-test-",
@@ -53,6 +54,7 @@ const assetRouteSupportLayer = Layer.mergeAll(
     Layer.provide(T3ProjectFileLoader.layer),
   ),
   ServerSecretStore.layer.pipe(Layer.provide(configLayer)),
+  NativeAppIconResolver.layer.pipe(Layer.provide(configLayer)),
   appReviewRepositoryLayer,
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
@@ -467,6 +469,19 @@ describe("assetResponseHeaders", () => {
       "Cache-Control": "private, max-age=3600",
       "Content-Type": "video/mp4",
       "X-Content-Type-Options": "nosniff",
+    });
+  });
+  it("serves inline attachment documents with their declared mime type", () => {
+    expect(
+      assetResponseHeaders("/attachments/upload.bin", { mimeType: "application/pdf" }),
+    ).toMatchObject({
+      "Content-Type": "application/pdf",
+    });
+    expect(
+      assetResponseHeaders("/attachments/upload.bin", { mimeType: "text/html" }),
+    ).toMatchObject({
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Security-Policy": "sandbox allow-scripts allow-forms allow-popups allow-modals",
     });
   });
   it("serves HTML assets as utf-8 inside a sandboxed origin", () => {
