@@ -114,3 +114,5 @@ export function downloadPlanAsTextFile(filename: string, contents: string): void
     URL.revokeObjectURL(url);
   }, 0);
 }
+
+export const PLAN_IMPLEMENTATION_PROMPT_PREFIX = "PLEASE IMPLEMENT THIS PLAN:\n";

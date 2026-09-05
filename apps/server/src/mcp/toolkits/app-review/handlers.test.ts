@@ -130,6 +130,9 @@ const makeHarness = (input: {
       OrchestrationEngineService.of({
         latestSequence: Effect.succeed(0),
         readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.empty,
+        getThreadReplayStats: () =>
+          Effect.succeed({ eventCount: 0, payloadBytes: 0, hasCreateEvent: false }),
         dispatch: (command) => {
           dispatched.push(command);
           return Effect.succeed({ sequence: dispatched.length });

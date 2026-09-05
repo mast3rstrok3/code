@@ -1,49 +1,63 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
-import { classifyTaskAgentKind, ProviderRuntimeEvent } from "./providerRuntime.ts";
+import {
+  classifyTaskAgentKind,
+  ProviderRuntimeEvent,
+  type ProviderRuntimeEventType,
+} from "./providerRuntime.ts";
 
 const decodeRuntimeEvent = Schema.decodeUnknownSync(ProviderRuntimeEvent);
 
 describe("ProviderRuntimeEvent", () => {
-  it("decodes structured failure recovery and accepts historical failures without it", () => {
-    const current = decodeRuntimeEvent({
+  it("includes every runtime event in the public event type", () => {
+    expectTypeOf<ProviderRuntimeEvent["type"]>().toEqualTypeOf<ProviderRuntimeEventType>();
+  });
+
+  it("requires input and output totals for complete turn usage", () => {
+    const completeEvent = {
       type: "turn.completed",
-      eventId: "event-failed-current",
-      provider: "opencode",
+      eventId: "event-complete-usage",
+      provider: "codex",
       createdAt: "2026-02-28T00:00:00.000Z",
       threadId: "thread-1",
       turnId: "turn-1",
       payload: {
-        state: "failed",
-        errorMessage: "Service unavailable",
-        recovery: {
-          disposition: "retryable",
-          reason: "overloaded",
-          statusCode: 503,
-          retryAt: "2026-02-28T00:05:00.000Z",
+        state: "completed",
+        tokenUsage: {
+          usageStatus: "complete",
+          usageScope: "main_agent",
+          hasSubagents: false,
         },
       },
-    });
-    const historical = decodeRuntimeEvent({
-      type: "turn.completed",
-      eventId: "event-failed-historical",
-      provider: "opencode",
-      createdAt: "2026-02-28T00:00:00.000Z",
-      threadId: "thread-1",
-      turnId: "turn-0",
-      payload: { state: "failed", errorMessage: "Old failure" },
-    });
+    };
 
-    expect(current.type === "turn.completed" ? current.payload.recovery : undefined).toEqual({
-      disposition: "retryable",
-      reason: "overloaded",
-      statusCode: 503,
-      retryAt: "2026-02-28T00:05:00.000Z",
-    });
+    expect(() => decodeRuntimeEvent(completeEvent)).toThrow();
     expect(
-      historical.type === "turn.completed" ? historical.payload.recovery : undefined,
-    ).toBeUndefined();
+      decodeRuntimeEvent({
+        ...completeEvent,
+        payload: {
+          ...completeEvent.payload,
+          tokenUsage: {
+            ...completeEvent.payload.tokenUsage,
+            inputTokens: 10,
+            outputTokens: 2,
+          },
+        },
+      }).type,
+    ).toBe("turn.completed");
+    expect(
+      decodeRuntimeEvent({
+        ...completeEvent,
+        payload: {
+          ...completeEvent.payload,
+          tokenUsage: {
+            ...completeEvent.payload.tokenUsage,
+            usageStatus: "partial",
+          },
+        },
+      }).type,
+    ).toBe("turn.completed");
   });
 
   it("accepts fork-provided driver kinds as branded slugs", () => {
@@ -281,5 +295,44 @@ describe("classifyTaskAgentKind", () => {
     expect(classifyTaskAgentKind({ taskType: undefined, agentId: "owner" })).toBe("background");
     // Nested agent: outlives its parent, stays in the roster.
     expect(classifyTaskAgentKind({ taskType: "local_agent", agentId: "owner" })).toBe("agent");
+  });
+  it("decodes structured failure recovery and accepts historical failures without it", () => {
+    const current = decodeRuntimeEvent({
+      type: "turn.completed",
+      eventId: "event-failed-current",
+      provider: "opencode",
+      createdAt: "2026-02-28T00:00:00.000Z",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      payload: {
+        state: "failed",
+        errorMessage: "Service unavailable",
+        recovery: {
+          disposition: "retryable",
+          reason: "overloaded",
+          statusCode: 503,
+          retryAt: "2026-02-28T00:05:00.000Z",
+        },
+      },
+    });
+    const historical = decodeRuntimeEvent({
+      type: "turn.completed",
+      eventId: "event-failed-historical",
+      provider: "opencode",
+      createdAt: "2026-02-28T00:00:00.000Z",
+      threadId: "thread-1",
+      turnId: "turn-0",
+      payload: { state: "failed", errorMessage: "Old failure" },
+    });
+
+    expect(current.type === "turn.completed" ? current.payload.recovery : undefined).toEqual({
+      disposition: "retryable",
+      reason: "overloaded",
+      statusCode: 503,
+      retryAt: "2026-02-28T00:05:00.000Z",
+    });
+    expect(
+      historical.type === "turn.completed" ? historical.payload.recovery : undefined,
+    ).toBeUndefined();
   });
 });

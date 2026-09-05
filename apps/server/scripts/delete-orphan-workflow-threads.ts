@@ -35,7 +35,7 @@ import { Command, Flag } from "effect/unstable/cli";
 import { CommandId, ThreadId } from "@t3tools/contracts";
 
 import * as ServerConfig from "../src/config.ts";
-import * as NodeSqliteClient from "../src/persistence/NodeSqliteClient.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as RepositoryIdentityResolver from "../src/project/RepositoryIdentityResolver.ts";
 import { OrchestrationLayerLive } from "../src/orchestration/runtimeLayer.ts";
 import { OrchestrationEngineService } from "../src/orchestration/Services/OrchestrationEngine.ts";

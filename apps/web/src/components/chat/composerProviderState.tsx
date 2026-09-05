@@ -12,10 +12,13 @@ import {
   isClaudeUltrathinkPrompt,
   normalizeModelSlug,
 } from "@t3tools/shared/model";
+import type { VariantProps } from "class-variance-authority";
 import type { ReactNode } from "react";
 
+import type { buttonVariants } from "../ui/button";
 import type { DraftId } from "../../composerDraftStore";
 import { getProviderModelCapabilities } from "../../providerModels";
+import type { ComposerControlSize } from "./ComposerControl";
 import { shouldRenderTraitsControls, TraitsMenuContent, TraitsPicker } from "./TraitsPicker";
 
 export type ComposerProviderStateInput = {
@@ -49,6 +52,11 @@ type TraitsRenderInput = {
   prompt: string;
   onPromptChange: (prompt: string) => void;
   planModeEnabled?: boolean;
+  size?: ComposerControlSize;
+  hidden?: boolean;
+  triggerVariant?: VariantProps<typeof buttonVariants>["variant"];
+  triggerClassName?: string;
+  isComposerOwned?: boolean;
 };
 
 export function getComposerPromptInjectionState(prompt: string): ComposerPromptInjectionState {
@@ -108,7 +116,10 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
   };
 }
 
-function traitsControlProps(input: TraitsRenderInput) {
+function renderTraitsControl(
+  Component: typeof TraitsMenuContent | typeof TraitsPicker,
+  input: TraitsRenderInput,
+): ReactNode {
   const {
     provider,
     instanceId,
@@ -118,48 +129,53 @@ function traitsControlProps(input: TraitsRenderInput) {
     models,
     modelOptions,
     prompt,
+    onPromptChange,
     planModeEnabled = false,
+    size,
+    hidden,
+    triggerVariant,
+    triggerClassName,
+    isComposerOwned,
   } = input;
   const hasTarget = threadRef !== undefined || draftId !== undefined;
-  if (!hasTarget) {
-    return null;
-  }
-  return {
-    provider,
-    ...(instanceId ? { instanceId } : {}),
-    models,
-    ...(threadRef ? { threadRef } : {}),
-    ...(draftId ? { draftId } : {}),
-    model,
-    modelOptions,
-    prompt,
-    onPromptChange: input.onPromptChange,
-    planModeEnabled,
-    hasTraits: shouldRenderTraitsControls({
+  if (
+    !hasTarget ||
+    !shouldRenderTraitsControls({
       provider,
       models,
       model,
       modelOptions,
       prompt,
       planModeEnabled,
-    }),
-  };
+    })
+  ) {
+    return null;
+  }
+  return (
+    <Component
+      provider={provider}
+      {...(instanceId ? { instanceId } : {})}
+      models={models}
+      {...(threadRef ? { threadRef } : {})}
+      {...(draftId ? { draftId } : {})}
+      model={model}
+      modelOptions={modelOptions}
+      prompt={prompt}
+      onPromptChange={onPromptChange}
+      planModeEnabled={planModeEnabled}
+      {...(size !== undefined ? { size } : {})}
+      {...(hidden !== undefined ? { hidden } : {})}
+      {...(triggerVariant !== undefined ? { triggerVariant } : {})}
+      {...(triggerClassName !== undefined ? { triggerClassName } : {})}
+      {...(isComposerOwned ? { isComposerOwned } : {})}
+    />
+  );
 }
 
 export function renderProviderTraitsMenuContent(input: TraitsRenderInput): ReactNode {
-  const props = traitsControlProps(input);
-  if (!props?.hasTraits) {
-    return null;
-  }
-  const { hasTraits: _hasTraits, ...rest } = props;
-  return <TraitsMenuContent {...rest} />;
+  return renderTraitsControl(TraitsMenuContent, input);
 }
 
 export function renderProviderTraitsPicker(input: TraitsRenderInput): ReactNode {
-  const props = traitsControlProps(input);
-  if (!props?.hasTraits) {
-    return null;
-  }
-  const { hasTraits: _hasTraits, ...rest } = props;
-  return <TraitsPicker {...rest} />;
+  return renderTraitsControl(TraitsPicker, input);
 }

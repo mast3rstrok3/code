@@ -58,7 +58,7 @@ export interface PendingUserInputCardProps {
   readonly onSelectOption: (
     requestId: ApprovalRequestId,
     question: UserInputQuestion,
-    label: string,
+    value: string,
   ) => void;
   readonly onChangeCustomAnswer: (
     requestId: ApprovalRequestId,
@@ -267,12 +267,13 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
               </Text>
               <View className="gap-2">
                 {question.options.map((option) => {
-                  const selected = isPendingUserInputOptionSelected(draft, option.label);
+                  const optionValue = option.value ?? option.label.trim();
+                  const selected = isPendingUserInputOptionSelected(question, draft, optionValue);
                   const description =
                     option.description !== option.label ? option.description : undefined;
                   return (
                     <Pressable
-                      key={option.label}
+                      key={optionValue}
                       className={cn(
                         "min-h-12 w-full rounded-2xl border px-3.5 py-3",
                         selected
@@ -283,7 +284,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
                         props.onSelectOption(
                           props.pendingUserInput.requestId,
                           question,
-                          option.label,
+                          optionValue,
                         )
                       }
                     >
@@ -309,25 +310,27 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
                 })}
               </View>
               {question.recommendation ? (
-                <View className="rounded-2xl border border-blue-300/35 bg-blue-50/80 px-3.5 py-3 dark:border-blue-400/20 dark:bg-blue-400/10">
-                  <Text className="font-t3-bold text-xs uppercase tracking-[0.8px] text-sky-700 dark:text-sky-300">
+                <View className="rounded-2xl border border-adaptive-blue-300-a50-blue-400-a28 bg-adaptive-blue-50-blue-400-a14 px-3.5 py-3">
+                  <Text className="font-t3-bold text-xs uppercase tracking-[0.8px] text-adaptive-sky-700-300">
                     Recommended: {question.recommendation.optionLabel}
                   </Text>
-                  <Text className="mt-1 font-sans text-sm leading-snug text-neutral-600 dark:text-neutral-300">
+                  <Text className="mt-1 font-sans text-sm leading-snug text-adaptive-neutral-600-300">
                     {question.recommendation.rationale}
                   </Text>
                 </View>
               ) : null}
-              <TextInput
-                value={draft?.customAnswer ?? ""}
-                onChangeText={(value) =>
-                  props.onChangeCustomAnswer(props.pendingUserInput.requestId, question.id, value)
-                }
-                onFocus={() => props.onInputFocusChange?.(true)}
-                onBlur={() => props.onInputFocusChange?.(false)}
-                placeholder="Or type a custom answer"
-                className="min-h-[54px] rounded-2xl border border-adaptive-neutral-200-white-a8 bg-adaptive-white-neutral-950-a70 px-3.5 py-3 font-sans text-base text-adaptive-neutral-950-50"
-              />
+              {question.allowCustomAnswer !== false ? (
+                <TextInput
+                  value={draft?.customAnswer ?? ""}
+                  onChangeText={(value) =>
+                    props.onChangeCustomAnswer(props.pendingUserInput.requestId, question.id, value)
+                  }
+                  onFocus={() => props.onInputFocusChange?.(true)}
+                  onBlur={() => props.onInputFocusChange?.(false)}
+                  placeholder="Or type a custom answer"
+                  className="min-h-[54px] rounded-2xl border border-adaptive-neutral-200-white-a8 bg-adaptive-white-neutral-950-a70 px-3.5 py-3 font-sans text-base text-adaptive-neutral-950-50"
+                />
+              ) : null}
             </View>
           );
         })}

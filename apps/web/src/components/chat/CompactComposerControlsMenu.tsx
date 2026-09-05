@@ -1,7 +1,6 @@
-import { RuntimeMode } from "@t3tools/contracts";
-import { memo, type ReactNode, useState } from "react";
+import { RuntimeMode, type ProviderInteractionMode } from "@t3tools/contracts";
+import { memo, type ReactNode } from "react";
 import { EllipsisIcon } from "lucide-react";
-import { Button } from "../ui/button";
 import {
   Menu,
   MenuPopup,
@@ -15,6 +14,9 @@ import {
   resolveComposerPrimaryMode,
   type ComposerModeControls,
 } from "./ComposerModePicker";
+import { ComposerControl } from "./ComposerControl";
+import { composerFloatingLayerProps } from "./composerEventScope";
+import { useComposerMenuState } from "./useComposerMenuState";
 
 /**
  * The narrow footer's single overflow menu: traits, mode and access in one
@@ -25,11 +27,16 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   /** Null when no mode, workflow or skill is offerable for this provider. */
   modeControls: ComposerModeControls | null;
   runtimeMode: RuntimeMode;
+  interactionMode?: ProviderInteractionMode;
+  showInteractionModeToggle?: boolean;
+  onToggleInteractionMode?: () => void;
+  size?: "sm" | "xs";
+  hidden?: boolean;
   traitsMenuContent?: ReactNode;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
   const { modeControls } = props;
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useComposerMenuState(props.hidden);
   const activeMode = modeControls ? resolveComposerPrimaryMode(modeControls) : null;
   const modeSection = modeControls ? (
     <ComposerModePickerContent
@@ -57,8 +64,8 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
       <Menu open={open} onOpenChange={setOpen}>
         <MenuTrigger
           render={
-            <Button
-              size="sm"
+            <ComposerControl
+              size={props.size ?? "sm"}
               variant="ghost"
               className="shrink-0 px-2 text-muted-foreground/70 hover:text-foreground/80"
               aria-label="More composer controls"
@@ -67,7 +74,7 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
         >
           <EllipsisIcon aria-hidden="true" className="size-4" />
         </MenuTrigger>
-        <MenuPopup align="start">
+        <MenuPopup align="start" {...composerFloatingLayerProps}>
           {props.traitsMenuContent ? (
             <>
               {props.traitsMenuContent}

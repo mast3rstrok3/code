@@ -328,7 +328,7 @@ describe("buildThreadListV2Items", () => {
     ]);
   });
 
-  it("ignores the previous pull request state after a different pull request is linked", () => {
+  it("keeps a linked pull request active until the thread is settled", () => {
     const thread = makeThread({
       id: ThreadId.make("linked"),
       title: "Linked pull request",
@@ -338,15 +338,6 @@ describe("buildThreadListV2Items", () => {
       threads: [thread],
       environmentId: null,
       searchQuery: "",
-      changeRequestByKey: new Map([
-        [
-          `${environmentId}:${thread.id}`,
-          {
-            state: "merged" as const,
-            linkedPullRequestKey: '["project-1","pingdotgg/t3code",41]',
-          },
-        ],
-      ]),
       now: NOW,
     });
 

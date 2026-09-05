@@ -12,6 +12,51 @@ const layer = it.layer(
 );
 
 layer("ProjectionThreadMessageRepository", (it) => {
+  it.effect("finds the latest user-message time within one thread", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.make("thread-latest-user-message");
+      assert.isNull(yield* repository.getLatestUserMessageAt({ threadId }));
+
+      const messages = [
+        { role: "user", createdAt: "2026-02-28T19:05:02.000Z" },
+        { role: "user", createdAt: "2026-02-28T19:05:01.000Z" },
+        { role: "assistant", createdAt: "2026-02-28T19:05:03.000Z" },
+        { role: "system", createdAt: "2026-02-28T19:05:04.000Z" },
+      ] as const;
+      for (const [index, message] of messages.entries()) {
+        yield* repository.upsert({
+          messageId: MessageId.make(`latest-user-message-${index}`),
+          threadId,
+          turnId: null,
+          workflowPromptId: null,
+          ...message,
+          text: "Message body",
+          isStreaming: false,
+          updatedAt: "2026-02-28T19:06:00.000Z",
+        });
+      }
+      yield* repository.upsert({
+        messageId: MessageId.make("latest-user-message-other-thread"),
+        threadId: ThreadId.make("thread-latest-user-message-other"),
+        turnId: null,
+        workflowPromptId: null,
+        role: "user",
+        text: "Other thread",
+        isStreaming: false,
+        createdAt: "2026-02-28T19:05:05.000Z",
+        updatedAt: "2026-02-28T19:05:05.000Z",
+      });
+
+      assert.strictEqual(
+        yield* repository.getLatestUserMessageAt({ threadId }),
+        "2026-02-28T19:05:02.000Z",
+      );
+      yield* repository.deleteByThreadId({ threadId });
+      assert.isNull(yield* repository.getLatestUserMessageAt({ threadId }));
+    }),
+  );
+
   it.effect("preserves an associated workflow prompt across message updates", () =>
     Effect.gen(function* () {
       const repository = yield* ProjectionThreadMessageRepository;
@@ -21,6 +66,7 @@ layer("ProjectionThreadMessageRepository", (it) => {
         messageId,
         threadId,
         turnId: null,
+        workflowPromptId: null,
         role: "user" as const,
         text: "Plan this",
         isStreaming: false,

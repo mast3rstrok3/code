@@ -27,6 +27,7 @@
   },
   "include": [
     "src",
+    "vite",
     "vite.config.ts",
     "viteDevServerHardening.ts",
     "viteDevServerHardening.test.ts",

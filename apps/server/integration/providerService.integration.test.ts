@@ -103,6 +103,7 @@ const makeIntegrationFixture = (options?: { readonly analytics?: Layer.Layer<Ana
 
     const layer = makeProviderServiceLive().pipe(
       Layer.provide(WorkflowUserInputBroker.layer),
+      Layer.provide(NodeServices.layer),
       Layer.provide(shared),
     );
 

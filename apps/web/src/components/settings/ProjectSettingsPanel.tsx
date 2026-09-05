@@ -886,7 +886,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
                 <ProjectFavicon
                   environmentId={representative.environmentId}
                   cwd={representative.workspaceRoot}
-                  projectName={group.displayName}
+                  projectName={representative.title}
                   faviconPath={faviconPath}
                   projectIcon={projectIcon}
                   className="size-6"
@@ -936,6 +936,12 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
                     modelOptionsByInstance={modelOptionsByInstance}
                     triggerVariant="outline"
                     triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+                    onOpenProviderSetup={(instanceId) => {
+                      void navigate({
+                        to: "/settings/providers",
+                        search: { environmentId: representative.environmentId, instanceId },
+                      });
+                    }}
                     onInstanceModelChange={(instanceId, model) => {
                       setDefaultModel(createModelSelection(instanceId, model));
                     }}
@@ -1047,6 +1053,11 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
           <SettingsRow
             title="Automatically pull"
             description="Keeps the default branch current in the background when the checkout has no local changes or commits."
+            resetAction={
+              autoPull ? (
+                <SettingResetButton label="automatic pull" onClick={() => setAutoPull(false)} />
+              ) : null
+            }
             control={
               <Switch
                 checked={autoPull}
