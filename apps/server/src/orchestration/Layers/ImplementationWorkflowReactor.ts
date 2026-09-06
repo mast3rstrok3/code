@@ -1410,9 +1410,9 @@ function fastFeatureExecutionContract(run: OrchestrationImplementationRun): Read
     "",
     "Use the repository dependencies prepared during workflow workspace bootstrap. Do not start a competing development server or replace dependency paths mounted by the workflow-owned App Stack.",
     "",
-    "## Pre-review validation",
+    "## Build validation",
     "Run focused tests and affected-file checks. A documented sub-minute fast command such as `pnpm check` is allowed.",
-    "Do not run the launch-level complete validation commands in Build; the final gate runs them after Code Review:",
+    "Do not run the launch-level complete validation commands in Build; the final gate runs them after the enabled review steps, or directly after Build when reviews are disabled:",
     ...run.launchSummary.validationCommands.map((command) => `- ${command}`),
     "",
     "Report the exact focused or fast commands actually run in `validations`.",
@@ -6567,7 +6567,7 @@ const make = Effect.gen(function* () {
           run: { ...run, fastBuildResult: buildResult, updatedAt },
           retryableStage: "build",
           reasonMarkdown:
-            "Fast feature Build must report passing focused or documented sub-minute fast validation and must not run launch-level complete commands before Code Review.",
+            "Build must report passing focused or documented sub-minute fast validation. Leave launch-level complete commands to the final validation gate.",
           updatedAt,
         });
         return;
@@ -10831,6 +10831,12 @@ const make = Effect.gen(function* () {
       if (
         WORKING_RUN_STATUSES.has(run.status) &&
         nowMs - Date.parse(run.updatedAt) >= RUN_STALL_GRACE_MS &&
+        // Proposed-plan workflows run Build in the orchestrator thread itself.
+        !(
+          run.artifactSource === "proposed-plan" &&
+          run.status === "running" &&
+          !stageThreadFinished(findThread(readModel, run.orchestratorThreadId) ?? undefined)
+        ) &&
         !childThreads.some((thread) => !stageThreadFinished(thread)) &&
         !run.stageExecutions.some(
           (execution) => execution.state === "queued" || execution.state === "starting",

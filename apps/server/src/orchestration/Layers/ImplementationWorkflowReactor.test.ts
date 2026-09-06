@@ -32,6 +32,8 @@ import {
   type VcsRemoveWorktreeInput,
 } from "@t3tools/contracts";
 import { type DeepPartial } from "@t3tools/shared/Struct";
+import { implementationDefaultsForWorkflowPreset } from "@t3tools/shared/workflowPresets";
+import { implementationWorkflowDefaultSkips } from "@t3tools/shared/workflowStepSkips";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -2025,7 +2027,10 @@ const claudeParentSelection: ModelSelection = {
 
 function dispatchFastFeatureLaunch(
   system: ImplementationSystem,
-  options?: { readonly reusePreparedWorkspace?: boolean },
+  options?: {
+    readonly reusePreparedWorkspace?: boolean;
+    readonly workflowPreset?: "fast-feature" | "quick-plan" | "fast-plan";
+  },
 ) {
   return Effect.gen(function* () {
     const sourceBranch = options?.reusePreparedWorkspace
@@ -2051,7 +2056,7 @@ function dispatchFastFeatureLaunch(
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
       runtimeMode: "full-access",
       interactionMode: "plan",
-      workflowPreset: "fast-feature",
+      workflowPreset: options?.workflowPreset ?? "fast-feature",
       branch: sourceBranch,
       worktreePath: "/tmp/implementation-reactor",
       createdAt: now,
@@ -2104,6 +2109,12 @@ function dispatchFastFeatureLaunch(
         ? "/tmp/implementation-reactor"
         : "/tmp/implementation-reactor.worktrees/fast-checkout",
       validationCommands: ["vp check", "vp run typecheck"],
+      skips: [
+        ...implementationWorkflowDefaultSkips(
+          implementationDefaultsForWorkflowPreset(options?.workflowPreset ?? "fast-feature") ??
+            undefined,
+        ),
+      ],
       createdAt: now,
     });
   });
@@ -2737,7 +2748,7 @@ describe("ImplementationWorkflowReactor", () => {
         expect(retried?.messages.at(-1)?.role).toBe("user");
         expect(retried?.messages.at(-1)?.text).toContain("Your last result was rejected");
         expect(retried?.messages.at(-1)?.text).toContain(
-          "must not run launch-level complete commands before Code Review",
+          "Leave launch-level complete commands to the final validation gate",
         );
       }),
     ),
@@ -3595,6 +3606,111 @@ describe("ImplementationWorkflowReactor", () => {
       { failAutoCreate: true },
     ),
   );
+
+  it.effect("completes Quick Feature after Build and final validation with reviews disabled", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* dispatchFastFeatureLaunch(system, { workflowPreset: "quick-plan" });
+        yield* system.reactor.drain;
+        const run = (yield* system.query.getSnapshot()).implementationRuns[0];
+        if (!run) throw new Error("Quick Feature run missing.");
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("quick-build-result"),
+          threadId: run.orchestratorThreadId,
+          activity: {
+            id: eventId("quick-build-result"),
+            tone: "info",
+            kind: "implementation-fast-build-result",
+            summary: "Build succeeded",
+            payload: {
+              type: "implementation-fast-build-result",
+              runId: run.id,
+              status: "succeeded",
+              commitSha: "def456",
+              validations: requiredValidations(),
+              notesMarkdown: "Implemented and committed.",
+            },
+            turnId: null,
+            createdAt: "2026-01-01T00:00:02.000Z",
+          },
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+        yield* system.reactor.drain;
+        const validating = (yield* system.query.getSnapshot()).implementationRuns[0];
+        expect(validating?.status).toBe("validating");
+        expect(validating?.activeValidationKind).toBe("final");
+        yield* passFinalGate(system, run);
+
+        const snapshot = yield* system.query.getSnapshot();
+        expect(snapshot.implementationRuns[0]?.status).toBe("completed");
+        expect(snapshot.implementationRuns[0]?.automationHalt).toBeNull();
+        expect(snapshot.implementationRuns[0]?.appReviewWorkflowRunIds).toEqual([]);
+        expect(
+          snapshot.threads
+            .filter((thread) => thread.parentThreadId === run.orchestratorThreadId)
+            .map((thread) => thread.workflowRole),
+        ).toEqual(["implementation-validator"]);
+        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
+        expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
+      }),
+    ),
+  );
+
+  for (const workflowPreset of ["quick-plan", "fast-plan", "fast-feature"] as const) {
+    for (const sessionStatus of ["starting", "running", "ready"] as const) {
+      it.effect(
+        `checks the Build owner before declaring ${workflowPreset} stalled with a ${sessionStatus} session`,
+        () =>
+          withSystem((system) =>
+            Effect.gen(function* () {
+              yield* dispatchFastFeatureLaunch(system, { workflowPreset });
+              yield* system.reactor.drain;
+              const run = (yield* system.query.getSnapshot()).implementationRuns[0];
+              if (!run) throw new Error("Build run missing.");
+              const startedAt = DateTime.formatIso(DateTime.makeUnsafe(0));
+              yield* system.engine.dispatch({
+                type: "thread.session.set",
+                commandId: commandId("build-owner-session"),
+                threadId: run.orchestratorThreadId,
+                session: {
+                  threadId: run.orchestratorThreadId,
+                  status: sessionStatus,
+                  providerName: "codex",
+                  runtimeMode: "full-access",
+                  activeTurnId: null,
+                  lastError: null,
+                  updatedAt: startedAt,
+                },
+                createdAt: startedAt,
+              });
+              yield* system.engine.dispatch({
+                type: "thread.implementation-run.update",
+                commandId: commandId("build-owner-running"),
+                threadId: sourceThreadId,
+                run: { ...run, status: "running", stageExecutions: [], updatedAt: startedAt },
+                createdAt: startedAt,
+              });
+              yield* system.reactor.drain;
+              yield* TestClock.adjust(Duration.minutes(25));
+
+              yield* system.reactor.recoverIncompleteStages();
+              yield* system.reactor.drain;
+
+              const current = (yield* system.query.getSnapshot()).implementationRuns[0];
+              if (sessionStatus === "ready") {
+                expect(current?.status).toBe("needs-human-attention");
+                expect(current?.automationHalt?.detail).toContain("no agent working on it");
+              } else {
+                expect(current?.status).toBe("running");
+                expect(current?.automationHalt).toBeNull();
+                expect(current?.retryableFailure).toBeNull();
+              }
+            }),
+          ),
+      );
+    }
+  }
 
   it.effect("re-seeds a Fast feature Build thread that was stranded without a turn", () =>
     withSystem(
