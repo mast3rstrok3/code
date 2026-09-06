@@ -17,7 +17,7 @@ const selection: ModelSelection = {
   model: "gpt-5.6-sol",
 };
 
-it("lists the eleven Full Engineering steps in phase order", () => {
+it("lists the eleven Engineering steps in phase order", () => {
   const targets = engineeringWorkflowDefaultSteps();
   expect(targets.map((target) => target.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
   expect(targets.map((target) => target.phase)).toEqual([

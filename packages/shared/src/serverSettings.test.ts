@@ -10,6 +10,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { resolveServerBackgroundActivitySettings } from "./backgroundActivitySettings.ts";
 import { createModelSelection } from "./model.ts";
 import {
+  appendWorkflowSkillInstructions,
   applyServerSettingsPatch,
   extractPersistedServerObservabilitySettings,
   isModelSelectionProviderEnabled,
@@ -19,6 +20,21 @@ import {
 } from "./serverSettings.ts";
 
 describe("serverSettings helpers", () => {
+  it("composes skill and step defaults once for previews and provider input", () => {
+    const instructions = {
+      skill: "  Use isolated fixtures.  ",
+      step: "Verify keyboard navigation.",
+      other: "Unrelated instructions.",
+    };
+    expect(appendWorkflowSkillInstructions("Base", "skill", "skill", instructions)).toBe(
+      "Base\n\n<user-workflow-instructions>\nUse isolated fixtures.\n</user-workflow-instructions>",
+    );
+    expect(appendWorkflowSkillInstructions("Base", "skill", "step", instructions)).toBe(
+      "Base\n\n<user-workflow-instructions>\nUse isolated fixtures.\n\nVerify keyboard navigation.\n</user-workflow-instructions>",
+    );
+    expect(appendWorkflowSkillInstructions("Base", "skill", "step", { step: "  " })).toBe("Base");
+  });
+
   it("normalizes optional persisted strings", () => {
     expect(normalizePersistedServerSettingString(undefined)).toBeUndefined();
     expect(normalizePersistedServerSettingString("   ")).toBeUndefined();
@@ -607,4 +623,23 @@ describe("serverSettings helpers", () => {
 
     expect(resolved.pauseWhenOnBattery).toBe(false);
   });
+});
+
+it("clears saved workflow additions and review-part overrides", () => {
+  const current = {
+    ...DEFAULT_SERVER_SETTINGS,
+    workflowStepInstructions: { "matt-pocock.to-tickets": "Use staging fixtures." },
+    workflowStepReviewParts: [
+      { workflowPromptId: "implementation.browser-app-review.codex", e2e: false, browser: true },
+    ],
+  };
+  const updated = applyServerSettingsPatch(current, {
+    workflowStepInstructions: {},
+    workflowStepReviewParts: [],
+  });
+  expect(updated.workflowStepInstructions).toEqual({});
+  expect(updated.workflowStepReviewParts).toEqual([]);
+  expect(applyServerSettingsPatch(current, {}).workflowStepInstructions).toEqual(
+    current.workflowStepInstructions,
+  );
 });

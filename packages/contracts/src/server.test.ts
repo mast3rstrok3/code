@@ -55,6 +55,13 @@ describe("ServerProvider", () => {
           title: "Fix",
           description: "Fix intent.",
           promptText: "Prompt.",
+          workflowAnnotations: [
+            {
+              workflowPromptId: "fix.workflow",
+              title: "Workflow variation",
+              text: "Use the shared environment.",
+            },
+          ],
           docIds: ["context"],
           buildModes: ["build"],
           workflowIds: ["fix"],
@@ -73,6 +80,7 @@ describe("ServerProvider", () => {
     });
     expect(parsed.workflows[0]?.steps[0]?.skillId).toBe("product.fix.codex");
     expect(parsed.skills[0]?.buildModes).toEqual(["build"]);
+    expect(parsed.skills[0]?.workflowAnnotations[0]?.text).toBe("Use the shared environment.");
     expect(parsed.docs[0]?.description).toBe("Project context.");
   });
 

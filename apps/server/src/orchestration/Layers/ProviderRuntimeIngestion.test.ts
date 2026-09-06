@@ -4730,7 +4730,7 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
-  it("rejects ad hoc Browser App Review children while Fast Feature owns review sequencing", async () => {
+  it("rejects ad hoc Browser App Review children while Feature owns review sequencing", async () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";
     const parentThreadId = asThreadId("thread-fast-feature-review-owner");
@@ -4743,13 +4743,13 @@ describe("ProviderRuntimeIngestion", () => {
         ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         parentThreadId: null,
         workflowRole: null,
-        title: "Fast Feature parent",
+        title: "Feature parent",
         modelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5-codex",
         },
-        interactionMode: "product-workflow",
-        workflowPreset: "fast-feature",
+        interactionMode: "plan",
+        workflowPreset: "fast-plan",
         runtimeMode: "full-access",
         branch: "dev",
         worktreePath: null,
@@ -4787,7 +4787,7 @@ describe("ProviderRuntimeIngestion", () => {
     const parent = snapshot.threads.find((thread) => thread.id === parentThreadId);
     const child = parent?.workflowSubagentBatches?.[0]?.children[0];
     expect(child?.status).toBe("rejected");
-    expect(child?.failureDetail).toContain("Fast Feature workflow owns its planning");
+    expect(child?.failureDetail).toContain("Feature workflow owns its planning");
     expect(
       snapshot.threads.some(
         (thread) =>

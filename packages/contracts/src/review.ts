@@ -27,8 +27,8 @@ export const APP_REVIEW_PREVIEW_URL_ENV = "APP_REVIEW_PREVIEW_URL";
 /**
  * How an App Review verifies its target: the project's e2e commands only, the
  * browser only, or both. Tickets carry it as `appReviewScope` next to
- * `appReviewEligible`; absent means both. A run whose project declares no
- * `e2eCommands` degrades to browser whatever the scope says.
+ * `appReviewEligible`; absent means both. Enabled E2E testing requires the
+ * project to declare `e2eCommands`.
  */
 export const AppReviewScope = Schema.Literals(["e2e", "browser", "both"]);
 export type AppReviewScope = typeof AppReviewScope.Type;
@@ -293,6 +293,7 @@ export const AppReviewCheck = Schema.Struct({
   notes: Schema.String,
   /** A test runner's inspectable web replay for this check, when it publishes one. */
   replayUrl: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isPattern(/^https?:\/\//i))),
+  replayMimeType: Schema.optionalKey(TrimmedNonEmptyString),
   carriedFromCycle: Schema.optionalKey(PositiveInt),
 });
 export type AppReviewCheck = typeof AppReviewCheck.Type;

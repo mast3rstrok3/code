@@ -930,6 +930,11 @@ export const ServerSettings = Schema.Struct({
   sourceControlWriterModelSelection: Schema.NullOr(ModelSelection).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  /** User additions keyed by catalog skill or exact workflow prompt. */
+  workflowStepInstructions: Schema.Record(
+    TrimmedNonEmptyString,
+    TrimmedString.check(Schema.isMaxLength(20_000)),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   /**
    * Default model per workflow step and sub-step, used by every workflow that
    * does not pin the step itself. A pin set from the Workflows panel governs
@@ -949,8 +954,8 @@ export const ServerSettings = Schema.Struct({
   /**
    * Which parts each App Review step runs, keyed like `workflowStepCycles`.
    * The step-level entry is the standing default for every review; the ticket
-   * sub-step entry overrides it for per-ticket reviews. No entry means both
-   * parts run.
+   * sub-step entry overrides it for per-ticket reviews. No entry enables E2E
+   * testing and disables browser review.
    */
   workflowStepReviewParts: Schema.Array(WorkflowStepReviewPartsOverride).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
@@ -1192,6 +1197,9 @@ export const ServerSettingsPatch = Schema.Struct({
   sourceControlWriterModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   // Whole-array replacement, like `providerInstances`: the list is small and
   // the client always sends the complete set of default step pins.
+  workflowStepInstructions: Schema.optionalKey(
+    Schema.Record(TrimmedNonEmptyString, TrimmedString.check(Schema.isMaxLength(20_000))),
+  ),
   workflowStepModels: Schema.optionalKey(Schema.Array(WorkflowStepModelOverride)),
   workflowStepCycles: Schema.optionalKey(Schema.Array(WorkflowStepCycleOverride)),
   workflowStepReviewParts: Schema.optionalKey(Schema.Array(WorkflowStepReviewPartsOverride)),

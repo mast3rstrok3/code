@@ -39,7 +39,6 @@ import {
   buildReviewPrompt,
   e2eCheckIdsForCommands,
   emptyAppReviewRepairPlanTurnId,
-  effectiveAppReviewScope,
   appReviewTargetIsGone,
   resolveEffectiveAppReviewScope,
   recoverableFailedAppReviewPhase,
@@ -1526,61 +1525,38 @@ it("derives stable e2e check ids from command order", () => {
   ]);
 });
 
-it("turns review parts off as a prohibition, degrading only for missing commands", () => {
-  const on = { e2e: true, browser: true };
+it("keeps disabled review parts off and preserves enabled E2E testing", () => {
   // Settings turn a part off: it stays off whatever the ticket asked for.
   expect(
     resolveEffectiveAppReviewScope({
       run: {},
       settingsParts: { e2e: true, browser: false },
-      e2eCommandCount: 1,
     }),
   ).toBe("e2e");
   expect(
     resolveEffectiveAppReviewScope({
       run: {},
       settingsParts: { e2e: false, browser: true },
-      e2eCommandCount: 1,
     }),
   ).toBe("browser");
   expect(
     resolveEffectiveAppReviewScope({
       run: { appReviewScope: "e2e" },
       settingsParts: { e2e: false, browser: true },
-      e2eCommandCount: 1,
     }),
   ).toBeNull();
   expect(
     resolveEffectiveAppReviewScope({
       run: {},
       settingsParts: { e2e: false, browser: false },
-      e2eCommandCount: 1,
     }),
   ).toBeNull();
-  // A missing suite degrades an e2e request to browser when Settings allow it.
   expect(
     resolveEffectiveAppReviewScope({
-      run: { appReviewScope: "e2e" },
-      settingsParts: on,
-      e2eCommandCount: 0,
+      run: { appReviewScope: "both" },
+      settingsParts: { e2e: true, browser: true },
     }),
-  ).toBe("browser");
-  expect(
-    resolveEffectiveAppReviewScope({
-      run: { appReviewScope: "e2e" },
-      settingsParts: { e2e: true, browser: false },
-      e2eCommandCount: 0,
-    }),
-  ).toBeNull();
-});
-
-it("degrades every scope to browser when the project declares no e2e commands", () => {
-  expect(effectiveAppReviewScope({ appReviewScope: "e2e" }, 0)).toBe("browser");
-  expect(effectiveAppReviewScope({ appReviewScope: "both" }, 0)).toBe("browser");
-  expect(effectiveAppReviewScope({}, 0)).toBe("browser");
-  expect(effectiveAppReviewScope({ appReviewScope: "e2e" }, 1)).toBe("e2e");
-  expect(effectiveAppReviewScope({ appReviewScope: "browser" }, 1)).toBe("browser");
-  expect(effectiveAppReviewScope({}, 1)).toBe("both");
+  ).toBe("both");
 });
 
 it("keeps the end-to-end test in its own durable section", () => {

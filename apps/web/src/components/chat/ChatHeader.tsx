@@ -72,7 +72,7 @@ export function workflowProgressLabel(input: {
     input.workflowPreset === "quick-plan"
       ? "Quick Feature"
       : input.workflowPreset === "fast-plan"
-        ? "Fast Feature"
+        ? "Feature"
         : "Fast feature";
   if (input.workflowContext === null) return null;
   const run = [...input.implementationRuns].sort((left, right) =>

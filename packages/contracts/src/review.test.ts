@@ -91,6 +91,7 @@ it.effect("keeps a check's origin cycle when it was carried forward, and omits i
             status: "passed",
             notes: "",
             replayUrl: "https://preview.example.test/replays/e2e-1",
+            replayMimeType: "application/x-rrweb+jsonl",
           },
         ],
       },
@@ -98,6 +99,7 @@ it.effect("keeps a check's origin cycle when it was carried forward, and omits i
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:01.000Z",
     });
+    assert.strictEqual(record.document.checks[1]?.replayMimeType, "application/x-rrweb+jsonl");
     assert.strictEqual(record.document.checks[0]?.carriedFromCycle, 1);
     assert.strictEqual(record.document.checks[1]?.carriedFromCycle, undefined);
     assert.strictEqual(
@@ -112,6 +114,7 @@ it.effect("keeps a check's origin cycle when it was carried forward, and omits i
       status: "passed",
       notes: "",
       replayUrl: "https://preview.example.test/replays/e2e-1",
+      replayMimeType: "application/x-rrweb+jsonl",
     });
   }),
 );

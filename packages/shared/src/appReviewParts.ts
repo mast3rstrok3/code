@@ -6,13 +6,13 @@ import {
   type WorkflowStepCycleKey,
 } from "./workflowStepCycles.ts";
 
-/** The two parts an App Review can run. Both on is the ordinary review. */
+/** The two independently switchable test steps in an App Review. */
 export interface AppReviewParts {
   readonly e2e: boolean;
   readonly browser: boolean;
 }
 
-export const ALL_APP_REVIEW_PARTS: AppReviewParts = { e2e: true, browser: true };
+export const DEFAULT_APP_REVIEW_PARTS: AppReviewParts = { e2e: true, browser: false };
 
 /** One step whose review parts a user can toggle in Settings → Workflows. */
 export interface AppReviewPartsTarget {
@@ -62,13 +62,13 @@ function partsFromOverrides(
 
 /**
  * The parts Settings allow for one step. A ticket key without its own entry
- * follows the step-level entry, and a step without any entry runs both parts.
+ * follows the step-level entry. Without an entry, E2E is on and browser review is off.
  */
 export function resolveAppReviewStepParts(input: {
   readonly overrides: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
   readonly key: WorkflowStepCycleKey;
 }): AppReviewParts {
-  return partsFromOverrides(input.overrides, input.key) ?? ALL_APP_REVIEW_PARTS;
+  return partsFromOverrides(input.overrides, input.key) ?? DEFAULT_APP_REVIEW_PARTS;
 }
 
 /**
@@ -85,7 +85,7 @@ export function resolveLayeredAppReviewStepParts(input: {
   return (
     partsFromOverrides(input.threadOverrides, input.key) ??
     partsFromOverrides(input.settingsOverrides, input.key) ??
-    ALL_APP_REVIEW_PARTS
+    DEFAULT_APP_REVIEW_PARTS
   );
 }
 

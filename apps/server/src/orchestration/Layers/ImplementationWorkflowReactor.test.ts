@@ -8344,56 +8344,24 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("skips ticket App Review when only project-wide E2E is enabled", () =>
-    withSystem(
-      (system) =>
-        Effect.gen(function* () {
-          const { run } = yield* launchRun(system, {
-            appReviewStrategy: "nested-workflow",
-            tickets: [
-              {
-                ...planningTicket("TICKET-1"),
-                appReviewEligible: true,
-                appReviewPlanMarkdown: "Review the ticket.",
-              },
-            ],
-          });
-          yield* appendWorkerResult(system, {
-            run,
-            status: "succeeded",
-            completeTicketReview: false,
-          });
-
-          const snapshot = yield* system.query.getSnapshot();
-          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
-          expect(snapshot.appReviewWorkflowRuns ?? []).toHaveLength(0);
-          expect(snapshot.implementationRuns[0]?.ticketStates[0]).toMatchObject({
-            status: "code-reviewing",
-            appReviewOutcome: "skipped",
-          });
-        }),
-      {
-        projectFile: { e2eCommands: ["vp test run e2e/checkout.test.ts"] },
-        serverSettings: {
-          workflowStepReviewParts: [
-            {
-              workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
-              stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
-              e2e: true,
-              browser: false,
-            },
-          ],
-        },
-      },
-    ),
-  );
-
-  it.effect("keeps project-wide E2E out of a ticket browser review", () =>
+  it.effect("starts ticket App Review with E2E only by default", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
           const { nestedRun } = yield* launchTicketAppReview(system);
-          expect(nestedRun.appReviewScope).toBe("browser");
+          expect(nestedRun.appReviewScope).toBe("e2e");
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
+        }),
+      { projectFile: { e2eCommands: ["vp test run e2e/checkout.test.ts"] } },
+    ),
+  );
+
+  it.effect("runs both ticket review parts when the user enables browser review", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { nestedRun } = yield* launchTicketAppReview(system);
+          expect(nestedRun.appReviewScope).toBe("both");
           expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
         }),
       {

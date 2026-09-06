@@ -145,6 +145,7 @@ describe("workflowProgressLabel", () => {
     expect(
       workflowProgressLabel({
         interactionMode: "implementation-workflow",
+        workflowPreset: "fast-plan",
         workflowRole: "fast-feature-implementer",
         workflowContext,
         planningWorkflow: null,
@@ -158,7 +159,7 @@ describe("workflowProgressLabel", () => {
           } as OrchestrationImplementationRun,
         ],
       }),
-    ).toBe("Fast feature · TDD repair · 3/10");
+    ).toBe("Feature · TDD repair · 3/10");
   });
 });
 

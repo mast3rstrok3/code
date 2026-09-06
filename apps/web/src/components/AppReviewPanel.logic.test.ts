@@ -152,6 +152,7 @@ describe("App Review workflow panel logic", () => {
         ...run.cycles[0]!,
         appReviewScope: "e2e",
         status: "planning",
+        planId: null,
         e2eReviewId: AppReviewId.make("review-e2e-1"),
         e2eThreadId: ThreadId.make("thread-e2e"),
         e2eVerdict: "failed",

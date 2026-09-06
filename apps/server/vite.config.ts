@@ -40,6 +40,7 @@ export default mergeConfig(
       outDir: "dist",
       sourcemap: true,
       clean: true,
+      copy: [{ from: "src/provider/workflow-skills", to: "dist" }],
       deps: {
         // Both halves are required. `alwaysBundle` forces the JS dependencies in
         // (declared deps are external by default, which is what this change is

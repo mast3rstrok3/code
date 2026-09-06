@@ -2,6 +2,7 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { BookOpenText } from "lucide-react";
 
 import { useWorkflowCatalog } from "../workflowCatalogState";
+import { WorkflowSkillContent } from "./WorkflowSkillContent";
 import { WorkflowCatalogContent } from "./settings/WorkflowCatalogContent";
 
 export function WorkflowInstructionsPanel({
@@ -43,10 +44,10 @@ export function WorkflowInstructionsPanel({
             </div>
           </div>
         </div>
-        <WorkflowCatalogContent
-          text={skill.promptText}
-          label={`${skill.title} instructions`}
-          maxHeightClassName="max-h-none"
+        <WorkflowSkillContent
+          skill={skill}
+          environmentId={environmentId}
+          workflowPromptId={workflowPromptId}
         />
         {docs.map((doc) => (
           <details key={doc.id} className="mb-3 rounded-lg border border-border/70 px-3 py-2">

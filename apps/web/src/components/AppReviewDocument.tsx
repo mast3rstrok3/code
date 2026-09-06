@@ -2,6 +2,7 @@ import type {
   AssetResource,
   AppReviewRecord,
   AppReviewRecordingEvidence,
+  AppReviewWorkflowCycle,
   EnvironmentId,
 } from "@t3tools/contracts";
 import { APP_REVIEW_RECORDING_EVIDENCE_ID } from "@t3tools/contracts";
@@ -119,7 +120,8 @@ export function AppReviewDocument(props: {
   const statusLabel = record.status[0]?.toUpperCase() + record.status.slice(1);
   const recording = record.evidence.recording;
   const screenshots = record.evidence.screenshots;
-  const showsBrowserEvidence = record.appReviewScope !== "e2e";
+  const showsBrowserEvidence =
+    record.appReviewScope !== "e2e" || recording.status !== "not-started" || screenshots.length > 0;
   const recordingSaved = showsBrowserEvidence && recording.status === "saved";
 
   const evidenceResources = useMemo<AssetResource[]>(() => {
@@ -245,6 +247,15 @@ export function AppReviewDocument(props: {
                     {check.notes}
                   </p>
                 ) : null}
+                {check.replayUrl && isDomReplayRecording(check.replayMimeType ?? null) ? (
+                  <Suspense
+                    fallback={
+                      <p className="mt-2 text-sm text-muted-foreground">Loading replay...</p>
+                    }
+                  >
+                    <DomReplaySurface url={check.replayUrl} />
+                  </Suspense>
+                ) : null}
                 {check.replayUrl ? (
                   <a
                     href={check.replayUrl}
@@ -336,5 +347,80 @@ export function AppReviewDocument(props: {
         <ExpandedImageDialog preview={expandedPreview} onClose={() => setExpandedPreview(null)} />
       ) : null}
     </div>
+  );
+}
+
+export function AppReviewCycleDocument(props: {
+  cycle: AppReviewWorkflowCycle;
+  e2eRecord?: AppReviewRecord | undefined;
+  browserRecord?: AppReviewRecord | undefined;
+  environmentId: EnvironmentId;
+}) {
+  const summaryRecords = [props.e2eRecord, props.browserRecord].filter(
+    (record): record is AppReviewRecord => Boolean(record?.document.summary),
+  );
+  return (
+    <div>
+      <section className="border-b border-border px-4 py-3">
+        <h3 className="text-sm font-semibold">Overall review</h3>
+        <p className="mt-1 text-xs text-muted-foreground">{props.cycle.status}</p>
+        {summaryRecords.length > 0 ? (
+          summaryRecords.map((record) => (
+            <p key={record.id} className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">
+              {record.document.summary}
+            </p>
+          ))
+        ) : (
+          <p className="mt-2 text-sm text-muted-foreground">No review summary yet.</p>
+        )}
+        {props.cycle.actionableFindingsMarkdown ? (
+          <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">
+            {props.cycle.actionableFindingsMarkdown}
+          </p>
+        ) : null}
+      </section>
+      <ReviewEvidenceSection
+        title="End-to-end tests"
+        record={props.e2eRecord}
+        environmentId={props.environmentId}
+      />
+      <ReviewEvidenceSection
+        title="Browser review"
+        record={props.browserRecord}
+        environmentId={props.environmentId}
+      />
+    </div>
+  );
+}
+
+function ReviewEvidenceSection(props: {
+  title: string;
+  record?: AppReviewRecord | undefined;
+  environmentId: EnvironmentId;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className="border-b border-border">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        className="flex w-full cursor-pointer items-center justify-between px-4 py-3 text-left text-sm font-medium"
+      >
+        <span>{props.title}</span>
+        <span className="text-xs text-muted-foreground">
+          {props.record?.status ?? "No results"} · {open ? "Collapse" : "Expand"}
+        </span>
+      </button>
+      {open ? (
+        props.record ? (
+          <AppReviewDocument record={props.record} environmentId={props.environmentId} />
+        ) : (
+          <p className="px-4 pb-3 text-sm text-muted-foreground">
+            No results or recordings for this section.
+          </p>
+        )
+      ) : null}
+    </section>
   );
 }

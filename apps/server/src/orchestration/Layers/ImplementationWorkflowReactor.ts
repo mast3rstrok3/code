@@ -66,7 +66,6 @@ import {
   WORKFLOW_PROMPT_IDS,
 } from "../../provider/WorkflowPromptRegistry.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
-import { resolveEffectiveAppReviewScope } from "./AppReviewWorkflowReactor.ts";
 import {
   ImplementationWorkflowReactor,
   type ImplementationWorkflowReactorShape,
@@ -3802,9 +3801,8 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    // Settings can turn a review part off outright. When the intersection
-    // with the ticket's own scope leaves nothing, the review is skipped and
-    // says so, rather than launching a run with nothing to verify.
+    // With both review parts disabled, continue to Code Review without
+    // provisioning a stack or launching an empty App Review.
     const settings = yield* serverSettingsService.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
     );
@@ -3816,15 +3814,9 @@ const make = Effect.gen(function* () {
         stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
       },
     });
-    // Ticket workers own focused E2E validation and persist those commands in
-    // their worker result. Project-level e2eCommands are integration-wide and
-    // can surface unrelated failures, so nested ticket reviews only inspect the
-    // browser. The run-level App Review still runs the complete configured suite.
-    const effectiveScope = resolveEffectiveAppReviewScope({
-      run: { appReviewScope: ticket.appReviewScope ?? "both" },
-      settingsParts: configuredParts,
-      e2eCommandCount: 0,
-    });
+    // The user's review switches govern ticket reviews too. A ticket's
+    // suggested scope cannot disable the E2E step or enable browser review.
+    const effectiveScope = appReviewScopeForParts(configuredParts);
     if (effectiveScope === null) {
       yield* startTicketCodeReview({
         sourceThreadId: input.sourceThreadId,

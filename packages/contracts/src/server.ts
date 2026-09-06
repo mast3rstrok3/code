@@ -76,6 +76,7 @@ export type WorkflowPromptContracts = typeof WorkflowPromptContracts.Type;
 export const WorkflowCatalogStep = Schema.Struct({
   label: TrimmedNonEmptyString,
   skillId: Schema.optional(TrimmedNonEmptyString),
+  workflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
   threadBoundary: Schema.optional(
     Schema.Literals(["same thread", "new thread", "new child thread", "new review thread"]),
   ),
@@ -102,6 +103,13 @@ export const WorkflowSkillContract = Schema.Struct({
   title: TrimmedNonEmptyString,
   description: TrimmedNonEmptyString,
   promptText: TrimmedNonEmptyString,
+  workflowAnnotations: Schema.Array(
+    Schema.Struct({
+      workflowPromptId: TrimmedNonEmptyString,
+      title: TrimmedNonEmptyString,
+      text: TrimmedNonEmptyString,
+    }),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   promptIds: Schema.Array(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),

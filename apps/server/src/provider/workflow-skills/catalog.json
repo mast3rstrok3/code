@@ -1,0 +1,864 @@
+[
+  {
+    "id": "planning.fast-feature.codex",
+    "order": 1,
+    "workflow": "planning",
+    "role": "planning-thread",
+    "stage": "planning",
+    "title": "Planning",
+    "description": "Plans ordered Build workstreams and App Review lanes for one stage thread.",
+    "file": "workflows/planning.fast-feature.codex.md",
+    "associatedDocs": [
+      {
+        "id": "app-dev-stack",
+        "title": "AppStack",
+        "path": "app-dev-stack.md",
+        "file": "documents/app-dev-stack.md"
+      }
+    ]
+  },
+  {
+    "id": "matt-pocock.ask-matt",
+    "order": 100,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "Ask Matt",
+    "description": "Find the right skill or workflow",
+    "file": "skills/ask-matt.md",
+    "associatedDocs": [
+      {
+        "id": "matt-pocock.ask-matt.phase-boundaries",
+        "title": "Phase boundaries",
+        "path": "ask-matt/PHASE-BOUNDARIES.md",
+        "file": "documents/matt-pocock.ask-matt.phase-boundaries.md"
+      }
+    ]
+  },
+  {
+    "id": "matt-pocock.code-review",
+    "order": 101,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "Code Review",
+    "description": "Review a diff on standards and spec",
+    "file": "skills/code-review.md",
+    "associatedDocs": []
+  },
+  {
+    "id": "matt-pocock.codebase-design",
+    "order": 102,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "Codebase Design",
+    "description": "Vocabulary for deep-module design",
+    "file": "skills/codebase-design.md",
+    "associatedDocs": [
+      {
+        "id": "matt-pocock.codebase-design.deepening",
+        "title": "Deepening",
+        "path": "codebase-design/DEEPENING.md",
+        "file": "documents/matt-pocock.codebase-design.deepening.md"
+      },
+      {
+        "id": "matt-pocock.codebase-design.design-it-twice",
+        "title": "Design It Twice",
+        "path": "codebase-design/DESIGN-IT-TWICE.md",
+        "file": "documents/matt-pocock.codebase-design.design-it-twice.md"
+      }
+    ]
+  },
+  {
+    "id": "matt-pocock.diagnosing-bugs",
+    "order": 103,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "Diagnosing Bugs",
+    "description": "Diagnose hard bugs and regressions",
+    "file": "skills/diagnosing-bugs.md",
+    "associatedDocs": [
+      {
+        "id": "matt-pocock.diagnosing-bugs.scripts-hitl-loop-template",
+        "title": "Scripts/hitl Loop.template",
+        "path": "diagnosing-bugs/scripts/hitl-loop.template.sh",
+        "file": "documents/matt-pocock.diagnosing-bugs.scripts-hitl-loop-template.sh"
+      }
+    ]
+  },
+  {
+    "id": "matt-pocock.domain-modeling",
+    "order": 104,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "Domain Modeling",
+    "description": "Build and sharpen a domain model",
+    "file": "skills/domain-modeling.md",
+    "associatedDocs": [
+      {
+        "id": "matt-pocock.domain-modeling.adr-format",
+        "title": "ADR Format",
+        "path": "domain-modeling/ADR-FORMAT.md",
+        "file": "documents/ADR-FORMAT.md"
+      },
+      {
+        "id": "matt-pocock.domain-modeling.context-format",
+        "title": "CONTEXT.md Format",
+        "path": "domain-modeling/CONTEXT-FORMAT.md",
+        "file": "documents/CONTEXT-FORMAT.md"
+      }
+    ]
+  },
+  {
+    "id": "matt-pocock.grill-with-docs",
+    "order": 105,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "Grill with Docs",
+    "description": "Grill a design and write its docs",
+    "file": "skills/grill-with-docs.md",
+    "associatedDocs": [
+      {
+        "id": "matt-pocock.domain-modeling.adr-format",
+        "title": "ADR Format",
+        "path": "domain-modeling/ADR-FORMAT.md",
+        "file": "documents/ADR-FORMAT.md"
+      },
+      {
+        "id": "matt-pocock.domain-modeling.context-format",
+        "title": "CONTEXT.md Format",
+        "path": "domain-modeling/CONTEXT-FORMAT.md",
+        "file": "documents/CONTEXT-FORMAT.md"
+      }
+    ]
+  },
+  {
+    "id": "matt-pocock.implement",
+    "order": 106,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "Implement",
+    "description": "Build work from a spec or tickets",
+    "file": "skills/implement.md",
+    "associatedDocs": []
+  },
+  {
+    "id": "matt-pocock.improve-codebase-architecture",
+    "order": 107,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "Improve Codebase Architecture",
+    "description": "Find and grill architecture improvements",
+    "file": "skills/improve-codebase-architecture.md",
+    "associatedDocs": [
+      {
+        "id": "matt-pocock.improve-codebase-architecture.html-report",
+        "title": "HTML Report Format",
+        "path": "improve-codebase-architecture/HTML-REPORT.md",
+        "file": "documents/matt-pocock.improve-codebase-architecture.html-report.md"
+      }
+    ]
+  },
+  {
+    "id": "matt-pocock.prototype",
+    "order": 108,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "Prototype",
+    "description": "Prototype to answer a design question",
+    "file": "skills/prototype.md",
+    "associatedDocs": [
+      {
+        "id": "matt-pocock.prototype.logic",
+        "title": "Logic Prototype",
+        "path": "prototype/LOGIC.md",
+        "file": "documents/matt-pocock.prototype.logic.md"
+      },
+      {
+        "id": "matt-pocock.prototype.ui",
+        "title": "UI Prototype",
+        "path": "prototype/UI.md",
+        "file": "documents/matt-pocock.prototype.ui.md"
+      }
+    ]
+  },
+  {
+    "id": "matt-pocock.research",
+    "order": 109,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "Research",
+    "description": "Research from high-trust sources",
+    "file": "skills/research.md",
+    "associatedDocs": []
+  },
+  {
+    "id": "matt-pocock.resolving-merge-conflicts",
+    "order": 110,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "Resolving Merge Conflicts",
+    "description": "Resolve merge and rebase conflicts",
+    "file": "skills/resolving-merge-conflicts.md",
+    "associatedDocs": []
+  },
+  {
+    "id": "matt-pocock.setup-matt-pocock-skills",
+    "order": 111,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "Setup Matt Pocock Skills",
+    "description": "Configure a repo for the skills",
+    "file": "skills/setup-matt-pocock-skills.md",
+    "associatedDocs": [
+      {
+        "id": "matt-pocock.setup-matt-pocock-skills.domain",
+        "title": "Domain Docs",
+        "path": "setup-matt-pocock-skills/domain.md",
+        "file": "documents/matt-pocock.setup-matt-pocock-skills.domain.md"
+      },
+      {
+        "id": "matt-pocock.setup-matt-pocock-skills.issue-tracker-github",
+        "title": "Issue tracker: GitHub",
+        "path": "setup-matt-pocock-skills/issue-tracker-github.md",
+        "file": "documents/matt-pocock.setup-matt-pocock-skills.issue-tracker-github.md"
+      },
+      {
+        "id": "matt-pocock.setup-matt-pocock-skills.issue-tracker-gitlab",
+        "title": "Issue tracker: GitLab",
+        "path": "setup-matt-pocock-skills/issue-tracker-gitlab.md",
+        "file": "documents/matt-pocock.setup-matt-pocock-skills.issue-tracker-gitlab.md"
+      },
+      {
+        "id": "matt-pocock.setup-matt-pocock-skills.issue-tracker-local",
+        "title": "Issue tracker: Local Markdown",
+        "path": "setup-matt-pocock-skills/issue-tracker-local.md",
+        "file": "documents/matt-pocock.setup-matt-pocock-skills.issue-tracker-local.md"
+      },
+      {
+        "id": "matt-pocock.setup-matt-pocock-skills.triage-labels",
+        "title": "Triage Labels",
+        "path": "setup-matt-pocock-skills/triage-labels.md",
+        "file": "documents/matt-pocock.setup-matt-pocock-skills.triage-labels.md"
+      }
+    ]
+  },
+  {
+    "id": "matt-pocock.tdd",
+    "order": 112,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "TDD",
+    "description": "Test-driven red-green-refactor",
+    "file": "skills/tdd.md",
+    "associatedDocs": [
+      {
+        "id": "matt-pocock.tdd.mocking",
+        "title": "When to Mock",
+        "path": "tdd/mocking.md",
+        "file": "documents/matt-pocock.tdd.mocking.md"
+      },
+      {
+        "id": "matt-pocock.tdd.tests",
+        "title": "Good and Bad Tests",
+        "path": "tdd/tests.md",
+        "file": "documents/matt-pocock.tdd.tests.md"
+      }
+    ]
+  },
+  {
+    "id": "matt-pocock.to-spec",
+    "order": 113,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "To Spec",
+    "description": "Turn a conversation into a spec",
+    "file": "skills/to-spec.md",
+    "associatedDocs": []
+  },
+  {
+    "id": "matt-pocock.to-tickets",
+    "order": 114,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "To Tickets",
+    "description": "Split a plan into tracer-bullet tickets",
+    "file": "skills/to-tickets.md",
+    "associatedDocs": []
+  },
+  {
+    "id": "matt-pocock.triage",
+    "order": 115,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "Triage",
+    "description": "Move issues through triage roles",
+    "file": "skills/triage.md",
+    "associatedDocs": [
+      {
+        "id": "matt-pocock.triage.agent-brief",
+        "title": "Writing Agent Briefs",
+        "path": "triage/AGENT-BRIEF.md",
+        "file": "documents/matt-pocock.triage.agent-brief.md"
+      },
+      {
+        "id": "matt-pocock.triage.out-of-scope",
+        "title": "Out-of-Scope Knowledge Base",
+        "path": "triage/OUT-OF-SCOPE.md",
+        "file": "documents/matt-pocock.triage.out-of-scope.md"
+      }
+    ]
+  },
+  {
+    "id": "matt-pocock.wayfinder",
+    "order": 116,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "Wayfinder",
+    "description": "Map a large effort as decision tickets",
+    "file": "skills/wayfinder.md",
+    "associatedDocs": []
+  },
+  {
+    "id": "matt-pocock.wizard",
+    "order": 117,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "Wizard",
+    "description": "Generate an interactive setup wizard",
+    "file": "skills/wizard.md",
+    "associatedDocs": [
+      {
+        "id": "matt-pocock.wizard.template",
+        "title": "Template",
+        "path": "wizard/template.sh",
+        "file": "documents/matt-pocock.wizard.template.sh"
+      }
+    ]
+  },
+  {
+    "id": "workflow.agent-communications",
+    "order": 1,
+    "workflow": "shared",
+    "role": "workflow-communications",
+    "stage": "agent-communications",
+    "title": "Agent Communications",
+    "description": "Shared workflow instructions for workflow thread messaging, blockers, and stage handoffs.",
+    "file": "workflows/workflow.agent-communications.md"
+  },
+  {
+    "id": "shared.grilling.codex",
+    "order": 2,
+    "workflow": "shared",
+    "role": "workflow-communications",
+    "stage": "grilling",
+    "title": "Grilling",
+    "description": "The shared design-tree and frontier-round interview primitive.",
+    "file": "workflows/shared.grilling.codex.md"
+  },
+  {
+    "id": "planning.grill-stage.codex",
+    "order": 1,
+    "workflow": "planning",
+    "role": "planning-thread",
+    "stage": "grill",
+    "title": "1. Planning Grill",
+    "description": "Asks for product-only or complete engineering grilling, then resolves that decision tree.",
+    "file": "skills/grill-with-docs.md",
+    "associatedDocs": [
+      {
+        "id": "app-dev-stack",
+        "title": "AppStack",
+        "path": "app-dev-stack.md",
+        "file": "documents/app-dev-stack.md"
+      },
+      {
+        "id": "context-format",
+        "title": "CONTEXT.md Format",
+        "path": "CONTEXT-FORMAT.md",
+        "file": "documents/CONTEXT-FORMAT.md"
+      },
+      {
+        "id": "adr-format",
+        "title": "ADR Format",
+        "path": "ADR-FORMAT.md",
+        "file": "documents/ADR-FORMAT.md"
+      }
+    ],
+    "workflowInstructionsFile": "workflows/planning.grill-stage.codex.md"
+  },
+  {
+    "id": "planning.domain-modeling.codex",
+    "order": 2,
+    "workflow": "planning",
+    "role": "planning-thread",
+    "stage": "domain-modeling",
+    "title": "Domain Modeling",
+    "description": "Sharpens repository language, contexts, scenarios, and durable decisions.",
+    "file": "skills/domain-modeling.md",
+    "associatedDocs": [
+      {
+        "id": "app-dev-stack",
+        "title": "AppStack",
+        "path": "app-dev-stack.md",
+        "file": "documents/app-dev-stack.md"
+      },
+      {
+        "id": "context-format",
+        "title": "CONTEXT.md Format",
+        "path": "CONTEXT-FORMAT.md",
+        "file": "documents/CONTEXT-FORMAT.md"
+      },
+      {
+        "id": "adr-format",
+        "title": "ADR Format",
+        "path": "ADR-FORMAT.md",
+        "file": "documents/ADR-FORMAT.md"
+      }
+    ],
+    "workflowInstructionsFile": "workflows/planning.domain-modeling.codex.md"
+  },
+  {
+    "id": "planning.engineering-grill-automatic.codex",
+    "order": 2,
+    "workflow": "planning",
+    "role": "planning-thread",
+    "stage": "grill",
+    "title": "Engineering Grill (Automatic)",
+    "description": "Resolves engineering and domain decisions autonomously from locked Product Grill intent.",
+    "file": "skills/grill-with-docs.md",
+    "associatedDocs": [
+      {
+        "id": "app-dev-stack",
+        "title": "AppStack",
+        "path": "app-dev-stack.md",
+        "file": "documents/app-dev-stack.md"
+      },
+      {
+        "id": "context-format",
+        "title": "CONTEXT.md Format",
+        "path": "CONTEXT-FORMAT.md",
+        "file": "documents/CONTEXT-FORMAT.md"
+      },
+      {
+        "id": "adr-format",
+        "title": "ADR Format",
+        "path": "ADR-FORMAT.md",
+        "file": "documents/ADR-FORMAT.md"
+      }
+    ],
+    "workflowInstructionsFile": "workflows/planning.engineering-grill-automatic.codex.md"
+  },
+  {
+    "id": "planning.product-context.codex",
+    "order": 2,
+    "workflow": "planning",
+    "role": "planning-thread",
+    "stage": "grill",
+    "title": "Product Context Modeling",
+    "description": "Builds domain context from locked product decisions without an Engineering Grill.",
+    "file": "skills/domain-modeling.md",
+    "associatedDocs": [
+      {
+        "id": "context-format",
+        "title": "CONTEXT.md Format",
+        "path": "CONTEXT-FORMAT.md",
+        "file": "documents/CONTEXT-FORMAT.md"
+      },
+      {
+        "id": "adr-format",
+        "title": "ADR Format",
+        "path": "ADR-FORMAT.md",
+        "file": "documents/ADR-FORMAT.md"
+      }
+    ],
+    "workflowInstructionsFile": "workflows/planning.product-context.codex.md"
+  },
+  {
+    "id": "planning.prototype.codex",
+    "order": 3,
+    "workflow": "planning",
+    "role": "planning-thread",
+    "stage": "prototype",
+    "title": "Prototype",
+    "description": "Builds throwaway logic or UI artifacts to answer one design question.",
+    "file": "skills/prototype.md",
+    "associatedDocs": [
+      {
+        "id": "app-dev-stack",
+        "title": "AppStack",
+        "path": "app-dev-stack.md",
+        "file": "documents/app-dev-stack.md"
+      },
+      {
+        "id": "prototype-logic",
+        "title": "Logic Prototype",
+        "path": "LOGIC.md",
+        "file": "documents/prototype-logic.md"
+      },
+      {
+        "id": "prototype-ui",
+        "title": "UI Prototype",
+        "path": "UI.md",
+        "file": "documents/prototype-ui.md"
+      }
+    ],
+    "workflowInstructionsFile": "workflows/planning.prototype.codex.md"
+  },
+  {
+    "id": "planning.wayfinder.codex",
+    "order": 4,
+    "workflow": "planning",
+    "role": "planning-thread",
+    "stage": "wayfinding",
+    "title": "Wayfinder",
+    "description": "Maps large, uncertain work into dependency-aware decision tickets.",
+    "file": "skills/wayfinder.md",
+    "workflowInstructionsFile": "workflows/planning.wayfinder.codex.md"
+  },
+  {
+    "id": "planning.research.codex",
+    "order": 5,
+    "workflow": "planning",
+    "role": "planning-thread",
+    "stage": "research",
+    "title": "Research",
+    "description": "Resolves bounded questions from primary sources into cited repository notes.",
+    "file": "skills/research.md",
+    "workflowInstructionsFile": "workflows/planning.research.codex.md"
+  },
+  {
+    "id": "planning.spec.codex",
+    "order": 2,
+    "workflow": "planning",
+    "role": "planning-thread",
+    "stage": "spec-authoring",
+    "title": "2. Spec",
+    "description": "Creates the durable Spec artifact from planning context and locked decisions.",
+    "file": "skills/to-spec.md",
+    "associatedDocs": [
+      {
+        "id": "app-dev-stack",
+        "title": "AppStack",
+        "path": "app-dev-stack.md",
+        "file": "documents/app-dev-stack.md"
+      },
+      {
+        "id": "context-format",
+        "title": "CONTEXT.md Format",
+        "path": "CONTEXT-FORMAT.md",
+        "file": "documents/CONTEXT-FORMAT.md"
+      },
+      {
+        "id": "adr-format",
+        "title": "ADR Format",
+        "path": "ADR-FORMAT.md",
+        "file": "documents/ADR-FORMAT.md"
+      },
+      {
+        "id": "domain-docs",
+        "title": "Domain Docs",
+        "path": "domain.md",
+        "file": "documents/matt-pocock.setup-matt-pocock-skills.domain.md"
+      }
+    ],
+    "workflowInstructionsFile": "workflows/planning.spec.codex.md"
+  },
+  {
+    "id": "planning.tickets.codex",
+    "order": 3,
+    "workflow": "planning",
+    "role": "planning-thread",
+    "stage": "tickets-authoring",
+    "title": "3. Tickets",
+    "description": "Decomposes the Spec into implementation-ready planning tickets with dependencies and tests.",
+    "file": "skills/to-tickets.md",
+    "associatedDocs": [
+      {
+        "id": "app-dev-stack",
+        "title": "AppStack",
+        "path": "app-dev-stack.md",
+        "file": "documents/app-dev-stack.md"
+      },
+      {
+        "id": "domain-docs",
+        "title": "Domain Docs",
+        "path": "domain.md",
+        "file": "documents/matt-pocock.setup-matt-pocock-skills.domain.md"
+      },
+      {
+        "id": "agent-brief",
+        "title": "Writing Agent Briefs",
+        "path": "AGENT-BRIEF.md",
+        "file": "documents/agent-brief.md"
+      }
+    ],
+    "workflowInstructionsFile": "workflows/planning.tickets.codex.md"
+  },
+  {
+    "id": "planning.ticket-reviewer.codex",
+    "order": 4,
+    "workflow": "planning",
+    "role": "planning-reviewer",
+    "stage": "ticket-review",
+    "title": "4. Ticket Review",
+    "description": "Reviews planning tickets for dependency correctness, readiness, and Spec alignment.",
+    "file": "workflows/planning.ticket-reviewer.codex.md",
+    "associatedDocs": [
+      {
+        "id": "app-dev-stack",
+        "title": "AppStack",
+        "path": "app-dev-stack.md",
+        "file": "documents/app-dev-stack.md"
+      },
+      {
+        "id": "agent-brief",
+        "title": "Writing Agent Briefs",
+        "path": "AGENT-BRIEF.md",
+        "file": "documents/agent-brief.md"
+      }
+    ]
+  },
+  {
+    "id": "implementation.orchestrator-planning.codex",
+    "order": 1,
+    "workflow": "implementation",
+    "role": "implementation-orchestrator",
+    "stage": "orchestrator-start",
+    "title": "1. Orchestrator Start",
+    "description": "Plans a durable implementation orchestration run from a Spec.",
+    "file": "skills/implement.md",
+    "associatedDocs": [
+      {
+        "id": "app-dev-stack",
+        "title": "AppStack",
+        "path": "app-dev-stack.md",
+        "file": "documents/app-dev-stack.md"
+      }
+    ],
+    "workflowInstructionsFile": "workflows/implementation.orchestrator-planning.codex.md"
+  },
+  {
+    "id": "implementation.tdd.codex",
+    "order": 2,
+    "workflow": "implementation",
+    "role": "implementation-worker",
+    "stage": "tdd",
+    "title": "2. TDD Implementation",
+    "description": "Implements planning tickets with a red-green-refactor loop and focused validation.",
+    "file": "skills/tdd.md",
+    "associatedDocs": [
+      {
+        "id": "app-dev-stack",
+        "title": "AppStack",
+        "path": "app-dev-stack.md",
+        "file": "documents/app-dev-stack.md"
+      },
+      {
+        "id": "tdd-mocking",
+        "title": "When to Mock",
+        "path": "mocking.md",
+        "file": "documents/matt-pocock.tdd.mocking.md"
+      },
+      {
+        "id": "tdd-tests",
+        "title": "Good and Bad Tests",
+        "path": "tests.md",
+        "file": "documents/matt-pocock.tdd.tests.md"
+      },
+      {
+        "id": "tdd-logging",
+        "title": "Logging for TDD",
+        "path": "logging.md",
+        "file": "documents/tdd-logging.md"
+      }
+    ],
+    "workflowInstructionsFile": "workflows/implementation.tdd.codex.md"
+  },
+  {
+    "id": "implementation.merge-gate.codex",
+    "order": 3,
+    "workflow": "implementation",
+    "role": "implementation-validator",
+    "stage": "merge-gate",
+    "title": "3. Merge Gate",
+    "description": "Merges implementation work and fixes validation failures until green.",
+    "file": "workflows/implementation.merge-gate.codex.md",
+    "associatedDocs": [
+      {
+        "id": "app-dev-stack",
+        "title": "AppStack",
+        "path": "app-dev-stack.md",
+        "file": "documents/app-dev-stack.md"
+      },
+      {
+        "id": "resolving-merge-conflicts",
+        "title": "Resolving Merge Conflicts",
+        "path": "resolving-merge-conflicts.md",
+        "file": "documents/resolving-merge-conflicts.md"
+      }
+    ]
+  },
+  {
+    "id": "implementation.e2e-app-review.codex",
+    "order": 1,
+    "workflow": "app-review",
+    "role": "app-review-reviewer",
+    "stage": "e2e-app-review",
+    "title": "End-to-end App Review",
+    "description": "Runs the configured E2E commands and publishes their durable review section.",
+    "file": "workflows/implementation.e2e-app-review.codex.md"
+  },
+  {
+    "id": "implementation.browser-app-review.codex",
+    "order": 2,
+    "workflow": "app-review",
+    "role": "app-review-reviewer",
+    "stage": "browser-app-review",
+    "title": "Browser App Review",
+    "description": "Tests a preview target and creates concrete durable App Review findings.",
+    "file": "workflows/implementation.browser-app-review.codex.md",
+    "associatedDocs": [
+      {
+        "id": "app-dev-stack",
+        "title": "AppStack",
+        "path": "app-dev-stack.md",
+        "file": "documents/app-dev-stack.md"
+      },
+      {
+        "id": "preview-browser-qa",
+        "path": "preview-browser-qa.md",
+        "title": "Preview Browser QA",
+        "file": "documents/preview-browser-qa.md"
+      }
+    ]
+  },
+  {
+    "id": "implementation.fix.codex",
+    "order": 5,
+    "workflow": "implementation",
+    "role": "implementation-fixer",
+    "stage": "fix",
+    "title": "5. Fix",
+    "description": "Fixes merge-gate and code-review failures before rerunning validation.",
+    "file": "workflows/implementation.fix.codex.md",
+    "associatedDocs": [
+      {
+        "id": "app-dev-stack",
+        "title": "AppStack",
+        "path": "app-dev-stack.md",
+        "file": "documents/app-dev-stack.md"
+      }
+    ]
+  },
+  {
+    "id": "implementation.code-review.codex",
+    "order": 6,
+    "workflow": "implementation",
+    "role": "implementation-code-reviewer",
+    "stage": "code-review",
+    "title": "6. Code Review",
+    "description": "Reviews implementation changes along the Standards and Spec axes.",
+    "file": "skills/code-review.md",
+    "associatedDocs": [
+      {
+        "id": "app-dev-stack",
+        "title": "AppStack",
+        "path": "app-dev-stack.md",
+        "file": "documents/app-dev-stack.md"
+      }
+    ],
+    "workflowInstructionsFile": "workflows/implementation.code-review.codex.md"
+  },
+  {
+    "id": "implementation.change-request-babysitter.codex",
+    "order": 7,
+    "workflow": "implementation",
+    "role": "implementation-change-request-babysitter",
+    "stage": "change-request-babysit",
+    "title": "7. Pull Request Babysitter",
+    "description": "Fixes CI and review failures until the latest pull request commit is green.",
+    "file": "workflows/implementation.change-request-babysitter.codex.md",
+    "associatedDocs": []
+  },
+  {
+    "id": "product.fix.codex",
+    "order": 1,
+    "workflow": "product",
+    "role": "planning-thread",
+    "stage": "intent",
+    "title": "Product Grill \u2014 Fix",
+    "description": "Locks a fix intent before same-thread planning and one Build child.",
+    "file": "workflows/product.fix.codex.md"
+  },
+  {
+    "id": "product.fast-feature.codex",
+    "order": 1,
+    "workflow": "product",
+    "role": "planning-thread",
+    "stage": "intent",
+    "title": "Product Grill \u2014 Fast Feature",
+    "description": "Locks feature intent before lightweight Plan, Build, and review orchestration.",
+    "file": "workflows/product.fast-feature.codex.md",
+    "associatedDocs": [
+      {
+        "id": "app-dev-stack",
+        "title": "AppStack",
+        "path": "app-dev-stack.md",
+        "file": "documents/app-dev-stack.md"
+      }
+    ]
+  },
+  {
+    "id": "product.full-feature.codex",
+    "order": 1,
+    "workflow": "product",
+    "role": "planning-thread",
+    "stage": "intent",
+    "title": "Product Grill \u2014 Full Feature",
+    "description": "Locks feature intent before complete Planning and Implementation workflows.",
+    "file": "workflows/product.full-feature.codex.md",
+    "associatedDocs": [
+      {
+        "id": "app-dev-stack",
+        "title": "AppStack",
+        "path": "app-dev-stack.md",
+        "file": "documents/app-dev-stack.md"
+      }
+    ]
+  },
+  {
+    "id": "product.planning.codex",
+    "order": 1,
+    "workflow": "product",
+    "role": "planning-thread",
+    "stage": "intent",
+    "title": "Product Grill \u2014 Planning",
+    "description": "Locks product intent before product context, Spec, tickets, and Implementation.",
+    "file": "workflows/product.planning.codex.md",
+    "associatedDocs": [
+      {
+        "id": "app-dev-stack",
+        "title": "AppStack",
+        "path": "app-dev-stack.md",
+        "file": "documents/app-dev-stack.md"
+      }
+    ]
+  }
+]

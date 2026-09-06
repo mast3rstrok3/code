@@ -235,6 +235,12 @@ export function applyServerSettingsPatch(
     ...(patch.providerInstances !== undefined
       ? { providerInstances: patch.providerInstances }
       : {}),
+    ...(patch.workflowStepInstructions !== undefined
+      ? { workflowStepInstructions: patch.workflowStepInstructions }
+      : {}),
+    ...(patch.workflowStepReviewParts !== undefined
+      ? { workflowStepReviewParts: patch.workflowStepReviewParts }
+      : {}),
     // Replace, never merge: dropping a default step pin has to be expressible.
     ...(patch.workflowStepModels !== undefined
       ? { workflowStepModels: patch.workflowStepModels }
@@ -302,4 +308,23 @@ export function applyServerSettingsPatch(
     ...nextWithReplacements,
     textGenerationModelSelection: createModelSelection(instanceId, model, options),
   };
+}
+
+/** Compose environment defaults after the built-in skill and its workflow variation. */
+export function appendWorkflowSkillInstructions(
+  text: string,
+  skillId: string,
+  workflowPromptId: string,
+  instructions: Readonly<Record<string, string>>,
+): string {
+  const extra = [
+    instructions[skillId],
+    ...(skillId === workflowPromptId ? [] : [instructions[workflowPromptId]]),
+  ]
+    .map((value) => value?.trim())
+    .filter(Boolean)
+    .join("\n\n");
+  return extra
+    ? `${text}\n\n<user-workflow-instructions>\n${extra}\n</user-workflow-instructions>`
+    : text;
 }

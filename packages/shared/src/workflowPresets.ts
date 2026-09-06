@@ -63,12 +63,12 @@ const APP_REVIEW_SUB_STEPS: ReadonlyArray<WorkflowPresetSubStep> = [
   {
     label: "End-to-end test",
     workflowPromptId: "implementation.e2e-app-review.codex",
-    note: "runs the project's e2eCommands when t3.json declares them",
+    note: "runs the project's e2eCommands; enabled by default",
   },
   {
     label: "Browser review",
     workflowPromptId: "implementation.browser-app-review.codex",
-    note: "reviews what the automated tests cannot prove and saves browser evidence",
+    note: "optional; reviews what the automated tests cannot prove and saves browser evidence",
   },
   {
     label: "Gap analysis & repair tickets",
@@ -195,7 +195,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
   },
   {
     id: "fast-plan",
-    label: "Fast Feature",
+    label: "Feature",
     description: "Plan and build with the provider CLI, then review and publish the change.",
     route: "product",
     interactionMode: "plan",
@@ -407,7 +407,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
   },
   {
     id: "planning",
-    label: "Full Engineering",
+    label: "Engineering",
     description:
       "Plan, run every ready ticket concurrently, then use one thread for each ticket or root step.",
     route: "planning",
@@ -504,7 +504,7 @@ const ENGINEERING_WORKFLOW_DEFINITION = GUIDED_WORKFLOW_PRESET_DEFINITIONS.find(
 const FAST_ENGINEERING_WORKFLOW_DEFINITION: WorkflowPresetDefinition = {
   ...ENGINEERING_WORKFLOW_DEFINITION,
   id: "fast-engineering",
-  label: "Fast Engineering",
+  label: "Quick Engineering",
   description:
     "Run the full engineering sequence with ticket and Final App Reviews skipped by default.",
   implementationDefaults: {

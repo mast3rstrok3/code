@@ -26,7 +26,6 @@ import {
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
 } from "@t3tools/contracts";
 import {
-  ALL_APP_REVIEW_PARTS,
   appReviewPartsForScope,
   appReviewScopeForParts,
   intersectAppReviewParts,
@@ -964,42 +963,16 @@ export function e2eCheckIdsForCommands(commands: ReadonlyArray<string>): Readonl
   return commands.map((_, index) => `e2e-${index + 1}`);
 }
 
-/**
- * The parts this run actually verifies with, or null when Settings leave it
- * nothing to run.
- *
- * Three layers intersect: what Settings allow for the step, what the run
- * requested (the ticket's scope), and what the project makes available. A
- * missing e2e suite degrades an e2e request to browser when Settings allow the
- * browser at all — an intent should not strand a review — but a part Settings
- * turned off stays off, which is what makes the toggle a prohibition rather
- * than a preference.
- */
+/** Keep the requested scope within the user's enabled review parts. */
 export function resolveEffectiveAppReviewScope(input: {
   readonly run: Pick<AppReviewWorkflowRun, "appReviewScope">;
   readonly settingsParts: AppReviewParts;
-  readonly e2eCommandCount: number;
 }): AppReviewScope | null {
-  const allowed = intersectAppReviewParts(
-    input.settingsParts,
-    appReviewPartsForScope(input.run.appReviewScope ?? "both"),
-  );
-  if (appReviewScopeForParts(allowed) === null) return null;
-  const available = { e2e: allowed.e2e && input.e2eCommandCount > 0, browser: allowed.browser };
-  return appReviewScopeForParts(available) ?? (input.settingsParts.browser ? "browser" : null);
-}
-
-/** {@link resolveEffectiveAppReviewScope} with nothing turned off in Settings. */
-export function effectiveAppReviewScope(
-  run: Pick<AppReviewWorkflowRun, "appReviewScope">,
-  e2eCommandCount: number,
-): AppReviewScope {
-  return (
-    resolveEffectiveAppReviewScope({
-      run,
-      settingsParts: ALL_APP_REVIEW_PARTS,
-      e2eCommandCount,
-    }) ?? "browser"
+  return appReviewScopeForParts(
+    intersectAppReviewParts(
+      input.settingsParts,
+      appReviewPartsForScope(input.run.appReviewScope ?? "both"),
+    ),
   );
 }
 
@@ -1377,7 +1350,6 @@ const make = Effect.gen(function* () {
    */
   const reviewScopeForRun = Effect.fn("AppReviewWorkflowReactor.reviewScopeForRun")(function* (
     run: AppReviewWorkflowRun,
-    e2eCommandCount: number,
   ) {
     const settings = yield* serverSettingsService.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
@@ -1400,7 +1372,7 @@ const make = Effect.gen(function* () {
             }
           : { workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex },
     });
-    return resolveEffectiveAppReviewScope({ run, settingsParts, e2eCommandCount });
+    return resolveEffectiveAppReviewScope({ run, settingsParts });
   });
 
   const updateRun = Effect.fn("AppReviewWorkflowReactor.updateRun")(function* (
@@ -1874,7 +1846,7 @@ const make = Effect.gen(function* () {
       }
     }
     const e2eCommands = yield* e2eCommandsForCwd(cwd);
-    const reviewScope = yield* reviewScopeForRun(run, e2eCommands.length);
+    const reviewScope = yield* reviewScopeForRun(run);
     if (reviewScope === null) {
       yield* failRun({
         run,
@@ -1886,6 +1858,16 @@ const make = Effect.gen(function* () {
       return;
     }
     const includesE2e = reviewScope === "e2e" || reviewScope === "both";
+    if (includesE2e && e2eCommands.length === 0) {
+      yield* failRun({
+        run,
+        reason: "automation-unavailable",
+        detailMarkdown:
+          "E2E testing is enabled, but this worktree has no e2eCommands in t3.json. Configure an E2E command or disable E2E testing for this App Review.",
+        occurredAt,
+      });
+      return;
+    }
     const cycleNumber = run.cyclesUsed + 1;
     const e2eThreadId = includesE2e ? yield* serverThreadId("app-review-e2e") : null;
     const cycle: AppReviewWorkflowCycle = {
@@ -2560,7 +2542,7 @@ const make = Effect.gen(function* () {
     );
     // A review that never gates on the e2e suite does not ask its fixer to
     // run it either.
-    const fixerScope = yield* reviewScopeForRun(run, declaredE2eCommands.length);
+    const fixerScope = yield* reviewScopeForRun(run);
     const e2eCommands = fixerScope === "e2e" || fixerScope === "both" ? declaredE2eCommands : [];
     if (existing === undefined) {
       yield* orchestrationEngine.dispatch({

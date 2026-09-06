@@ -14,10 +14,11 @@ import {
   type EnvironmentId,
   type ModelSelection,
   type ServerSettings,
+  type WorkflowSkillContract,
 } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { type WorkflowCatalogState, useWorkflowCatalog } from "../../workflowCatalogState";
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
@@ -25,6 +26,7 @@ import { setWorkflowStepReviewPartsOverride } from "@t3tools/shared/appReviewPar
 import { resolveDefaultAgentModelSelectionState } from "../../modelSelection";
 import { primaryServerProvidersAtom } from "../../state/server";
 import { usePrimaryEnvironmentId } from "../../state/environments";
+import { WorkflowSkillContent } from "../WorkflowSkillContent";
 import { EngineeringWorkflowSettings } from "../EngineeringWorkflowSettings";
 import {
   useWorkflowModelChoices,
@@ -53,10 +55,10 @@ function PageIntro({ title, description }: { title: string; description: string 
       </div>
       <div className="flex flex-wrap items-center gap-2 px-1">
         <Badge variant="secondary" size="sm">
-          Read-only
+          Built-in catalog
         </Badge>
         <Badge variant="secondary" size="sm">
-          Repository versioned
+          Versioned instructions
         </Badge>
         <Badge variant="secondary" size="sm">
           Codex + Claude + OpenCode
@@ -270,13 +272,16 @@ export function WorkflowSettings() {
               >
                 <ol className="mt-3 space-y-2 border-t border-border/60 py-3">
                   {workflow.steps.map((step, index) => (
-                    <li key={`${workflow.id}-${step.label}`} className="flex gap-3 text-xs">
+                    <li
+                      key={`${workflow.id}-${step.workflowPromptId ?? step.label}-${step.note ?? ""}`}
+                      className="flex gap-3 text-xs"
+                    >
                       <span className="text-muted-foreground">{index + 1}.</span>
                       <div className="min-w-0">
                         {step.skillId ? (
                           <Link
                             to="/settings/skills"
-                            search={{ skill: step.skillId }}
+                            search={{ skill: step.skillId, prompt: step.workflowPromptId }}
                             className="font-medium text-foreground hover:underline"
                           >
                             {step.label}
@@ -309,7 +314,48 @@ export function resolveCatalogFocusId(
   return requestedId !== undefined && availableIds.includes(requestedId) ? requestedId : undefined;
 }
 
-export function SkillSettings({ focusedSkillId }: { focusedSkillId: string | undefined }) {
+function SkillInstructions({
+  skill,
+  environmentId,
+  focused,
+  focusedPromptId,
+}: {
+  skill: WorkflowSkillContract;
+  environmentId: EnvironmentId | null;
+  focused: boolean;
+  focusedPromptId?: string | undefined;
+}) {
+  const [expanded, setExpanded] = useState(focused);
+  return (
+    <details
+      open={focused}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+      className="group border-t border-border/60"
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-2 py-2 font-medium text-muted-foreground text-xs">
+        <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />
+        Skill instructions
+      </summary>
+      {expanded ? (
+        <WorkflowSkillContent
+          key={focusedPromptId ?? skill.id}
+          skill={skill}
+          environmentId={environmentId}
+          initialWorkflowPromptId={focusedPromptId}
+        />
+      ) : null}
+    </details>
+  );
+}
+
+export function SkillSettings({
+  focusedSkillId,
+  focusedPromptId,
+}: {
+  focusedSkillId: string | undefined;
+  focusedPromptId?: string | undefined;
+}) {
+  const environmentId = usePrimaryEnvironmentId();
   const state = useWorkflowCatalog();
   const validFocusedId =
     state.status === "loaded"
@@ -383,20 +429,12 @@ export function SkillSettings({ focusedSkillId }: { focusedSkillId: string | und
                       })}
                     </div>
                   ) : null}
-                  <details
-                    open={validFocusedId === skill.id}
-                    className="group border-t border-border/60"
-                  >
-                    <summary className="flex cursor-pointer list-none items-center gap-2 py-2 font-medium text-muted-foreground text-xs">
-                      <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />
-                      Prompt text
-                    </summary>
-                    <WorkflowCatalogContent
-                      text={skill.promptText}
-                      label={`${skill.title} prompt text`}
-                      maxHeightClassName="max-h-[26rem]"
-                    />
-                  </details>
+                  <SkillInstructions
+                    skill={skill}
+                    environmentId={environmentId}
+                    focused={validFocusedId === skill.id}
+                    focusedPromptId={validFocusedId === skill.id ? focusedPromptId : undefined}
+                  />
                 </SettingsRow>
               </FocusedRow>
             ))}
@@ -459,7 +497,11 @@ export function DocSettings({ focusedDocId }: { focusedDocId: string | undefined
                         <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 py-2">
                           <span className="mr-1 text-xs text-muted-foreground">Used by</span>
                           {doc.skillIds.map((skillId) => (
-                            <Link key={skillId} to="/settings/skills" search={{ skill: skillId }}>
+                            <Link
+                              key={skillId}
+                              to="/settings/skills"
+                              search={{ skill: skillId, prompt: undefined }}
+                            >
                               <Badge variant="secondary" size="sm">
                                 <SparklesIcon />
                                 {skillsById.get(skillId)?.title ?? skillId}

@@ -1,7 +1,7 @@
 import { expect, it } from "vite-plus/test";
 
 import {
-  ALL_APP_REVIEW_PARTS,
+  DEFAULT_APP_REVIEW_PARTS,
   appReviewPartsForScope,
   appReviewScopeForParts,
   describeAppReviewParts,
@@ -18,10 +18,14 @@ const ticketKey = {
   stepWorkflowPromptId: "implementation.tdd.codex",
 };
 
-it("defaults to both parts and lets a ticket key fall back to the step entry", () => {
+it("defaults to E2E only and lets a ticket key fall back to the step entry", () => {
   expect(resolveAppReviewStepParts({ overrides: undefined, key: stepKey })).toEqual(
-    ALL_APP_REVIEW_PARTS,
+    DEFAULT_APP_REVIEW_PARTS,
   );
+  expect(resolveAppReviewStepParts({ overrides: [], key: ticketKey })).toEqual({
+    e2e: true,
+    browser: false,
+  });
   const stepOnly = [{ ...stepKey, e2e: true, browser: false }];
   expect(resolveAppReviewStepParts({ overrides: stepOnly, key: ticketKey })).toEqual({
     e2e: true,
@@ -80,7 +84,7 @@ it("lets run-level overrides outrank the standing Settings entirely", () => {
       settingsOverrides: undefined,
       key: stepKey,
     }),
-  ).toEqual(ALL_APP_REVIEW_PARTS);
+  ).toEqual(DEFAULT_APP_REVIEW_PARTS);
 });
 
 it("states the parts as the insert line", () => {

@@ -705,6 +705,28 @@ function runtimeModeToTurnSandboxPolicy(
   }
 }
 
+export const startCodexTurn = Effect.fn("startCodexTurn")(function* (
+  request: CodexClient.CodexAppServerClient["Service"]["raw"]["request"],
+  params: CodexTurnStartParamsWithCollaborationMode,
+) {
+  const instructions = params.collaborationMode?.settings.developer_instructions;
+  if (instructions) {
+    // Codex 0.153.4 saves collaboration instructions without sending them to the model.
+    // Inject the full developer message; additionalContext truncates long workflow prompts.
+    yield* request("thread/inject_items", {
+      threadId: params.threadId,
+      items: [
+        {
+          type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: instructions }],
+        },
+      ],
+    } satisfies EffectCodexSchema.V2ThreadInjectItemsParams);
+  }
+  return yield* request("turn/start", params);
+});
+
 function buildCodexCollaborationMode(input: {
   readonly interactionMode?: ProviderInteractionMode;
   readonly workflowPromptId?: string;
@@ -2573,7 +2595,7 @@ export const makeCodexSessionRuntime = (
               (input.workflowPromptId === undefined ||
                 isBrowserAppReviewWorkflowPromptId(input.workflowPromptId)),
           });
-          const rawResponse = yield* client.raw.request("turn/start", params);
+          const rawResponse = yield* startCodexTurn(client.raw.request, params);
           const response = yield* decodeV2TurnStartResponse(rawResponse).pipe(
             Effect.mapError((error) =>
               CodexErrors.CodexAppServerProtocolParseError.fromSchemaError(

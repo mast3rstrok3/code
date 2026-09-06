@@ -26,7 +26,7 @@ import {
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
-import { AppReviewDocument } from "./AppReviewDocument";
+import { AppReviewDocument, AppReviewCycleDocument } from "./AppReviewDocument";
 import { AppReviewLaunchDialog } from "./AppReviewLaunchDialog";
 import { cn } from "~/lib/utils";
 
@@ -346,34 +346,12 @@ function RunDetails(props: {
                           Cycle spent · {cycle.failure.reason}: {cycle.failure.detailMarkdown}
                         </p>
                       ) : null}
-                      {cycle.actionableFindingsMarkdown ? (
-                        <p className="whitespace-pre-wrap border-b px-3 py-2 text-xs text-muted-foreground">
-                          {cycle.actionableFindingsMarkdown}
-                        </p>
-                      ) : null}
-                      {e2eRecord ? (
-                        <section className="border-b border-border">
-                          <h3 className="px-4 pt-3 text-xs font-semibold uppercase tracking-normal text-muted-foreground">
-                            End-to-end test
-                          </h3>
-                          <AppReviewDocument
-                            record={e2eRecord}
-                            environmentId={props.environmentId}
-                          />
-                        </section>
-                      ) : null}
-                      {record ? (
-                        <section>
-                          <h3 className="px-4 pt-3 text-xs font-semibold uppercase tracking-normal text-muted-foreground">
-                            Browser review
-                          </h3>
-                          <AppReviewDocument record={record} environmentId={props.environmentId} />
-                        </section>
-                      ) : cycle.appReviewScope !== "e2e" ? (
-                        <p className="px-3 py-4 text-xs text-muted-foreground">
-                          Review evidence is still being prepared.
-                        </p>
-                      ) : null}
+                      <AppReviewCycleDocument
+                        cycle={cycle}
+                        e2eRecord={e2eRecord}
+                        browserRecord={record}
+                        environmentId={props.environmentId}
+                      />
                     </>
                   ) : null}
                 </article>

@@ -190,6 +190,7 @@ describe("ProviderCommandReactor", () => {
   });
 
   async function createHarness(input?: {
+    readonly workflowStepInstructions?: Readonly<Record<string, string>>;
     readonly baseDir?: string;
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session";
@@ -522,7 +523,11 @@ describe("ProviderCommandReactor", () => {
           generateThreadTitle,
         }),
       ),
-      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        ServerSettingsService.layerTest({
+          workflowStepInstructions: input?.workflowStepInstructions ?? {},
+        }),
+      ),
       Layer.provide(Layer.succeed(ServerActivation, input?.serverActivation)),
       Layer.provideMerge(
         Layer.mock(AppStackManager)({
@@ -998,7 +1003,17 @@ describe("ProviderCommandReactor", () => {
     "propagates workflowPromptId from turn command to provider session and turn",
     () =>
       Effect.gen(function* () {
-        const harness = yield* Effect.promise(() => createHarness());
+        const started = yield* Deferred.make<void>();
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            workflowStepInstructions: {
+              [WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex]:
+                "Check the complete signup journey.",
+            },
+            startSessionEffect: (session) =>
+              Deferred.succeed(started, undefined).pipe(Effect.as(session)),
+          }),
+        );
         const now = "2026-01-01T00:00:00.000Z";
 
         yield* harness.engine.dispatch({
@@ -1017,12 +1032,13 @@ describe("ProviderCommandReactor", () => {
           createdAt: now,
         });
 
-        yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 1));
-        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+        yield* Deferred.await(started);
+        yield* Effect.promise(() => harness.drain());
         expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
           workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
         });
         expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+          input: expect.stringContaining("Check the complete signup journey."),
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
         });
@@ -3604,14 +3620,7 @@ describe("ProviderCommandReactor", () => {
           createdAt: now,
         });
 
-        yield* Effect.promise(() =>
-          waitFor(async () => {
-            const thread = (await harness.readModel()).threads.find(
-              (entry) => entry.id === ThreadId.make("thread-1"),
-            );
-            return thread?.session?.status === "stopped";
-          }),
-        );
+        yield* Effect.promise(() => harness.drain());
 
         const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
           (entry) => entry.id === ThreadId.make("thread-1"),

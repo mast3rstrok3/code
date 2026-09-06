@@ -62,7 +62,11 @@ import {
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { AppStackManager } from "../../appStack/AppStackManager.ts";
-import { isAppReviewMcpWorkflowPromptId } from "../../provider/WorkflowPromptRegistry.ts";
+import {
+  appendWorkflowStepInstructions,
+  resolveWorkflowPromptId,
+  isAppReviewMcpWorkflowPromptId,
+} from "../../provider/WorkflowPromptRegistry.ts";
 import { buildWorktreeRuntimeContext } from "../worktreeRuntimeContext.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
@@ -1033,13 +1037,28 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const normalizedInput = toNonEmptyProviderInput(input.messageText);
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
       .listSessions()
       .pipe(
         Effect.map((sessions) => sessions.find((session) => session.threadId === input.threadId)),
       );
+    const workflowPromptId = resolveWorkflowPromptId({
+      workflowPromptId:
+        input.workflowPromptId ??
+        (thread.workflowRole === "fast-feature-implementer"
+          ? "implementation.tdd.codex"
+          : undefined),
+      interactionMode: input.interactionMode ?? thread.interactionMode,
+    });
+    const settings = yield* serverSettingsService.getSettings;
+    const normalizedInput = toNonEmptyProviderInput(
+      appendWorkflowStepInstructions(
+        input.messageText,
+        workflowPromptId,
+        settings.workflowStepInstructions,
+      ),
+    );
     const sessionModelSwitch =
       activeSession === undefined
         ? "in-session"

@@ -25,6 +25,7 @@ import { WORKFLOW_PROMPT_IDS } from "../WorkflowPromptRegistry.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import {
   buildTurnStartParams,
+  startCodexTurn,
   decodeWorkflowRequestUserInputArguments,
   describeMcpElicitation,
   hasConfiguredMcpServer,
@@ -36,6 +37,97 @@ import {
   toMcpElicitationResponse,
 } from "./CodexSessionRuntime.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
+
+describe("startCodexTurn", () => {
+  it.effect("delivers complete developer instructions before starting each workflow stage", () =>
+    Effect.gen(function* () {
+      for (const [interactionMode, workflowPromptId] of [
+        ["planning-workflow", undefined],
+        ["planning-workflow", WORKFLOW_PROMPT_IDS.planningGrillStageCodex],
+        ["planning-workflow", WORKFLOW_PROMPT_IDS.planningSpecCodex],
+        ["planning-workflow", WORKFLOW_PROMPT_IDS.planningTicketsCodex],
+        ["default", undefined],
+        ["plan", undefined],
+      ] as const) {
+        const params = yield* buildTurnStartParams({
+          threadId: "provider-thread-1",
+          runtimeMode: "full-access",
+          prompt: "Continue",
+          interactionMode,
+          ...(workflowPromptId ? { workflowPromptId } : {}),
+          workflowUserInputToolAvailable: true,
+        });
+        const calls: Array<{ method: string; payload: unknown }> = [];
+        const result = yield* startCodexTurn((method, payload) => {
+          calls.push({ method, payload });
+          return Effect.succeed({ turn: { id: "turn-1" } });
+        }, params);
+
+        NodeAssert.deepStrictEqual(calls, [
+          {
+            method: "thread/inject_items",
+            payload: {
+              threadId: "provider-thread-1",
+              items: [
+                {
+                  type: "message",
+                  role: "developer",
+                  content: [
+                    {
+                      type: "input_text",
+                      text: params.collaborationMode?.settings.developer_instructions,
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+          { method: "turn/start", payload: params },
+        ]);
+        NodeAssert.deepStrictEqual(result, { turn: { id: "turn-1" } });
+      }
+    }),
+  );
+
+  it.effect("does not start a turn when developer instruction delivery fails", () =>
+    Effect.gen(function* () {
+      const params = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        interactionMode: "planning-workflow",
+      });
+      const calls: string[] = [];
+      const error = new CodexErrors.CodexAppServerRequestError({
+        method: "thread/inject_items",
+        code: -32601,
+        errorMessage: "Injection unavailable",
+      });
+      const failure = yield* startCodexTurn((method) => {
+        calls.push(method);
+        return Effect.fail(error);
+      }, params).pipe(Effect.result);
+      NodeAssert.equal(failure._tag, "Failure");
+      NodeAssert.strictEqual(failure.failure, error);
+      NodeAssert.deepStrictEqual(calls, ["thread/inject_items"]);
+    }),
+  );
+
+  it.effect("keeps turns without instruction overrides unchanged", () =>
+    Effect.gen(function* () {
+      const params = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        prompt: "Continue",
+      });
+      const calls: string[] = [];
+      yield* startCodexTurn((method) => {
+        calls.push(method);
+        return Effect.succeed({});
+      }, params);
+      NodeAssert.deepStrictEqual(calls, ["turn/start"]);
+    }),
+  );
+});
 
 describe("CodexSessionRuntimeIdentifierGenerationError", () => {
   it("retains identifier purpose and the random source failure", () => {
