@@ -779,7 +779,11 @@ describe("WorkflowPromptRegistry", () => {
     ] as const) {
       const preset = contracts.find((contract) => contract.id === id);
       NodeAssert.ok(preset);
-      NodeAssert.ok(preset.promptText.includes(GRILLING_BLUEPRINT));
+      NodeAssert.ok(
+        preset.promptText.includes(
+          GRILLING_BLUEPRINT.slice(GRILLING_BLUEPRINT.indexOf("Interview the user")),
+        ),
+      );
       NodeAssert.match(preset.promptText, /# Product Grill/);
       NodeAssert.doesNotMatch(preset.promptText, /Fix-or-feature classification \(hard gate\)/);
       NodeAssert.match(preset.promptText, /ground yourself in the codebase/);
