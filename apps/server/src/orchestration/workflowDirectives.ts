@@ -435,8 +435,13 @@ function parseValidationResults(
     if (outputMarkdown !== undefined && typeof outputMarkdown !== "string") {
       return "implementation validation outputMarkdown must be a string when provided.";
     }
+    const scope = allowBlocked ? record["scope"] : undefined;
+    if (scope !== undefined && scope !== "focused" && scope !== "project") {
+      return "App Review validation scope must be focused or project.";
+    }
     validations.push({
       command,
+      ...(scope === undefined ? {} : { scope }),
       status,
       outputMarkdown: outputMarkdown ?? "",
       completedAt,

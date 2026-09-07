@@ -111,6 +111,36 @@ describe("workflowDirectives", () => {
     NodeAssert.match(result.directive.notesMarkdown, /Cortex origin is unavailable/);
   });
 
+  it.each(["focused", "project"])(
+    "preserves the %s validation scope in repair reports",
+    (scope) => {
+      const result = parseWorkflowDirectiveFromMarkdown(
+        "```json\n" +
+          JSON.stringify({
+            type: "app-review-fix-result",
+            runId: "review-1",
+            planId: "plan-1",
+            status: "succeeded",
+            validations: [
+              {
+                command: "tests",
+                scope,
+                status: "failed",
+                outputMarkdown: "failure",
+                completedAt: "2026-01-01T00:00:00.000Z",
+              },
+            ],
+            notesMarkdown: "Repair implemented; regression failed.",
+          }) +
+          "\n```",
+      );
+      NodeAssert.equal(result.kind, "parsed");
+      if (result.kind !== "parsed" || result.directive.type !== "app-review-fix-result") return;
+      NodeAssert.equal(result.directive.validations[0]?.scope, scope);
+      NodeAssert.equal(result.directive.validations[0]?.status, "failed");
+    },
+  );
+
   it("parses Wayfinder Map artifacts", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 { "type": "wayfinder-map-artifact", "title": "Remote roadmap", "summaryMarkdown": "## Destination\\nShip remote workflows" }

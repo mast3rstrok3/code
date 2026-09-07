@@ -129,20 +129,78 @@ export function isAppReviewWorkflowSessionStatus(status: string): boolean {
   return status === "starting" || status === "running" || status === "error";
 }
 
-export function appReviewFixValidationsPassed(input: {
+function splitAppReviewFixValidations(input: {
   readonly completeValidationCommands: ReadonlyArray<string>;
+  readonly projectValidationCommands?: ReadonlyArray<string>;
   readonly validations: ReadonlyArray<AppReviewWorkflowFixResult["validations"][number]>;
-}): boolean {
-  const completeCommands = new Set(
+}) {
+  const projectCommands = new Set(
+    [...input.completeValidationCommands, ...(input.projectValidationCommands ?? [])].map(
+      (command) => command.trim(),
+    ),
+  );
+  const isProject = (validation: AppReviewWorkflowFixResult["validations"][number]) =>
+    validation.scope === "project" || projectCommands.has(validation.command.trim());
+  return {
+    focused: input.validations.filter((validation) => !isProject(validation)),
+    project: input.validations.filter(isProject),
+  };
+}
+
+export function appReviewFixValidationsPassed(
+  input: Parameters<typeof splitAppReviewFixValidations>[0],
+): boolean {
+  const { focused } = splitAppReviewFixValidations(input);
+  return focused.length > 0 && focused.every((validation) => validation.status === "passed");
+}
+
+export function appReviewFixValidationFailure(
+  input: Parameters<typeof splitAppReviewFixValidations>[0],
+): string | null {
+  const { focused, project } = splitAppReviewFixValidations(input);
+  const focusedPassed =
+    focused.length > 0 && focused.every((validation) => validation.status === "passed");
+  const deferredCommands = new Set(
     input.completeValidationCommands.map((command) => command.trim()),
   );
-  const focusedValidations = input.validations.filter(
-    (validation) => !completeCommands.has(validation.command.trim()),
+  const blockingProjectFailures = project.filter(
+    (validation) =>
+      validation.status !== "passed" && !deferredCommands.has(validation.command.trim()),
   );
-  return (
-    focusedValidations.length > 0 &&
-    focusedValidations.every((validation) => validation.status === "passed")
-  );
+  if (
+    appReviewFixValidationsPassed({ ...input, projectValidationCommands: [] }) &&
+    blockingProjectFailures.length === 0
+  )
+    return null;
+  const failures = (validations: AppReviewWorkflowFixResult["validations"]) =>
+    validations
+      .filter((validation) => validation.status !== "passed")
+      .map(
+        (validation) =>
+          `- ${validation.command}: ${validation.status}\n\n${validation.outputMarkdown.trim() || "No output was reported."}`,
+      );
+  const focusedFailures = failures(focused);
+  const projectFailures = failures(project);
+  return [
+    focusedPassed
+      ? "Repair checks passed, but project validation still needs attention."
+      : "App Review repair validation needs attention.",
+    "",
+    "## Repair checks",
+    ...(focused.length === 0
+      ? ["No focused validation was reported. Report at least one passing check for the repair."]
+      : focusedFailures.length === 0
+        ? ["All reported repair checks passed."]
+        : focusedFailures),
+    ...(projectFailures.length > 0
+      ? [
+          "",
+          "## Project checks",
+          "Commands reserved for final validation remain deferred; other project checks are required for this review.",
+          ...projectFailures,
+        ]
+      : []),
+  ].join("\n");
 }
 
 export function renewAppReviewPhaseExecutionLease(
@@ -1202,6 +1260,7 @@ export function buildAppReviewFixPrompt(input: {
       "",
       "Finish with exactly one fenced JSON block:",
       "Validation status is passed, failed, or blocked. Use blocked for a check you could not run, explain why in outputMarkdown, and report the overall result as blocked with the concrete blocker in notesMarkdown.",
+      "Set each validation's scope to focused for a check of these repair tickets, or project for broader regression suites. Keep all results, including failed or blocked project checks. Scope labels describe the checks; they do not waive required validation. A failed command remains failed even when a narrower rerun passes.",
       "```json",
       JSON.stringify(
         {
@@ -1213,6 +1272,7 @@ export function buildAppReviewFixPrompt(input: {
           validations: [
             {
               command: "vp test run focused-test",
+              scope: "focused",
               status: "passed",
               outputMarkdown: "Important output or empty string.",
               completedAt: "2026-01-01T00:00:00.000Z",
@@ -1243,6 +1303,7 @@ export function buildAppReviewFixResultContinuationPrompt(input: {
         : "A standalone repair may report succeeded without a commit SHA.",
       "Finish with exactly one fenced JSON block and no text after it:",
       "Validation status is passed, failed, or blocked. Use blocked for checks you could not run and preserve the reason in outputMarkdown and notesMarkdown.",
+      "Set validation scope to focused for these repair tickets or project for broader regression suites. Preserve every failed or blocked check and its output; a narrower passing rerun does not replace a failed broad command.",
       "```json",
       JSON.stringify(
         {
@@ -1254,6 +1315,7 @@ export function buildAppReviewFixResultContinuationPrompt(input: {
           validations: [
             {
               command: "vp test run focused-test",
+              scope: "focused",
               status: "passed",
               outputMarkdown: "Important output or empty string.",
               completedAt: "2026-01-01T00:00:00.000Z",
@@ -2943,41 +3005,51 @@ const make = Effect.gen(function* () {
       return;
     }
     if (!hasSettledCheckpoint(fixer)) return;
-    if (result.status !== "succeeded") {
-      yield* failCycle({
-        run,
-        reason: "fixer-failed",
-        retryable: false,
-        detailMarkdown: result.notesMarkdown || `The App Review implementation ${result.status}.`,
-        occurredAt,
-      });
-      return;
-    }
+    const reportedRun = {
+      ...run,
+      cycles: run.cycles.map((entry) =>
+        entry.cycleNumber === cycle.cycleNumber ? { ...entry, fixResult: result } : entry,
+      ),
+    };
     const caller = run.caller;
+    const target = yield* resolveTarget(run.targetThreadId);
+    if (target === null) return;
     const completeValidationCommands =
       caller.type === "implementation"
         ? ((yield* projectionSnapshotQuery.getCommandReadModel()).implementationRuns.find(
             (candidate) => candidate.id === caller.implementationRunId,
           )?.launchSummary.validationCommands ?? [])
         : [];
-    if (
-      !appReviewFixValidationsPassed({
-        completeValidationCommands,
-        validations: result.validations,
-      })
-    ) {
+    const validationFailure = appReviewFixValidationFailure({
+      completeValidationCommands,
+      projectValidationCommands: yield* e2eCommandsForCwd(target.cwd),
+      validations: result.validations,
+    });
+    if (result.status !== "succeeded") {
       yield* failCycle({
-        run,
+        run: reportedRun,
         reason: "fixer-failed",
         retryable: false,
-        detailMarkdown:
-          "The App Review implementation thread did not report successful focused validation.",
+        detailMarkdown: [
+          result.notesMarkdown || `The App Review implementation ${result.status}.`,
+          validationFailure,
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
         occurredAt,
       });
       return;
     }
-    const target = yield* resolveTarget(run.targetThreadId);
-    if (target === null) return;
+    if (validationFailure !== null) {
+      yield* failCycle({
+        run: reportedRun,
+        reason: "fixer-failed",
+        retryable: false,
+        detailMarkdown: validationFailure,
+        occurredAt,
+      });
+      return;
+    }
     const revision = yield* computeWorkspaceRevision(target.cwd);
     if (run.caller.type === "implementation") {
       const status = yield* gitWorkflow.status({ cwd: target.cwd });

@@ -356,6 +356,7 @@ it.effect("round-trips blocked repair checks without losing their explanation", 
       validations: [
         {
           command: "pnpm e2e:review",
+          scope: "project",
           status: "blocked",
           outputMarkdown: "Not run: Cortex origin unavailable.",
           completedAt: "2026-01-01T00:00:00.000Z",

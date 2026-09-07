@@ -25,6 +25,7 @@ import {
   APP_REVIEW_RECOVERY_SWEEP_INTERVAL_MS,
   appReviewFixResultContinuationNeedsLaunch,
   appReviewFixValidationsPassed,
+  appReviewFixValidationFailure,
   appReviewPhaseLaunchNeedsRetry,
   appReviewRepairPlanAction,
   appReviewPhaseModelStepWorkflowPromptId,
@@ -131,6 +132,139 @@ it("does not count a blocked focused check as successful repair validation", () 
       ],
     }),
   ).toBe(false);
+});
+
+it("reports failed checks separately for the repair and the project", () => {
+  const failure = appReviewFixValidationFailure({
+    completeValidationCommands: ["pnpm check:full"],
+    validations: [
+      {
+        command: "policy-test",
+        status: "blocked",
+        outputMarkdown: "Cortex is unavailable.",
+        completedAt: now,
+      },
+      {
+        command: "pnpm check:full",
+        status: "failed",
+        outputMarkdown: "Calendar tests failed.",
+        completedAt: now,
+      },
+    ],
+  });
+  expect(failure).toContain("Repair checks");
+  expect(failure).toContain("policy-test");
+  expect(failure).toContain("Cortex is unavailable.");
+  expect(failure).toContain("Project checks");
+  expect(failure).toContain("Calendar tests failed.");
+});
+
+it("keeps explicitly project-wide checks out of focused repair validation", () => {
+  expect(
+    appReviewFixValidationsPassed({
+      completeValidationCommands: [],
+      validations: [
+        {
+          command: "writing-checks",
+          status: "passed",
+          outputMarkdown: "5 passed",
+          completedAt: now,
+        },
+        {
+          command: "all-tests --workers=2",
+          scope: "project",
+          status: "failed",
+          outputMarkdown: "Calendar failure",
+          completedAt: now,
+        },
+      ],
+    }),
+  ).toBe(true);
+});
+
+it("names required project failures even when every repair check passed", () => {
+  const input = {
+    completeValidationCommands: ["pnpm check:full"],
+    projectValidationCommands: ["pnpm e2e:review"],
+    validations: [
+      {
+        command: "writing-checks",
+        status: "passed" as const,
+        outputMarkdown: "5 passed",
+        completedAt: now,
+      },
+      {
+        command: "pnpm e2e:review",
+        status: "failed" as const,
+        outputMarkdown: "Archive and member removal failed.",
+        completedAt: now,
+      },
+    ],
+  };
+  expect(appReviewFixValidationsPassed(input)).toBe(true);
+  const detail = appReviewFixValidationFailure(input);
+  expect(detail).toContain("Repair checks passed, but project validation");
+  expect(detail).toContain("pnpm e2e:review: failed");
+  expect(detail).toContain("Archive and member removal failed.");
+});
+
+it("keeps configured final checks deferred and rejects missing focused evidence", () => {
+  const input = {
+    completeValidationCommands: ["pnpm check:full"],
+    validations: [
+      {
+        command: "writing-checks",
+        status: "passed" as const,
+        outputMarkdown: "5 passed",
+        completedAt: now,
+      },
+      {
+        command: "pnpm check:full",
+        status: "failed" as const,
+        outputMarkdown: "Calendar failed.",
+        completedAt: now,
+      },
+    ],
+  };
+  expect(appReviewFixValidationFailure(input)).toBeNull();
+  expect(
+    appReviewFixValidationFailure({ ...input, validations: input.validations.slice(1) }),
+  ).toContain("No focused validation was reported");
+});
+
+it("does not let a scope label or a passing narrow rerun waive a required project check", () => {
+  expect(
+    appReviewFixValidationFailure({
+      completeValidationCommands: [],
+      validations: [
+        {
+          command: "all-tests",
+          scope: "project",
+          status: "failed",
+          outputMarkdown: "Teardown failed",
+          completedAt: now,
+        },
+        { command: "single-test", status: "passed", outputMarkdown: "ok", completedAt: now },
+      ],
+    }),
+  ).toContain("all-tests: failed");
+});
+
+it("accepts a legacy passing E2E report without scope metadata", () => {
+  expect(
+    appReviewFixValidationFailure({
+      completeValidationCommands: [],
+      projectValidationCommands: ["pnpm e2e:review"],
+      validations: [
+        {
+          command: "pnpm e2e:review",
+          status: "passed",
+          outputMarkdown: "All passed",
+          completedAt: now,
+        },
+      ],
+    }),
+  ).toBeNull();
 });
 
 it("queues provider activity that renews an active App Review phase", () => {
