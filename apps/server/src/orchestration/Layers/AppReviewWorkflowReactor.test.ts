@@ -1,3 +1,4 @@
+import { deferredTicketValidationCommands } from "../appReviewValidation.ts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   AppReviewId,
@@ -28,6 +29,7 @@ import {
   appReviewFixValidationFailure,
   claimAppReviewValidationRepair,
   appReviewValidationRepairNeedsLaunch,
+  appReviewValidationRepairCommands,
   appReviewValidationRepairMissingCommands,
   buildAppReviewValidationRepairPrompt,
   APP_REVIEW_VALIDATION_MAX_REPAIRS,
@@ -2362,4 +2364,284 @@ it("leaves a working phase thread alone", () => {
   });
 
   expect(phaseState(working)).toBe("working");
+});
+
+describe("current validation results", () => {
+  const failed = {
+    command: "ticket-test",
+    status: "failed" as const,
+    outputMarkdown: "red",
+    completedAt: now,
+  };
+  const passed = {
+    ...failed,
+    status: "passed" as const,
+    outputMarkdown: "green",
+    completedAt: "2026-01-01T00:01:00.000Z",
+  };
+
+  it("accepts a newer passing execution while retaining the failed execution", () => {
+    const validations = [passed, failed];
+    expect(
+      appReviewFixValidationFailure({ completeValidationCommands: [], validations }),
+    ).toBeNull();
+    expect(validations).toEqual([passed, failed]);
+    const continued = claimAppReviewValidationRepair({
+      run: validationFixingRun(),
+      result: { ...failedValidationResult, validations },
+      detailMarkdown: "Other missing evidence",
+      occurredAt: passed.completedAt,
+    });
+    expect(continued?.cycles.at(-1)?.validationRepair?.requiredCommands).toEqual([]);
+  });
+
+  it("blocks on a newer failure or an ambiguous result at the same time", () => {
+    for (const completedAt of [passed.completedAt, "2026-01-01T00:02:00.000Z"]) {
+      expect(
+        appReviewFixValidationFailure({
+          completeValidationCommands: [],
+          validations: [{ ...failed, completedAt }, passed],
+        }),
+      ).toContain("ticket-test: failed");
+    }
+  });
+
+  it("normalizes outer whitespace but does not replace a broad failure with a selected test", () => {
+    expect(
+      appReviewFixValidationFailure({
+        completeValidationCommands: [],
+        validations: [failed, { ...passed, command: " ticket-test " }],
+      }),
+    ).toBeNull();
+    expect(
+      appReviewFixValidationFailure({
+        completeValidationCommands: [],
+        validations: [failed, { ...passed, command: "ticket-test --filter one" }],
+      }),
+    ).toContain("ticket-test: failed");
+  });
+
+  it("defers unrelated project failures only at the ticket gate", () => {
+    const input = {
+      completeValidationCommands: [],
+      validations: failedValidationResult.validations,
+    };
+    expect(appReviewFixValidationFailure({ ...input, deferProjectFailures: true })).toBeNull();
+    expect(appReviewFixValidationFailure(input)).toContain("project-tests: failed");
+    expect(
+      appReviewFixValidationFailure({
+        ...input,
+        deferProjectFailures: true,
+        validations: input.validations.slice(1),
+      }),
+    ).toContain("No focused validation");
+  });
+
+  it("requires fresh focused acceptance evidence for ticket E2E reviews", () => {
+    const ticketRun = run({
+      caller: {
+        type: "implementation",
+        implementationRunId: "implementation-run-1",
+        orchestratorThreadId: ThreadId.make("thread-orchestrator"),
+        ticketId: "ticket-1",
+      },
+    });
+    const ids = e2eCheckIdsForCommands(["all-e2e"], ticketRun);
+    expect(ids).toEqual(["e2e-ticket"]);
+    const prompt = buildE2eReviewPrompt({
+      run: ticketRun,
+      cycle: carryCycle(1, AppReviewId.make("app-review-1")),
+      priorFindingIds: [],
+      e2eCommands: ["all-e2e"],
+    });
+    expect(prompt).toContain("supported test selection");
+    expect(prompt).toContain("every ticket acceptance criterion");
+    expect(prompt).not.toContain("- e2e-1:");
+  });
+});
+
+it("keeps shared repair commands out of resumed ticket assignments", () => {
+  const ticketRun: AppReviewWorkflowRun = {
+    ...validationFixingRun(),
+    caller: {
+      type: "implementation",
+      implementationRunId: "implementation-run-1",
+      orchestratorThreadId: ThreadId.make("thread-orchestrator"),
+      ticketId: "ticket-1",
+    },
+  };
+  const continued = claimAppReviewValidationRepair({
+    run: ticketRun,
+    result: {
+      ...failedValidationResult,
+      validations: [
+        ...failedValidationResult.validations,
+        {
+          command: "ticket-failure",
+          scope: "focused",
+          status: "failed",
+          outputMarkdown: "failure",
+          completedAt: now,
+        },
+      ],
+    },
+    detailMarkdown: "ticket-failure needs repair",
+    occurredAt: now,
+  })!;
+  const cycle = continued.cycles.at(-1)!;
+  expect(cycle.validationRepair?.requiredCommands).toEqual(["ticket-failure"]);
+  expect(
+    appReviewValidationRepairCommands(ticketRun, {
+      ...cycle,
+      validationRepair: {
+        ...cycle.validationRepair!,
+        requiredCommands: ["ticket-failure", "project-tests"],
+      },
+    }),
+  ).toEqual(["ticket-failure"]);
+  expect(buildAppReviewValidationRepairPrompt({ run: continued, cycle })).not.toContain(
+    "- project-tests\n",
+  );
+});
+
+it("collects only unresolved shared commands and preserves ticket failure ownership", () => {
+  const ticketRun: AppReviewWorkflowRun = {
+    ...validationFixingRun(),
+    caller: {
+      type: "implementation",
+      implementationRunId: "implementation-run-1",
+      orchestratorThreadId: ThreadId.make("thread-orchestrator"),
+      ticketId: "ticket-1",
+    },
+  };
+  const cycle = ticketRun.cycles[0]!;
+  const repaired: AppReviewWorkflowRun = {
+    ...ticketRun,
+    cycles: [
+      { ...cycle, fixResult: failedValidationResult },
+      {
+        ...cycle,
+        cycleNumber: 2,
+        fixResult: {
+          ...failedValidationResult,
+          validations: [
+            {
+              ...failedValidationResult.validations[1]!,
+              status: "passed",
+              completedAt: "2026-01-01T00:05:00.000Z",
+            },
+            {
+              command: "another-project-test",
+              scope: "project",
+              status: "blocked",
+              outputMarkdown: "Unavailable fixture",
+              completedAt: now,
+            },
+            {
+              command: "ticket-failure",
+              scope: "focused",
+              status: "failed",
+              outputMarkdown: "Ticket defect",
+              completedAt: now,
+            },
+          ],
+        },
+      },
+    ],
+  };
+  expect(deferredTicketValidationCommands(repaired, [])).toEqual(["another-project-test"]);
+  expect(deferredTicketValidationCommands({ ...repaired, caller: run().caller }, [])).toEqual([]);
+});
+
+it("lets an in-flight legacy ticket review finish its full-suite contract", () => {
+  const ticketRun = run({
+    caller: {
+      type: "implementation",
+      implementationRunId: "implementation-run-1",
+      orchestratorThreadId: ThreadId.make("thread-orchestrator"),
+      ticketId: "ticket-1",
+    },
+  });
+  const passed = review("passed");
+  const legacy = {
+    ...passed,
+    document: {
+      ...passed.document,
+      checks: [
+        {
+          id: "e2e-1",
+          label: "suite one",
+          status: "passed" as const,
+          notes: "Ran all ticket and project tests",
+        },
+      ],
+    },
+  };
+  const ids = e2eCheckIdsForCommands(["suite-one", "suite-two"], ticketRun, legacy);
+  expect(ids).toEqual(["e2e-1", "e2e-2"]);
+  expect(
+    terminalReviewPassFailure({
+      run: ticketRun,
+      review: legacy,
+      priorReviews: [],
+      e2eCheckIds: ids,
+    }),
+  ).toContain("e2e-2");
+  const scoped = {
+    ...legacy,
+    document: {
+      ...legacy.document,
+      checks: [
+        {
+          id: "e2e-ticket",
+          label: "ticket acceptance",
+          status: "passed" as const,
+          notes: "All criteria covered",
+        },
+      ],
+    },
+  };
+  const scopedIds = e2eCheckIdsForCommands(["suite-one", "suite-two"], ticketRun, scoped);
+  expect(scopedIds).toEqual(["e2e-ticket"]);
+  expect(
+    terminalReviewPassFailure({
+      run: ticketRun,
+      review: scoped,
+      priorReviews: [],
+      e2eCheckIds: scopedIds,
+    }),
+  ).toBeNull();
+});
+
+it("preserves shared failures omitted from a later focused repair report", () => {
+  const ticketRun: AppReviewWorkflowRun = {
+    ...validationFixingRun(),
+    caller: {
+      type: "implementation",
+      implementationRunId: "implementation-run-1",
+      orchestratorThreadId: ThreadId.make("thread-orchestrator"),
+      ticketId: "ticket-1",
+    },
+  };
+  const cycle = ticketRun.cycles[0]!;
+  const repaired = {
+    ...ticketRun,
+    cycles: [
+      {
+        ...cycle,
+        validationRepair: {
+          attempt: 1,
+          requestedAt: now,
+          requiredCommands: ["project-tests"],
+          result: failedValidationResult,
+          detailMarkdown: "Earlier project failure",
+        },
+        fixResult: {
+          ...failedValidationResult,
+          validations: failedValidationResult.validations.slice(0, 1),
+        },
+      },
+    ],
+  };
+  expect(deferredTicketValidationCommands(repaired, [])).toEqual(["project-tests"]);
 });

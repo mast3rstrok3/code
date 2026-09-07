@@ -8983,6 +8983,91 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("collects shared ticket failures once for integrated validation", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket, nestedRun } = yield* launchTicketAppReview(system);
+        const before = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        )!;
+        const head = before.ticketStates.find((state) => state.ticketId === ticket.id)!
+          .workerResult!.commitSha;
+        const completedAt = "2026-01-01T00:05:00.000Z";
+        const cycle = failedReviewRecoveryState(nestedRun, completedAt, "shared-check").cycle;
+        const completed: AppReviewWorkflowRun = {
+          ...nestedRun,
+          status: "passed",
+          outcome: "passed",
+          cyclesUsed: 1,
+          activePhase: null,
+          activeThreadId: null,
+          finalHeadSha: head,
+          cycles: [
+            {
+              ...cycle,
+              status: "completed",
+              failure: null,
+              fixResult: {
+                runId: nestedRun.id,
+                planId: "repair-plan",
+                status: "succeeded",
+                commitSha: head,
+                notesMarkdown:
+                  "Acceptance passed; shared calendar validation belongs to integration.",
+                validations: [
+                  {
+                    command: "ticket-test",
+                    scope: "focused",
+                    status: "passed",
+                    outputMarkdown: "ok",
+                    completedAt,
+                  },
+                  {
+                    command: "shared-calendar-test",
+                    scope: "project",
+                    status: "failed",
+                    outputMarkdown: "Calendar failed",
+                    completedAt,
+                  },
+                  {
+                    command: "shared-calendar-test",
+                    scope: "project",
+                    status: "failed",
+                    outputMarkdown: "Earlier failure",
+                    completedAt: now,
+                  },
+                ],
+              },
+            },
+          ],
+          updatedAt: completedAt,
+          completedAt,
+        };
+        for (const suffix of ["first", "replayed"]) {
+          yield* system.engine.dispatch({
+            type: "thread.app-review-workflow.update",
+            commandId: commandId(`deferred-project-check-${suffix}`),
+            threadId: nestedRun.controllerThreadId,
+            run: completed,
+            createdAt: completedAt,
+          });
+          yield* system.reactor.drain;
+        }
+        const after = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        )!;
+        expect(
+          after.ticketStates.find((state) => state.ticketId === ticket.id)?.appReviewOutcome,
+        ).toBe("passed");
+        expect(after.launchSummary.validationCommands).toEqual([
+          ...before.launchSummary.validationCommands,
+          "shared-calendar-test",
+        ]);
+        expect(after.automationHalt).toBeNull();
+      }),
+    ),
+  );
+
   it.effect(
     "stage recovery applies a terminal ticket App Review whose update was interrupted",
     () =>

@@ -1,3 +1,4 @@
+import { deferredTicketValidationCommands } from "../appReviewValidation.ts";
 import {
   type AppStackAutoCreateResult,
   applyImplementationSkip,
@@ -1120,7 +1121,7 @@ function buildMergeGatePrompt(input: {
   const validationInstructions =
     input.kind === "final"
       ? [
-          "This is the sole complete repository gate. Code Review has finished for this HEAD. Run every configured command exactly once:",
+          "This is the sole complete repository gate. Code Review has finished for this HEAD. The command list includes unresolved project checks collected from ticket reviews. Run each command once on this integrated commit. Report failures for the shared repair phase; do not send them back to individual ticket workers:",
           ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
           "",
           "If native mobile files changed, also run:",
@@ -9065,8 +9066,18 @@ const make = Effect.gen(function* () {
         outcome === "passed"
           ? undefined
           : (appReviewFailureContinuationMarkdown(input.nestedRun) ?? undefined);
+      const deferredCommands = deferredTicketValidationCommands(
+        input.nestedRun,
+        input.run.launchSummary.validationCommands,
+      );
       const reviewedTicketRun: OrchestrationImplementationRun = {
         ...input.run,
+        launchSummary: {
+          ...input.run.launchSummary,
+          validationCommands: [
+            ...new Set([...input.run.launchSummary.validationCommands, ...deferredCommands]),
+          ],
+        },
         ticketStates: input.run.ticketStates.map((state) =>
           state.ticketId === ticketId
             ? {

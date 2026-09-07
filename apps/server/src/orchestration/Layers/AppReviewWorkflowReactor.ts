@@ -45,6 +45,8 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Stream from "effect/Stream";
 
+import { isTicketAppReview, latestAppReviewValidations } from "../appReviewValidation.ts";
+
 import { AppStackManager } from "../../appStack/AppStackManager.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
@@ -132,6 +134,7 @@ export function isAppReviewWorkflowSessionStatus(status: string): boolean {
 function splitAppReviewFixValidations(input: {
   readonly completeValidationCommands: ReadonlyArray<string>;
   readonly projectValidationCommands?: ReadonlyArray<string>;
+  readonly deferProjectFailures?: boolean;
   readonly validations: ReadonlyArray<AppReviewWorkflowFixResult["validations"][number]>;
 }) {
   const projectCommands = new Set(
@@ -141,9 +144,10 @@ function splitAppReviewFixValidations(input: {
   );
   const isProject = (validation: AppReviewWorkflowFixResult["validations"][number]) =>
     validation.scope === "project" || projectCommands.has(validation.command.trim());
+  const current = latestAppReviewValidations(input.validations);
   return {
-    focused: input.validations.filter((validation) => !isProject(validation)),
-    project: input.validations.filter(isProject),
+    focused: current.filter((validation) => !isProject(validation)),
+    project: current.filter(isProject),
   };
 }
 
@@ -160,9 +164,13 @@ export function appReviewFixValidationFailure(
   const { focused, project } = splitAppReviewFixValidations(input);
   const focusedPassed =
     focused.length > 0 && focused.every((validation) => validation.status === "passed");
-  const blockingProjectFailures = project.filter((validation) => validation.status !== "passed");
+  const blockingProjectFailures = input.deferProjectFailures
+    ? []
+    : project.filter((validation) => validation.status !== "passed");
   if (
-    appReviewFixValidationsPassed({ ...input, projectValidationCommands: [] }) &&
+    (input.deferProjectFailures
+      ? focusedPassed
+      : appReviewFixValidationsPassed({ ...input, projectValidationCommands: [] })) &&
     blockingProjectFailures.length === 0
   )
     return null;
@@ -174,7 +182,7 @@ export function appReviewFixValidationFailure(
           `- ${validation.command}: ${validation.status}\n\n${validation.outputMarkdown.trim() || "No output was reported."}`,
       );
   const focusedFailures = failures(focused);
-  const projectFailures = failures(project);
+  const projectFailures = failures(blockingProjectFailures);
   return [
     focusedPassed
       ? "Repair checks passed, but project validation still needs attention."
@@ -768,6 +776,7 @@ export function claimAppReviewFixResultContinuation(input: {
 }
 
 export function claimAppReviewValidationRepair(input: {
+  readonly projectValidationCommands?: ReadonlyArray<string>;
   readonly run: AppReviewWorkflowRun;
   readonly result: AppReviewWorkflowFixResult;
   readonly detailMarkdown: string;
@@ -781,11 +790,18 @@ export function claimAppReviewValidationRepair(input: {
     (cycle.validationRepair?.attempt ?? 0) >= APP_REVIEW_VALIDATION_MAX_REPAIRS
   )
     return null;
+  const currentValidations = latestAppReviewValidations(input.result.validations);
   const requiredCommands = [
     ...new Set([
-      ...(cycle.validationRepair?.requiredCommands ?? []),
-      ...input.result.validations
-        .filter((validation) => validation.status !== "passed")
+      ...appReviewValidationRepairCommands(input.run, cycle, input.projectValidationCommands),
+      ...currentValidations
+        .filter(
+          (validation) =>
+            validation.status !== "passed" &&
+            (!isTicketAppReview(input.run) ||
+              (validation.scope !== "project" &&
+                !input.projectValidationCommands?.includes(validation.command.trim()))),
+        )
         .map((validation) => validation.command.trim()),
     ]),
   ];
@@ -826,11 +842,28 @@ export function appReviewValidationRepairNeedsLaunch(
   );
 }
 
+export function appReviewValidationRepairCommands(
+  run: AppReviewWorkflowRun,
+  cycle: AppReviewWorkflowCycle,
+  projectCommands: ReadonlyArray<string> = [],
+): ReadonlyArray<string> {
+  const required = cycle.validationRepair?.requiredCommands ?? [];
+  if (!isTicketAppReview(run)) return required;
+  const project = new Set([
+    ...projectCommands.map((command) => command.trim()),
+    ...(cycle.validationRepair?.result.validations ?? [])
+      .filter((validation) => validation.scope === "project")
+      .map((validation) => validation.command.trim()),
+  ]);
+  return required.filter((command) => !project.has(command));
+}
+
 export function appReviewValidationRepairMissingCommands(
   cycle: AppReviewWorkflowCycle,
   result: AppReviewWorkflowFixResult,
+  requiredCommands: ReadonlyArray<string> = cycle.validationRepair?.requiredCommands ?? [],
 ): ReadonlyArray<string> {
-  return (cycle.validationRepair?.requiredCommands ?? []).filter(
+  return requiredCommands.filter(
     (command) => !result.validations.some((validation) => validation.command.trim() === command),
   );
 }
@@ -1084,7 +1117,19 @@ export function priorCycleChecks(input: {
  * Stable check ids for a project's e2e commands: the first command is `e2e-1`
  * in every cycle, so repair verification and the pass gate can find it by id.
  */
-export function e2eCheckIdsForCommands(commands: ReadonlyArray<string>): ReadonlyArray<string> {
+export function e2eCheckIdsForCommands(
+  commands: ReadonlyArray<string>,
+  run?: AppReviewWorkflowRun,
+  review?: AppReviewRecord,
+): ReadonlyArray<string> {
+  // A tester launched before this upgrade can finish its original full-suite contract.
+  if (
+    run !== undefined &&
+    isTicketAppReview(run) &&
+    (review === undefined || review.document.checks.some((check) => check.id === "e2e-ticket"))
+  ) {
+    return ["e2e-ticket"];
+  }
   return commands.map((_, index) => `e2e-${index + 1}`);
 }
 
@@ -1194,9 +1239,20 @@ export function buildE2eReviewPrompt(input: {
         ? []
         : ["", "Supporting source context:", input.run.supportingContextMarkdown]),
       "",
-      `Run every command below from the selected worktree, in order, with ${APP_REVIEW_PREVIEW_URL_ENV}=${input.run.previewTargets[0] ?? "the-authoritative-preview-target"}:`,
-      ...input.e2eCommands.map((command, index) => `- e2e-${index + 1}: ${command}`),
-      "Record each command as one check with the exact id shown. Summarize the suite result in notes. When command output publishes an inspectable web replay URL, copy it into that check's replayUrl field so a human can open it from the App Review panel.",
+      `Use ${APP_REVIEW_PREVIEW_URL_ENV}=${input.run.previewTargets[0] ?? "the-authoritative-preview-target"} in the selected worktree.`,
+      ...(isTicketAppReview(input.run)
+        ? [
+            "This is a ticket acceptance review. Retrieve the ticket with workflow_ticket_get and select focused E2E tests covering every acceptance criterion and prior actionable finding. Use the repository's supported test selection; do not run the full project suite for each ticket. If focused selection or acceptance coverage is unavailable, report a blocked check instead of a pass.",
+            "Record the exact selected commands, acceptance coverage, and results in a fresh check with id e2e-ticket. The check passes only if all selected tests pass and every ticket acceptance criterion has evidence. Keep unrelated project diagnostics in notes for the integrated review.",
+            "Configured project runners, for reference when selecting tests:",
+            ...input.e2eCommands.map((command) => `- ${command}`),
+          ]
+        : [
+            "Run every command below in order:",
+            ...input.e2eCommands.map((command, index) => `- e2e-${index + 1}: ${command}`),
+            "Record each command as one check with the exact id shown.",
+          ]),
+      "Summarize test results in notes. When command output publishes an inspectable web replay URL, copy it into that check's replayUrl field so a human can open it from the App Review panel.",
       "A failing command is a failed check. Turn each distinct in-scope product failure into an actionable finding. Keep unrelated or pre-existing failures in check notes or note-severity findings.",
       ...(input.priorFindingIds.length === 0
         ? []
@@ -1299,7 +1355,12 @@ export function buildAppReviewFixPrompt(input: {
       "",
       "Use TDD: write the test each ticket names, watch it fail, then repair. Address every actionable finding together, preserve unrelated work, and run focused validation. Do not ask the user questions.",
       APP_REVIEW_FIXER_IMPLEMENTATION_ONLY_INSTRUCTION,
-      ...(input.e2eCommands.length === 0
+      ...(isTicketAppReview(input.run)
+        ? [
+            "Run focused tests for this ticket and its repairs. Do not run full project suites or repair unrelated project failures here. Record unrelated failures with scope project; the parent workflow collects those commands for validation and a shared repair on the integrated branch. Set the overall repair status from ticket acceptance and repair checks; unrelated project failures do not make the ticket blocked. Existing dependency merges carry committed repairs to dependent tickets.",
+          ]
+        : []),
+      ...(input.e2eCommands.length === 0 || isTicketAppReview(input.run)
         ? []
         : [
             `Before reporting succeeded, run the project's end-to-end test commands${
@@ -1327,7 +1388,7 @@ export function buildAppReviewFixPrompt(input: {
       "",
       "Finish with exactly one fenced JSON block:",
       "Validation status is passed, failed, or blocked. Use blocked for a check you could not run, explain why in outputMarkdown, and report the overall result as blocked with the concrete blocker in notesMarkdown.",
-      "Set each validation's scope to focused for a check of these repair tickets, or project for broader regression suites. Keep all results, including failed or blocked project checks. Scope labels describe the checks; they do not waive required validation. A failed command remains failed even when a narrower rerun passes.",
+      "Set each validation's scope to focused for ticket acceptance and repair checks, or project for unrelated broader regression checks. Preserve failure history with accurate completedAt timestamps. The newest execution of the same command determines its status; a narrower passing command cannot replace a failed broad command.",
       "```json",
       JSON.stringify(
         {
@@ -1370,7 +1431,7 @@ export function buildAppReviewFixResultContinuationPrompt(input: {
         : "A standalone repair may report succeeded without a commit SHA.",
       "Finish with exactly one fenced JSON block and no text after it:",
       "Validation status is passed, failed, or blocked. Use blocked for checks you could not run and preserve the reason in outputMarkdown and notesMarkdown.",
-      "Set validation scope to focused for these repair tickets or project for broader regression suites. Preserve every failed or blocked check and its output; a narrower passing rerun does not replace a failed broad command.",
+      "Set validation scope to focused for ticket acceptance and repair checks, or project for unrelated broader regression checks. Preserve every execution and its completedAt timestamp. A newer execution of the same command supersedes its earlier result; a narrower passing command cannot replace a failed broad command.",
       "```json",
       JSON.stringify(
         {
@@ -1407,17 +1468,23 @@ export function buildAppReviewValidationRepairPrompt(input: {
   if (repair == null) return "";
   return [
     `Validation repair ${repair.attempt} of ${APP_REVIEW_VALIDATION_MAX_REPAIRS}.`,
-    "Your previous repair did not pass validation. Continue in this thread and worktree, preserving completed repairs and commits. Fix every reported test failure, including project-wide failures outside the original tickets. Those failures are now part of this repair assignment.",
+    isTicketAppReview(input.run)
+      ? "Continue the ticket repair in this worktree, preserving completed repairs and commits. Fix acceptance failures for this ticket. Record unrelated project failures for the parent workflow to repair on the integrated branch."
+      : "Your previous repair did not pass validation. Continue in this thread and worktree, preserving completed repairs and commits. Fix every reported test failure, including project-wide failures outside the original tickets. Those failures are now part of this repair assignment.",
     "Reproduce each failure, repair its cause, and rerun the failed command. Do not skip or quarantine tests, weaken assertions, or raise timeouts to hide a failure. A narrower passing test does not replace a failed broad command.",
-    "Report every command below again in your result. Preserve passing results if the code has not changed since they ran. The workflow requires all reported checks to pass before leaving repair.",
-    ...repair.requiredCommands.map((command) => `- ${command}`),
+    "Report the current result for each required command below. Preserve passing results if the code has not changed since they ran. Keep earlier executions as history with their original timestamps; the newest execution of the identical command determines its current status.",
+    ...appReviewValidationRepairCommands(input.run, input.cycle).map((command) => `- ${command}`),
     "",
+    "Earlier diagnostics, preserved as history. For ticket reviews, unrelated project failures belong to integrated validation:",
     repair.detailMarkdown,
     "",
     "Previous repair report:",
     JSON.stringify(repair.result, null, 2),
     "",
-    buildAppReviewFixPrompt({ ...input, e2eCommands: repair.requiredCommands }),
+    buildAppReviewFixPrompt({
+      ...input,
+      e2eCommands: appReviewValidationRepairCommands(input.run, input.cycle),
+    }),
   ].join("\n");
 }
 
@@ -2553,7 +2620,7 @@ const make = Effect.gen(function* () {
       run: completedE2eRun,
       review,
       priorReviews: controller?.appReviews ?? [],
-      e2eCheckIds: e2eCheckIdsForCommands(e2eCommands),
+      e2eCheckIds: e2eCheckIdsForCommands(e2eCommands, run, review),
     });
     if (e2eVerdict === "passed" && passFailure === null) {
       yield* finishPassed(completedE2eRun, review, occurredAt);
@@ -2636,7 +2703,7 @@ const make = Effect.gen(function* () {
             run: stableRun,
             review: e2eReview,
             priorReviews: controller?.appReviews ?? [],
-            e2eCheckIds: e2eCheckIdsForCommands(e2eCommands),
+            e2eCheckIds: e2eCheckIdsForCommands(e2eCommands, run, e2eReview),
           });
     if (
       action === "passed" &&
@@ -3141,12 +3208,21 @@ const make = Effect.gen(function* () {
             (candidate) => candidate.id === caller.implementationRunId,
           )?.launchSummary.validationCommands ?? [])
         : [];
+    const projectValidationCommands = yield* e2eCommandsForCwd(target.cwd);
     const validationFailure = appReviewFixValidationFailure({
       completeValidationCommands,
-      projectValidationCommands: yield* e2eCommandsForCwd(target.cwd),
+      projectValidationCommands,
       validations: result.validations,
+      deferProjectFailures: isTicketAppReview(run),
     });
-    const missingCommands = appReviewValidationRepairMissingCommands(cycle, result);
+    const missingCommands = appReviewValidationRepairMissingCommands(
+      cycle,
+      result,
+      appReviewValidationRepairCommands(run, cycle, [
+        ...completeValidationCommands,
+        ...projectValidationCommands,
+      ]),
+    );
     const repairFailure =
       missingCommands.length > 0
         ? `${validationFailure ?? "Validation results are incomplete."}\n\nMissing results for previously failed commands:\n${missingCommands.map((command) => `- ${command}`).join("\n")}`
@@ -3159,6 +3235,7 @@ const make = Effect.gen(function* () {
       const continued = claimAppReviewValidationRepair({
         run: reportedRun,
         result,
+        projectValidationCommands: [...completeValidationCommands, ...projectValidationCommands],
         detailMarkdown: repairFailure,
         occurredAt,
       });
@@ -3237,7 +3314,18 @@ const make = Effect.gen(function* () {
           ? {
               ...entry,
               status: "completed",
-              fixResult: result,
+              fixResult: isTicketAppReview(run)
+                ? {
+                    ...result,
+                    validations: result.validations.map((validation) =>
+                      [...completeValidationCommands, ...projectValidationCommands].includes(
+                        validation.command.trim(),
+                      )
+                        ? { ...validation, scope: "project" as const }
+                        : validation,
+                    ),
+                  }
+                : result,
               failure: null,
               completedAt: occurredAt,
             }
@@ -3372,6 +3460,7 @@ const make = Effect.gen(function* () {
             completeValidationCommands: [],
             projectValidationCommands: yield* e2eCommandsForCwd(target.cwd),
             validations: previousResult.validations,
+            deferProjectFailures: isTicketAppReview(run),
           });
     const fixingRun: AppReviewWorkflowRun = {
       ...reopened,
@@ -3387,7 +3476,7 @@ const make = Effect.gen(function* () {
                   ? {
                       attempt: 1,
                       requestedAt: occurredAt,
-                      requiredCommands: previousResult.validations
+                      requiredCommands: latestAppReviewValidations(previousResult.validations)
                         .filter((validation) => validation.status !== "passed")
                         .map((validation) => validation.command.trim()),
                       result: previousResult,
