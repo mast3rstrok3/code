@@ -1,4 +1,5 @@
 import type {
+  AppReviewWorkflowFixValidation,
   OrchestrationImplementationValidationResult,
   OrchestrationImplementationWorkerResult,
   OrchestrationPlanningFileChange,
@@ -136,7 +137,7 @@ export type WorkflowDirective =
       readonly planId: string;
       readonly status: "succeeded" | "failed" | "blocked";
       readonly commitSha?: string;
-      readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
+      readonly validations: ReadonlyArray<AppReviewWorkflowFixValidation>;
       readonly notesMarkdown: string;
     }
   | {
@@ -402,11 +403,19 @@ function parseWorkflowAgentMessageTarget(value: unknown): WorkflowAgentMessageTa
 
 function parseValidationResults(
   value: unknown,
-): ReadonlyArray<OrchestrationImplementationValidationResult> | string {
+): ReadonlyArray<OrchestrationImplementationValidationResult> | string;
+function parseValidationResults(
+  value: unknown,
+  allowBlocked: true,
+): ReadonlyArray<AppReviewWorkflowFixValidation> | string;
+function parseValidationResults(
+  value: unknown,
+  allowBlocked = false,
+): ReadonlyArray<AppReviewWorkflowFixValidation> | string {
   if (!Array.isArray(value)) {
     return "implementation validations must be an array.";
   }
-  const validations: OrchestrationImplementationValidationResult[] = [];
+  const validations: AppReviewWorkflowFixValidation[] = [];
   for (const entry of value) {
     const record = asRecord(entry);
     if (record === null) {
@@ -417,8 +426,10 @@ function parseValidationResults(
     const status = record["status"];
     if (command.startsWith("Directive field")) return command;
     if (completedAt.startsWith("Directive field")) return completedAt;
-    if (status !== "passed" && status !== "failed") {
-      return "implementation validation status must be passed or failed.";
+    if (status !== "passed" && status !== "failed" && !(allowBlocked && status === "blocked")) {
+      return allowBlocked
+        ? "App Review validation status must be passed, failed, or blocked."
+        : "implementation validation status must be passed or failed.";
     }
     const outputMarkdown = record["outputMarkdown"];
     if (outputMarkdown !== undefined && typeof outputMarkdown !== "string") {
@@ -949,7 +960,7 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       const planId = requiredString(record, "planId");
       const notesMarkdown = requiredString(record, "notesMarkdown");
       const status = record["status"];
-      const validations = parseValidationResults(record["validations"] ?? []);
+      const validations = parseValidationResults(record["validations"] ?? [], true);
       const commitSha = optionalString(record, "commitSha");
       for (const value of [runId, planId, notesMarkdown]) {
         if (value.startsWith("Directive field")) return value;

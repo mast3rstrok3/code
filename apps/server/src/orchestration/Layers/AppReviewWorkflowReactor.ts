@@ -1201,6 +1201,7 @@ export function buildAppReviewFixPrompt(input: {
       ),
       "",
       "Finish with exactly one fenced JSON block:",
+      "Validation status is passed, failed, or blocked. Use blocked for a check you could not run, explain why in outputMarkdown, and report the overall result as blocked with the concrete blocker in notesMarkdown.",
       "```json",
       JSON.stringify(
         {
@@ -1241,6 +1242,7 @@ export function buildAppReviewFixResultContinuationPrompt(input: {
         ? "A succeeded result requires a clean worktree and a commit SHA that matches HEAD."
         : "A standalone repair may report succeeded without a commit SHA.",
       "Finish with exactly one fenced JSON block and no text after it:",
+      "Validation status is passed, failed, or blocked. Use blocked for checks you could not run and preserve the reason in outputMarkdown and notesMarkdown.",
       "```json",
       JSON.stringify(
         {

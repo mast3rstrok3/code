@@ -84,6 +84,33 @@ describe("workflowDirectives", () => {
     NodeAssert.equal(result.directive.type, "app-review-fix-result");
   });
 
+  it("preserves blocked App Review checks and the actual repair blocker", () => {
+    const result = parseWorkflowDirectiveFromMarkdown(
+      "```json\n" +
+        JSON.stringify({
+          type: "app-review-fix-result",
+          runId: "review-1",
+          planId: "plan-1",
+          status: "blocked",
+          validations: [
+            {
+              command: "pnpm e2e:review",
+              status: "blocked",
+              outputMarkdown: "Not run: assigned Cortex origin unavailable.",
+              completedAt: "2026-01-01T00:00:00.000Z",
+            },
+          ],
+          notesMarkdown: "The assigned Cortex origin is unavailable.",
+        }) +
+        "\n```",
+    );
+    NodeAssert.equal(result.kind, "parsed");
+    if (result.kind !== "parsed" || result.directive.type !== "app-review-fix-result") return;
+    NodeAssert.equal(result.directive.status, "blocked");
+    NodeAssert.equal(result.directive.validations[0]?.status, "blocked");
+    NodeAssert.match(result.directive.notesMarkdown, /Cortex origin is unavailable/);
+  });
+
   it("parses Wayfinder Map artifacts", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 { "type": "wayfinder-map-artifact", "title": "Remote roadmap", "summaryMarkdown": "## Destination\\nShip remote workflows" }

@@ -95,7 +95,7 @@ export type AppReviewWorkflowWorkspaceRevision = typeof AppReviewWorkflowWorkspa
 
 export const AppReviewWorkflowFixValidation = Schema.Struct({
   command: TrimmedNonEmptyString,
-  status: Schema.Literals(["passed", "failed"]),
+  status: Schema.Literals(["passed", "failed", "blocked"]),
   outputMarkdown: Schema.String,
   completedAt: IsoDateTime,
 });

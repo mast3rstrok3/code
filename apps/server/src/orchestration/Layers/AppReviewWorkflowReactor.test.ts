@@ -116,6 +116,23 @@ it("judges embedded fixes by focused validation while preserving full-suite diag
   ).toBe(false);
 });
 
+it("does not count a blocked focused check as successful repair validation", () => {
+  expect(
+    appReviewFixValidationsPassed({
+      completeValidationCommands: [],
+      validations: [
+        { command: "unit-tests", status: "passed", outputMarkdown: "ok", completedAt: now },
+        {
+          command: "policy-e2e",
+          status: "blocked",
+          outputMarkdown: "No Cortex URL",
+          completedAt: now,
+        },
+      ],
+    }),
+  ).toBe(false);
+});
+
 it("queues provider activity that renews an active App Review phase", () => {
   expect(isAppReviewProviderProgressActivityKind("tool.updated")).toBe(true);
   expect(isAppReviewProviderProgressActivityKind("context-window.updated")).toBe(true);

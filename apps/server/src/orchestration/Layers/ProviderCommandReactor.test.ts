@@ -5,6 +5,7 @@ import * as NodePath from "node:path";
 
 import {
   type AppStackByWorktreeResult,
+  AppStackError,
   ModelSelection,
   ProviderRuntimeEvent,
   ProviderSession,
@@ -375,7 +376,7 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
     );
-    const getByWorktree = vi.fn((_input: { readonly worktreePath: string }) =>
+    const getByWorktree = vi.fn<AppStackManager["Service"]["getByWorktree"]>((_input) =>
       Effect.succeed(
         input?.appStackByWorktreeResult ?? {
           stack: null,
@@ -2450,6 +2451,68 @@ describe("ProviderCommandReactor", () => {
     expect(request.input).toContain("Worktree path: /tmp/worktrees/rudi/worktree-1234abcd");
     expect(request.input).toContain("Git branch: verify-email-capabilities");
     expect(request.input).toContain("App Stack status: pending workspace dependency readiness");
+    expect(request.input).toContain("do not substitute another runtime");
+    expect(request.input).toMatch(/Check the email capabilities\.$/);
+  });
+
+  it.each([1, 2])("retries a failed stack lookup once with %s failures", async (failures) => {
+    const harness = await createHarness({ threadWorkflowPreset: "fast-feature" });
+    const now = "2026-01-01T00:00:00.000Z";
+    let attempts = 0;
+    harness.getByWorktree.mockReturnValue(
+      Effect.suspend(() => {
+        attempts += 1;
+        return attempts <= failures
+          ? Effect.fail(
+              new AppStackError({
+                operation: "getByWorktree",
+                message: "Temporary controller failure",
+              }),
+            )
+          : Effect.succeed({ stack: null, frontendUrl: null, frontendServiceName: null });
+      }),
+    );
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-thread-worktree-context"),
+        threadId: ThreadId.make("thread-1"),
+        branch: "verify-email-capabilities",
+        worktreePath: "/tmp/worktrees/rudi/worktree-1234abcd",
+      }),
+    );
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-worktree-context"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-worktree-context"),
+          role: "user",
+          text: "Check the email capabilities.",
+          attachments: [],
+        },
+        interactionMode: "product-workflow",
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    expect(attempts).toBe(2);
+    expect(harness.getByWorktree.mock.calls[0]?.[0]).toEqual({
+      worktreePath: "/tmp/worktrees/rudi/worktree-1234abcd",
+    });
+    const request = harness.sendTurn.mock.calls[0]?.[0] as { readonly input?: string };
+    expect(request.input).toContain("Worktree path: /tmp/worktrees/rudi/worktree-1234abcd");
+    expect(request.input).toContain("Git branch: verify-email-capabilities");
+    expect(request.input).toContain(
+      failures === 1
+        ? "App Stack status: pending workspace dependency readiness"
+        : "controller lookup did not complete",
+    );
     expect(request.input).toContain("do not substitute another runtime");
     expect(request.input).toMatch(/Check the email capabilities\.$/);
   });

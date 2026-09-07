@@ -60,7 +60,15 @@ describe("buildWorktreeRuntimeContext", () => {
           displayName: "Verify email capabilities",
           description: null,
           status: "running",
-          services: [],
+          services: [
+            {
+              name: "cortex",
+              status: "running",
+              health: "unknown",
+              error: null,
+              previewUrl: "https://cortex.example.test",
+            },
+          ],
           serviceCount: 0,
           lastError: null,
           errorCount: 0,
@@ -76,7 +84,8 @@ describe("buildWorktreeRuntimeContext", () => {
     expect(context).toContain("App Stack name: Verify email capabilities");
     expect(context).toContain("App Stack status: running");
     expect(context).toContain("App Stack URL: https://verify-email.example.test");
-    expect(context).toContain("only authoritative runtime and browser target");
+    expect(context).toContain("authoritative runtime and browser targets");
+    expect(context).toContain("cortex: https://cortex.example.test");
   });
 
   it("does not authorize runtime evidence from a stack that is still starting", () => {

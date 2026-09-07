@@ -455,10 +455,10 @@ const make = Effect.gen(function* () {
       if (!worktreePath) return input.messageText;
 
       const stackLookup = yield* appStackManager.getByWorktree({ worktreePath }).pipe(
+        Effect.timeout("5 seconds"),
+        Effect.retry({ times: 1 }),
         Effect.map(Option.some),
         Effect.orElseSucceed(() => Option.none()),
-        Effect.timeoutOption("1500 millis"),
-        Effect.map(Option.flatten),
       );
       const context = buildWorktreeRuntimeContext({
         worktreePath,

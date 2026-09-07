@@ -7,9 +7,12 @@ import {
   AppReviewEvidence,
   AppReviewRecord,
   AppReviewWorkflowRun,
+  AppReviewWorkflowFixResult,
   EMPTY_APP_REVIEW_EVIDENCE,
 } from "./review.ts";
 
+const decodeFixResult = Schema.decodeUnknownEffect(AppReviewWorkflowFixResult);
+const encodeFixResult = Schema.encodeEffect(AppReviewWorkflowFixResult);
 const decodeAppReviewRecord = Schema.decodeUnknownEffect(AppReviewRecord);
 const encodeAppReviewRecord = Schema.encodeEffect(AppReviewRecord);
 const decodeAppReviewEvidence = Schema.decodeUnknownEffect(AppReviewEvidence);
@@ -341,5 +344,26 @@ it.effect("rejects zero and clamps historical App Review budgets to 10", () =>
     }
     const historical = yield* decodeAppReviewWorkflowRun({ ...workflowRun, cycleBudget: 50 });
     assert.strictEqual(historical.cycleBudget, 10);
+  }),
+);
+
+it.effect("round-trips blocked repair checks without losing their explanation", () =>
+  Effect.gen(function* () {
+    const input = {
+      runId: "review-1",
+      planId: "plan-1",
+      status: "blocked",
+      validations: [
+        {
+          command: "pnpm e2e:review",
+          status: "blocked",
+          outputMarkdown: "Not run: Cortex origin unavailable.",
+          completedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      notesMarkdown: "Supply the assigned Cortex URL.",
+    };
+    const result = yield* decodeFixResult(input);
+    assert.deepStrictEqual(yield* encodeFixResult(result), input);
   }),
 );

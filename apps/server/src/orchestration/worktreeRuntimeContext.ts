@@ -67,12 +67,21 @@ export function buildWorktreeRuntimeContext(input: {
       `- App Stack name: ${stack.displayName ?? stack.id}`,
       `- App Stack status: ${stack.status}`,
       `- App Stack URL: ${input.stackLookup.frontendUrl ?? "not ready"}`,
+      ...Object.entries({
+        ...Object.fromEntries(
+          (stack.services ?? [])
+            .filter((service) => service.previewUrl)
+            .map((service) => [service.name, service.previewUrl]),
+        ),
+        ...stack.previewUrls,
+      }).map(([name, url]) => `- App Stack service ${name}: ${url}`),
     ];
   })();
 
   return [
     "<worktree-runtime-context>",
     "This block is generated from current orchestration state at turn start and is authoritative.",
+    "It replaces earlier runtime context in this conversation. An earlier unavailable status does not apply when this block reports a running stack.",
     `- Worktree path: ${input.worktreePath}`,
     `- Git branch: ${input.branch ?? "rename pending"}`,
     ...stackLines,
@@ -80,7 +89,7 @@ export function buildWorktreeRuntimeContext(input: {
     "Do not inspect, query, modify, or claim evidence from a host container, database, development server, deployment URL, or App Stack belonging to another worktree.",
     !stackHealthy
       ? "Until this worktree's App Stack is healthy and its URL is ready, limit work to source inspection and the workflow's current non-runtime stage; do not substitute another runtime."
-      : "The App Stack URL above is the only authoritative runtime and browser target for this worktree.",
+      : "The App Stack URL and service URLs above are the authoritative runtime and browser targets for this worktree. Use the named service URL when a test needs a secondary application. Do not derive service URLs by replacing hostname text.",
     "Later workflow turns receive a freshly generated block, including the exact stack id and URL once ready.",
     "</worktree-runtime-context>",
   ].join("\n");
