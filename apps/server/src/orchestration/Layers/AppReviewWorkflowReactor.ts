@@ -160,13 +160,7 @@ export function appReviewFixValidationFailure(
   const { focused, project } = splitAppReviewFixValidations(input);
   const focusedPassed =
     focused.length > 0 && focused.every((validation) => validation.status === "passed");
-  const deferredCommands = new Set(
-    input.completeValidationCommands.map((command) => command.trim()),
-  );
-  const blockingProjectFailures = project.filter(
-    (validation) =>
-      validation.status !== "passed" && !deferredCommands.has(validation.command.trim()),
-  );
+  const blockingProjectFailures = project.filter((validation) => validation.status !== "passed");
   if (
     appReviewFixValidationsPassed({ ...input, projectValidationCommands: [] }) &&
     blockingProjectFailures.length === 0
@@ -196,7 +190,7 @@ export function appReviewFixValidationFailure(
       ? [
           "",
           "## Project checks",
-          "Commands reserved for final validation remain deferred; other project checks are required for this review.",
+          "These reported failures must be repaired even when they fall outside the original tickets.",
           ...projectFailures,
         ]
       : []),
@@ -550,6 +544,7 @@ export function successfulFixAction(
 
 export const APP_REVIEW_PHASE_MAX_LAUNCHES = 2;
 export const APP_REVIEW_FIX_RESULT_MAX_CONTINUATIONS = 1;
+export const APP_REVIEW_VALIDATION_MAX_REPAIRS = 3;
 export const APP_REVIEW_RECOVERY_SWEEP_INTERVAL_MS = 30_000;
 
 const APP_REVIEW_FIX_RESULT_MISSING_MESSAGE =
@@ -772,6 +767,74 @@ export function claimAppReviewFixResultContinuation(input: {
   };
 }
 
+export function claimAppReviewValidationRepair(input: {
+  readonly run: AppReviewWorkflowRun;
+  readonly result: AppReviewWorkflowFixResult;
+  readonly detailMarkdown: string;
+  readonly occurredAt: string;
+}): AppReviewWorkflowRun | null {
+  const cycle = input.run.cycles.at(-1);
+  if (
+    input.run.status !== "running" ||
+    input.run.activePhase !== "fixing" ||
+    cycle?.fixerThreadId == null ||
+    (cycle.validationRepair?.attempt ?? 0) >= APP_REVIEW_VALIDATION_MAX_REPAIRS
+  )
+    return null;
+  const requiredCommands = [
+    ...new Set([
+      ...(cycle.validationRepair?.requiredCommands ?? []),
+      ...input.result.validations
+        .filter((validation) => validation.status !== "passed")
+        .map((validation) => validation.command.trim()),
+    ]),
+  ];
+  return {
+    ...input.run,
+    cycles: input.run.cycles.map((entry) =>
+      entry.cycleNumber === cycle.cycleNumber
+        ? {
+            ...entry,
+            fixResult: null,
+            validationRepair: {
+              attempt: (cycle.validationRepair?.attempt ?? 0) + 1,
+              requestedAt: input.occurredAt,
+              requiredCommands,
+              result: input.result,
+              detailMarkdown: input.detailMarkdown,
+            },
+          }
+        : entry,
+    ),
+    updatedAt: input.occurredAt,
+  };
+}
+
+export function appReviewValidationRepairNeedsLaunch(
+  cycle: AppReviewWorkflowCycle,
+  thread: {
+    readonly latestTurn: { readonly requestedAt: string } | null;
+    readonly session: { readonly status: string } | null;
+  },
+): boolean {
+  const repair = cycle.validationRepair;
+  return (
+    repair != null &&
+    thread.session?.status !== "starting" &&
+    thread.session?.status !== "running" &&
+    (thread.latestTurn === null || thread.latestTurn.requestedAt < repair.requestedAt)
+  );
+}
+
+export function appReviewValidationRepairMissingCommands(
+  cycle: AppReviewWorkflowCycle,
+  result: AppReviewWorkflowFixResult,
+): ReadonlyArray<string> {
+  return (cycle.validationRepair?.requiredCommands ?? []).filter(
+    (command) => !result.validations.some((validation) => validation.command.trim() === command),
+  );
+}
+
 export function appReviewFixResultContinuationNeedsLaunch(
   run: AppReviewWorkflowRun,
   cycle: AppReviewWorkflowCycle,
@@ -836,6 +899,7 @@ export function appReviewRecoveryEvidenceIsCurrent(
   cycle: AppReviewWorkflowCycle,
   createdAt: string,
 ): boolean {
+  if (cycle.validationRepair != null) return createdAt > cycle.validationRepair.requestedAt;
   const failedAt = run.failure?.failedAt ?? cycle.failure?.failedAt ?? null;
   const baseline =
     run.status === "failed"
@@ -866,6 +930,7 @@ export function retryReviewPhaseInCycle(input: {
     repairTickets: [],
     ticketingTurnId: null,
     fixResult: null,
+    validationRepair: null,
     failure: input.failure,
     workspaceRevision: input.workspaceRevision,
     completedAt: null,
@@ -892,6 +957,7 @@ export function retryE2ePhaseInCycle(input: {
     repairTickets: [],
     ticketingTurnId: null,
     fixResult: null,
+    validationRepair: null,
     failure: input.failure,
     workspaceRevision: input.workspaceRevision,
     completedAt: null,
@@ -912,6 +978,7 @@ export function rerunPlanningPhaseInCycle(input: {
     repairTickets: [],
     fixerThreadId: null,
     fixResult: null,
+    validationRepair: null,
     failure: null,
     workspaceRevision: input.workspaceRevision,
     completedAt: null,
@@ -1330,6 +1397,28 @@ export function buildAppReviewFixResultContinuationPrompt(input: {
     ].join("\n"),
     APP_REVIEW_IMPLEMENT_SKILL_ID,
   );
+}
+
+export function buildAppReviewValidationRepairPrompt(input: {
+  readonly run: AppReviewWorkflowRun;
+  readonly cycle: AppReviewWorkflowCycle;
+}): string {
+  const repair = input.cycle.validationRepair;
+  if (repair == null) return "";
+  return [
+    `Validation repair ${repair.attempt} of ${APP_REVIEW_VALIDATION_MAX_REPAIRS}.`,
+    "Your previous repair did not pass validation. Continue in this thread and worktree, preserving completed repairs and commits. Fix every reported test failure, including project-wide failures outside the original tickets. Those failures are now part of this repair assignment.",
+    "Reproduce each failure, repair its cause, and rerun the failed command. Do not skip or quarantine tests, weaken assertions, or raise timeouts to hide a failure. A narrower passing test does not replace a failed broad command.",
+    "Report every command below again in your result. Preserve passing results if the code has not changed since they ran. The workflow requires all reported checks to pass before leaving repair.",
+    ...repair.requiredCommands.map((command) => `- ${command}`),
+    "",
+    repair.detailMarkdown,
+    "",
+    "Previous repair report:",
+    JSON.stringify(repair.result, null, 2),
+    "",
+    buildAppReviewFixPrompt({ ...input, e2eCommands: repair.requiredCommands }),
+  ].join("\n");
 }
 
 export function terminalReviewEvidenceFailure(
@@ -2635,7 +2724,10 @@ const make = Effect.gen(function* () {
       message: {
         messageId: yield* serverMessageId("app-review-workflow-fixer"),
         role: "user",
-        text: buildAppReviewFixPrompt({ run, cycle, e2eCommands }),
+        text:
+          cycle.validationRepair != null
+            ? buildAppReviewValidationRepairPrompt({ run, cycle })
+            : buildAppReviewFixPrompt({ run, cycle, e2eCommands }),
         attachments: [],
       },
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
@@ -2887,11 +2979,13 @@ const make = Effect.gen(function* () {
     thread: OrchestrationThread,
     run: AppReviewWorkflowRun,
     cycle: AppReviewWorkflowCycle,
+    acceptHistorical = false,
   ): AppReviewWorkflowFixResult | null => {
     for (const activity of thread.activities.toReversed()) {
       if (
         activity.kind !== "app-review-fix-result" ||
-        !appReviewRecoveryEvidenceIsCurrent(run, cycle, activity.createdAt) ||
+        (!acceptHistorical &&
+          !appReviewRecoveryEvidenceIsCurrent(run, cycle, activity.createdAt)) ||
         !Predicate.isObject(activity.payload)
       ) {
         continue;
@@ -2960,6 +3054,29 @@ const make = Effect.gen(function* () {
     return continued;
   });
 
+  const ensureValidationRepairLaunch = Effect.fn(
+    "AppReviewWorkflowReactor.ensureValidationRepairLaunch",
+  )(function* (run: AppReviewWorkflowRun, cycle: AppReviewWorkflowCycle) {
+    const repair = cycle.validationRepair;
+    if (cycle.fixerThreadId === null || repair == null) return;
+    const key = `${run.id}:${cycle.cycleNumber}:${repair.attempt}:${repair.requestedAt}`;
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make(`server:app-review-validation-repair:${key}`),
+      threadId: cycle.fixerThreadId,
+      message: {
+        messageId: MessageId.make(`message-app-review-validation-repair:${key}`),
+        role: "user",
+        text: buildAppReviewValidationRepairPrompt({ run, cycle }),
+        attachments: [],
+      },
+      runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+      interactionMode: "default",
+      workflowPromptId: APP_REVIEW_IMPLEMENT_SKILL_ID,
+      createdAt: repair.requestedAt,
+    });
+  });
+
   const reconcileFixer = Effect.fn("AppReviewWorkflowReactor.reconcileFixer")(function* (
     run: AppReviewWorkflowRun,
     occurredAt: string,
@@ -2970,6 +3087,10 @@ const make = Effect.gen(function* () {
     const fixer = yield* resolveThread(cycle.fixerThreadId);
     if (fixer === undefined) {
       if ((cycle.repairTickets?.length ?? 0) > 0) yield* ensureFixerLaunch(run, cycle);
+      return;
+    }
+    if (appReviewValidationRepairNeedsLaunch(cycle, fixer)) {
+      yield* ensureValidationRepairLaunch(run, cycle);
       return;
     }
     if (appReviewPhaseLaunchNeedsRetry(run, cycle, fixer)) {
@@ -3025,6 +3146,36 @@ const make = Effect.gen(function* () {
       projectValidationCommands: yield* e2eCommandsForCwd(target.cwd),
       validations: result.validations,
     });
+    const missingCommands = appReviewValidationRepairMissingCommands(cycle, result);
+    const repairFailure =
+      missingCommands.length > 0
+        ? `${validationFailure ?? "Validation results are incomplete."}\n\nMissing results for previously failed commands:\n${missingCommands.map((command) => `- ${command}`).join("\n")}`
+        : validationFailure;
+    if (
+      repairFailure !== null &&
+      (result.status === "succeeded" ||
+        result.validations.some((validation) => validation.status === "failed"))
+    ) {
+      const continued = claimAppReviewValidationRepair({
+        run: reportedRun,
+        result,
+        detailMarkdown: repairFailure,
+        occurredAt,
+      });
+      if (continued !== null) {
+        yield* updateRun(continued);
+        yield* ensureValidationRepairLaunch(continued, continued.cycles.at(-1)!);
+        return;
+      }
+      yield* failRun({
+        run: reportedRun,
+        reason: "fixer-failed",
+        retryable: false,
+        detailMarkdown: `Validation still failed after ${APP_REVIEW_VALIDATION_MAX_REPAIRS} repair attempts.\n\n${repairFailure}`,
+        occurredAt,
+      });
+      return;
+    }
     if (result.status !== "succeeded") {
       yield* failCycle({
         run: reportedRun,
@@ -3040,12 +3191,12 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    if (validationFailure !== null) {
+    if (repairFailure !== null) {
       yield* failCycle({
         run: reportedRun,
         reason: "fixer-failed",
         retryable: false,
-        detailMarkdown: validationFailure,
+        detailMarkdown: repairFailure,
         occurredAt,
       });
       return;
@@ -3209,6 +3360,19 @@ const make = Effect.gen(function* () {
 
     const repairTickets = cycle.repairTickets ?? [];
     if (repairTickets.length === 0 || run.reviewOnly === true) return;
+    const previousFixer =
+      cycle.fixerThreadId === null ? undefined : yield* resolveThread(cycle.fixerThreadId);
+    const previousResult =
+      cycle.fixResult ??
+      (previousFixer === undefined ? null : parseFixResult(previousFixer, run, cycle, true));
+    const previousFailure =
+      previousResult === null
+        ? null
+        : appReviewFixValidationFailure({
+            completeValidationCommands: [],
+            projectValidationCommands: yield* e2eCommandsForCwd(target.cwd),
+            validations: previousResult.validations,
+          });
     const fixingRun: AppReviewWorkflowRun = {
       ...reopened,
       cycles: run.cycles.map((entry) =>
@@ -3218,6 +3382,18 @@ const make = Effect.gen(function* () {
               status: "fixing" as const,
               fixerThreadId: null,
               fixResult: null,
+              validationRepair:
+                previousResult !== null && previousFailure !== null
+                  ? {
+                      attempt: 1,
+                      requestedAt: occurredAt,
+                      requiredCommands: previousResult.validations
+                        .filter((validation) => validation.status !== "passed")
+                        .map((validation) => validation.command.trim()),
+                      result: previousResult,
+                      detailMarkdown: previousFailure,
+                    }
+                  : null,
               workspaceRevision,
               completedAt: null,
             }

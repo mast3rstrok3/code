@@ -181,6 +181,17 @@ export const AppReviewWorkflowCycle = Schema.Struct({
   recoveryContinuationCount: Schema.optionalKey(NonNegativeInt),
   /** One result-only continuation after a fixer completes without its directive. */
   fixResultContinuationCount: Schema.optionalKey(NonNegativeInt),
+  validationRepair: Schema.optionalKey(
+    Schema.NullOr(
+      Schema.Struct({
+        attempt: PositiveInt,
+        requestedAt: IsoDateTime,
+        requiredCommands: Schema.Array(TrimmedNonEmptyString),
+        result: AppReviewWorkflowFixResult,
+        detailMarkdown: Schema.String,
+      }),
+    ),
+  ),
   /** Older phase threads replaced by an in-cycle retry. */
   supersededThreadIds: Schema.optionalKey(Schema.Array(ThreadId)),
   reviewVerdict: Schema.NullOr(Schema.Literals(["pending", "passed", "failed"])),

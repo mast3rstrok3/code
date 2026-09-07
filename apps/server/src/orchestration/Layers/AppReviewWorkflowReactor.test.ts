@@ -26,6 +26,11 @@ import {
   appReviewFixResultContinuationNeedsLaunch,
   appReviewFixValidationsPassed,
   appReviewFixValidationFailure,
+  claimAppReviewValidationRepair,
+  appReviewValidationRepairNeedsLaunch,
+  appReviewValidationRepairMissingCommands,
+  buildAppReviewValidationRepairPrompt,
+  APP_REVIEW_VALIDATION_MAX_REPAIRS,
   appReviewPhaseLaunchNeedsRetry,
   appReviewRepairPlanAction,
   appReviewPhaseModelStepWorkflowPromptId,
@@ -208,7 +213,7 @@ it("names required project failures even when every repair check passed", () => 
   expect(detail).toContain("Archive and member removal failed.");
 });
 
-it("keeps configured final checks deferred and rejects missing focused evidence", () => {
+it("repairs reported final-check failures and rejects missing focused evidence", () => {
   const input = {
     completeValidationCommands: ["pnpm check:full"],
     validations: [
@@ -226,7 +231,7 @@ it("keeps configured final checks deferred and rejects missing focused evidence"
       },
     ],
   };
-  expect(appReviewFixValidationFailure(input)).toBeNull();
+  expect(appReviewFixValidationFailure(input)).toContain("pnpm check:full: failed");
   expect(
     appReviewFixValidationFailure({ ...input, validations: input.validations.slice(1) }),
   ).toContain("No focused validation was reported");
@@ -263,6 +268,128 @@ it("accepts a legacy passing E2E report without scope metadata", () => {
           completedAt: now,
         },
       ],
+    }),
+  ).toBeNull();
+});
+
+function validationFixingRun(): AppReviewWorkflowRun {
+  const run = reviewingRun();
+  return {
+    ...run,
+    activePhase: "fixing",
+    activeThreadId: ThreadId.make("fixer"),
+    cycles: run.cycles.map((cycle) => ({
+      ...cycle,
+      status: "fixing",
+      fixerThreadId: ThreadId.make("fixer"),
+      fixingLaunchCount: 2,
+    })),
+  };
+}
+const failedValidationResult = {
+  runId: AppReviewWorkflowRunId.make("review-run"),
+  planId: "repair-plan",
+  status: "succeeded" as const,
+  commitSha: "saved-commit",
+  notesMarkdown: "Original repair passed, archive still fails.",
+  validations: [
+    {
+      command: "writing-tests",
+      scope: "focused" as const,
+      status: "passed" as const,
+      outputMarkdown: "5 passed",
+      completedAt: now,
+    },
+    {
+      command: "project-tests",
+      scope: "project" as const,
+      status: "failed" as const,
+      outputMarkdown: "Channel archive did not occur after approval.",
+      completedAt: now,
+    },
+  ],
+};
+
+it("feeds project failures back into repair after provider launch retries were used", () => {
+  const continued = claimAppReviewValidationRepair({
+    run: validationFixingRun(),
+    result: failedValidationResult,
+    detailMarkdown: "project-tests failed",
+    occurredAt: "2026-01-01T00:10:00.000Z",
+  });
+  expect(continued?.status).toBe("running");
+  const cycle = continued!.cycles.at(-1)!;
+  expect(cycle.fixingLaunchCount).toBe(2);
+  expect(cycle.validationRepair?.attempt).toBe(1);
+  expect(cycle.validationRepair?.requiredCommands).toEqual(["project-tests"]);
+  const prompt = buildAppReviewValidationRepairPrompt({ run: continued!, cycle });
+  expect(prompt).toContain("outside the original tickets");
+  expect(prompt).toContain("Channel archive did not occur after approval.");
+  expect(prompt).toContain("saved-commit");
+});
+
+it("recovers a saved repair request and rejects results from the previous turn", () => {
+  const requestedAt = "2026-01-01T00:10:00.000Z";
+  const run = claimAppReviewValidationRepair({
+    run: validationFixingRun(),
+    result: failedValidationResult,
+    detailMarkdown: "project-tests failed",
+    occurredAt: requestedAt,
+  })!;
+  const cycle = run.cycles.at(-1)!;
+  expect(
+    appReviewValidationRepairNeedsLaunch(cycle, {
+      latestTurn: { requestedAt: now },
+      session: { status: "ready" },
+    }),
+  ).toBe(true);
+  expect(
+    appReviewValidationRepairNeedsLaunch(cycle, {
+      latestTurn: { requestedAt },
+      session: { status: "running" },
+    }),
+  ).toBe(false);
+  expect(appReviewRecoveryEvidenceIsCurrent(run, cycle, now)).toBe(false);
+  expect(
+    appReviewRecoveryEvidenceIsCurrent(
+      { ...run, updatedAt: "2026-01-01T00:20:00.000Z" },
+      cycle,
+      "2026-01-01T00:15:00.000Z",
+    ),
+  ).toBe(true);
+});
+
+it("requires previous failures to stay in later repair reports and bounds further attempts", () => {
+  let run = validationFixingRun();
+  for (let i = 0; i < APP_REVIEW_VALIDATION_MAX_REPAIRS; i++) {
+    run = claimAppReviewValidationRepair({
+      run,
+      result: failedValidationResult,
+      detailMarkdown: "project-tests failed",
+      occurredAt: `2026-01-01T00:1${i}:00.000Z`,
+    })!;
+  }
+  expect(
+    appReviewValidationRepairMissingCommands(run.cycles.at(-1)!, {
+      ...failedValidationResult,
+      validations: failedValidationResult.validations.slice(0, 1),
+    }),
+  ).toEqual(["project-tests"]);
+  expect(
+    appReviewValidationRepairMissingCommands(run.cycles.at(-1)!, {
+      ...failedValidationResult,
+      validations: failedValidationResult.validations.map((v) => ({
+        ...v,
+        status: "passed" as const,
+      })),
+    }),
+  ).toEqual([]);
+  expect(
+    claimAppReviewValidationRepair({
+      run,
+      result: failedValidationResult,
+      detailMarkdown: "still failed",
+      occurredAt: "2026-01-01T00:20:00.000Z",
     }),
   ).toBeNull();
 });

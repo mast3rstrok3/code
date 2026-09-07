@@ -347,6 +347,37 @@ it.effect("rejects zero and clamps historical App Review budgets to 10", () =>
   }),
 );
 
+it.effect("preserves pending validation repair feedback across a workflow round trip", () =>
+  Effect.gen(function* () {
+    const validationRepair = {
+      attempt: 2,
+      requestedAt: "2026-01-01T00:00:02.000Z",
+      requiredCommands: ["all-tests"],
+      result: {
+        runId: workflowRun.id,
+        planId: "repair-plan",
+        status: "succeeded",
+        validations: [
+          {
+            command: "all-tests",
+            scope: "project",
+            status: "failed",
+            outputMarkdown: "Archive failed",
+            completedAt: "2026-01-01T00:00:01.000Z",
+          },
+        ],
+        notesMarkdown: "Repair the new regression",
+      },
+      detailMarkdown: "all-tests: failed",
+    };
+    const run = yield* decodeAppReviewWorkflowRun({
+      ...workflowRun,
+      cycles: [{ ...legacyCycle, validationRepair }],
+    });
+    assert.deepStrictEqual(run.cycles[0]?.validationRepair, validationRepair);
+  }),
+);
+
 it.effect("round-trips blocked repair checks without losing their explanation", () =>
   Effect.gen(function* () {
     const input = {
