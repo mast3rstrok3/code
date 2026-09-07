@@ -10484,6 +10484,8 @@ const make = Effect.gen(function* () {
             !ticketStagePaused(state),
         );
         if (pendingTicketReview !== undefined) {
+          const launches = yield* SynchronizedRef.get(ticketAppReviewLocks);
+          if (launches.has(`${run.id}:${pendingTicketReview.ticketId}`)) continue;
           if (pendingTicketReview.appReviewWorkflowRunId != null) {
             yield* blockRun({
               sourceThreadId,
@@ -10496,28 +10498,17 @@ const make = Effect.gen(function* () {
             });
             continue;
           }
-          const releasedRun: OrchestrationImplementationRun = {
-            ...run,
-            ticketStates: run.ticketStates.map((state) =>
-              state.ticketId === pendingTicketReview.ticketId
-                ? { ...state, updatedAt: createdAt }
-                : state,
-            ),
-            updatedAt: createdAt,
-          };
+          // The launcher reloads the run under the ticket lock. Writing this
+          // sweep's snapshot first could erase a review launched in the meantime.
           yield* recoverRunStage(
             run.id,
             "ticket-app-review",
-            updateRun({ sourceThreadId, run: releasedRun, createdAt }).pipe(
-              Effect.andThen(
-                startTicketAppReview({
-                  sourceThreadId,
-                  run: releasedRun,
-                  ticketId: pendingTicketReview.ticketId,
-                  createdAt,
-                }),
-              ),
-            ),
+            startTicketAppReview({
+              sourceThreadId,
+              run,
+              ticketId: pendingTicketReview.ticketId,
+              createdAt,
+            }),
           );
           continue;
         }

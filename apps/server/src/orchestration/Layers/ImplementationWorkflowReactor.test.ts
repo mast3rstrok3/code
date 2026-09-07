@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 import {
   AppStackError,
   CommandId,
@@ -7155,6 +7156,82 @@ describe("ImplementationWorkflowReactor", () => {
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
         ).toHaveLength(2);
+      }),
+    ),
+  );
+
+  it.effect("leaves a reserved ticket App Review alone while its launch is in flight", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const dispatch = system.engine.dispatch;
+        const launchGate = vi
+          .spyOn(system.engine, "dispatch")
+          .mockImplementation((command) =>
+            command.type === "thread.app-review-workflow.launch"
+              ? Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(dispatch(command)),
+                )
+              : dispatch(command),
+          );
+        const launching = yield* Effect.forkChild(launchTicketAppReview(system));
+        yield* Deferred.await(entered);
+        yield* system.reactor
+          .recoverIncompleteStages()
+          .pipe(
+            Effect.ensuring(Deferred.succeed(release, undefined)),
+            Effect.ensuring(Effect.sync(() => launchGate.mockRestore())),
+          );
+        const { run, nestedRun } = yield* Fiber.join(launching);
+        const snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(current?.automationHalt).toBeNull();
+        expect(current?.ticketStates[0]?.appReviewWorkflowRunId).toBe(nestedRun.id);
+        expect(snapshot.appReviewWorkflowRuns).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("keeps a launched ticket App Review when recovery reads older ticket state", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket, nestedRun } = yield* launchTicketAppReview(system);
+        const snapshot = yield* system.query.getCommandReadModel();
+        const staleSnapshot: OrchestrationReadModel = {
+          ...snapshot,
+          appReviewWorkflowRuns: [],
+          implementationRuns: snapshot.implementationRuns.map((entry) =>
+            entry.id === run.id
+              ? {
+                  ...entry,
+                  ticketStates: entry.ticketStates.map((state) =>
+                    state.ticketId === ticket.id
+                      ? { ...state, appReviewWorkflowRunId: null, appReviewLaunchCount: 0 }
+                      : state,
+                  ),
+                }
+              : entry,
+          ),
+        };
+        yield* TestClock.adjust("2 seconds");
+        const staleRead = vi
+          .spyOn(system.query, "getCommandReadModel")
+          .mockReturnValueOnce(Effect.succeed(staleSnapshot));
+        yield* system.reactor
+          .recoverIncompleteStages()
+          .pipe(Effect.ensuring(Effect.sync(() => staleRead.mockRestore())));
+        yield* system.reactor.drain;
+        const recovered = yield* system.query.getSnapshot();
+        const current = recovered.implementationRuns.find((entry) => entry.id === run.id);
+        expect(current?.automationHalt).toBeNull();
+        expect(current?.ticketStates.find((state) => state.ticketId === ticket.id)).toMatchObject({
+          status: "app-reviewing",
+          appReviewWorkflowRunId: nestedRun.id,
+          appReviewLaunchCount: 1,
+        });
+        expect(recovered.appReviewWorkflowRuns).toHaveLength(1);
       }),
     ),
   );
