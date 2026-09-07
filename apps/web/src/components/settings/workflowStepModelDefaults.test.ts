@@ -48,8 +48,15 @@ it("lists the eleven Engineering steps in phase order", () => {
   ]);
 });
 
-it("groups Quick Feature into one Planning step and five Implementation steps", () => {
+it("limits Quick Feature to Planning and Build", () => {
   const targets = engineeringWorkflowDefaultSteps("quick-plan");
+
+  expect(targets.map((target) => target.phase)).toEqual(["planning", "implementation"]);
+  expect(targets.map((target) => target.label)).toEqual(["Planning", "Build"]);
+});
+
+it("keeps the review and pull-request steps in Feature", () => {
+  const targets = engineeringWorkflowDefaultSteps("fast-plan");
 
   expect(targets.map((target) => target.phase)).toEqual([
     "planning",

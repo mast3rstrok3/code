@@ -1399,7 +1399,10 @@ function fastFeatureExampleDirective(run: OrchestrationImplementationRun) {
   } as const;
 }
 
-function fastFeatureExecutionContract(run: OrchestrationImplementationRun): ReadonlyArray<string> {
+function fastFeatureExecutionContract(
+  run: OrchestrationImplementationRun,
+  completesAfterBuild = false,
+): ReadonlyArray<string> {
   return [
     "## Execution identity",
     `- branch: ${run.orchestratorBranch}`,
@@ -1411,8 +1414,14 @@ function fastFeatureExecutionContract(run: OrchestrationImplementationRun): Read
     "",
     "## Build validation",
     "Run focused tests and affected-file checks. A documented sub-minute fast command such as `pnpm check` is allowed.",
-    "Do not run the launch-level complete validation commands in Build; the final gate runs them after the enabled review steps, or directly after Build when reviews are disabled:",
-    ...run.launchSummary.validationCommands.map((command) => `- ${command}`),
+    ...(completesAfterBuild
+      ? [
+          "Quick Feature ends after Build. There is no later validation, review, or pull-request stage. Run the planned focused checks and affected-file checks before reporting success. Fix every failure you encounter, including failures outside the change. Do not defer failures to a later stage.",
+        ]
+      : [
+          "Do not run the launch-level complete validation commands in Build; the final gate runs them after the enabled review steps, or directly after Build when reviews are disabled:",
+          ...run.launchSummary.validationCommands.map((command) => `- ${command}`),
+        ]),
     "",
     "Report the exact focused or fast commands actually run in `validations`.",
     "",
@@ -1493,7 +1502,7 @@ function buildFastFeaturePrompt(input: {
     "",
     fastFeatureArtifactMarkdown(input),
     "",
-    ...fastFeatureExecutionContract(input.run),
+    ...fastFeatureExecutionContract(input.run, input.sourceThread.workflowPreset === "quick-plan"),
   ].join("\n");
 }
 
@@ -1504,7 +1513,9 @@ function buildFastFeaturePrompt(input: {
 function reviewGateExhaustionReason(run: OrchestrationImplementationRun): string {
   const lastValidation = run.finalValidation?.outputMarkdown.trim();
   return [
-    "The fixed Code Review sequence completed, but final validation did not pass on the resulting HEAD.",
+    run.codeReviewAttemptCount > 0
+      ? "The fixed Code Review sequence completed, but final validation did not pass on the resulting HEAD."
+      : "Final validation did not pass on the resulting HEAD. Code Review was skipped.",
     lastValidation === undefined || lastValidation.length === 0
       ? "The latest complete validation did not produce a usable summary."
       : `Latest validation: ${lastValidation.slice(0, 1_000)}`,
@@ -5413,6 +5424,7 @@ const make = Effect.gen(function* () {
     readonly sourceThreadId: ThreadId;
     readonly run: OrchestrationImplementationRun;
     readonly skippedStage: "change-request" | "change-request-babysit";
+    readonly summary?: string;
     readonly createdAt: string;
   }) {
     const completedRun: OrchestrationImplementationRun = {
@@ -5432,9 +5444,10 @@ const make = Effect.gen(function* () {
       tone: "info",
       kind: "implementation-run-completed",
       summary:
-        input.skippedStage === "change-request"
+        input.summary ??
+        (input.skippedStage === "change-request"
           ? "Implementation run completed without creating a pull request"
-          : "Implementation run completed without babysitting the pull request",
+          : "Implementation run completed without babysitting the pull request"),
       payload: { runId: input.run.id, skippedStage: input.skippedStage },
       createdAt: input.createdAt,
     });
@@ -6524,6 +6537,8 @@ const make = Effect.gen(function* () {
       }
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) return;
+      const completesAfterBuild =
+        findThread(readModel, sourceThreadId)?.workflowPreset === "quick-plan";
       const updatedAt = input.updatedAt;
       const buildResult = {
         runId: run.id,
@@ -6546,6 +6561,8 @@ const make = Effect.gen(function* () {
         return;
       }
       if (
+        (completesAfterBuild &&
+          directive.validations.some((validation) => validation.status !== "passed")) ||
         !focusedRepairValidationsPassed({
           finalCommands: [
             ...run.launchSummary.validationCommands,
@@ -6558,8 +6575,9 @@ const make = Effect.gen(function* () {
           sourceThreadId,
           run: { ...run, fastBuildResult: buildResult, updatedAt },
           retryableStage: "build",
-          reasonMarkdown:
-            "Build must report passing focused or documented sub-minute fast validation. Leave launch-level complete commands to the final validation gate.",
+          reasonMarkdown: completesAfterBuild
+            ? "Quick Feature must finish Build with passing focused checks and no failed or blocked checks. Fix every reported failure before reporting success."
+            : "Build must report passing focused or documented sub-minute fast validation. Leave launch-level complete commands to the final validation gate.",
           updatedAt,
         });
         return;
@@ -6614,8 +6632,19 @@ const make = Effect.gen(function* () {
         integrationHeadSha: head.commitSha,
         validatedHeadSha: null,
         retryableFailure: null,
+        automationHalt: null,
         updatedAt,
       };
+      if (completesAfterBuild) {
+        yield* completeWithoutChangeRequestStage({
+          sourceThreadId,
+          run: succeededRun,
+          skippedStage: "change-request",
+          summary: "Quick Feature completed after Build and its checks",
+          createdAt: updatedAt,
+        });
+        return;
+      }
       yield* updateRun({ sourceThreadId, run: succeededRun, createdAt: updatedAt });
       yield* startBrowserReview({ sourceThreadId, run: succeededRun, createdAt: updatedAt });
     },

@@ -32,7 +32,7 @@ After a workflow starts, its Planning steps appear in the Workflows side panel e
 
 ## Phase details
 
-**Quick Feature and Feature** create a shared worktree and start the provider's native CLI Plan mode. T3 Code answers structured planning questions without pausing the run: it chooses a valid explicit recommendation, otherwise the first option, otherwise asks the agent to use its best judgment. The proposed plan launches Build in the same worktree. Quick Feature stops after a separate final-validation thread unless you enable later stages. Feature enables Final App Review, Final Code Review, pull-request creation, and pull-request babysitting by default.
+**Quick Feature and Feature** create a shared worktree and start the provider's native CLI Plan mode. T3 Code answers structured planning questions without pausing the run: it chooses a valid explicit recommendation, otherwise the first option, otherwise asks the agent to use its best judgment. The proposed plan launches Build in the same worktree. Quick Feature ends when Build commits the change and passes its focused checks. Any failures Build encounters must be fixed before it can finish. Choose Feature for Final App Review, Final Code Review, complete validation, pull-request creation, and pull-request babysitting.
 
 **Quick Engineering** follows the same Planning and Implementation sequence as Engineering. It skips each ticket's App Review and Final App Review by default. Code Reviews, pull-request creation, and pull-request babysitting remain enabled.
 

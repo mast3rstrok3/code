@@ -79,6 +79,6 @@ describe("EngineeringWorkflowSettings", () => {
     expect(markup).toContain("Planning phase");
     expect(markup).toContain("1 step");
     expect(markup).toContain("Implementation phase");
-    expect(markup).toContain("5 steps");
+    expect(markup).not.toContain("5 steps");
   });
 });

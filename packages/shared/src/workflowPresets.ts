@@ -81,7 +81,7 @@ const APP_REVIEW_SUB_STEPS: ReadonlyArray<WorkflowPresetSubStep> = [
   },
 ];
 
-const PLAN_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
+const QUICK_PLAN_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
   {
     label: "Planning",
     skillId: "planning.fast-feature.codex",
@@ -94,6 +94,10 @@ const PLAN_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
     threadBoundary: "new child thread",
     note: "runs every planned workstream in order in one Build thread",
   },
+];
+
+const PLAN_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
+  ...QUICK_PLAN_HELP_STEPS,
   {
     label: "App Review",
     skillId: "implementation.browser-app-review.codex",
@@ -182,7 +186,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     route: "product",
     interactionMode: "plan",
     workflowPromptId: "planning.fast-feature.codex",
-    helpSteps: PLAN_HELP_STEPS,
+    helpSteps: QUICK_PLAN_HELP_STEPS,
     group: "plan",
     availability: "available",
     implementationDefaults: {

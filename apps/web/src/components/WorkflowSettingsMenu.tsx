@@ -252,7 +252,7 @@ export function WorkflowSettingsBody(props: {
             </div>
           );
         })}
-        {(props.preset === "quick-plan" || props.preset === "fast-plan") &&
+        {props.preset === "fast-plan" &&
         props.implementationSettings !== undefined &&
         props.onSetImplementationSettings !== undefined ? (
           <PlanWorkflowStageControls
