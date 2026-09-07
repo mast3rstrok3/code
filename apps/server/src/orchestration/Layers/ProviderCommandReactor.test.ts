@@ -913,7 +913,7 @@ describe("ProviderCommandReactor", () => {
       });
       expect(harness.sendTurn).toHaveBeenCalledWith(
         expect.objectContaining({
-          input: text,
+          input: expect.stringContaining(`</worktree-runtime-context>\n\n${text}`),
           ...(attachments.length > 0 ? { attachments } : {}),
         }),
       );
@@ -983,7 +983,7 @@ describe("ProviderCommandReactor", () => {
     });
     expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
       threadId: ThreadId.make("thread-1"),
-      input: "resume this workflow after restart",
+      input: expect.stringContaining("resume this workflow after restart"),
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
       workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
     });
@@ -2411,6 +2411,80 @@ describe("ProviderCommandReactor", () => {
     };
     expect(renameInput.oldBranch).toBe("worktree/1234abcd");
     expect(renameInput.newBranch).toBe("please-check-if-our-email-capabilities");
+  });
+
+  it("refreshes stack context for repo-root threads without restricting ordinary local tests", async () => {
+    const harness = await createHarness();
+    for (const index of [1, 2]) {
+      const sent = await harness.runEffect(Deferred.make<void>());
+      harness.sendTurn.mockReturnValue(
+        Deferred.succeed(sent, undefined).pipe(
+          Effect.as({
+            threadId: ThreadId.make("thread-1"),
+            turnId: asTurnId(`turn-${index}`),
+          }),
+        ),
+      );
+      if (index === 2) {
+        harness.getByWorktree.mockReturnValue(
+          Effect.succeed({
+            stack: {
+              id: "dev-existing",
+              uuid: "dev-existing",
+              userId: "user-1",
+              worktreePath: "/tmp/provider-project",
+              composePath: "infra/compose/compose.app-dev.yml",
+              namespace: "dev-existing",
+              displayName: "Project dev",
+              description: null,
+              status: "running",
+              services: [],
+              serviceCount: 0,
+              lastError: null,
+              errorCount: 0,
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+            },
+            frontendUrl: "https://project-dev.example.test",
+            frontendServiceName: "frontend",
+          }),
+        );
+      }
+      await harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(`cmd-root-stack-${index}`),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId(`root-stack-message-${index}`),
+            role: "user",
+            text: "Run the focused tests.",
+            attachments: [],
+          },
+          interactionMode: "default",
+          runtimeMode: "approval-required",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      );
+      await harness.runEffect(Deferred.await(sent));
+      await harness.drain();
+    }
+    expect(harness.getByWorktree).toHaveBeenCalledTimes(2);
+    expect(harness.getByWorktree).toHaveBeenLastCalledWith({
+      worktreePath: "/tmp/provider-project",
+    });
+    const request = harness.sendTurn.mock.calls.at(-1)?.[0] as
+      | { readonly input?: string }
+      | undefined;
+    expect(request?.input).toContain("Worktree path: /tmp/provider-project");
+    expect(request?.input).toContain("App Stack status: running");
+    expect(request?.input).toContain("App Stack URL: https://project-dev.example.test");
+    expect(request?.input).not.toContain("limit work to source inspection");
+    expect(request?.input).toMatch(/Run the focused tests\.$/);
+    const first = harness.sendTurn.mock.calls[0]?.[0] as { readonly input?: string };
+    expect(first.input).toContain("no stack is registered");
+    expect(first.input).toContain("Follow repository instructions for local testing");
+    expect(first.input).not.toContain("limit work to source inspection");
   });
 
   it("injects authoritative worktree and App Stack state into provider turns", async () => {

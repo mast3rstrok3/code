@@ -452,7 +452,10 @@ const make = Effect.gen(function* () {
 
   const addWorktreeRuntimeContext = Effect.fn("ProviderCommandReactor.addWorktreeRuntimeContext")(
     function* (input: { readonly thread: OrchestrationThread; readonly messageText: string }) {
-      const worktreePath = input.thread.worktreePath?.trim();
+      const project = input.thread.worktreePath?.trim()
+        ? undefined
+        : yield* resolveProject(input.thread.projectId);
+      const worktreePath = input.thread.worktreePath?.trim() || project?.workspaceRoot;
       if (!worktreePath) return input.messageText;
 
       const stackLookup = yield* appStackManager.getByWorktree({ worktreePath }).pipe(

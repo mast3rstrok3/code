@@ -27,6 +27,7 @@ import {
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
+import { ThreadAppStackIndicator } from "./ThreadAppStackIndicator";
 import { Button } from "./ui/button";
 import {
   Menu,
@@ -569,6 +570,14 @@ export const BranchToolbar = memo(function BranchToolbar({
             />
           ) : null}
         </div>
+      ) : null}
+
+      {serverThread && contextStripVisible ? (
+        <ThreadAppStackIndicator
+          environmentId={environmentId}
+          threadId={threadId}
+          worktreePath={activeWorktreePath ?? activeProject.workspaceRoot}
+        />
       ) : null}
 
       {composerControlsHostRef ? (

@@ -1,4 +1,5 @@
 import type { AppStackByWorktreeResult, WorkflowPreset } from "@t3tools/contracts";
+import { appStackVariantForComposePath } from "@t3tools/shared/appStack";
 
 const WORKFLOWS_WITH_EARLY_APP_STACK = new Set<WorkflowPreset>([
   "planning",
@@ -65,6 +66,8 @@ export function buildWorktreeRuntimeContext(input: {
     return [
       `- App Stack id: ${stack.id}`,
       `- App Stack name: ${stack.displayName ?? stack.id}`,
+      `- App Stack variant: ${stack.variant ?? appStackVariantForComposePath(stack.composePath)}`,
+      `- App Stack namespace: ${stack.namespace ?? "unavailable"}`,
       `- App Stack status: ${stack.status}`,
       `- App Stack URL: ${input.stackLookup.frontendUrl ?? "not ready"}`,
       ...Object.entries({
@@ -87,10 +90,12 @@ export function buildWorktreeRuntimeContext(input: {
     ...stackLines,
     "Use only this worktree for source and Git operations.",
     "Do not inspect, query, modify, or claim evidence from a host container, database, development server, deployment URL, or App Stack belonging to another worktree.",
-    !stackHealthy
+    !stackHealthy && input.workflowPreset !== null
       ? "Until this worktree's App Stack is healthy and its URL is ready, limit work to source inspection and the workflow's current non-runtime stage; do not substitute another runtime."
-      : "The App Stack URL and service URLs above are the authoritative runtime and browser targets for this worktree. Use the named service URL when a test needs a secondary application. Do not derive service URLs by replacing hostname text.",
-    "Later workflow turns receive a freshly generated block, including the exact stack id and URL once ready.",
+      : stackHealthy
+        ? "The App Stack URL and service URLs above are the authoritative runtime and browser targets for this worktree. Use the named service URL when a test needs a secondary application. Do not derive service URLs by replacing hostname text. Reuse the running stack instead of starting a competing dev server."
+        : "No healthy App Stack target is confirmed. Follow repository instructions for local testing; do not assume a stack is running or substitute another worktree's runtime.",
+    "Each turn receives fresh runtime context. Use the app_stack_get MCP tool, when available, to refresh this workspace's status during a turn or inspect its prod variant.",
     "</worktree-runtime-context>",
   ].join("\n");
 }

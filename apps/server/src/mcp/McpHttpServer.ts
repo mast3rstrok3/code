@@ -15,6 +15,8 @@ import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import { AppReviewToolkitHandlersLive } from "./toolkits/app-review/handlers.ts";
 import { AppReviewToolkit } from "./toolkits/app-review/tools.ts";
+import { AppStackToolkitHandlersLive } from "./toolkits/app-stack/handlers.ts";
+import { AppStackToolkit } from "./toolkits/app-stack/tools.ts";
 import { WorkflowArtifactsToolkitHandlersLive } from "./toolkits/workflow-artifacts/handlers.ts";
 import { WorkflowArtifactsToolkit } from "./toolkits/workflow-artifacts/tools.ts";
 import { WorkflowUserInputToolkitHandlersLive } from "./toolkits/workflow-user-input/handlers.ts";
@@ -220,6 +222,10 @@ const AppReviewToolkitRegistrationLive = McpServer.toolkit(AppReviewToolkit).pip
   Layer.provide(AppReviewToolkitHandlersLive),
 );
 
+export const AppStackToolkitRegistrationLive = McpServer.toolkit(AppStackToolkit).pipe(
+  Layer.provide(AppStackToolkitHandlersLive),
+);
+
 const WorkflowArtifactsToolkitRegistrationLive = McpServer.toolkit(WorkflowArtifactsToolkit).pipe(
   Layer.provide(WorkflowArtifactsToolkitHandlersLive),
 );
@@ -234,6 +240,7 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
 );
 
 const McpToolkitRegistrationLive = Layer.mergeAll(
+  AppStackToolkitRegistrationLive,
   PreviewToolkitRegistrationLive,
   AppReviewToolkitRegistrationLive,
   WorkflowArtifactsToolkitRegistrationLive,

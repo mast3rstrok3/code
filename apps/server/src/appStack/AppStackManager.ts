@@ -421,8 +421,31 @@ export class AppStackManager extends Context.Service<
         const stack = result.stack === null ? null : withVariant(result.stack);
         // The controller keys this lookup on the worktree alone, so the stack
         // it returns may be the other variant's. That one is not ours.
-        if (stack === null || stack.variant !== (input.variant ?? "dev")) {
-          return { stack: null, frontendUrl: null, frontendServiceName: null };
+        if (stack === null) return result;
+        if (stack.variant !== (input.variant ?? "dev")) {
+          const normalizePath = (path: string) => path.trim().replace(/[\\/]+$/u, "");
+          const candidates = yield* list({});
+          const matchingStack = candidates.stacks.find(
+            (candidate) =>
+              normalizePath(candidate.worktreePath) === normalizePath(input.worktreePath) &&
+              candidate.variant === (input.variant ?? "dev"),
+          );
+          const frontendServiceName =
+            ["frontend", "web", "app"].find(
+              (name) =>
+                matchingStack?.previewUrls?.[name] ||
+                matchingStack?.services?.some(
+                  (service) => service.name === name && service.previewUrl,
+                ),
+            ) ?? null;
+          const frontendUrl =
+            frontendServiceName === null
+              ? null
+              : (matchingStack?.previewUrls?.[frontendServiceName] ??
+                matchingStack?.services?.find((service) => service.name === frontendServiceName)
+                  ?.previewUrl ??
+                null);
+          return { stack: matchingStack ?? null, frontendUrl, frontendServiceName };
         }
         return { ...result, stack };
       });

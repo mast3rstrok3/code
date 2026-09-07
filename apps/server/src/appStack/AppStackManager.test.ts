@@ -861,7 +861,9 @@ it.effect("asks the controller for the prod contract and ignores the worktree's 
               frontendUrl: "https://feature.example.test",
               frontendServiceName: "frontend",
             }
-          : { stack: prodStackJson, created: true, frontendUrl: null, frontendServiceName: null },
+          : request.method === "GET"
+            ? [stackJson]
+            : { stack: prodStackJson, created: true, frontendUrl: null, frontendServiceName: null },
       ),
   });
 
@@ -887,6 +889,35 @@ it.effect("asks the controller for the prod contract and ignores the worktree's 
     }
     assert.equal(request.method, "POST");
     assert.equal(decodeVariantRequest(new TextDecoder().decode(request.body.body)).variant, "prod");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("finds the exact workspace dev stack when the controller returns its prod stack", () => {
+  const dev = {
+    ...stackJson,
+    composePath: "infra/compose/compose.app-dev.yml",
+    previewUrls: { frontend: "https://dev.example.test" },
+  };
+  const prod = { ...stackJson, composePath: "infra/compose/compose.app-prod.yml" };
+  const layer = makeLayer({
+    requests: [],
+    response: (request) =>
+      Response.json(
+        new URL(request.url).pathname.endsWith("/by-worktree")
+          ? {
+              stack: prod,
+              frontendUrl: "https://prod.example.test",
+              frontendServiceName: "frontend",
+            }
+          : [{ ...dev, worktreePath: "/another/worktree" }, prod, dev],
+      ),
+  });
+  return Effect.gen(function* () {
+    const manager = yield* AppStackManager;
+    const result = yield* manager.getByWorktree({ worktreePath: stackJson.worktreePath + "/" });
+    assert.equal(result.stack?.worktreePath, stackJson.worktreePath);
+    assert.equal(result.stack?.variant, "dev");
+    assert.equal(result.frontendUrl, "https://dev.example.test");
   }).pipe(Effect.provide(layer));
 });
 

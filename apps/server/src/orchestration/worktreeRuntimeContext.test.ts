@@ -57,6 +57,7 @@ describe("buildWorktreeRuntimeContext", () => {
           userId: "user-1",
           worktreePath: "/worktrees/rudi/worktree-deadbeef",
           composePath: "compose.app-dev.yml",
+          namespace: "dev-123",
           displayName: "Verify email capabilities",
           description: null,
           status: "running",
@@ -83,6 +84,9 @@ describe("buildWorktreeRuntimeContext", () => {
     expect(context).toContain("App Stack id: stack-123");
     expect(context).toContain("App Stack name: Verify email capabilities");
     expect(context).toContain("App Stack status: running");
+    expect(context).toContain("App Stack variant: dev");
+    expect(context).toContain("App Stack namespace: dev-123");
+    expect(context).toContain("Reuse the running stack");
     expect(context).toContain("App Stack URL: https://verify-email.example.test");
     expect(context).toContain("authoritative runtime and browser targets");
     expect(context).toContain("cortex: https://cortex.example.test");

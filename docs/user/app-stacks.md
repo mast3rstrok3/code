@@ -43,6 +43,12 @@ Open **App Stack** in the right sidebar to see every stack reported by the activ
 current worktree is marked and appears first. Stack cards start collapsed so the list stays compact;
 expand a card to access previews, start and stop controls, service details, and Kubernetes pod logs.
 
+In web and desktop threads, the App Stack status beside the workspace and branch controls opens
+this panel. It shows the dev stack for the thread's worktree, or the repository directory when
+the thread uses the local checkout. Agents receive fresh dev stack status and service URLs at
+each turn. Agents with T3's MCP tools can use `app_stack_get` to refresh status during a turn or
+request the prod variant.
+
 Stacks created for a workflow are labeled **Workflow-owned**. If historical implementation runs
 map more than one visible stack to the same workflow, the panel reports the conflict but never
 deletes either stack automatically.

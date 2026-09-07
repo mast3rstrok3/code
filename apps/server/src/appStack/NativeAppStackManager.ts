@@ -1252,7 +1252,9 @@ export const makeNativeAppStackService = (
     getByWorktree: (input) =>
       nativeOperation("getByWorktree", async () => {
         const variant = input.variant ?? "dev";
-        const known = knownByWorktreePath.get(worktreeKey(input.worktreePath, variant));
+        const key = worktreeKey(input.worktreePath, variant);
+        if (!knownByWorktreePath.has(key)) await discoverAppStacks();
+        const known = knownByWorktreePath.get(key);
         const resolved =
           known ??
           resolveNativeConfigForWorktree(config, {

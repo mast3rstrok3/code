@@ -553,6 +553,47 @@ it.effect("seeds anonymous Compose volumes from the container image", () => {
   );
 });
 
+it.effect("discovers dev and prod stacks by workspace before any stack list request", () => {
+  const namespaces = ["dev", "prod"].map((variant) => ({
+    metadata: {
+      name: `existing-${variant}-123`,
+      annotations: {
+        "cortex.ai/worktree-path": "/repo/rudi",
+        "cortex.ai/compose-path": `infra/compose/compose.app-${variant}.yml`,
+      },
+    },
+  }));
+  const calls: string[] = [];
+  const runKubectl: KubectlRunner = async (args) => {
+    calls.push(args.join(" "));
+    if (args[0] === "get" && args[1] === "namespaces") return JSON.stringify({ items: namespaces });
+    if (args[0] === "get" && args[1] === "namespace") {
+      const namespace = namespaces.find((entry) => entry.metadata.name === args[2]);
+      if (namespace) return JSON.stringify(namespace);
+    }
+    if (args.includes("deployments")) return deploymentsJson;
+    if (args.includes("ingressroutes.traefik.io")) return JSON.stringify({ items: [] });
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppStackService(
+    {
+      ...nativeConfig,
+      id: undefined,
+      namespace: undefined,
+      worktreePath: undefined,
+    },
+    runKubectl,
+  );
+  return Effect.gen(function* () {
+    const dev = yield* service.getByWorktree({ worktreePath: "/repo/rudi/" });
+    const prod = yield* service.getByWorktree({ worktreePath: "/repo/rudi", variant: "prod" });
+    assert.equal(dev.stack?.namespace, "existing-dev-123");
+    assert.equal(prod.stack?.namespace, "existing-prod-123");
+    assert.equal(dev.stack?.status, "running");
+    assert.equal(calls.filter((call) => call.startsWith("get namespaces ")).length, 1);
+  });
+});
+
 it.effect("reports the configured Rudi stack from Kubernetes deployments", () => {
   const calls: Array<ReadonlyArray<string>> = [];
   const runKubectl: KubectlRunner = async (args) => {
@@ -613,6 +654,7 @@ it.effect(
       ],
     });
     const runKubectl: KubectlRunner = async (args) => {
+      if (args[0] === "get" && args[1] === "namespaces") return JSON.stringify({ items: [] });
       if (args.join(" ") === "get namespace hero-dev -o json") return namespaceJson;
       if (args.join(" ") === "-n hero-dev get deployments -o json") return deployments;
       if (args.join(" ") === "-n hero-dev get ingressroutes.traefik.io -o json") {
@@ -670,6 +712,7 @@ it.effect("keeps derived worktree preview URLs scoped to their namespace", () =>
     ],
   });
   const runKubectl: KubectlRunner = async (args) => {
+    if (args[0] === "get" && args[1] === "namespaces") return JSON.stringify({ items: [] });
     if (args.join(" ") === "get namespace hero-dev -o json") return namespaceJson;
     if (args.join(" ") === "-n hero-dev get deployments -o json") return deployments;
     if (args.join(" ") === "-n hero-dev get ingressroutes.traefik.io -o json") {
@@ -1783,6 +1826,7 @@ it.effect("restores Kubernetes resources when auto-creating an empty native name
 it.effect("does not report a derived worktree stack before its namespace exists", () => {
   const calls: Array<ReadonlyArray<string>> = [];
   const runKubectl: KubectlRunner = async (args) => {
+    if (args[0] === "get" && args[1] === "namespaces") return JSON.stringify({ items: [] });
     calls.push(args);
     if (args.join(" ") === "get namespace hero-dev -o json") {
       throw new Error('namespaces "hero-dev" not found');
@@ -2219,6 +2263,7 @@ it.effect("keeps a worktree's dev and prod stacks apart", () => {
   const tempDir = makeTempProdComposeWorktree("hero");
   const liveNamespaces = new Set<string>();
   const runKubectl: KubectlRunner = async (args) => {
+    if (args[0] === "get" && args[1] === "namespaces") return JSON.stringify({ items: [] });
     const line = args.join(" ");
     const match = /^get namespace (\S+) -o json$/u.exec(line);
     if (match !== null) {
