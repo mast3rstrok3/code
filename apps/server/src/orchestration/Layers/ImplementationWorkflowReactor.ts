@@ -58,6 +58,11 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
+import {
+  currentWorkflowValidations,
+  hasPostRepairVerification,
+  WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
+} from "../workflowValidation.ts";
 import { AppStackManager } from "../../appStack/AppStackManager.ts";
 import { normalizeWorkflowWorktreePath } from "../../appStack/workflowOwnership.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
@@ -991,12 +996,16 @@ function completeValidationsPassedExactlyOnce(input: {
   }
   const reportedCounts = new Map<string, number>();
   for (const validation of input.validations) {
+    if (validation.purpose === "reproduction") continue;
     const normalized = validation.command.trim();
     if (!requiredCounts.has(normalized)) continue;
     if (validation.status !== "passed") return false;
     reportedCounts.set(normalized, (reportedCounts.get(normalized) ?? 0) + 1);
   }
-  return [...requiredCounts].every(([command, count]) => reportedCounts.get(command) === count);
+  return (
+    hasPostRepairVerification(input.validations) &&
+    [...requiredCounts].every(([command, count]) => reportedCounts.get(command) === count)
+  );
 }
 
 function focusedRepairValidationsPassed(input: {
@@ -1004,12 +1013,13 @@ function focusedRepairValidationsPassed(input: {
   readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
 }): boolean {
   const finalCommands = new Set(input.finalCommands.map((command) => command.trim()));
-  const focusedValidations = input.validations.filter(
+  const focusedValidations = currentWorkflowValidations(input.validations).filter(
     (validation) => !finalCommands.has(validation.command.trim()),
   );
   return (
     focusedValidations.length > 0 &&
-    focusedValidations.every((validation) => validation.status === "passed")
+    focusedValidations.every((validation) => validation.status === "passed") &&
+    hasPostRepairVerification(input.validations)
   );
 }
 
@@ -1072,6 +1082,7 @@ function buildWorkerPrompt(input: {
         ]
       : [];
   return [
+    WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
     `Implement planning ticket ${input.ticketId} for implementation run ${input.run.id}.`,
     "",
     "Do not ask the user questions. Run one focused failing test before implementation. Work in behavioral slices, rerunning the relevant focused test after each slice, then finish with affected-file formatting, linting, typing, and focused tests only.",
@@ -1144,6 +1155,7 @@ function buildMergeGatePrompt(input: {
         ]
       : [];
   return [
+    WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
     `Run ${input.kind} gate for implementation run ${input.run.id}.`,
     "",
     ...integrationInstructions,
@@ -1196,6 +1208,7 @@ function buildFixPrompt(input: {
   readonly artifactMarkdown?: string;
 }): string {
   return [
+    WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
     `Fix browser app-review failures for implementation run ${input.run.id}.`,
     "",
     `This is QA repair ${input.run.qaCycleCount} of ${IMPLEMENTATION_RUN_MAX_QA_REPAIRS}. Do not ask the user questions. Use a focused red-green TDD loop, make the smallest implementation changes needed in the orchestrator worktree, run focused validation only, commit the repair, and report the fix result.`,
@@ -1215,6 +1228,7 @@ function buildAppStackFixPrompt(input: {
   readonly diagnosticsMarkdown: string;
 }): string {
   return [
+    WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
     `Repair the AppStack failure for implementation run ${input.run.id}.`,
     "",
     `This is QA repair ${input.run.qaCycleCount} of ${IMPLEMENTATION_RUN_MAX_QA_REPAIRS}. Treat the supplied failure as a code problem in this worktree, even when it looks like controller, authentication, configuration, or deployment infrastructure. Do not ask the user questions.`,
@@ -1252,6 +1266,7 @@ function buildCodeReviewPrompt(input: {
       ]
     : ["Run focused validation and report it in validations."];
   return [
+    WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
     `Perform ${isFinalReview ? "Final Code Review" : "historical combined Code Review"} for run ${input.run.id}. Cycle ${input.cycleNumber} of ${input.cycleBudget}.`,
     "",
     isFinalReview
@@ -1290,6 +1305,7 @@ function buildCodeReviewFixPrompt(input: {
   readonly reportMarkdown: string;
 }): string {
   return [
+    WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
     `Fix code-review findings for implementation run ${input.run.id}.`,
     "",
     "Do not ask the user questions. Apply the code-review findings with the smallest reliable changes in the orchestrator worktree, run focused validation, and report the fix result.",
@@ -1309,6 +1325,7 @@ function buildMergeGateFixPrompt(input: {
 }): string {
   const gateName = input.run.activeValidationKind === "final" ? "final validation" : "merge gate";
   return [
+    WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
     `Fix ${gateName} failures for implementation run ${input.run.id}.`,
     "",
     "Do not ask the user questions. Resolve integration conflicts or validation failures in the orchestrator worktree, commit the result, and report the fix.",
@@ -1391,6 +1408,7 @@ function fastFeatureExampleDirective(run: OrchestrationImplementationRun) {
     validations: [
       {
         command: "<focused test or documented sub-minute fast check actually run>",
+        purpose: "verification",
         status: "passed",
         outputMarkdown: "summary",
         completedAt: "ISO timestamp",
@@ -1405,6 +1423,7 @@ function fastFeatureExecutionContract(
   completesAfterBuild = false,
 ): ReadonlyArray<string> {
   return [
+    WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
     "## Execution identity",
     `- branch: ${run.orchestratorBranch}`,
     `- worktree: ${run.orchestratorWorktreePath}`,
@@ -3687,10 +3706,12 @@ const make = Effect.gen(function* () {
           role: "user",
           text: appendWorkflowSkillCommandSection(
             [
+              WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
               `Run Code Review Cycle ${state.codeReviewPassCount + 1} of ${cycleBudget} for ticket ${input.ticketId} in implementation run ${input.run.id}.`,
               `Worktree: ${state.worktreePath}`,
               `Branch: ${state.branch}`,
               `Review base: ${baseRef}`,
+              `The worker last verified commit ${state.workerResult?.commitSha ?? "unknown"}. If HEAD differs, include focused verification for the current HEAD even when this review is clean. Reuse existing passing output only when it verified the unchanged HEAD, preserving its original completion time.`,
               `Retrieve the durable ticket with workflow_ticket_get. Review Standards and Spec, apply and commit clear fixes, and leave the worktree clean.`,
               input.warningMarkdown === undefined
                 ? ""
@@ -6563,7 +6584,9 @@ const make = Effect.gen(function* () {
       }
       if (
         (completesAfterBuild &&
-          directive.validations.some((validation) => validation.status !== "passed")) ||
+          currentWorkflowValidations(directive.validations).some(
+            (validation) => validation.status !== "passed",
+          )) ||
         !focusedRepairValidationsPassed({
           finalCommands: [
             ...run.launchSummary.validationCommands,
@@ -7616,16 +7639,23 @@ const make = Effect.gen(function* () {
                       .filter(Boolean)
                       .join("\n\n"),
                     workerResult:
+                      directive.status === "findings" &&
                       candidate.workerResult?.status === "succeeded"
-                        ? { ...candidate.workerResult, commitSha: head.commitSha }
+                        ? {
+                            ...candidate.workerResult,
+                            commitSha: head.commitSha,
+                            validations: reportedValidations,
+                          }
                         : candidate.workerResult,
                     updatedAt,
                   }
                 : candidate,
             ),
             workerResults: completedReviewRun.workerResults.map((result) =>
-              result.ticketId === state.ticketId && result.status === "succeeded"
-                ? { ...result, commitSha: head.commitSha }
+              directive.status === "findings" &&
+              result.ticketId === state.ticketId &&
+              result.status === "succeeded"
+                ? { ...result, commitSha: head.commitSha, validations: reportedValidations }
                 : result,
             ),
             updatedAt,
@@ -8283,6 +8313,20 @@ const make = Effect.gen(function* () {
       if (failure === null || failure.attemptCount > failure.maxAttempts) return;
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
 
+      if (
+        failure.ticketId !== undefined &&
+        (failure.stage === "code-review" || failure.stage === "app-review")
+      ) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.implementation-run.rerun",
+          commandId: yield* serverCommandId("implementation-ticket-review-retry"),
+          threadId: input.sourceThreadId,
+          runId: input.run.id,
+          target: { kind: "ticket", ticketId: failure.ticketId, stage: failure.stage },
+          createdAt: input.createdAt,
+        });
+        return;
+      }
       if (failure.stage === "change-request") {
         yield* fileChangeRequest({
           sourceThreadId: input.sourceThreadId,

@@ -5,6 +5,40 @@ import { describe, it } from "vite-plus/test";
 import { parseWorkflowDirectiveFromMarkdown } from "./workflowDirectives.ts";
 
 describe("workflowDirectives", () => {
+  for (const type of ["implementation-code-review-result", "app-review-fix-result"] as const) {
+    it(`preserves validation purpose in ${type}`, () => {
+      const directive = {
+        type,
+        runId: "run-1",
+        planId: "plan-1",
+        status: type === "app-review-fix-result" ? "succeeded" : "findings",
+        commitSha: "abc123",
+        reportMarkdown: "Fixed the regression.",
+        notesMarkdown: "Fixed the regression.",
+        validations: [
+          {
+            command: "test focused",
+            purpose: "reproduction",
+            status: "failed",
+            outputMarkdown: "Expected red before the fix.",
+            completedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      };
+      const parse = (value: unknown) =>
+        parseWorkflowDirectiveFromMarkdown("```json\n" + JSON.stringify(value) + "\n```");
+      const result = parse(directive);
+      NodeAssert.equal(result.kind, "parsed");
+      if (result.kind !== "parsed" || !("validations" in result.directive)) return;
+      NodeAssert.equal(result.directive.validations[0]?.purpose, "reproduction");
+      NodeAssert.equal(
+        parse({ ...directive, validations: [{ ...directive.validations[0], purpose: "ignore" }] })
+          .kind,
+        "error",
+      );
+    });
+  }
+
   it("parses a green latest-commit PR babysit result", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 {

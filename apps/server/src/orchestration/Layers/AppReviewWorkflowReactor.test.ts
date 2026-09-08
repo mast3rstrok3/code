@@ -2395,6 +2395,31 @@ describe("current validation results", () => {
     expect(continued?.cycles.at(-1)?.validationRepair?.requiredCommands).toEqual([]);
   });
 
+  it("accepts explicit reproduction evidence followed by broader green verification", () => {
+    const validations = [
+      { ...failed, purpose: "reproduction" as const },
+      { ...passed, command: "ticket-test other-test", purpose: "verification" as const },
+    ];
+    expect(
+      appReviewFixValidationFailure({ completeValidationCommands: [], validations }),
+    ).toBeNull();
+    expect(
+      appReviewFixValidationFailure({
+        completeValidationCommands: [],
+        validations: validations.slice(0, 1),
+      }),
+    ).toContain("No focused validation");
+    expect(
+      appReviewFixValidationFailure({
+        completeValidationCommands: [],
+        validations: [
+          validations[0]!,
+          { ...validations[1]!, completedAt: "2025-12-31T23:59:00.000Z" },
+        ],
+      }),
+    ).toContain("after the latest reproduction");
+  });
+
   it("blocks on a newer failure or an ambiguous result at the same time", () => {
     for (const completedAt of [passed.completedAt, "2026-01-01T00:02:00.000Z"]) {
       expect(

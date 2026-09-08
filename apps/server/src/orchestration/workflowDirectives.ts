@@ -435,12 +435,17 @@ function parseValidationResults(
     if (outputMarkdown !== undefined && typeof outputMarkdown !== "string") {
       return "implementation validation outputMarkdown must be a string when provided.";
     }
+    const purpose = record["purpose"];
+    if (purpose !== undefined && purpose !== "reproduction" && purpose !== "verification") {
+      return "implementation validation purpose must be reproduction or verification.";
+    }
     const scope = allowBlocked ? record["scope"] : undefined;
     if (scope !== undefined && scope !== "focused" && scope !== "project") {
       return "App Review validation scope must be focused or project.";
     }
     validations.push({
       command,
+      ...(purpose === undefined ? {} : { purpose }),
       ...(scope === undefined ? {} : { scope }),
       status,
       outputMarkdown: outputMarkdown ?? "",

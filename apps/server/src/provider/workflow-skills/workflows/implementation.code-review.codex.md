@@ -23,6 +23,7 @@ Finish with exactly one fenced JSON block using this shape:
   "validations": [
     {
       "command": "vp test focused-test",
+      "purpose": "verification",
       "status": "passed",
       "outputMarkdown": "summary",
       "completedAt": "ISO timestamp"

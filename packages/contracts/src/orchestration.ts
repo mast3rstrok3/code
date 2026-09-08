@@ -966,6 +966,7 @@ export type OrchestrationImplementationValidationResultStatus =
   typeof OrchestrationImplementationValidationResultStatus.Type;
 
 export const OrchestrationImplementationValidationResult = Schema.Struct({
+  purpose: Schema.optionalKey(Schema.Literals(["reproduction", "verification"])),
   command: TrimmedNonEmptyString,
   status: OrchestrationImplementationValidationResultStatus,
   outputMarkdown: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),

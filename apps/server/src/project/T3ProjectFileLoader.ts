@@ -2,9 +2,9 @@
  * T3ProjectFileLoader - Effect service that loads the checked-in `t3.json`
  * project file from a workspace root.
  *
- * Loading is best-effort: a missing file resolves to `Option.none`, and
- * unreadable or invalid files are logged and treated as absent so callers
- * can fall back to their defaults.
+ * `load` logs invalid files and falls back to defaults. `loadStrict` preserves
+ * read and decode errors for workflows that require the configuration.
+ * Both return `Option.none` when the file is missing.
  *
  * @module T3ProjectFileLoader
  */
@@ -28,10 +28,11 @@ export class T3ProjectFileLoadError extends Schema.TaggedErrorClass<T3ProjectFil
     workspaceRoot: Schema.String,
     filePath: Schema.String,
     cause: Schema.Defect(),
+    detail: Schema.String,
   },
 ) {
   override get message(): string {
-    return `Failed to ${this.operation} ${T3_PROJECT_FILE_NAME} at ${this.filePath}.`;
+    return `Failed to ${this.operation} ${T3_PROJECT_FILE_NAME} at ${this.filePath}.\n${this.detail}`;
   }
 }
 
@@ -46,11 +47,15 @@ export class T3ProjectFileLoader extends Context.Service<
      * `Option.none` (invalid files are logged as warnings).
      */
     readonly load: (workspaceRoot: string) => Effect.Effect<Option.Option<T3ProjectFile>>;
+    /** Required workflow configuration preserves read and decode errors. */
+    readonly loadStrict: (
+      workspaceRoot: string,
+    ) => Effect.Effect<Option.Option<T3ProjectFile>, T3ProjectFileLoadError>;
   }
 >()("t3/project/T3ProjectFileLoader") {}
 
 const logT3ProjectFileLoadError = (error: T3ProjectFileLoadError) =>
-  Effect.logWarning(error).pipe(
+  Effect.logWarning(error.message).pipe(
     Effect.annotateLogs({
       operation: error.operation,
       workspaceRoot: error.workspaceRoot,
@@ -63,46 +68,50 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
 
-  const load: T3ProjectFileLoader["Service"]["load"] = Effect.fn("T3ProjectFileLoader.load")(
-    function* (workspaceRoot) {
-      const filePath = path.join(workspaceRoot, T3_PROJECT_FILE_NAME);
-      const raw = yield* fileSystem.readFileString(filePath).pipe(
-        Effect.map(Option.some),
-        Effect.catchTags({
-          PlatformError: (error) =>
-            error.reason._tag === "NotFound"
-              ? Effect.succeed(Option.none<string>())
-              : logT3ProjectFileLoadError(
-                  new T3ProjectFileLoadError({
-                    operation: "read",
-                    workspaceRoot,
-                    filePath,
-                    cause: error,
-                  }),
-                ).pipe(Effect.as(Option.none<string>())),
-        }),
-      );
-      if (Option.isNone(raw)) {
-        return Option.none<T3ProjectFile>();
-      }
-      return yield* decodeT3ProjectFileJson(raw.value).pipe(
-        Effect.map(Option.some),
-        Effect.catchTags({
-          SchemaError: (error) =>
-            logT3ProjectFileLoadError(
-              new T3ProjectFileLoadError({
-                operation: "decode",
-                workspaceRoot,
-                filePath,
-                cause: error,
-              }),
-            ).pipe(Effect.as(Option.none<T3ProjectFile>())),
-        }),
-      );
-    },
-  );
+  const loadStrict: T3ProjectFileLoader["Service"]["loadStrict"] = Effect.fn(
+    "T3ProjectFileLoader.loadStrict",
+  )(function* (workspaceRoot) {
+    const filePath = path.join(workspaceRoot, T3_PROJECT_FILE_NAME);
+    const raw = yield* fileSystem.readFileString(filePath).pipe(
+      Effect.map(Option.some),
+      Effect.catchTags({
+        PlatformError: (error) =>
+          error.reason._tag === "NotFound"
+            ? Effect.succeed(Option.none<string>())
+            : Effect.fail(
+                new T3ProjectFileLoadError({
+                  operation: "read",
+                  workspaceRoot,
+                  filePath,
+                  cause: error,
+                  detail: error.message,
+                }),
+              ),
+      }),
+    );
+    if (Option.isNone(raw)) return Option.none<T3ProjectFile>();
+    return yield* decodeT3ProjectFileJson(raw.value).pipe(
+      Effect.map(Option.some),
+      Effect.mapError(
+        (error) =>
+          new T3ProjectFileLoadError({
+            operation: "decode",
+            workspaceRoot,
+            filePath,
+            cause: error,
+            detail: error.message,
+          }),
+      ),
+    );
+  });
+  const load: T3ProjectFileLoader["Service"]["load"] = (workspaceRoot) =>
+    loadStrict(workspaceRoot).pipe(
+      Effect.catchTag("T3ProjectFileLoadError", (error) =>
+        logT3ProjectFileLoadError(error).pipe(Effect.as(Option.none<T3ProjectFile>())),
+      ),
+    );
 
-  return T3ProjectFileLoader.of({ load });
+  return T3ProjectFileLoader.of({ load, loadStrict });
 });
 
 export const layer = Layer.effect(T3ProjectFileLoader, make);

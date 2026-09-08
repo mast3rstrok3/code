@@ -374,7 +374,7 @@ it.effect("preserves pending validation repair feedback across a workflow round 
       ...workflowRun,
       cycles: [{ ...legacyCycle, validationRepair }],
     });
-    assert.deepStrictEqual(run.cycles[0]?.validationRepair, validationRepair);
+    assert.deepStrictEqual<unknown>(run.cycles[0]?.validationRepair, validationRepair);
   }),
 );
 
@@ -396,6 +396,6 @@ it.effect("round-trips blocked repair checks without losing their explanation", 
       notesMarkdown: "Supply the assigned Cortex URL.",
     };
     const result = yield* decodeFixResult(input);
-    assert.deepStrictEqual(yield* encodeFixResult(result), input);
+    assert.deepStrictEqual<unknown>(yield* encodeFixResult(result), input);
   }),
 );

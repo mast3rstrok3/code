@@ -165,6 +165,7 @@ function makeTestLayer(
     ),
     Layer.provide(
       Layer.succeed(T3ProjectFileLoader, {
+        loadStrict: () => Effect.succeed(Option.none()),
         load: () => Effect.succeed(Option.none()),
       }),
     ),
