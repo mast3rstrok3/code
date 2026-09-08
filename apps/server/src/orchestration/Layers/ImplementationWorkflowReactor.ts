@@ -147,6 +147,35 @@ export function isImplementationWorkflowActivityKind(kind: string): boolean {
 const ticketAppReviewLaunchBudgetWarning = () =>
   `Ticket App Review skipped after exhausting its ${String(IMPLEMENTATION_STAGE_MAX_LAUNCHES)}-launch budget. Ticket Code Review and the combined review stages still run.`;
 
+/** Rebuild the halt from current ticket failures so late sibling results remain visible. */
+export function summarizeTicketAppReviewHalt(input: {
+  readonly automationHalt: OrchestrationImplementationRun["automationHalt"];
+  readonly ticketStates: ReadonlyArray<
+    Pick<
+      OrchestrationImplementationTicketState,
+      "ticketId" | "appReviewOutcome" | "warningMarkdown"
+    >
+  >;
+}): OrchestrationImplementationRun["automationHalt"] {
+  const halt = input.automationHalt;
+  if (
+    halt?.stage !== "app-review" ||
+    halt.category !== "review-blocked" ||
+    halt.ticketId === undefined
+  )
+    return halt;
+  const blockers = input.ticketStates.filter(
+    (state) => state.appReviewOutcome === "failed" && state.warningMarkdown?.trim(),
+  );
+  if (!blockers.some((state) => state.ticketId === halt.ticketId)) return halt;
+  return {
+    ...halt,
+    detail: blockers
+      .map((state) => `Ticket ${state.ticketId}\n\n${state.warningMarkdown}`)
+      .join("\n\n"),
+  };
+}
+
 export function appReviewFailureContinuationMarkdown(run: AppReviewWorkflowRun): string | null {
   const outcome = run.outcome ?? run.status;
   if (outcome === "passed") return null;
@@ -1988,11 +2017,12 @@ const make = Effect.gen(function* () {
     if (currentRun !== null && runUpdateWouldOverwriteNewerTicketState(currentRun, input.run)) {
       return;
     }
+    const run = { ...input.run, automationHalt: summarizeTicketAppReviewHalt(input.run) };
     yield* orchestrationEngine.dispatch({
       type: "thread.implementation-run.update",
       commandId: yield* serverCommandId("implementation-run-update"),
       threadId: input.sourceThreadId,
-      run: input.run,
+      run,
       ...(input.expectedStageExecutionTransition === undefined
         ? {}
         : { expectedStageExecutionTransition: input.expectedStageExecutionTransition }),
@@ -2008,7 +2038,7 @@ const make = Effect.gen(function* () {
       createdAt: input.createdAt,
     });
     locallyUpdatedRuns.set(input.run.id, {
-      run: input.run,
+      run,
       writtenAtMs: yield* Clock.currentTimeMillis,
     });
   });
@@ -10638,9 +10668,26 @@ const make = Effect.gen(function* () {
           const launches = yield* SynchronizedRef.get(ticketAppReviewLocks);
           if (launches.has(`${run.id}:${pendingTicketReview.ticketId}`)) continue;
           if (pendingTicketReview.appReviewWorkflowRunId != null) {
+            // A locally cached ticket claim can be newer than this sweep's projection.
+            const latestReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
+            const latestRun = findRunById(latestReadModel, run.id);
+            const latestTicket = latestRun?.ticketStates.find(
+              (state) => state.ticketId === pendingTicketReview.ticketId,
+            );
+            if (
+              latestRun === null ||
+              latestRun.status !== "running" ||
+              latestRun.automationHalt !== null ||
+              latestTicket?.status !== "app-reviewing" ||
+              latestTicket.appReviewWorkflowRunId !== pendingTicketReview.appReviewWorkflowRunId ||
+              latestReadModel.appReviewWorkflowRuns?.some(
+                (candidate) => candidate.id === pendingTicketReview.appReviewWorkflowRunId,
+              )
+            )
+              continue;
             yield* blockRun({
               sourceThreadId,
-              run,
+              run: latestRun,
               ticketId: pendingTicketReview.ticketId,
               reasonMarkdown: `Ticket App Review cannot recover because its durable run '${pendingTicketReview.appReviewWorkflowRunId}' is missing. The ticket worktree and branch were preserved.`,
               updatedAt: createdAt,

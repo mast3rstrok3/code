@@ -1,9 +1,16 @@
 import { deferredTicketValidationCommands } from "../appReviewValidation.ts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { it as effectIt } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 import {
   AppReviewId,
   AppReviewWorkflowCycleBudget,
   AppReviewWorkflowRunId,
+  OrchestrationThread,
   ThreadId,
   TurnId,
   type AppReviewCheck,
@@ -11,7 +18,17 @@ import {
   type AppReviewWorkflowCycle,
   type AppReviewWorkflowRun,
   type OrchestrationImplementationRun,
+  type OrchestrationCommand,
 } from "@t3tools/contracts";
+
+import { AppStackManager } from "../../appStack/AppStackManager.ts";
+import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
+import { ReviewService } from "../../review/ReviewService.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+import { AppReviewWorkflowReactor } from "../Services/AppReviewWorkflowReactor.ts";
+import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 
 import {
   ORPHANED_PROVIDER_SESSION_ERROR,
@@ -27,12 +44,14 @@ import {
   appReviewFixResultContinuationNeedsLaunch,
   appReviewFixValidationsPassed,
   appReviewFixValidationFailure,
+  appReviewBlockerDetail,
   claimAppReviewValidationRepair,
   appReviewValidationRepairNeedsLaunch,
   appReviewValidationRepairCommands,
   appReviewValidationRepairMissingCommands,
   buildAppReviewValidationRepairPrompt,
   APP_REVIEW_VALIDATION_MAX_REPAIRS,
+  AppReviewWorkflowReactorLive,
   appReviewPhaseLaunchNeedsRetry,
   appReviewRepairPlanAction,
   appReviewPhaseModelStepWorkflowPromptId,
@@ -75,6 +94,7 @@ import {
 } from "./AppReviewWorkflowReactor.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
+const decodeThread = Schema.decodeUnknownSync(OrchestrationThread);
 
 it("reconciles running App Reviews after projection lag", () => {
   expect(APP_REVIEW_RECOVERY_SWEEP_INTERVAL_MS).toBe(30_000);
@@ -311,6 +331,146 @@ const failedValidationResult = {
     },
   ],
 };
+
+it("preserves blocked repair results without spending validation attempts", () => {
+  const original = validationFixingRun();
+  const blocked = {
+    ...failedValidationResult,
+    status: "blocked" as const,
+    notesMarkdown: "The stack operator must provision the approved writing route.",
+  };
+  expect(
+    claimAppReviewValidationRepair({
+      run: original,
+      result: blocked,
+      detailMarkdown: "Provider smoke failed because the approved route is missing.",
+      occurredAt: now,
+    }),
+  ).toBeNull();
+  expect(original.cycles[0]?.validationRepair).toBeUndefined();
+  expect(blocked.validations[1]?.status).toBe("failed");
+
+  const resumed = claimAppReviewValidationRepair({
+    run: original,
+    result: { ...blocked, status: "failed" },
+    detailMarkdown: "The route is ready; the smoke test now reproduces a product defect.",
+    occurredAt: now,
+  });
+  expect(resumed?.cycles[0]?.validationRepair?.attempt).toBe(1);
+});
+
+effectIt.effect(
+  "persists a blocked fixer result and leaves it stopped on later recovery sweeps",
+  () => {
+    const original = validationFixingRun();
+    let storedRun: AppReviewWorkflowRun = {
+      ...original,
+      cycles: original.cycles.map((cycle) => ({ ...cycle, planId: "repair-plan" })),
+    };
+    const result = {
+      ...failedValidationResult,
+      runId: storedRun.id,
+      status: "blocked" as const,
+      notesMarkdown: "The stack operator must provision the approved writing route.",
+    };
+    const fixer = decodeThread({
+      id: "fixer",
+      projectId: "project",
+      workflowRole: "app-review-fixer",
+      parentThreadId: storedRun.controllerThreadId,
+      title: "Repair writing",
+      modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
+      runtimeMode: "full-access",
+      branch: "writing",
+      worktreePath: "/tmp/writing",
+      latestTurn: {
+        turnId: "fix-turn",
+        state: "completed",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: now,
+        assistantMessageId: null,
+      },
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+      messages: [],
+      activities: [
+        {
+          id: "fix-result",
+          tone: "info",
+          kind: "app-review-fix-result",
+          summary: "Blocked on provisioning",
+          payload: { type: "app-review-fix-result", ...result },
+          turnId: "fix-turn",
+          createdAt: now,
+        },
+      ],
+      checkpoints: [
+        {
+          turnId: "fix-turn",
+          checkpointTurnCount: 1,
+          checkpointRef: "refs/t3/checkpoints/fix-turn",
+          status: "ready",
+          files: [],
+          assistantMessageId: null,
+          completedAt: now,
+        },
+      ],
+      session: null,
+    });
+    const commands: OrchestrationCommand[] = [];
+    const layer = AppReviewWorkflowReactorLive.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          Layer.mock(OrchestrationEngineService)({
+            dispatch: (command) =>
+              Effect.sync(() => {
+                commands.push(command);
+                if (command.type === "thread.app-review-workflow.update") storedRun = command.run;
+                return { sequence: commands.length };
+              }),
+          }),
+          Layer.mock(ProjectionSnapshotQuery)({
+            getCommandReadModel: () =>
+              Effect.sync(() => ({
+                snapshotSequence: commands.length,
+                projects: [],
+                threads: [fixer],
+                implementationRuns: [],
+                appReviewWorkflowRuns: [storedRun],
+                updatedAt: now,
+              })),
+            getThreadDetailById: (id) =>
+              Effect.succeed(id === fixer.id ? Option.some(fixer) : Option.none()),
+          }),
+          Layer.mock(GitWorkflowService)({}),
+          Layer.mock(AppStackManager)({}),
+          Layer.mock(ReviewService)({}),
+          Layer.mock(ServerSettingsService)({}),
+          Layer.mock(T3ProjectFileLoader)({}),
+        ),
+      ),
+    );
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const reactor = yield* AppReviewWorkflowReactor;
+        yield* reactor.reconcile();
+        expect(storedRun.status).toBe("failed");
+        expect(storedRun.failure).toMatchObject({ reason: "review-blocked", retryable: false });
+        expect(storedRun.failure?.detailMarkdown).toContain("stack operator");
+        expect(storedRun.cycles[0]?.fixResult).toEqual(result);
+        expect(storedRun.cycles[0]?.validationRepair).toBeUndefined();
+        expect(storedRun.cycles[0]?.fixingLaunchCount).toBe(2);
+        const dispatchCount = commands.length;
+        yield* reactor.reconcile();
+        expect(commands).toHaveLength(dispatchCount);
+        expect(commands.some((command) => command.type === "thread.turn.start")).toBe(false);
+      }).pipe(Effect.provide(layer)),
+    );
+  },
+);
 
 it("feeds project failures back into repair after provider launch retries were used", () => {
   const continued = claimAppReviewValidationRepair({
@@ -2107,9 +2267,40 @@ it("exhausts only after the final cycle implements its repair plan", () => {
   ).toBe("await-preview-refresh");
 });
 
-it("routes every non-passing review through gap analysis", () => {
+it("routes product failures through gap analysis", () => {
   expect(terminalReviewAction(review("failed"))).toBe("planning");
   expect(terminalReviewAction(review("failed", false))).toBe("planning");
+});
+
+it("halts prerequisite-only reviews with the owner and recovery action", () => {
+  const original = review("failed", false);
+  const blocked: AppReviewRecord = {
+    ...original,
+    document: {
+      ...original.document,
+      checks: [
+        { id: "auth", label: "Authentication", status: "passed", notes: "Signed in" },
+        {
+          id: "provider",
+          label: "Real provider smoke",
+          status: "blocked",
+          notes: "The assigned backend has no approved writing route.",
+        },
+      ],
+      nextSteps: ["The stack operator must provision the route, then resume E2E."],
+    },
+  };
+  expect(terminalReviewAction(blocked)).toBe("blocked");
+  expect(appReviewBlockerDetail(blocked)).toContain("no approved writing route");
+  expect(appReviewBlockerDetail(blocked)).toContain("stack operator");
+  expect(appReviewBlockerDetail(blocked)).toContain("resume E2E");
+  expect(
+    terminalReviewAction({
+      ...blocked,
+      document: { ...blocked.document, findings: review("failed").document.findings },
+    }),
+  ).toBe("planning");
+  expect(terminalReviewAction(review("passed"))).toBe("passed");
 });
 
 it("treats a review without browser evidence as a failed gap to plan", () => {

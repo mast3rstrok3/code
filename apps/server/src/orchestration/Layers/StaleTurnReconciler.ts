@@ -422,7 +422,7 @@ export function resolveImplementationCodeReviewOwner(
  * workflow has moved past this thread (or the role is not autonomous), so the
  * thread settles without any resume artifacts and is never nudged.
  */
-function resolveResumeTarget(
+export function resolveResumeTarget(
   readModel: OrchestrationReadModel,
   thread: OrchestrationThread,
 ): ResumeTarget | null {
@@ -516,9 +516,17 @@ function resolveResumeTarget(
         (candidate) => candidate.status === "running" && candidate.activeThreadId === thread.id,
       );
       if (run === undefined) return null;
+      if (
+        thread.workflowRole === "app-review-reviewer" &&
+        run.activePhase !== "e2e" &&
+        run.activePhase !== "review"
+      )
+        return null;
       const workflowPromptId =
         thread.workflowRole === "app-review-reviewer"
-          ? WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex
+          ? run.activePhase === "e2e"
+            ? WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex
+            : WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex
           : thread.workflowRole === "app-review-planner"
             ? APP_REVIEW_TO_TICKETS_SKILL_ID
             : APP_REVIEW_IMPLEMENT_SKILL_ID;

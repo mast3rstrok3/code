@@ -1,6 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
+  AppReviewId,
+  AppReviewWorkflowCycleBudget,
   CommandId,
   DEFAULT_WORKSPACE_USER_ID,
   EventId,
@@ -60,6 +62,7 @@ import {
 import {
   makeStaleTurnReconcilerLive,
   resolveImplementationCodeReviewOwner,
+  resolveResumeTarget,
   STALE_TURN_RESUME_ACTIVITY_KIND,
   type StaleTurnReconcilerLiveOptions,
 } from "./StaleTurnReconciler.ts";
@@ -217,6 +220,7 @@ function makeTestLayer(
     ),
     Layer.provide(
       Layer.mock(AppStackManager)({
+        delete: () => Effect.succeed({ deleted: true as const }),
         getByWorktree: (input) =>
           Effect.succeed({
             stack: {
@@ -741,6 +745,96 @@ it("keeps ticket Code Review owned while its parent implementation run is runnin
 });
 
 describe("StaleTurnReconciler", () => {
+  for (const phase of ["e2e", "review"] as const) {
+    it.live(`preserves the ${phase} review phase when resuming after a server restart`, () =>
+      withSystem(
+        (system) =>
+          Effect.gen(function* () {
+            const controllerId = ThreadId.make(`controller-${phase}`);
+            const reviewerId = ThreadId.make(`reviewer-${phase}`);
+            yield* seedProject(system);
+            yield* createPlainThread(system, sourceThreadId, "review-source");
+            yield* system.engine.dispatch({
+              type: "thread.app-review-workflow.launch",
+              commandId: commandId("launch-review"),
+              targetThreadId: sourceThreadId,
+              controllerThreadId: controllerId,
+              caller: { type: "standalone", sourceThreadId },
+              briefMarkdown: "Verify writing through the approved provider.",
+              previewTargets: ["http://localhost:3000"],
+              cycleBudget: AppReviewWorkflowCycleBudget.make(3),
+              modelSelection: {
+                instanceId: ProviderInstanceId.make("codex"),
+                model: "gpt-5-codex",
+              },
+              createdAt: now,
+            });
+            yield* createThread(system, reviewerId, "reviewer", {
+              workflowRole: "app-review-reviewer",
+              parentThreadId: controllerId,
+            });
+            const snapshot = yield* system.query.getSnapshot();
+            const run = snapshot.appReviewWorkflowRuns?.[0];
+            if (run === undefined) throw new Error("App Review run missing.");
+            const activeRun = {
+              ...run,
+              activeThreadId: reviewerId,
+              activePhase: phase,
+              cyclesUsed: 1,
+              cycles: [
+                {
+                  cycleNumber: 1,
+                  status: phase === "e2e" ? ("e2e-testing" as const) : ("reviewing" as const),
+                  e2eThreadId: phase === "e2e" ? reviewerId : null,
+                  e2eReviewId: phase === "e2e" ? AppReviewId.make("e2e-record") : null,
+                  reviewId: AppReviewId.make("browser-record"),
+                  reviewerThreadId: reviewerId,
+                  reviewVerdict: null,
+                  actionableFindingsMarkdown: null,
+                  planId: null,
+                  plannerTurnId: null,
+                  fixerThreadId: null,
+                  fixResult: null,
+                  workspaceRevision: run.workspaceRevision,
+                  startedAt: now,
+                  completedAt: null,
+                },
+              ],
+            };
+            yield* system.engine.dispatch({
+              type: "thread.app-review-workflow.update",
+              commandId: commandId("review-phase"),
+              threadId: controllerId,
+              run: activeRun,
+              createdAt: now,
+            });
+            yield* setThreadSession(system, {
+              threadId: reviewerId,
+              status: "running",
+              activeTurnId: TurnId.make("interrupted-review"),
+              tag: "interrupted-review",
+            });
+            yield* system.reconciler.start();
+            const thread = yield* getThread(system, reviewerId);
+            const expectedPrompt =
+              phase === "e2e"
+                ? WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex
+                : WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex;
+            const messages = yield* resumeMessages(system, reviewerId);
+            expect(messages).toHaveLength(1);
+            expect(messages[0]?.workflowPromptId).toBe(expectedPrompt);
+            expect(messages[0]?.text).toContain(`<workflow-skill id="${expectedPrompt}"`);
+            expect(yield* resumeActivities(system, reviewerId)).toHaveLength(1);
+            const readModel = yield* system.query.getCommandReadModel();
+            expect(
+              resolveResumeTarget({ ...readModel, appReviewWorkflowRuns: [] }, thread!),
+            ).toBeNull();
+          }),
+        { reconciler: bootOnlyOptions },
+      ),
+    );
+  }
+
   it.live("finishes the boot reconciliation before start returns", () =>
     withSystem(
       (system) =>

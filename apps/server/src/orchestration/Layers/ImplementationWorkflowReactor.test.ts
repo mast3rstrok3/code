@@ -85,6 +85,7 @@ import {
   workflowIdForRun,
   workflowIdsForRun,
   selectPublicationBaseBranch,
+  summarizeTicketAppReviewHalt,
 } from "./ImplementationWorkflowReactor.ts";
 import {
   ORPHANED_PROVIDER_SESSION_ERROR,
@@ -195,6 +196,41 @@ it("detects a paused ancestor before handling an implementation re-run", () => {
       orchestratorThreadId,
     }),
   ).toBe(true);
+});
+
+it("shows concurrent App Review blockers without duplicating or retaining resolved warnings", () => {
+  const halt = {
+    ticketId: "ticket-3",
+    stage: "app-review",
+    category: "review-blocked",
+    detail: "Writing route missing",
+    haltedAt: now,
+  } as const;
+  const ticketStates = [
+    { ticketId: "ticket-3", appReviewOutcome: "failed", warningMarkdown: "Writing route missing" },
+    { ticketId: "ticket-4", appReviewOutcome: "failed", warningMarkdown: "Deepgram route missing" },
+    { ticketId: "ticket-2", appReviewOutcome: "exhausted", warningMarkdown: "Deferred finding" },
+  ] as const;
+  const combined = summarizeTicketAppReviewHalt({ automationHalt: halt, ticketStates });
+  expect(combined?.detail).toContain("Writing route missing");
+  expect(combined?.detail).toContain("Deepgram route missing");
+  expect(combined?.detail).not.toContain("Deferred finding");
+  expect(summarizeTicketAppReviewHalt({ automationHalt: combined, ticketStates })).toEqual(
+    combined,
+  );
+  const resolved = summarizeTicketAppReviewHalt({
+    automationHalt: combined,
+    ticketStates: ticketStates.map((state) =>
+      state.ticketId === "ticket-4"
+        ? { ...state, appReviewOutcome: "passed", warningMarkdown: null }
+        : state,
+    ),
+  });
+  expect(resolved?.detail).not.toContain("Deepgram");
+  expect(resolved?.detail).toContain("Writing route missing");
+  expect(summarizeTicketAppReviewHalt({ automationHalt: null, ticketStates })).toBeNull();
+  const otherHalt = { ...halt, stage: "integration" as const };
+  expect(summarizeTicketAppReviewHalt({ automationHalt: otherHalt, ticketStates })).toBe(otherHalt);
 });
 
 it("matches legacy ticket final Code Review halts to the Code Review stage", () => {

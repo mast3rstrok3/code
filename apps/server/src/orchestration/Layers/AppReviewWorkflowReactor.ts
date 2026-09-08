@@ -518,9 +518,29 @@ export function appReviewPhaseThreadState(input: {
   return isAwaitingStaleTurnResume(input) || isAwaitingWorkflowNudge(input) ? "nudging" : "failed";
 }
 
-export function terminalReviewAction(review: AppReviewRecord): "passed" | "planning" {
+export function terminalReviewAction(review: AppReviewRecord): "passed" | "planning" | "blocked" {
+  if (
+    review.document.checks.some((check) => check.status === "blocked") &&
+    !review.document.findings.some((finding) => finding.severity !== "note")
+  ) {
+    return "blocked";
+  }
   if (review.status === "passed" && review.document.verdict === "passed") return "passed";
   return "planning";
+}
+
+/** Keep unavailable prerequisites with their owner instead of creating product repair tickets. */
+export function appReviewBlockerDetail(review: AppReviewRecord): string {
+  return [
+    review.document.summary,
+    ...review.document.checks
+      .filter((check) => check.status === "blocked")
+      .map((check) => `${check.label}: ${check.notes}`),
+    ...review.document.nextSteps,
+    "Resolve the prerequisites, then rerun the blocked phase in the Workflows panel. Completed work remains available.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 export function appReviewRepairPlanAction(
@@ -799,6 +819,7 @@ export function claimAppReviewValidationRepair(input: {
 }): AppReviewWorkflowRun | null {
   const cycle = input.run.cycles.at(-1);
   if (
+    input.result.status === "blocked" ||
     input.run.status !== "running" ||
     input.run.activePhase !== "fixing" ||
     cycle?.fixerThreadId == null ||
@@ -1255,6 +1276,8 @@ export function buildE2eReviewPrompt(input: {
         : ["", "Supporting source context:", input.run.supportingContextMarkdown]),
       "",
       `Use ${APP_REVIEW_PREVIEW_URL_ENV}=${input.run.previewTargets[0] ?? "the-authoritative-preview-target"} in the selected worktree.`,
+      "Before acceptance commands, check the selected tests' required services, provider routes, deployment approvals, and managed credential availability in the assigned App Stack. Check presence and readiness without exposing secret values. A running stack alone does not establish provider readiness.",
+      "If provisioning or a controller action is required, record blocked checks with the missing prerequisite, its owner, and the action needed to resume. Keep these external blockers in notes and nextSteps; actionable findings describe product defects. Preserve any actual failed command results. Resume acceptance after the prerequisite changes.",
       ...(isTicketAppReview(input.run)
         ? [
             "This is a ticket acceptance review. Retrieve the ticket with workflow_ticket_get and select focused E2E tests covering every acceptance criterion and prior actionable finding. Use the repository's supported test selection; do not run the full project suite for each ticket. If focused selection or acceptance coverage is unavailable, report a blocked check instead of a pass.",
@@ -1277,7 +1300,7 @@ export function buildE2eReviewPrompt(input: {
             ...input.priorFindingIds.map((findingId) => `- ${findingId}`),
           ]),
       "",
-      "Call app_review_get first, then run the commands. Do not call preview_* tools, start a recording, inspect the UI manually, edit files, or fix failures. Finish by writing the complete E2E App Review document and a passed or failed status with app_review_update.",
+      "Call app_review_get first, check prerequisites, then run the available commands. Do not call preview_* tools, start a recording, inspect the UI manually, edit files, or fix failures. Finish by writing the complete E2E App Review document and a passed or failed status with app_review_update. Use failed status when acceptance is blocked.",
       "A passed verdict requires a non-empty check matrix in which every check passed. Run every command fresh in every cycle and never carry an E2E check forward.",
     ].join("\n"),
     WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex,
@@ -1315,6 +1338,7 @@ export function buildReviewPrompt(input: {
       "Preview targets (try in order):",
       ...run.previewTargets.map((target) => `- ${target}`),
       "These preview targets are authoritative for this App Review cycle. Do not substitute deployment URLs from repository documentation, supporting source context, browser history, or environment conventions. If every listed target is unavailable, report the review failed with concrete details.",
+      "If a required service, credential, deployment approval, or controller action is unavailable, record a blocked check and name the prerequisite, owner, and recovery action in nextSteps. Keep external blockers in notes; actionable findings describe product defects that can be repaired in this worktree.",
       "",
       "Review parts for this thread: E2E tests: no · Browser review: yes. The E2E phase has already finished in its own thread.",
       ...(input.e2eSummaryMarkdown === undefined
@@ -1403,6 +1427,7 @@ export function buildAppReviewFixPrompt(input: {
       "",
       "Finish with exactly one fenced JSON block:",
       "Validation status is passed, failed, or blocked. Use blocked for a check you could not run, explain why in outputMarkdown, and report the overall result as blocked with the concrete blocker in notesMarkdown.",
+      "Use an overall blocked result when progress requires provisioning, credentials, or a controller action outside this thread's capabilities, even if an attempted command failed. Name the owner and the action needed to resume in notesMarkdown. Preserve actual command results and completed repairs. The controller stops blocked results until an explicit phase rerun; use failed for product defects that still need code repair.",
       WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
       "Set each validation's scope to focused for ticket acceptance and repair checks, or project for unrelated broader regression checks. Preserve failure history with accurate completedAt timestamps. The newest execution of the same command determines its status; a narrower passing command cannot replace a failed broad command.",
       "```json",
@@ -2648,6 +2673,16 @@ const make = Effect.gen(function* () {
       ),
       updatedAt: occurredAt,
     };
+    if (terminalReviewAction(review) === "blocked") {
+      yield* failRun({
+        run: completedE2eRun,
+        reason: "review-blocked",
+        retryable: false,
+        detailMarkdown: appReviewBlockerDetail(review),
+        occurredAt,
+      });
+      return;
+    }
     if (cycle.appReviewScope === "both") {
       yield* startBrowserReview(completedE2eRun, occurredAt);
       return;
@@ -2733,6 +2768,18 @@ const make = Effect.gen(function* () {
         ? null
         : (controller?.appReviews.find((entry) => entry.id === cycle.e2eReviewId) ?? null);
     const e2eAction = e2eReview === null ? "passed" : terminalReviewAction(e2eReview);
+    const blockedReview =
+      action === "blocked" ? review : e2eAction === "blocked" ? e2eReview : null;
+    if (blockedReview !== null) {
+      yield* failRun({
+        run: stableRun,
+        reason: "review-blocked",
+        retryable: false,
+        detailMarkdown: appReviewBlockerDetail(blockedReview),
+        occurredAt,
+      });
+      return;
+    }
     const e2ePassFailure =
       e2eReview === null
         ? null
@@ -3237,6 +3284,25 @@ const make = Effect.gen(function* () {
         entry.cycleNumber === cycle.cycleNumber ? { ...entry, fixResult: result } : entry,
       ),
     };
+    if (result.status === "blocked") {
+      yield* failRun({
+        run: reportedRun,
+        reason: "review-blocked",
+        retryable: false,
+        detailMarkdown: [
+          result.notesMarkdown || "The App Review repair is blocked.",
+          ...currentWorkflowValidations(result.validations)
+            .filter((validation) => validation.status !== "passed")
+            .map(
+              (validation) =>
+                `${validation.command}: ${validation.status}\n\n${validation.outputMarkdown}`,
+            ),
+          "Resolve the blocker, then rerun the blocked phase in the Workflows panel. Completed repairs remain in the worktree.",
+        ].join("\n\n"),
+        occurredAt,
+      });
+      return;
+    }
     const caller = run.caller;
     const target = yield* resolveTarget(run.targetThreadId);
     if (target === null) return;
