@@ -439,6 +439,13 @@ function parseValidationResults(
     if (purpose !== undefined && purpose !== "reproduction" && purpose !== "verification") {
       return "implementation validation purpose must be reproduction or verification.";
     }
+    const supersedesCommand = record["supersedesCommand"];
+    if (
+      supersedesCommand !== undefined &&
+      (typeof supersedesCommand !== "string" || supersedesCommand.trim().length === 0)
+    ) {
+      return "implementation validation supersedesCommand must be a non-empty string when provided.";
+    }
     const scope = allowBlocked ? record["scope"] : undefined;
     if (scope !== undefined && scope !== "focused" && scope !== "project") {
       return "App Review validation scope must be focused or project.";
@@ -446,6 +453,7 @@ function parseValidationResults(
     validations.push({
       command,
       ...(purpose === undefined ? {} : { purpose }),
+      ...(supersedesCommand === undefined ? {} : { supersedesCommand: supersedesCommand.trim() }),
       ...(scope === undefined ? {} : { scope }),
       status,
       outputMarkdown: outputMarkdown ?? "",

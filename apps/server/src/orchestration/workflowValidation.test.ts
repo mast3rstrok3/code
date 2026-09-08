@@ -51,6 +51,50 @@ describe("workflow validation evidence", () => {
     expect(currentWorkflowValidations([tied, green])).toEqual([tied]);
   });
 
+  it("accepts an explicitly corrected setup command and preserves its history", () => {
+    const failure = { ...green, command: "pytest tests/writing.py", status: "failed" as const };
+    const retry = {
+      ...green,
+      command: "DATABASE_URL=postgresql://localhost/test pytest tests/writing.py",
+      supersedesCommand: failure.command,
+      completedAt: "2026-09-07T23:30:00.000Z",
+    };
+    const history = [failure, retry];
+    expect(currentWorkflowValidations(history)).toEqual([retry]);
+    expect(currentWorkflowValidations([retry, failure])).toEqual([retry]);
+    expect(history).toEqual([failure, retry]);
+    const { supersedesCommand: _, ...unlinked } = retry;
+    expect(currentWorkflowValidations([failure, unlinked])).toEqual([failure, unlinked]);
+  });
+
+  it("keeps failures unless their explicit replacement is newer and still passing", () => {
+    const failure = { ...green, status: "failed" as const };
+    const retry = {
+      ...green,
+      command: "DATABASE_URL=postgresql://localhost/test test writing.test.ts block-handle.test.ts",
+      supersedesCommand: failure.command,
+      completedAt: "2026-09-07T23:30:00.000Z",
+    };
+    for (const invalid of [
+      { ...retry, status: "failed" as const },
+      { ...retry, status: "blocked" as const },
+      { ...retry, purpose: "reproduction" as const },
+      { ...retry, completedAt: failure.completedAt },
+      { ...retry, completedAt: red.completedAt },
+      { ...retry, supersedesCommand: "test unrelated" },
+    ]) {
+      expect(currentWorkflowValidations([failure, invalid])).toContainEqual(failure);
+    }
+    const regression = {
+      ...retry,
+      status: "failed" as const,
+      completedAt: "2026-09-07T23:31:00.000Z",
+    };
+    expect(currentWorkflowValidations([failure, retry, regression])).toEqual([failure, regression]);
+    const laterFailure = { ...failure, completedAt: regression.completedAt };
+    expect(currentWorkflowValidations([failure, retry, laterFailure])).toContainEqual(laterFailure);
+  });
+
   it("round trips the purpose through both persisted validation contracts", () => {
     for (const schema of [
       AppReviewWorkflowFixValidation,
@@ -59,6 +103,9 @@ describe("workflow validation evidence", () => {
       const decode = Schema.decodeUnknownSync(schema);
       expect(decode(red)).toEqual(red);
       expect(decode(green)).toEqual(green);
+      const retry = { ...green, supersedesCommand: red.command };
+      expect(decode(retry)).toEqual(retry);
+      expect(() => decode({ ...retry, supersedesCommand: "" })).toThrow();
       expect(() => decode({ ...red, purpose: "historical" })).toThrow();
     }
   });

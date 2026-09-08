@@ -31,6 +31,23 @@ describe("workflowDirectives", () => {
       NodeAssert.equal(result.kind, "parsed");
       if (result.kind !== "parsed" || !("validations" in result.directive)) return;
       NodeAssert.equal(result.directive.validations[0]?.purpose, "reproduction");
+      const retry = {
+        ...directive.validations[0],
+        purpose: "verification",
+        status: "passed",
+        supersedesCommand: "  test original  ",
+      };
+      const corrected = parse({ ...directive, validations: [retry] });
+      NodeAssert.equal(corrected.kind, "parsed");
+      if (corrected.kind === "parsed" && "validations" in corrected.directive) {
+        NodeAssert.equal(corrected.directive.validations[0]?.supersedesCommand, "test original");
+      }
+      for (const supersedesCommand of ["", " ", 123, null]) {
+        NodeAssert.equal(
+          parse({ ...directive, validations: [{ ...retry, supersedesCommand }] }).kind,
+          "error",
+        );
+      }
       NodeAssert.equal(
         parse({ ...directive, validations: [{ ...directive.validations[0], purpose: "ignore" }] })
           .kind,

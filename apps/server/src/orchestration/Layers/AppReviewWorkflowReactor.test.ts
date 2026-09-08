@@ -2710,6 +2710,27 @@ describe("current validation results", () => {
     ).toContain("after the latest reproduction");
   });
 
+  it("accepts an explicit command correction without scheduling another validation repair", () => {
+    const validations = [
+      failed,
+      {
+        ...passed,
+        command: "DATABASE_URL=postgresql://localhost/test ticket-test",
+        supersedesCommand: failed.command,
+      },
+    ];
+    expect(
+      appReviewFixValidationFailure({ completeValidationCommands: [], validations }),
+    ).toBeNull();
+    const continued = claimAppReviewValidationRepair({
+      run: validationFixingRun(),
+      result: { ...failedValidationResult, validations },
+      detailMarkdown: "Other missing evidence",
+      occurredAt: passed.completedAt,
+    });
+    expect(continued?.cycles.at(-1)?.validationRepair?.requiredCommands).toEqual([]);
+  });
+
   it("blocks on a newer failure or an ambiguous result at the same time", () => {
     for (const completedAt of [passed.completedAt, "2026-01-01T00:02:00.000Z"]) {
       expect(

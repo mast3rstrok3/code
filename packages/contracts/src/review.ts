@@ -96,6 +96,7 @@ export type AppReviewWorkflowWorkspaceRevision = typeof AppReviewWorkflowWorkspa
 export const AppReviewWorkflowFixValidation = Schema.Struct({
   purpose: Schema.optionalKey(Schema.Literals(["reproduction", "verification"])),
   command: TrimmedNonEmptyString,
+  supersedesCommand: Schema.optionalKey(TrimmedNonEmptyString),
   scope: Schema.optionalKey(Schema.Literals(["focused", "project"])),
   status: Schema.Literals(["passed", "failed", "blocked"]),
   outputMarkdown: Schema.String,

@@ -6320,6 +6320,66 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("continues ticket Code Review after an explicit setup correction", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          completeTicketReview: false,
+        });
+        let snapshot = yield* system.query.getSnapshot();
+        const state = snapshot.implementationRuns.find((entry) => entry.id === run.id)
+          ?.ticketStates[0];
+        if (!state?.codeReviewThreadId) throw new Error("Ticket reviewer missing.");
+        const validations = [
+          {
+            command: "pytest tests/writing.py",
+            status: "failed" as const,
+            outputMarkdown: "Collection failed because DATABASE_URL was missing.",
+            completedAt: "2026-01-01T00:00:02.000Z",
+          },
+          {
+            command: "DATABASE_URL=postgresql://localhost/test pytest tests/writing.py",
+            supersedesCommand: "pytest tests/writing.py",
+            status: "passed" as const,
+            outputMarkdown: "34 tests passed after supplying the required setting.",
+            completedAt: "2026-01-01T00:00:03.000Z",
+          },
+        ];
+        yield* appendCodeReviewResult(system, {
+          run,
+          threadId: state.codeReviewThreadId,
+          ticketId: state.ticketId,
+          status: "findings",
+          tag: "corrected-setup",
+          validations,
+        });
+        snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(current?.automationHalt).toBeNull();
+        expect(current?.ticketStates[0]?.workerResult?.validations).toEqual(validations);
+        const nextReviewer = current?.ticketStates[0]?.codeReviewThreadId;
+        expect(nextReviewer).not.toBe(state.codeReviewThreadId);
+        if (!nextReviewer) throw new Error("Next reviewer missing.");
+        yield* appendCodeReviewResult(system, {
+          run,
+          threadId: nextReviewer,
+          ticketId: state.ticketId,
+          status: "clean",
+          tag: "corrected-setup-clean",
+          validations: [],
+        });
+        const finished = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        );
+        expect(finished?.ticketStates[0]?.status).toBe("succeeded");
+        expect(finished?.automationHalt).toBeNull();
+      }),
+    ),
+  );
+
   for (const purpose of ["reproduction", "verification", undefined] as const) {
     it.effect(`handles ${purpose ?? "legacy"} red evidence in ticket Code Review`, () =>
       withSystem((system) =>

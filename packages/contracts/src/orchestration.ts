@@ -968,6 +968,7 @@ export type OrchestrationImplementationValidationResultStatus =
 export const OrchestrationImplementationValidationResult = Schema.Struct({
   purpose: Schema.optionalKey(Schema.Literals(["reproduction", "verification"])),
   command: TrimmedNonEmptyString,
+  supersedesCommand: Schema.optionalKey(TrimmedNonEmptyString),
   status: OrchestrationImplementationValidationResultStatus,
   outputMarkdown: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   completedAt: IsoDateTime,
