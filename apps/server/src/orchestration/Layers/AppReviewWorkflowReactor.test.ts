@@ -45,6 +45,7 @@ import {
   appReviewFixValidationsPassed,
   appReviewFixValidationFailure,
   appReviewBlockerDetail,
+  appReviewRepairFindingsMarkdown,
   claimAppReviewValidationRepair,
   appReviewValidationRepairNeedsLaunch,
   appReviewValidationRepairCommands,
@@ -2301,6 +2302,104 @@ it("halts prerequisite-only reviews with the owner and recovery action", () => {
     }),
   ).toBe("planning");
   expect(terminalReviewAction(review("passed"))).toBe("passed");
+});
+
+const coverageGap: AppReviewCheck = {
+  id: "audio-playback-coverage",
+  label: "Audio playback acceptance",
+  status: "blocked",
+  blockerKind: "coverage-gap",
+  notes:
+    "The HTTP audio GET passes, but no test exercises player playback or expired media denial.",
+};
+
+it("plans missing acceptance tests without requiring a product defect", () => {
+  const original = review("failed", false);
+  const coverageReview: AppReviewRecord = {
+    ...original,
+    document: {
+      ...original.document,
+      checks: [
+        {
+          id: "e2e-ticket",
+          label: "Selected tests",
+          status: "passed",
+          notes: "All selected tests pass.",
+        },
+        coverageGap,
+      ],
+      nextSteps: ["Add playback and expired-media assertions in the ticket worktree."],
+    },
+  };
+  expect(terminalReviewAction(coverageReview)).toBe("planning");
+  const input = appReviewRepairFindingsMarkdown(coverageReview);
+  expect(input).toContain(coverageGap.id);
+  expect(input).toContain(coverageGap.notes);
+  expect(input).toContain(coverageReview.document.nextSteps[0]);
+  expect(
+    terminalReviewAction({
+      ...coverageReview,
+      status: "passed",
+      document: { ...coverageReview.document, verdict: "passed" },
+    }),
+  ).toBe("planning");
+});
+
+it("keeps external prerequisites stopped when coverage gaps or product defects also exist", () => {
+  const original = review("failed");
+  for (const blockerKind of [undefined, "external-prerequisite"] as const) {
+    const blocked: AppReviewRecord = {
+      ...original,
+      document: {
+        ...original.document,
+        findings: blockerKind === undefined ? [] : original.document.findings,
+        checks: [
+          coverageGap,
+          {
+            id: "provider-balance",
+            label: "Provider balance",
+            status: "blocked",
+            ...(blockerKind === undefined ? {} : { blockerKind }),
+            notes: "The account owner must add provider credit.",
+          },
+        ],
+      },
+    };
+    expect(terminalReviewAction(blocked)).toBe("blocked");
+  }
+});
+
+it("requires fresh verification of a repaired coverage gap before accepting a later pass", () => {
+  const prior: AppReviewRecord = {
+    ...cycleOneReview,
+    document: { ...cycleOneReview.document, findings: [], checks: [coverageGap] },
+  };
+  const checks = priorCycleChecks({
+    run: secondCycleRun,
+    currentCycleNumber: 2,
+    priorReviews: [prior],
+  });
+  expect(checks.findingIds).toContain(coverageGap.id);
+  expect(checks.carryable).toEqual([]);
+  const verify = (check?: AppReviewCheck) =>
+    terminalReviewPassFailure({
+      run: secondCycleRun,
+      review: passedCycleTwo([
+        { id: "e2e-1", label: "Selected tests", status: "passed", notes: "Passed" },
+        ...(check === undefined ? [] : [check]),
+      ]),
+      priorReviews: [prior],
+      e2eCheckIds: ["e2e-1"],
+    });
+  expect(verify()).toContain(coverageGap.id);
+  const repaired: AppReviewCheck = {
+    id: coverageGap.id,
+    label: coverageGap.label,
+    status: "passed",
+    notes: "Playback and expiry tests pass.",
+  };
+  expect(verify({ ...repaired, carriedFromCycle: 1 })).toContain("instead of verifying");
+  expect(verify(repaired)).toBeNull();
 });
 
 it("treats a review without browser evidence as a failed gap to plan", () => {

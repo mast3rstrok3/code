@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import {
   APP_REVIEW_WORKFLOW_DEFAULT_CYCLES,
   AppReviewEvidence,
+  AppReviewCheck,
   AppReviewRecord,
   AppReviewWorkflowRun,
   AppReviewWorkflowFixResult,
@@ -397,5 +398,31 @@ it.effect("round-trips blocked repair checks without losing their explanation", 
     };
     const result = yield* decodeFixResult(input);
     assert.deepStrictEqual<unknown>(yield* encodeFixResult(result), input);
+  }),
+);
+
+it.effect("preserves coverage and external blocker classifications and accepts legacy checks", () =>
+  Effect.gen(function* () {
+    const decode = Schema.decodeUnknownEffect(AppReviewCheck);
+    const encode = Schema.encodeEffect(AppReviewCheck);
+    for (const blockerKind of [undefined, "coverage-gap", "external-prerequisite"] as const) {
+      const input = {
+        id: "acceptance",
+        label: "Acceptance",
+        status: "blocked",
+        notes: "Needs follow-up",
+        ...(blockerKind === undefined ? {} : { blockerKind }),
+      };
+      const check = yield* decode(input);
+      assert.deepStrictEqual(yield* encode(check), input);
+    }
+    const invalid = yield* decode({
+      id: "acceptance",
+      label: "Acceptance",
+      status: "blocked",
+      notes: "",
+      blockerKind: "unknown",
+    }).pipe(Effect.result);
+    assert.strictEqual(invalid._tag, "Failure");
   }),
 );

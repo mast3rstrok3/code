@@ -303,6 +303,8 @@ export const AppReviewCheck = Schema.Struct({
   id: TrimmedNonEmptyString,
   label: TrimmedNonEmptyString,
   status: AppReviewCheckStatus,
+  /** Classifies blocked checks; older records may omit this field. */
+  blockerKind: Schema.optionalKey(Schema.Literals(["external-prerequisite", "coverage-gap"])),
   notes: Schema.String,
   /** A test runner's inspectable web replay for this check, when it publishes one. */
   replayUrl: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isPattern(/^https?:\/\//i))),

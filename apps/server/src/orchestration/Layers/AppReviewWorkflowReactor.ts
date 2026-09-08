@@ -519,14 +519,31 @@ export function appReviewPhaseThreadState(input: {
 }
 
 export function terminalReviewAction(review: AppReviewRecord): "passed" | "planning" | "blocked" {
+  const blockedChecks = review.document.checks.filter((check) => check.status === "blocked");
   if (
-    review.document.checks.some((check) => check.status === "blocked") &&
-    !review.document.findings.some((finding) => finding.severity !== "note")
+    blockedChecks.some((check) => check.blockerKind === "external-prerequisite") ||
+    (blockedChecks.some((check) => check.blockerKind !== "coverage-gap") &&
+      !review.document.findings.some((finding) => finding.severity !== "note"))
   ) {
     return "blocked";
   }
+  if (blockedChecks.length > 0) return "planning";
   if (review.status === "passed" && review.document.verdict === "passed") return "passed";
   return "planning";
+}
+
+/** Carry repairable checks into planning even when the review found no product defect. */
+export function appReviewRepairFindingsMarkdown(review: AppReviewRecord): string {
+  return [
+    ...review.document.findings.map(
+      (finding) =>
+        `[${finding.id}] [${finding.severity}] ${finding.title}\n\n${finding.details}\n\nReproduction: ${finding.reproduction}`,
+    ),
+    ...review.document.checks
+      .filter((check) => check.status === "blocked" && check.blockerKind === "coverage-gap")
+      .map((check) => `[${check.id}] Coverage gap: ${check.label}\n\n${check.notes}`),
+    ...review.document.nextSteps,
+  ].join("\n\n");
 }
 
 /** Keep unavailable prerequisites with their owner instead of creating product repair tickets. */
@@ -1108,14 +1125,20 @@ export function priorCycleChecks(input: {
       : input.recordScope === "browser"
         ? [cycle.reviewId]
         : [cycle.e2eReviewId, cycle.reviewId];
-  const findingIds = priorCycles
-    .flatMap((cycle) =>
-      reviewIdsForCycle(cycle).flatMap((reviewId) =>
-        reviewId == null ? [] : (reviewById.get(reviewId)?.document.findings ?? []),
-      ),
-    )
-    .filter((finding) => finding.severity !== "note")
-    .map((finding) => finding.id);
+  const findingIds = priorCycles.flatMap((cycle) =>
+    reviewIdsForCycle(cycle).flatMap((reviewId) => {
+      const document = reviewId == null ? undefined : reviewById.get(reviewId)?.document;
+      if (document === undefined) return [];
+      return [
+        ...document.findings
+          .filter((finding) => finding.severity !== "note")
+          .map((finding) => finding.id),
+        ...document.checks
+          .filter((check) => check.status === "blocked" && check.blockerKind === "coverage-gap")
+          .map((check) => check.id),
+      ];
+    }),
+  );
   const findingIdSet = new Set(findingIds);
   const carryable = new Map<string, CarryableAppReviewCheck>();
   const passedCheckIdsByCycle = new Map<number, ReadonlySet<string>>();
@@ -1277,10 +1300,10 @@ export function buildE2eReviewPrompt(input: {
       "",
       `Use ${APP_REVIEW_PREVIEW_URL_ENV}=${input.run.previewTargets[0] ?? "the-authoritative-preview-target"} in the selected worktree.`,
       "Before acceptance commands, check the selected tests' required services, provider routes, deployment approvals, and managed credential availability in the assigned App Stack. Check presence and readiness without exposing secret values. A running stack alone does not establish provider readiness.",
-      "If provisioning or a controller action is required, record blocked checks with the missing prerequisite, its owner, and the action needed to resume. Keep these external blockers in notes and nextSteps; actionable findings describe product defects. Preserve any actual failed command results. Resume acceptance after the prerequisite changes.",
+      "If provisioning or a controller action is required, record blocked checks with blockerKind external-prerequisite and the missing prerequisite, its owner, and the action needed to resume. Keep these external blockers in notes and nextSteps; actionable findings describe product defects or repairable acceptance coverage gaps. Preserve any actual failed command results. Resume acceptance after the prerequisite changes.",
       ...(isTicketAppReview(input.run)
         ? [
-            "This is a ticket acceptance review. Retrieve the ticket with workflow_ticket_get and select focused E2E tests covering every acceptance criterion and prior actionable finding. Use the repository's supported test selection; do not run the full project suite for each ticket. If focused selection or acceptance coverage is unavailable, report a blocked check instead of a pass.",
+            "This is a ticket acceptance review. Retrieve the ticket with workflow_ticket_get and select focused E2E tests covering every acceptance criterion and prior actionable finding. Use the repository's supported test selection; do not run the full project suite for each ticket. If focused tests or acceptance coverage are missing and can be added in this worktree, report a blocked check with blockerKind coverage-gap. Name the uncovered criteria, the missing test or assertion, and the repair needed in notes. Missing credentials, billing balance, approvals, services, or controller actions use blockerKind external-prerequisite. Never pass uncovered acceptance criteria.",
             "Record the exact selected commands, acceptance coverage, and results in a fresh check with id e2e-ticket. The check passes only if all selected tests pass and every ticket acceptance criterion has evidence. Keep unrelated project diagnostics in notes for the integrated review.",
             "Configured project runners, for reference when selecting tests:",
             ...input.e2eCommands.map((command) => `- ${command}`),
@@ -1290,6 +1313,7 @@ export function buildE2eReviewPrompt(input: {
             ...input.e2eCommands.map((command, index) => `- e2e-${index + 1}: ${command}`),
             "Record each command as one check with the exact id shown.",
           ]),
+      "Set blockerKind on every blocked check, including the aggregate e2e-ticket check. Use external-prerequisite if a check combines missing coverage with an external prerequisite.",
       "Summarize test results in notes. When command output publishes an inspectable web replay URL, copy it into that check's replayUrl field so a human can open it from the App Review panel.",
       "A failing command is a failed check. Turn each distinct in-scope product failure into an actionable finding. Keep unrelated or pre-existing failures in check notes or note-severity findings.",
       ...(input.priorFindingIds.length === 0
@@ -1338,7 +1362,7 @@ export function buildReviewPrompt(input: {
       "Preview targets (try in order):",
       ...run.previewTargets.map((target) => `- ${target}`),
       "These preview targets are authoritative for this App Review cycle. Do not substitute deployment URLs from repository documentation, supporting source context, browser history, or environment conventions. If every listed target is unavailable, report the review failed with concrete details.",
-      "If a required service, credential, deployment approval, or controller action is unavailable, record a blocked check and name the prerequisite, owner, and recovery action in nextSteps. Keep external blockers in notes; actionable findings describe product defects that can be repaired in this worktree.",
+      "If a required service, credential, deployment approval, or controller action is unavailable, record a blocked check with blockerKind external-prerequisite and name the prerequisite, owner, and recovery action in nextSteps. Keep external blockers in notes; actionable findings describe product defects that can be repaired in this worktree.",
       "",
       "Review parts for this thread: E2E tests: no · Browser review: yes. The E2E phase has already finished in its own thread.",
       ...(input.e2eSummaryMarkdown === undefined
@@ -1392,7 +1416,7 @@ export function buildAppReviewFixPrompt(input: {
           ]
         : []),
       "",
-      "Use TDD: write the test each ticket names, watch it fail, then repair. Address every actionable finding together, preserve unrelated work, and run focused validation. Do not ask the user questions.",
+      "For product defects, write the test each ticket names, watch it fail, then repair. For coverage gaps, add the missing executable test or assertion and run it; it may pass immediately when the product already works. Repair any defects it exposes. Missing test code is repair work, not an external prerequisite. Address every actionable finding together, preserve unrelated work, and run focused validation. Do not ask the user questions.",
       APP_REVIEW_FIXER_IMPLEMENTATION_ONLY_INSTRUCTION,
       ...(isTicketAppReview(input.run)
         ? [
@@ -2223,14 +2247,6 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const findingsMarkdown = (review: AppReviewRecord) =>
-    review.document.findings
-      .map(
-        (finding, index) =>
-          `${index + 1}. [${finding.severity}] ${finding.title}\n\n${finding.details}\n\nReproduction: ${finding.reproduction}`,
-      )
-      .join("\n\n");
-
   const finishPassed = Effect.fn("AppReviewWorkflowReactor.finishPassed")(function* (
     run: AppReviewWorkflowRun,
     review: AppReviewRecord,
@@ -2540,7 +2556,7 @@ const make = Effect.gen(function* () {
             `Run gap analysis and create repair tickets for App Review cycle ${cycle.cycleNumber}.`,
             "",
             "The review that produced these findings ran in a separate thread; the brief and the complete actionable findings below are the whole input. Do not edit files, browse the app, or ask questions. Apply the To Tickets vertical-slice discipline to every actionable finding.",
-            "Work test-first: every ticket must name the automated test that reproduces its gap — an extension of the project's end-to-end suite when the gap is a user-visible flow, otherwise a focused test — and its acceptance criteria must require that the test fails before the repair and passes after it.",
+            "Every ticket must name the automated test that verifies its gap. Product defects require a failing reproduction before the repair and a passing test after it. Coverage gaps require adding and running the missing test or assertion, which may pass immediately if the product already works. Create repair tickets for coverage gaps even when no product defect was established.",
             "This App Review adapter owns persistence. Do not emit planning-tickets-artifact, create external issues, or modify the parent planning-ticket set; emit only app-review-repair-tickets below.",
             `Use '${parentTicketKey}' as the parent key. Number child tickets consecutively from '${firstChildKey}' (for example '${parentTicketKey}.1', '${parentTicketKey}.2').`,
             input.run.caller.type === "implementation" && input.run.caller.ticketId !== undefined
@@ -2702,7 +2718,7 @@ const make = Effect.gen(function* () {
       run: completedE2eRun,
       review,
       actionableFindingsMarkdown:
-        [passFailure, findingsMarkdown(review), review.document.summary]
+        [passFailure, appReviewRepairFindingsMarkdown(review), review.document.summary]
           .filter((value): value is string => Boolean(value))
           .join("\n\n") || "The end-to-end test failed without details.",
       occurredAt,
@@ -2801,11 +2817,11 @@ const make = Effect.gen(function* () {
     }
     const actionableFindingsMarkdown = [
       e2ePassFailure,
-      e2eReview === null ? null : findingsMarkdown(e2eReview),
+      e2eReview === null ? null : appReviewRepairFindingsMarkdown(e2eReview),
       e2eReview?.document.summary,
       passFailure,
       evidenceFailure,
-      findingsMarkdown(review),
+      appReviewRepairFindingsMarkdown(review),
       review.document.summary,
     ]
       .filter((value): value is string => Boolean(value))
