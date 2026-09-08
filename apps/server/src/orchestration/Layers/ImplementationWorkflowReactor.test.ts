@@ -724,6 +724,7 @@ function makeTestLayer(
   }> = [{ name: "origin/main", remoteName: "origin", isDefault: true }],
   projectFile?: T3ProjectFile,
   failIntegratedSetup = false,
+  failDeleteStackAttempts = 0,
 ) {
   const coreLayer = Layer.mergeAll(
     OrchestrationEngineLive.pipe(
@@ -1059,6 +1060,10 @@ function makeTestLayer(
                 (candidate) => candidate.worktreePath === input.worktreePath,
               );
               const workflowId = created?.workflowId;
+              const protection =
+                (yield* Ref.get(calls.protectionInputs)).findLast(
+                  (entry) => entry.stackId === stackId,
+                )?.protected ?? false;
               // The orchestrator worktree inherits its stack from Planning, so it
               // is there without this run standing one up. A ticket worktree has
               // no such source: its stack exists only once something created it,
@@ -1073,6 +1078,7 @@ function makeTestLayer(
                   ? null
                   : {
                       id: stackId,
+                      protected: protection,
                       uuid: isTicketWorktree ? "stack-ticket-uuid" : "stack-uuid-1",
                       userId: "user-1",
                       worktreePath: input.worktreePath,
@@ -1154,11 +1160,19 @@ function makeTestLayer(
               }),
             ),
           delete: (input) =>
-            Ref.update(calls.deleteStackIds, (stackIds) => [...stackIds, input.stackId]).pipe(
-              Effect.andThen(
-                Ref.update(calls.deletedStackIds, (stackIds) =>
-                  new Set(stackIds).add(input.stackId),
-                ),
+            Ref.updateAndGet(calls.deleteStackIds, (stackIds) => [...stackIds, input.stackId]).pipe(
+              Effect.flatMap((attempts) =>
+                attempts.length <= failDeleteStackAttempts
+                  ? Effect.fail(
+                      new AppStackError({
+                        operation: "delete",
+                        reason: "request_failed",
+                        message: "Controller unavailable",
+                      }),
+                    )
+                  : Ref.update(calls.deletedStackIds, (stackIds) =>
+                      new Set(stackIds).add(input.stackId),
+                    ),
               ),
               Effect.as({ deleted: true as const }),
             ),
@@ -1282,6 +1296,7 @@ function withSystem<A, E>(
     }>;
     readonly projectFile?: T3ProjectFile;
     readonly failIntegratedSetup?: boolean;
+    readonly failDeleteStackAttempts?: number;
   },
 ) {
   return Effect.gen(function* () {
@@ -1400,6 +1415,7 @@ function withSystem<A, E>(
           options?.remoteRefs,
           options?.projectFile,
           options?.failIntegratedSetup,
+          options?.failDeleteStackAttempts,
         ),
       ),
     );
@@ -4514,10 +4530,11 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("deletes ticket resources only after the ticket commit is integrated", () =>
+  it.effect("deletes the stack at ticket success and the worktree only after integration", () =>
     withSystem((system) =>
       Effect.gen(function* () {
-        const { run, ticket } = yield* launchRun(system);
+        const { run, ticket } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+        yield* seedTicketStack(system, { run, ticketId: ticket.id });
         yield* appendWorkerResult(system, { run, status: "succeeded" });
 
         let snapshot = yield* system.query.getSnapshot();
@@ -4525,12 +4542,11 @@ describe("ImplementationWorkflowReactor", () => {
           .find((entry) => entry.id === run.id)
           ?.ticketStates.find((entry) => entry.ticketId === ticket.id);
         expect(state?.status).toBe("succeeded");
-        expect(state?.appDevStackTierDownAt).toBeNull();
+        expect(state?.appDevStackTierDownAt).not.toBeNull();
         expect(state?.resourceCleanupAt).toBeNull();
-        expect(yield* Ref.get(system.deleteStackIds)).toEqual([]);
+        expect(yield* Ref.get(system.deleteStackIds)).toEqual(["stack-ticket"]);
         expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([]);
 
-        yield* seedTicketStack(system, { run, ticketId: ticket.id });
         yield* passMergeGate(system, run);
 
         snapshot = yield* system.query.getSnapshot();
@@ -4555,13 +4571,107 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("retries failed stack deletion without blocking dependent tickets", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run, tickets } = yield* launchRun(system, {
+            tickets: [planningTicket("TICKET-1"), planningTicket("TICKET-2", ["TICKET-1"])],
+          });
+          const ticket = tickets[0]!;
+          yield* seedTicketStack(system, { run, ticketId: ticket.id });
+          yield* appendWorkerResult(system, { run, ticketId: ticket.id, status: "succeeded" });
+          let snapshot = yield* system.query.getSnapshot();
+          let current = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
+          expect(current.ticketStates[0]?.status).toBe("succeeded");
+          expect(current.ticketStates[0]?.appDevStackTierDownAt).toBeNull();
+          expect(current.ticketStates[1]?.status).toBe("running");
+          expect(yield* Ref.get(system.deleteStackIds)).toEqual(["stack-ticket"]);
+          yield* system.reactor.recoverIncompleteStages();
+          snapshot = yield* system.query.getSnapshot();
+          current = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
+          expect(current.ticketStates[0]?.appDevStackTierDownAt).not.toBeNull();
+          expect(yield* Ref.get(system.deleteStackIds)).toEqual(["stack-ticket", "stack-ticket"]);
+          expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([]);
+          yield* system.reactor.recoverIncompleteStages();
+          expect(yield* Ref.get(system.deleteStackIds)).toHaveLength(2);
+        }),
+      { failDeleteStackAttempts: 1 },
+    ),
+  );
+
+  it.effect("cleans up historical completed ticket stacks before integration", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        const current = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        )!;
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("legacy-stack-cleanup"),
+          threadId: sourceThreadId,
+          run: {
+            ...current,
+            ticketStates: current.ticketStates.map((state) => ({
+              ...state,
+              appDevStackTierDownAt: null,
+            })),
+          },
+          createdAt: "2026-01-01T00:01:00.000Z",
+        });
+        yield* seedTicketStack(system, { run, ticketId: ticket.id });
+        yield* system.reactor.recoverIncompleteStages();
+        expect(yield* Ref.get(system.deleteStackIds)).toEqual(["stack-ticket"]);
+        expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([]);
+      }),
+    ),
+  );
+
+  it.effect("keeps protected ticket stacks until protection is released", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket } = yield* launchRun(system);
+        yield* seedTicketStack(system, { run, ticketId: ticket.id });
+        yield* Ref.set(system.protectionInputs, [{ stackId: "stack-ticket", protected: true }]);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+        expect(yield* Ref.get(system.deleteStackIds)).toEqual([]);
+        expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([]);
+        yield* Ref.set(system.protectionInputs, [{ stackId: "stack-ticket", protected: false }]);
+        yield* system.reactor.recoverIncompleteStages();
+        expect(yield* Ref.get(system.deleteStackIds)).toEqual(["stack-ticket"]);
+      }),
+    ),
+  );
+
+  it.effect("retains a stack owned by another workflow", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket } = yield* launchRun(system);
+        yield* seedTicketStack(system, {
+          run,
+          ticketId: ticket.id,
+          workflowId: "another-workflow",
+        });
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        const current = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        )!;
+        expect(current.ticketStates[0]?.appDevStackTierDownAt).toBeNull();
+        expect(yield* Ref.get(system.deleteStackIds)).toEqual([]);
+      }),
+    ),
+  );
+
   it.effect("retries failed ticket worktree cleanup during recovery", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
           const { run, ticket } = yield* launchRun(system);
-          yield* appendWorkerResult(system, { run, status: "succeeded" });
           yield* seedTicketStack(system, { run, ticketId: ticket.id });
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
           yield* passMergeGate(system, run);
 
           expect(yield* Ref.get(system.deleteStackIds)).toEqual(["stack-ticket"]);
@@ -4578,8 +4688,8 @@ describe("ImplementationWorkflowReactor", () => {
     withSystem((system) =>
       Effect.gen(function* () {
         const { run, ticket } = yield* launchRun(system);
-        yield* appendWorkerResult(system, { run, status: "succeeded" });
         yield* seedTicketStack(system, { run, ticketId: ticket.id, workflowId: null });
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
         yield* passMergeGate(system, run);
 
         expect(yield* Ref.get(system.deleteStackIds)).toEqual(["stack-ticket"]);
@@ -4594,8 +4704,8 @@ describe("ImplementationWorkflowReactor", () => {
           const { run, ticket } = yield* launchRun(system);
           const branch = run.launchSummary.plannedWorkers[0]?.branch;
           if (branch === undefined) throw new Error("Ticket branch missing.");
-          yield* appendWorkerResult(system, { run, status: "succeeded" });
           yield* seedTicketStack(system, { run, ticketId: ticket.id });
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
           yield* Ref.set(system.dirtyWorkerWorktrees, true);
           yield* passMergeGate(system, run);
 

@@ -55,14 +55,13 @@ deletes either stack automatically.
 
 ## Automatic teardown and protected stacks
 
-T3 Code waits to clean up a successful engineering ticket until the integration gate confirms that
-the ticket commit is present in the combined branch. It then deletes the ticket App Stack and
-removes the ticket worktree if Git reports the expected branch, accepted commit, and no working tree
-changes. A dirty, divergent, or unmerged worktree stays on disk so cleanup cannot discard code.
+T3 Code deletes a ticket's App Stack when the ticket succeeds, unless you protected it. It keeps the branch and worktree
+available for dependent tickets. Failed stack deletions are retried automatically, including after
+a server restart.
 
-The ticket carries a durable cleanup timestamp. T3 Code retries failed stack deletion and checks a
-retained worktree again after a restart. Once the worktree is clean and its commit is merged, T3 Code
-removes it.
+After integration confirms that the ticket commit is in the combined branch, T3 Code removes the
+worktree if Git reports the expected branch, accepted commit, and no working tree changes. A dirty,
+divergent, or unmerged worktree stays on disk for manual inspection.
 
 When the workflow succeeds, it protects and keeps the main shared App Stack running, then tiers
 down every other stack the workflow created. The run reports what it stopped in its activity log.

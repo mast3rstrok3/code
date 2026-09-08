@@ -3140,30 +3140,29 @@ const make = Effect.gen(function* () {
     });
   });
 
-  /** Deletes resources for tickets whose commits reached the integrated branch. */
-  const cleanupTicketResources = Effect.fn("ImplementationWorkflowReactor.cleanupTicketResources")(
+  /** Release ticket runtimes at success; dependency branches remain available until integration. */
+  const cleanupTicketStacks = Effect.fn("ImplementationWorkflowReactor.cleanupTicketStacks")(
     function* (input: {
       readonly run: OrchestrationImplementationRun;
       readonly createdAt: string;
     }) {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const workflowIds = workflowIdsForRun(readModel, input.run);
-      const retentionResults = yield* Effect.forEach(
+      const cleanedTickets = yield* Effect.forEach(
         input.run.ticketStates,
         (state) =>
           Effect.gen(function* () {
             if (
               state.status !== "succeeded" ||
-              state.resourceCleanupAt === null ||
+              state.appDevStackTierDownAt !== null ||
               state.worktreePath === null ||
-              state.worktreePath === input.run.orchestratorWorktreePath
-            ) {
+              normalizeWorkflowWorktreePath(state.worktreePath) ===
+                normalizeWorkflowWorktreePath(input.run.orchestratorWorktreePath)
+            )
               return null;
-            }
-
             const stackLookup = yield* appStackManager
               .getByWorktree({ worktreePath: state.worktreePath })
-              .pipe(Effect.result);
+              .pipe(Effect.timeout("30 seconds"), Effect.result);
             if (stackLookup._tag === "Failure") {
               yield* Effect.logWarning("ticket App Stack lookup failed during cleanup", {
                 runId: input.run.id,
@@ -3171,8 +3170,10 @@ const make = Effect.gen(function* () {
                 worktreePath: state.worktreePath,
                 cause: errorDetail(stackLookup.failure),
               });
+              return null;
             } else if (stackLookup.success.stack !== null) {
               const stack = stackLookup.success.stack;
+              if (stack.protected) return null;
               if (
                 normalizeWorkflowWorktreePath(stack.worktreePath) !==
                   normalizeWorkflowWorktreePath(state.worktreePath) ||
@@ -3196,10 +3197,11 @@ const make = Effect.gen(function* () {
                   },
                   createdAt: input.createdAt,
                 });
+                return null;
               } else {
                 const deleted = yield* appStackManager
                   .delete({ stackId: stack.id })
-                  .pipe(Effect.result);
+                  .pipe(Effect.timeout("30 seconds"), Effect.result);
                 if (deleted._tag === "Failure") {
                   yield* Effect.logWarning("ticket App Stack cleanup failed", {
                     runId: input.run.id,
@@ -3207,6 +3209,7 @@ const make = Effect.gen(function* () {
                     stackId: stack.id,
                     cause: errorDetail(deleted.failure),
                   });
+                  return null;
                 } else {
                   yield* appendActivity({
                     threadId: input.run.orchestratorThreadId,
@@ -3217,12 +3220,70 @@ const make = Effect.gen(function* () {
                       runId: input.run.id,
                       ticketId: state.ticketId,
                       stackId: stack.id,
-                      cleanupRequestedAt: state.resourceCleanupAt,
+                      cleanupRequestedAt: input.createdAt,
                     },
                     createdAt: input.createdAt,
                   });
                 }
               }
+            }
+
+            return state.ticketId;
+          }),
+        { concurrency: 4 },
+      );
+      const cleanedIds = new Set(cleanedTickets.filter((id) => id !== null));
+      const currentReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const currentRun = findRunById(currentReadModel, input.run.id) ?? input.run;
+      if (cleanedIds.size === 0) return currentRun;
+      const sourceThreadId = findRunSourceThreadId({
+        readModel: currentReadModel,
+        run: currentRun,
+      });
+      if (sourceThreadId === null) return currentRun;
+      const cleanedRun: OrchestrationImplementationRun = {
+        ...currentRun,
+        ticketStates: currentRun.ticketStates.map((state) =>
+          cleanedIds.has(state.ticketId) &&
+          state.status === "succeeded" &&
+          input.run.ticketStates.some(
+            (prior) =>
+              prior.ticketId === state.ticketId &&
+              prior.worktreePath === state.worktreePath &&
+              prior.codeReviewGeneration === state.codeReviewGeneration &&
+              prior.implementationGeneration === state.implementationGeneration &&
+              prior.appReviewGeneration === state.appReviewGeneration,
+          )
+            ? { ...state, appDevStackTierDownAt: input.createdAt }
+            : state,
+        ),
+        updatedAt: currentRun.updatedAt > input.createdAt ? currentRun.updatedAt : input.createdAt,
+      };
+      yield* updateRun({ sourceThreadId, run: cleanedRun, createdAt: cleanedRun.updatedAt });
+      return cleanedRun;
+    },
+  );
+
+  /** Deletes resources for tickets whose commits reached the integrated branch. */
+  const cleanupTicketResources = Effect.fn("ImplementationWorkflowReactor.cleanupTicketResources")(
+    function* (input: {
+      readonly run: OrchestrationImplementationRun;
+      readonly createdAt: string;
+    }) {
+      const run = yield* cleanupTicketStacks(input);
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const retentionResults = yield* Effect.forEach(
+        run.ticketStates,
+        (state) =>
+          Effect.gen(function* () {
+            if (
+              state.status !== "succeeded" ||
+              state.resourceCleanupAt === null ||
+              state.appDevStackTierDownAt === null ||
+              state.worktreePath === null ||
+              state.worktreePath === run.orchestratorWorktreePath
+            ) {
+              return null;
             }
 
             if (state.resourceCleanupRetention !== null) return null;
@@ -3233,11 +3294,11 @@ const make = Effect.gen(function* () {
             if (Option.isNone(worktreeHead)) return null;
             const cleanupSafety = yield* Effect.all([
               gitWorkflow.localStatus({ cwd: state.worktreePath }),
-              verifiedDependency({ run: input.run, ticketId: state.ticketId }),
+              verifiedDependency({ run, ticketId: state.ticketId }),
             ]).pipe(Effect.result);
             if (cleanupSafety._tag === "Failure") {
               yield* Effect.logWarning("ticket worktree cleanup safety check failed", {
-                runId: input.run.id,
+                runId: run.id,
                 ticketId: state.ticketId,
                 worktreePath: state.worktreePath,
                 cause: errorDetail(cleanupSafety.failure),
@@ -3247,7 +3308,7 @@ const make = Effect.gen(function* () {
             const [status, accepted] = cleanupSafety.success;
             const merged = yield* gitWorkflow
               .isAncestor({
-                cwd: input.run.orchestratorWorktreePath,
+                cwd: run.orchestratorWorktreePath,
                 ancestorRef: accepted.commitSha,
                 descendantRef: "HEAD",
               })
@@ -3264,12 +3325,12 @@ const make = Effect.gen(function* () {
             });
             if (retention !== null) {
               yield* appendActivity({
-                threadId: input.run.orchestratorThreadId,
+                threadId: run.orchestratorThreadId,
                 tone: "info",
                 kind: "implementation-ticket-worktree-retained",
                 summary: `Ticket ${state.ticketId} worktree retained`,
                 payload: {
-                  runId: input.run.id,
+                  runId: run.id,
                   ticketId: state.ticketId,
                   worktreePath: state.worktreePath,
                   cleanupRequestedAt: state.resourceCleanupAt,
@@ -3281,13 +3342,13 @@ const make = Effect.gen(function* () {
             }
             const removed = yield* gitWorkflow
               .removeWorktree({
-                cwd: input.run.orchestratorWorktreePath,
+                cwd: run.orchestratorWorktreePath,
                 path: state.worktreePath,
               })
               .pipe(Effect.result);
             if (removed._tag === "Failure") {
               yield* Effect.logWarning("ticket worktree cleanup failed", {
-                runId: input.run.id,
+                runId: run.id,
                 ticketId: state.ticketId,
                 worktreePath: state.worktreePath,
                 cause: errorDetail(removed.failure),
@@ -3295,12 +3356,12 @@ const make = Effect.gen(function* () {
               return null;
             }
             yield* appendActivity({
-              threadId: input.run.orchestratorThreadId,
+              threadId: run.orchestratorThreadId,
               tone: "info",
               kind: "implementation-ticket-worktree-removed",
               summary: `Ticket ${state.ticketId} worktree removed`,
               payload: {
-                runId: input.run.id,
+                runId: run.id,
                 ticketId: state.ticketId,
                 worktreePath: state.worktreePath,
                 cleanupRequestedAt: state.resourceCleanupAt,
@@ -3316,18 +3377,18 @@ const make = Effect.gen(function* () {
           .filter((result) => result !== null)
           .map((result) => [result.ticketId, result.retention] as const),
       );
-      if (retainedByTicket.size === 0) return input.run;
-      const sourceThreadId = findRunSourceThreadId({ readModel, run: input.run });
+      if (retainedByTicket.size === 0) return run;
+      const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) {
         yield* Effect.logWarning("ticket worktree retention could not be persisted", {
-          runId: input.run.id,
+          runId: run.id,
           ticketIds: [...retainedByTicket.keys()],
         });
-        return input.run;
+        return run;
       }
       const retainedRun: OrchestrationImplementationRun = {
-        ...input.run,
-        ticketStates: input.run.ticketStates.map((state) => ({
+        ...run,
+        ticketStates: run.ticketStates.map((state) => ({
           ...state,
           resourceCleanupRetention:
             retainedByTicket.get(state.ticketId) ?? state.resourceCleanupRetention,
@@ -3395,6 +3456,7 @@ const make = Effect.gen(function* () {
         run: reviewedRun,
         createdAt: input.createdAt,
       });
+      yield* cleanupTicketStacks({ run: reviewedRun, createdAt: input.createdAt });
       return;
     }
     const failedIds = new Set(usableBranch ? [] : [input.ticketId]);
@@ -3436,20 +3498,21 @@ const make = Effect.gen(function* () {
       run: completed,
       createdAt: input.createdAt,
     });
-    const terminal = completed.ticketStates.every(
+    const cleanedRun = yield* cleanupTicketStacks({ run: completed, createdAt: input.createdAt });
+    const terminal = cleanedRun.ticketStates.every(
       (state) => state.status === "succeeded" || state.status === "failed",
     );
     if (terminal) {
       yield* integrateCompletedRun({
         sourceThreadId: input.sourceThreadId,
-        run: completed,
+        run: cleanedRun,
         createdAt: input.createdAt,
       });
       return;
     }
     yield* startReadyWorkers({
       sourceThreadId: input.sourceThreadId,
-      run: completed,
+      run: cleanedRun,
       createdAt: input.createdAt,
     });
   });
@@ -6500,20 +6563,24 @@ const make = Effect.gen(function* () {
           run: completedTicketRun,
           createdAt: writeAt,
         });
+        const cleanedRun = yield* cleanupTicketStacks({
+          run: completedTicketRun,
+          createdAt: writeAt,
+        });
         if (
-          completedTicketRun.ticketStates.every((state) =>
+          cleanedRun.ticketStates.every((state) =>
             implementationTicketStateIsTerminal(state.status),
           )
         ) {
           yield* integrateCompletedRun({
             sourceThreadId,
-            run: completedTicketRun,
+            run: cleanedRun,
             createdAt: writeAt,
           });
         } else {
           yield* startReadyWorkers({
             sourceThreadId,
-            run: completedTicketRun,
+            run: cleanedRun,
             createdAt: writeAt,
           });
         }
@@ -10216,8 +10283,8 @@ const make = Effect.gen(function* () {
       createdAt = DateTime.formatIso(yield* DateTime.now);
     }
     const nowMs = Date.parse(createdAt);
-    for (const run of readModel.implementationRuns) {
-      yield* cleanupTicketResources({ run, createdAt });
+    for (const persistedRun of readModel.implementationRuns) {
+      const run = yield* cleanupTicketResources({ run: persistedRun, createdAt });
       if (run.status === "completed" || run.status === "canceled") {
         yield* teardownWorkflowStacks({ readModel, run, createdAt });
         continue;
