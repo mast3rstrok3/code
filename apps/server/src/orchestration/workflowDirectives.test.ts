@@ -586,6 +586,37 @@ ${JSON.stringify({
     NodeAssert.equal(result.directive.status, "succeeded");
   });
 
+  it("records blocked worker reports as failures while preserving their checkpoint and evidence", () => {
+    const result = parseWorkflowDirectiveFromMarkdown(
+      JSON.stringify({
+        type: "implementation-worker-result",
+        ticketId: "ticket-1",
+        workerThreadId: "worker-1",
+        branch: "ticket-1",
+        worktreePath: "/tmp/ticket-1",
+        status: "blocked",
+        commitSha: "abc123",
+        validations: [
+          {
+            command: "native test",
+            status: "failed",
+            outputMarkdown: "SDK missing",
+            completedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+        notesMarkdown: "Installed native acceptance is unavailable.",
+        reportedAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+    NodeAssert.equal(result.kind, "parsed");
+    if (result.kind !== "parsed" || result.directive.type !== "implementation-worker-result")
+      return;
+    NodeAssert.equal(result.directive.status, "failed");
+    NodeAssert.equal(result.directive.commitSha, "abc123");
+    NodeAssert.equal(result.directive.validations[0]?.status, "failed");
+    NodeAssert.equal(result.directive.notesMarkdown, "Installed native acceptance is unavailable.");
+  });
+
   it("rejects implementation worker success without commit sha", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 {

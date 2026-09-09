@@ -5800,6 +5800,120 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect(
+    "recovers a blocked worker report during an unrelated halt without restarting agents",
+    () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const state = run.ticketStates[0]!;
+          const threadId = state.workerThreadId!;
+          const turnId = TurnId.make("blocked-worker-turn");
+          const messageId = MessageId.make("blocked-worker-message");
+          const createdAt = "2026-01-01T00:01:00.000Z";
+          const halt = {
+            stage: "app-review" as const,
+            category: "review-blocked" as const,
+            detail: "Another review needs its backend.",
+            haltedAt: now,
+          };
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.update",
+            commandId: commandId("halt-before-worker-report"),
+            threadId: sourceThreadId,
+            run: { ...run, status: "needs-human-attention", automationHalt: halt },
+            createdAt: now,
+          });
+          yield* system.engine.dispatch({
+            type: "thread.session.set",
+            commandId: commandId("blocked-worker-active"),
+            threadId,
+            session: {
+              threadId,
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: turnId,
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          });
+          yield* system.engine.dispatch({
+            type: "thread.message.assistant.delta",
+            commandId: commandId("blocked-worker-report-text"),
+            threadId,
+            turnId,
+            messageId,
+            delta: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+              type: "implementation-worker-result",
+              ticketId: state.ticketId,
+              workerThreadId: threadId,
+              branch: state.branch,
+              worktreePath: state.worktreePath,
+              status: "blocked",
+              commitSha: "native-checkpoint",
+              validations: requiredValidations(),
+              notesMarkdown: "Native acceptance needs a device.",
+              reportedAt: createdAt,
+            }),
+            createdAt,
+          });
+          yield* system.engine.dispatch({
+            type: "thread.message.assistant.complete",
+            commandId: commandId("blocked-worker-report-complete"),
+            threadId,
+            turnId,
+            messageId,
+            createdAt,
+          });
+          yield* system.reactor.drain;
+          yield* system.reactor.recoverIncompleteStages();
+          expect(
+            (yield* system.query.getSnapshot()).implementationRuns[0]?.ticketStates[0]
+              ?.workerResult,
+          ).toBeNull();
+          yield* system.engine.dispatch({
+            type: "thread.session.set",
+            commandId: commandId("blocked-worker-idle"),
+            threadId,
+            session: {
+              threadId,
+              status: "ready",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          });
+          yield* system.reactor.drain;
+          const before = yield* system.query.getSnapshot();
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
+          const after = yield* system.query.getSnapshot();
+          const recovered = after.implementationRuns[0]!;
+          expect(recovered.automationHalt).toEqual(halt);
+          expect(recovered.ticketStates[0]).toMatchObject({
+            status: "failed",
+            workerResult: {
+              status: "failed",
+              commitSha: "native-checkpoint",
+              notesMarkdown: "Native acceptance needs a device.",
+            },
+          });
+          expect(recovered.workerResults).toHaveLength(1);
+          expect(after.threads).toHaveLength(before.threads.length);
+          expect(after.threads.find((thread) => thread.id === threadId)?.messages).toHaveLength(
+            before.threads.find((thread) => thread.id === threadId)!.messages.length,
+          );
+        }),
+      ),
+  );
+
   it.effect("replays a completed worker result after clearing a legacy dirty-worktree halt", () =>
     withSystem((system) =>
       Effect.gen(function* () {

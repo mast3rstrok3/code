@@ -1544,6 +1544,39 @@ describe("resolveWorkflowStepRollup", () => {
 });
 
 describe("resolveWorkflowTicketStatus", () => {
+  it("shows terminal review outcomes instead of a running ticket stage", () => {
+    for (const ticketState of ["app-reviewing", "code-reviewing"]) {
+      for (const reviewOutcome of ["failed", "blocked", "exhausted", "canceled"]) {
+        expect(
+          resolveWorkflowTicketStatus({
+            ticketState,
+            reviewOutcome,
+            threadStatuses: ["completed"],
+            skipped: false,
+            paused: false,
+          }),
+        ).toBe("failed");
+      }
+      expect(
+        resolveWorkflowTicketStatus({
+          ticketState,
+          reviewOutcome: "passed",
+          threadStatuses: ["completed"],
+          skipped: false,
+          paused: false,
+        }),
+      ).toBe("awaiting");
+      expect(
+        resolveWorkflowTicketStatus({
+          ticketState,
+          reviewOutcome: "failed",
+          threadStatuses: ["completed"],
+          skipped: false,
+          paused: true,
+        }),
+      ).toBe("paused");
+    }
+  });
   it("shows native handoffs as awaiting verification", () => {
     expect(
       resolveWorkflowTicketStatus({

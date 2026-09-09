@@ -812,8 +812,8 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       for (const value of [ticketId, workerThreadId, branch, worktreePath, reportedAt]) {
         if (value.startsWith("Directive field")) return value;
       }
-      if (status !== "succeeded" && status !== "failed") {
-        return "implementation-worker-result.status must be succeeded or failed.";
+      if (status !== "succeeded" && status !== "failed" && status !== "blocked") {
+        return "implementation-worker-result.status must be succeeded, failed, or blocked.";
       }
       if (typeof validations === "string") return validations;
       if (notesMarkdown !== undefined && typeof notesMarkdown !== "string") {
@@ -849,7 +849,7 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
         workerThreadId: ThreadId.make(workerThreadId),
         branch,
         worktreePath,
-        status,
+        status: "failed",
         commitSha: typeof commitSha === "string" ? commitSha.trim() : null,
         validations,
         notesMarkdown: notesMarkdown ?? "",

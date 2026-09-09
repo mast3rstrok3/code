@@ -1289,6 +1289,7 @@ export function resolveWorkflowPhaseStatus(
  */
 export function resolveWorkflowTicketStatus(input: {
   readonly ticketState: string | null;
+  readonly reviewOutcome?: string | null | undefined;
   readonly threadStatuses: readonly WorkflowThreadStatus[];
   readonly skipped: boolean;
   readonly paused: boolean;
@@ -1297,6 +1298,15 @@ export function resolveWorkflowTicketStatus(input: {
   if (input.paused) return "paused";
   if (input.threadStatuses.includes("approval") || input.threadStatuses.includes("input")) {
     return "awaiting";
+  }
+  if (input.ticketState === "app-reviewing" || input.ticketState === "code-reviewing") {
+    if (
+      input.reviewOutcome === "passed" ||
+      input.reviewOutcome === "skipped" ||
+      input.reviewOutcome === "clean"
+    )
+      return "awaiting";
+    if (input.reviewOutcome != null) return "failed";
   }
   switch (input.ticketState) {
     case "awaiting-native-verification":

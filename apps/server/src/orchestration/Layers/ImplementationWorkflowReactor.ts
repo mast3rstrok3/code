@@ -1,4 +1,5 @@
 import { nativeVerificationEvidenceMarkdown } from "../nativeVerification.ts";
+import { parseWorkflowDirectiveFromMarkdown } from "../workflowDirectives.ts";
 import { deferredTicketValidationCommands } from "../appReviewValidation.ts";
 import {
   type AppStackAutoCreateResult,
@@ -10411,6 +10412,53 @@ const make = Effect.gen(function* () {
       if (isWorkflowThreadPaused(readModel.threads, run.orchestratorThreadId)) continue;
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) continue;
+      // Completed workers still need their result recorded when another ticket halts automation.
+      // Read the current turn only, so a prior attempt cannot overwrite a newer assignment.
+      let recoveredWorker = false;
+      for (const state of run.ticketStates) {
+        if (state.status !== "running" || state.workerResult !== null || !state.workerThreadId)
+          continue;
+        if (isWorkflowThreadPaused(readModel.threads, state.workerThreadId)) continue;
+        const worker = findThread(readModel, state.workerThreadId);
+        if (
+          !worker ||
+          worker.deletedAt !== null ||
+          worker.latestTurn?.state !== "completed" ||
+          worker.session?.activeTurnId != null ||
+          worker.session?.status === "running" ||
+          worker.session?.status === "starting"
+        )
+          continue;
+        const detail = yield* projectionSnapshotQuery
+          .getThreadDetailById(worker.id)
+          .pipe(Effect.map(Option.getOrUndefined));
+        const message = detail?.messages.findLast(
+          (candidate) =>
+            candidate.role === "assistant" &&
+            !candidate.streaming &&
+            candidate.turnId === worker.latestTurn?.turnId &&
+            candidate.createdAt >= state.updatedAt,
+        );
+        if (!message) continue;
+        const parsed = parseWorkflowDirectiveFromMarkdown(message.text);
+        if (parsed.kind !== "parsed" || parsed.directive.type !== "implementation-worker-result")
+          continue;
+        if (
+          parsed.directive.workerThreadId !== worker.id ||
+          parsed.directive.ticketId !== state.ticketId ||
+          parsed.directive.branch !== state.branch ||
+          parsed.directive.worktreePath !== state.worktreePath
+        )
+          continue;
+        yield* recoverRunStage(
+          run.id,
+          "completed-worker-result",
+          handleWorkerResult(worker.id, parsed.directive, createdAt),
+        );
+        recoveredWorker = true;
+        break;
+      }
+      if (recoveredWorker) continue;
       const returnedNativeTicket =
         run.automationHalt === null
           ? run.ticketStates.find(

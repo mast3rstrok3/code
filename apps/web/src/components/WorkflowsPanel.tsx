@@ -1690,6 +1690,10 @@ function TicketPhases(props: {
           wave.map((ticket) =>
             resolveWorkflowTicketStatus({
               ticketState: states.get(ticket.id)?.status ?? null,
+              reviewOutcome:
+                states.get(ticket.id)?.status === "app-reviewing"
+                  ? states.get(ticket.id)?.appReviewOutcome
+                  : states.get(ticket.id)?.codeReviewOutcome,
               threadStatuses: (threadsByTicketId.get(ticket.id) ?? []).map(
                 resolveWorkflowThreadStatus,
               ),
@@ -1869,6 +1873,10 @@ function TicketPhases(props: {
               const ticketPause = workflowPauseOf(runThreads, linkedThreads);
               const ticketStatus = resolveWorkflowTicketStatus({
                 ticketState: state?.status ?? null,
+                reviewOutcome:
+                  state?.status === "app-reviewing"
+                    ? state.appReviewOutcome
+                    : state?.codeReviewOutcome,
                 threadStatuses: linkedThreads.map(resolveWorkflowThreadStatus),
                 skipped: isTicketSkipped(props.skips, ticket.id),
                 paused: ticketPause.paused,
@@ -1878,7 +1886,11 @@ function TicketPhases(props: {
                   ? "skipped"
                   : ticketStatus === "paused"
                     ? "paused"
-                    : (state?.status ?? ticket.status);
+                    : state?.status === "app-reviewing" && state.appReviewOutcome != null
+                      ? `App Review ${state.appReviewOutcome}`
+                      : state?.status === "code-reviewing" && state.codeReviewOutcome != null
+                        ? `Code Review ${state.codeReviewOutcome}`
+                        : (state?.status ?? ticket.status);
               return (
                 <div
                   key={ticket.id}
