@@ -3899,11 +3899,17 @@ const make = Effect.gen(function* () {
               `Branch: ${state.branch}`,
               `Review base: ${baseRef}`,
               `The worker last verified commit ${state.workerResult?.commitSha ?? "unknown"}. If HEAD differs, include focused verification for the current HEAD even when this review is clean. Reuse existing passing output only when it verified the unchanged HEAD, preserving its original completion time.`,
+              ...currentWorkflowValidations(state.workerResult?.validations ?? [])
+                .filter((validation) => validation.status !== "passed")
+                .map(
+                  (validation) =>
+                    `Unresolved check from the previous result: ${validation.command}\n${validation.outputMarkdown}\nRepair and rerun these checks. If a corrected command covers the same checks, retain the failed attempt and name it in supersedesCommand. Do not replace it with an unrelated passing test.`,
+                ),
               nativeVerificationEvidenceMarkdown(state.nativeVerification),
               `Retrieve the durable ticket with workflow_ticket_get. Review Standards and Spec, apply and commit clear fixes, and leave the worktree clean.`,
               input.warningMarkdown === undefined
                 ? ""
-                : `Earlier App Review warning:\n\n${input.warningMarkdown}`,
+                : `Earlier review context:\n\n${input.warningMarkdown}`,
               `Finish with one implementation-code-review-result JSON directive containing runId ${input.run.id} and ticketId ${input.ticketId}.`,
             ].join("\n\n"),
             WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
@@ -7809,15 +7815,22 @@ const make = Effect.gen(function* () {
           ),
           updatedAt,
         };
-        if (!identityValid || !findingsCommitValid || !validationValid) {
+        const canRepairValidation =
+          directive.status === "findings" && state.codeReviewPassCount + 1 < cycleBudget;
+        if (!identityValid || !findingsCommitValid || (!validationValid && !canRepairValidation)) {
           yield* blockRun({
             sourceThreadId,
             run: completedReviewRun,
             ticketId: state.ticketId,
             retryableStage: "code-review",
-            reasonMarkdown: warningParts.filter(Boolean).join("\n\n"),
+            reasonMarkdown: [...warningParts, directive.reportMarkdown]
+              .filter(Boolean)
+              .join("\n\n"),
             updatedAt,
             humanBlocked: true,
+            haltStage: "code-review",
+            haltCategory:
+              !identityValid || !findingsCommitValid ? "structural-invariant" : "validation-failed",
           });
           return;
         }
@@ -7871,6 +7884,7 @@ const make = Effect.gen(function* () {
               sourceThreadId,
               run: nextCycleRun,
               ticketId: state.ticketId,
+              warningMarkdown: directive.reportMarkdown,
               createdAt: updatedAt,
             });
             return;

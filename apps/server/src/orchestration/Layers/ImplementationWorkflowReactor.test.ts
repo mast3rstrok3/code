@@ -6547,70 +6547,106 @@ describe("ImplementationWorkflowReactor", () => {
 
   for (const purpose of ["reproduction", "verification", undefined] as const) {
     it.effect(`handles ${purpose ?? "legacy"} red evidence in ticket Code Review`, () =>
-      withSystem((system) =>
-        Effect.gen(function* () {
-          const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
-          yield* appendWorkerResult(system, {
-            run,
-            status: "succeeded",
-            completeTicketReview: false,
-          });
-          let snapshot = yield* system.query.getSnapshot();
-          const state = snapshot.implementationRuns.find((entry) => entry.id === run.id)
-            ?.ticketStates[0];
-          if (!state?.codeReviewThreadId) throw new Error("Ticket reviewer missing.");
-          yield* appendCodeReviewResult(system, {
-            run,
-            threadId: state.codeReviewThreadId,
-            ticketId: state.ticketId,
-            status: "findings",
-            tag: `red-green-${purpose ?? "legacy"}`,
-            validations: [
-              {
-                command: "test writing.test.ts",
-                ...(purpose === undefined ? {} : { purpose }),
-                status: "failed",
-                outputMarkdown: "Before the fix, the regression failed.",
-                completedAt: "2026-01-01T00:00:02.000Z",
-              },
-              {
-                command: "test writing.test.ts block-handle.test.ts",
-                purpose: "verification",
-                status: "passed",
-                outputMarkdown: "All eleven tests pass after the fix.",
-                completedAt: "2026-01-01T00:00:03.000Z",
-              },
-            ],
-          });
-          snapshot = yield* system.query.getSnapshot();
-          const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-          if (purpose === "reproduction") {
-            expect(current?.automationHalt).toBeNull();
-            expect(current?.ticketStates[0]?.codeReviewThreadId).not.toBe(state.codeReviewThreadId);
-            expect(current?.ticketStates[0]?.codeReviewPassCount).toBe(1);
-            expect(
-              current?.ticketStates[0]?.workerResult?.validations.map((entry) => entry.purpose),
-            ).toEqual(["reproduction", "verification"]);
-            const nextReviewer = current?.ticketStates[0]?.codeReviewThreadId;
-            if (!nextReviewer) throw new Error("Next reviewer missing.");
+      withSystem(
+        (system) =>
+          Effect.gen(function* () {
+            const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+            yield* appendWorkerResult(system, {
+              run,
+              status: "succeeded",
+              completeTicketReview: false,
+            });
+            let snapshot = yield* system.query.getSnapshot();
+            const state = snapshot.implementationRuns.find((entry) => entry.id === run.id)
+              ?.ticketStates[0];
+            if (!state?.codeReviewThreadId) throw new Error("Ticket reviewer missing.");
             yield* appendCodeReviewResult(system, {
               run,
-              threadId: nextReviewer,
+              threadId: state.codeReviewThreadId,
               ticketId: state.ticketId,
-              status: "clean",
-              tag: "red-green-clean",
-              validations: [],
+              status: "findings",
+              tag: `red-green-${purpose ?? "legacy"}`,
+              validations: [
+                {
+                  command: "test writing.test.ts",
+                  ...(purpose === undefined ? {} : { purpose }),
+                  status: "failed",
+                  outputMarkdown: "Before the fix, the regression failed.",
+                  completedAt: "2026-01-01T00:00:02.000Z",
+                },
+                {
+                  command: "test writing.test.ts block-handle.test.ts",
+                  purpose: "verification",
+                  status: "passed",
+                  outputMarkdown: "All eleven tests pass after the fix.",
+                  completedAt: "2026-01-01T00:00:03.000Z",
+                },
+              ],
             });
-            const finished = (yield* system.query.getSnapshot()).implementationRuns.find(
-              (entry) => entry.id === run.id,
-            );
-            expect(finished?.ticketStates[0]?.status).toBe("succeeded");
-            expect(finished?.automationHalt).toBeNull();
-          } else {
-            expect(current?.status).toBe("needs-human-attention");
-            expect(current?.automationHalt?.detail).toContain("valid focused validation");
-          }
-        }),
+            snapshot = yield* system.query.getSnapshot();
+            const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+            if (purpose === "reproduction") {
+              expect(current?.automationHalt).toBeNull();
+              expect(current?.ticketStates[0]?.codeReviewThreadId).not.toBe(
+                state.codeReviewThreadId,
+              );
+              expect(current?.ticketStates[0]?.codeReviewPassCount).toBe(1);
+              expect(
+                current?.ticketStates[0]?.workerResult?.validations.map((entry) => entry.purpose),
+              ).toEqual(["reproduction", "verification"]);
+              const nextReviewer = current?.ticketStates[0]?.codeReviewThreadId;
+              if (!nextReviewer) throw new Error("Next reviewer missing.");
+              yield* appendCodeReviewResult(system, {
+                run,
+                threadId: nextReviewer,
+                ticketId: state.ticketId,
+                status: "clean",
+                tag: "red-green-clean",
+                validations: [],
+              });
+              const finished = (yield* system.query.getSnapshot()).implementationRuns.find(
+                (entry) => entry.id === run.id,
+              );
+              expect(finished?.ticketStates[0]?.status).toBe("succeeded");
+              expect(finished?.automationHalt).toBeNull();
+            } else {
+              expect(current?.automationHalt).toBeNull();
+              expect(current?.ticketStates[0]?.status).toBe("code-reviewing");
+              const nextReviewer = current?.ticketStates[0]?.codeReviewThreadId;
+              if (!nextReviewer) throw new Error("Next reviewer missing.");
+              expect(nextReviewer).not.toBe(state.codeReviewThreadId);
+              expect(
+                snapshot.threads.find((thread) => thread.id === nextReviewer)?.messages.at(-1)
+                  ?.text,
+              ).toContain("Unresolved check from the previous result: test writing.test.ts");
+              yield* appendCodeReviewResult(system, {
+                run,
+                threadId: nextReviewer,
+                ticketId: state.ticketId,
+                status: purpose === undefined ? "findings" : "clean",
+                tag: `unresolved-clean-${purpose ?? "legacy"}`,
+                validations: [],
+              });
+              const unresolved = (yield* system.query.getSnapshot()).implementationRuns.find(
+                (entry) => entry.id === run.id,
+              );
+              expect(unresolved?.status).toBe("needs-human-attention");
+              expect(unresolved?.automationHalt?.detail).toContain("valid focused validation");
+              expect(unresolved?.automationHalt?.category).toBe("validation-failed");
+              expect(unresolved?.ticketStates[0]?.status).not.toBe("succeeded");
+            }
+          }),
+        {
+          serverSettings: {
+            workflowStepCycles: [
+              {
+                workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+                stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+                maxCycles: 2,
+              },
+            ],
+          },
+        },
       ),
     );
   }
@@ -6634,7 +6670,7 @@ describe("ImplementationWorkflowReactor", () => {
             run,
             threadId: state.codeReviewThreadId,
             ticketId: state.ticketId,
-            status: "findings",
+            status: "clean",
             tag: "retry-invalid-validation",
             validations: [
               {
