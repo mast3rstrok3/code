@@ -177,6 +177,8 @@ Interactive grill threads use T3's own `workflow_request_user_input` tool, which
 
 ## Verifying a ticket on another machine
 
+To implement tickets before testing the combined app, disable **Ticket App Review** and keep **Final App Review** enabled. In an existing run, skip the App Review stage on unfinished tickets, then start their blocked stage again. Workers and Code Review still check the implementation with focused tests and static checks. Browser E2E, native-device evidence, and related test-environment or coverage gaps move to the final review. Earlier failed reports remain available there. A completed ticket does not mean its deferred acceptance passed.
+
 Use native verification when a ticket needs an OS or simulator that the workflow server cannot run. The web and desktop Workflows panel can hand a committed ticket to another connected T3 environment. The original server keeps the workflow and its history. Independent tickets can continue while this ticket and its dependents wait.
 
 1. On the target machine, run a T3 server with native handoff support, clone the same GitHub repository, add it as a project, and select its default model. Install the required native tools, such as Xcode and an iOS Simulator on your Mac. Both machines need GitHub access to push the repository's branches.

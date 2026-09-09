@@ -92,6 +92,8 @@ import {
   workflowIdsForRun,
   selectPublicationBaseBranch,
   summarizeTicketAppReviewHalt,
+  deferredTicketAppReviewInstructions,
+  buildBrowserAppReviewPrompt,
 } from "./ImplementationWorkflowReactor.ts";
 import {
   ORPHANED_PROVIDER_SESSION_ERROR,
@@ -237,6 +239,48 @@ it("shows concurrent App Review blockers without duplicating or retaining resolv
   expect(summarizeTicketAppReviewHalt({ automationHalt: null, ticketStates })).toBeNull();
   const otherHalt = { ...halt, stage: "integration" as const };
   expect(summarizeTicketAppReviewHalt({ automationHalt: otherHalt, ticketStates })).toBe(otherHalt);
+});
+
+it("defers ticket acceptance only when final App Review remains enabled", () => {
+  const skips = [{ kind: "ticket" as const, ticketId: "ticket-1", stage: "app-review" as const }];
+  expect(deferredTicketAppReviewInstructions({ skips }, "ticket-1")).toContain(
+    "final review of the integrated app",
+  );
+  expect(deferredTicketAppReviewInstructions({ skips }, "ticket-1")).toContain(
+    "Fix failures in those checks",
+  );
+  expect(deferredTicketAppReviewInstructions({ skips }, "ticket-2")).toBe("");
+  expect(
+    deferredTicketAppReviewInstructions(
+      { skips: [...skips, { kind: "run", stage: "app-review" }] },
+      "ticket-1",
+    ),
+  ).toBe("");
+  const halt = {
+    stage: "app-review" as const,
+    category: "review-blocked" as const,
+    ticketId: "ticket-1",
+    detail: "Native acceptance unavailable",
+    haltedAt: now,
+  };
+  const ticketStates = [
+    { ticketId: "ticket-1", appReviewOutcome: "failed" as const, warningMarkdown: halt.detail },
+  ];
+  expect(summarizeTicketAppReviewHalt({ automationHalt: halt, ticketStates, skips })).toBeNull();
+  expect(
+    summarizeTicketAppReviewHalt({
+      automationHalt: halt,
+      skips,
+      ticketStates: [
+        ...ticketStates,
+        {
+          ticketId: "ticket-2",
+          appReviewOutcome: "failed",
+          warningMarkdown: "Other review failed",
+        },
+      ],
+    }),
+  ).toMatchObject({ ticketId: "ticket-2", detail: "Ticket ticket-2\n\nOther review failed" });
 });
 
 it("matches legacy ticket final Code Review halts to the Code Review stage", () => {
@@ -613,6 +657,7 @@ it("turns ticket setup failures and their dependents into terminal warnings", ()
 });
 const projectId = ProjectId.make("project-implementation-reactor");
 const sourceThreadId = ThreadId.make("thread-implementation-source");
+const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeBuildContractExample = Schema.decodeUnknownEffect(
   Schema.fromJsonString(
     Schema.Struct({
@@ -5845,7 +5890,7 @@ describe("ImplementationWorkflowReactor", () => {
             threadId,
             turnId,
             messageId,
-            delta: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+            delta: yield* encodeJson({
               type: "implementation-worker-result",
               ticketId: state.ticketId,
               workerThreadId: threadId,
@@ -8921,6 +8966,88 @@ describe("ImplementationWorkflowReactor", () => {
         expect(after?.workerResult?.commitSha).toBe(before?.workerResult?.commitSha);
       }),
     ),
+  );
+
+  it.effect(
+    "continues a deferred failed ticket review through Code Review and retains its evidence",
+    () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run, ticket, nestedRun } = yield* launchTicketAppReview(system);
+          const failedAt = "2026-01-01T00:05:00.000Z";
+          const { cycle, failure } = failedReviewRecoveryState(nestedRun, failedAt, "deferred");
+          yield* system.engine.dispatch({
+            type: "thread.app-review-workflow.update",
+            commandId: commandId("defer-review-failure"),
+            threadId: nestedRun.controllerThreadId,
+            run: {
+              ...nestedRun,
+              status: "failed",
+              outcome: "failed",
+              activePhase: null,
+              activeThreadId: null,
+              cycles: [cycle],
+              failure: {
+                ...failure,
+                detailMarkdown: "Native E2E needs a device.",
+              },
+              updatedAt: failedAt,
+              completedAt: failedAt,
+            },
+            createdAt: failedAt,
+          });
+          yield* system.reactor.drain;
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.skip",
+            commandId: commandId("defer-review-skip"),
+            threadId: sourceThreadId,
+            runId: run.id,
+            target: { kind: "ticket", ticketId: ticket.id, stage: "app-review" },
+            skipped: true,
+            createdAt: "2026-01-01T00:06:00.000Z",
+          });
+          yield* system.reactor.drain;
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.rerun",
+            commandId: commandId("defer-review-resume"),
+            threadId: sourceThreadId,
+            runId: run.id,
+            target: { kind: "ticket", ticketId: ticket.id, stage: "app-review" },
+            createdAt: "2026-01-01T00:07:00.000Z",
+          });
+          yield* system.reactor.drain;
+          const snapshot = yield* system.query.getSnapshot();
+          const updated = snapshot.implementationRuns.find((candidate) => candidate.id === run.id)!;
+          expect(updated.automationHalt).toBeNull();
+          expect(updated.ticketStates.find((state) => state.ticketId === ticket.id)?.status).toBe(
+            "code-reviewing",
+          );
+          expect(updated.skips).toEqual([
+            { kind: "ticket", ticketId: ticket.id, stage: "app-review" },
+          ]);
+          expect(
+            snapshot.appReviewWorkflowRuns?.find((candidate) => candidate.id === nestedRun.id)
+              ?.outcome,
+          ).toBe("failed");
+          expect(snapshot.appReviewWorkflowRuns).toHaveLength(1);
+          const finalPrompt = buildBrowserAppReviewPrompt({
+            run: updated,
+            frontendUrl: null,
+            priorReviews: snapshot.appReviewWorkflowRuns ?? [],
+          });
+          expect(finalPrompt).toContain(`Deferred acceptance for ticket ${ticket.id}`);
+          expect(finalPrompt).toContain(nestedRun.id);
+          expect(finalPrompt).toContain(cycle.reviewId);
+          expect(finalPrompt).toContain("Native E2E needs a device.");
+          expect(finalPrompt).toContain(
+            "required native-platform acceptance on the integrated commit",
+          );
+          const reviewer = snapshot.threads.find(
+            (thread) => thread.workflowRole === "implementation-code-reviewer",
+          );
+          expect(reviewer?.messages.at(-1)?.text).toContain("final review of the integrated app");
+        }),
+      ),
   );
 
   it.effect("skips ticket App Review without provisioning a stack when its scope is empty", () =>

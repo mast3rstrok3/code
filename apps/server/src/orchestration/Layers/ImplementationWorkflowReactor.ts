@@ -153,6 +153,7 @@ const ticketAppReviewLaunchBudgetWarning = () =>
 /** Rebuild the halt from current ticket failures so late sibling results remain visible. */
 export function summarizeTicketAppReviewHalt(input: {
   readonly automationHalt: OrchestrationImplementationRun["automationHalt"];
+  readonly skips?: OrchestrationImplementationRun["skips"];
   readonly ticketStates: ReadonlyArray<
     Pick<
       OrchestrationImplementationTicketState,
@@ -168,8 +169,21 @@ export function summarizeTicketAppReviewHalt(input: {
   )
     return halt;
   const blockers = input.ticketStates.filter(
-    (state) => state.appReviewOutcome === "failed" && state.warningMarkdown?.trim(),
+    (state) =>
+      state.appReviewOutcome === "failed" &&
+      state.warningMarkdown?.trim() &&
+      !isTicketStageSkipped(input.skips ?? [], state.ticketId, "app-review"),
   );
+  if (isTicketStageSkipped(input.skips ?? [], halt.ticketId, "app-review")) {
+    if (blockers.length === 0) return null;
+    return {
+      ...halt,
+      ticketId: blockers[0]!.ticketId,
+      detail: blockers
+        .map((state) => `Ticket ${state.ticketId}\n\n${state.warningMarkdown}`)
+        .join("\n\n"),
+    };
+  }
   if (!blockers.some((state) => state.ticketId === halt.ticketId)) return halt;
   return {
     ...halt,
@@ -1071,6 +1085,24 @@ function validationSummary(
   );
 }
 
+export function deferredTicketAppReviewInstructions(
+  run: Pick<OrchestrationImplementationRun, "skips">,
+  ticketId: string,
+): string {
+  if (
+    !isTicketStageSkipped(run.skips, ticketId, "app-review") ||
+    isRunStageSkipped(run.skips, "app-review")
+  )
+    return "";
+  return [
+    "The user deferred this ticket's App Review to the final review of the integrated app.",
+    "Implement the product behavior and run focused unit/component tests, formatting, lint, and type checks available on this host. Fix failures in those checks. Code Review remains required.",
+    "Defer browser E2E, installed Electron/mobile journeys, OS recordings, and their test-environment or coverage gaps to final App Review. Do not provision a ticket App Stack or block this implementation/Code Review solely on that deferred acceptance.",
+    "Record every deferred command, required platform, missing fixture or coverage assertion, and earlier failure in notesMarkdown or reportMarkdown. Keep the original evidence; do not describe unrun or failed acceptance as passed.",
+    "Report implementation success or a clean Code Review only when the code and focused checks are complete. Missing product behavior or failing runnable checks still need repairs. Final App Review must test the deferred requirements on the combined commit before the workflow can complete.",
+  ].join("\n\n");
+}
+
 function buildWorkerPrompt(input: {
   readonly run: OrchestrationImplementationRun;
   readonly ticketId: string;
@@ -1116,6 +1148,7 @@ function buildWorkerPrompt(input: {
   return [
     WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
     `Implement planning ticket ${input.ticketId} for implementation run ${input.run.id}.`,
+    deferredTicketAppReviewInstructions(input.run, input.ticketId),
     "",
     "Do not ask the user questions. Run one focused failing test before implementation. Work in behavioral slices, rerunning the relevant focused test after each slice, then finish with affected-file formatting, linting, typing, and focused tests only.",
     "Do not run launch-level complete validation commands or full test suites. A documented sub-minute fast check such as `pnpm check` is allowed. Final Code Review owns complete validation. Do not rerun an unchanged passing command without a new code change that could affect it.",
@@ -1200,10 +1233,11 @@ function buildMergeGatePrompt(input: {
   ].join("\n");
 }
 
-function buildBrowserAppReviewPrompt(input: {
+export function buildBrowserAppReviewPrompt(input: {
   readonly run: OrchestrationImplementationRun;
   readonly frontendUrl: string | null;
   readonly artifactMarkdown?: string;
+  readonly priorReviews?: ReadonlyArray<AppReviewWorkflowRun>;
 }): string {
   const ticketWarnings = input.run.ticketStates
     .filter((state) => state.status === "failed" || (state.warningMarkdown?.trim().length ?? 0) > 0)
@@ -1216,6 +1250,27 @@ function buildBrowserAppReviewPrompt(input: {
     "",
     "Open the app with preview_open, record the session with app_review_recording_start/stop, exercise the product with the preview_* tools, and capture captioned screenshots with app_review_capture_screenshot. Do not ask the user questions.",
     "Review cross-ticket and multi-step behavior across the complete integrated change. Recheck every ticket-level App Review that failed, exhausted, was blocked, or could not run.",
+    ...input.run.ticketStates
+      .filter((state) => isTicketStageSkipped(input.run.skips, state.ticketId, "app-review"))
+      .map(
+        (state) =>
+          `Deferred acceptance for ticket ${state.ticketId}: retrieve its complete ticket and App Review plan. Run its E2E and required native-platform acceptance on the integrated commit, repair missing test coverage, and retain evidence. Implementation completion did not pass this acceptance.\n${state.workerResult?.notesMarkdown ?? ""}`,
+      ),
+    ...(input.priorReviews ?? [])
+      .filter(
+        (review) =>
+          review.caller.type === "implementation" &&
+          review.caller.implementationRunId === input.run.id &&
+          review.caller.ticketId !== undefined &&
+          isTicketStageSkipped(input.run.skips, review.caller.ticketId, "app-review"),
+      )
+      .flatMap((review) => [
+        `Earlier ticket review ${review.id} is recorded in controller thread ${review.controllerThreadId}. ${review.failure?.detailMarkdown ?? ""}`,
+        ...review.cycles.map(
+          (cycle) =>
+            `Earlier ticket review ${review.id}, cycle ${cycle.cycleNumber}: retrieve ${[cycle.e2eReviewId, cycle.reviewId].filter(Boolean).join(" and ")} with workflow_app_review_get. Recheck its unresolved findings on the combined commit; do not rerun against the old ticket preview URLs.`,
+        ),
+      ]),
     ...(ticketWarnings.length === 0
       ? []
       : ["", "Ticket-level warnings requiring combined review focus:", ...ticketWarnings]),
@@ -3838,6 +3893,7 @@ const make = Effect.gen(function* () {
           text: appendWorkflowSkillCommandSection(
             [
               WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
+              deferredTicketAppReviewInstructions(input.run, input.ticketId),
               `Run Code Review Cycle ${state.codeReviewPassCount + 1} of ${cycleBudget} for ticket ${input.ticketId} in implementation run ${input.run.id}.`,
               `Worktree: ${state.worktreePath}`,
               `Branch: ${state.branch}`,
@@ -5104,6 +5160,7 @@ const make = Effect.gen(function* () {
           supportingContextMarkdown: buildBrowserAppReviewPrompt({
             run: readyRun,
             frontendUrl,
+            priorReviews: readModel.appReviewWorkflowRuns ?? [],
             ...(artifactMarkdown === undefined ? {} : { artifactMarkdown }),
           }),
           previewTargets: [frontendUrl],
@@ -5183,6 +5240,7 @@ const make = Effect.gen(function* () {
             buildBrowserAppReviewPrompt({
               run: reviewRun,
               frontendUrl,
+              priorReviews: readModel.appReviewWorkflowRuns ?? [],
               ...(artifactMarkdown === undefined ? {} : { artifactMarkdown }),
             }),
             WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
@@ -9252,7 +9310,9 @@ const make = Effect.gen(function* () {
       )
         return;
       const ticketId = input.ticketState.ticketId;
-      const outcome = input.nestedRun.outcome ?? input.nestedRun.status;
+      const deferred =
+        deferredTicketAppReviewInstructions(input.run, input.ticketState.ticketId) !== "";
+      const outcome = deferred ? "skipped" : (input.nestedRun.outcome ?? input.nestedRun.status);
       const warningMarkdown =
         outcome === "passed"
           ? undefined
@@ -9297,6 +9357,22 @@ const make = Effect.gen(function* () {
         yield* updateRun({
           sourceThreadId: input.sourceThreadId,
           run: reviewedTicketRun,
+          createdAt: input.updatedAt,
+        });
+        return;
+      }
+      if (deferred) {
+        yield* startTicketCodeReview({
+          sourceThreadId: input.sourceThreadId,
+          run: reviewedTicketRun,
+          ticketId,
+          appReviewOutcome: "skipped",
+          warningMarkdown: [
+            "Ticket App Review deferred to the final integrated review.",
+            warningMarkdown,
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
           createdAt: input.updatedAt,
         });
         return;
