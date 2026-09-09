@@ -1,3 +1,4 @@
+import { nativeVerificationEvidenceMarkdown } from "../nativeVerification.ts";
 import { deferredTicketValidationCommands } from "../appReviewValidation.ts";
 import {
   type AppStackAutoCreateResult,
@@ -133,6 +134,7 @@ type ImplementationWorkflowEvent = Extract<
 
 const IMPLEMENTATION_WORKFLOW_ACTIVITY_KINDS = new Set<string>([
   "implementation-worker-result",
+  "implementation-native-verification-updated",
   "implementation-merge-gate-result",
   "implementation-fix-result",
   "implementation-code-review-result",
@@ -3447,6 +3449,41 @@ const make = Effect.gen(function* () {
     readonly createdAt: string;
   }) {
     const usableBranch = input.usableBranch ?? true;
+    const nativeTicket = input.run.ticketStates.find((state) => state.ticketId === input.ticketId);
+    if (
+      nativeTicket?.nativeVerification?.status === "completed" &&
+      nativeTicket.nativeVerification.commitSha !== input.commitSha
+    ) {
+      const waiting: OrchestrationImplementationRun = {
+        ...input.run,
+        ticketStates: input.run.ticketStates.map((state) =>
+          state.ticketId === input.ticketId
+            ? {
+                ...state,
+                status: "awaiting-native-verification",
+                workerResult: state.workerResult
+                  ? { ...state.workerResult, commitSha: input.commitSha }
+                  : null,
+                warningMarkdown:
+                  "Review changed the verified commit. Prepare a new native checkpoint before completing this ticket.",
+                updatedAt: input.createdAt,
+              }
+            : state,
+        ),
+        updatedAt: input.createdAt,
+      };
+      yield* updateRun({
+        sourceThreadId: input.sourceThreadId,
+        run: waiting,
+        createdAt: input.createdAt,
+      });
+      yield* startReadyWorkers({
+        sourceThreadId: input.sourceThreadId,
+        run: waiting,
+        createdAt: input.createdAt,
+      });
+      return;
+    }
     const reviewedRun: OrchestrationImplementationRun = {
       ...input.run,
       retryableFailure:
@@ -3805,6 +3842,7 @@ const make = Effect.gen(function* () {
               `Branch: ${state.branch}`,
               `Review base: ${baseRef}`,
               `The worker last verified commit ${state.workerResult?.commitSha ?? "unknown"}. If HEAD differs, include focused verification for the current HEAD even when this review is clean. Reuse existing passing output only when it verified the unchanged HEAD, preserving its original completion time.`,
+              nativeVerificationEvidenceMarkdown(state.nativeVerification),
               `Retrieve the durable ticket with workflow_ticket_get. Review Standards and Spec, apply and commit clear fixes, and leave the worktree clean.`,
               input.warningMarkdown === undefined
                 ? ""
@@ -4041,7 +4079,7 @@ const make = Effect.gen(function* () {
         ticketId: input.ticketId,
       },
       briefMarkdown: ticket.appReviewPlanMarkdown,
-      supportingContextMarkdown: `Review only ticket ${input.ticketId}: ${ticket.title}. Treat its attached plan and acceptance criteria as authoritative.`,
+      supportingContextMarkdown: `Review only ticket ${input.ticketId}: ${ticket.title}. Treat its attached plan and acceptance criteria as authoritative.\n\n${nativeVerificationEvidenceMarkdown(state.nativeVerification)}`,
       previewTargets: [frontendUrl],
       appReviewScope: effectiveScope,
       cycleBudget: AppReviewWorkflowCycleBudget.make(
@@ -6370,6 +6408,7 @@ const make = Effect.gen(function* () {
       const currentState = run.ticketStates.find((state) => state.workerThreadId === threadId);
       if (
         currentState === undefined ||
+        currentState.status === "awaiting-native-verification" ||
         currentState.status === "succeeded" ||
         currentState.status === "failed"
       ) {
@@ -7577,7 +7616,13 @@ const make = Effect.gen(function* () {
             candidate.ticketId === directive.ticketId &&
             candidate.codeReviewThreadId === event.payload.threadId,
         );
-        if (sourceThreadId === null || state?.worktreePath == null || state.branch == null) return;
+        if (
+          sourceThreadId === null ||
+          state?.worktreePath == null ||
+          state.branch == null ||
+          state.status === "awaiting-native-verification"
+        )
+          return;
         const updatedAt = event.payload.activity.createdAt;
         if (
           directive.status === "blocked" &&
@@ -9200,7 +9245,11 @@ const make = Effect.gen(function* () {
       readonly nestedRun: AppReviewWorkflowRun;
       readonly updatedAt: string;
     }) {
-      if (input.nestedRun.status === "running") return;
+      if (
+        input.nestedRun.status === "running" ||
+        input.ticketState.status === "awaiting-native-verification"
+      )
+        return;
       const ticketId = input.ticketState.ticketId;
       const outcome = input.nestedRun.outcome ?? input.nestedRun.status;
       const warningMarkdown =
@@ -9737,6 +9786,10 @@ const make = Effect.gen(function* () {
     event: Extract<ImplementationWorkflowEvent, { type: "thread.activity-appended" }>,
   ) {
     switch (event.payload.activity.kind) {
+      case "implementation-native-verification-updated": {
+        yield* recoverIncompleteStages();
+        return;
+      }
       case "implementation-worker-result": {
         const directive = asWorkerDirective(event.payload.activity.payload);
         // Stamp the write with when the activity landed, not with the
@@ -10358,6 +10411,23 @@ const make = Effect.gen(function* () {
       if (isWorkflowThreadPaused(readModel.threads, run.orchestratorThreadId)) continue;
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) continue;
+      const returnedNativeTicket =
+        run.automationHalt === null
+          ? run.ticketStates.find(
+              (state) =>
+                state.status === "running" &&
+                state.nativeVerification?.status === "completed" &&
+                state.workerResult?.status === "succeeded",
+            )
+          : undefined;
+      if (returnedNativeTicket?.workerResult && returnedNativeTicket.workerThreadId) {
+        yield* handleWorkerResult(
+          returnedNativeTicket.workerThreadId,
+          { type: "implementation-worker-result", ...returnedNativeTicket.workerResult },
+          createdAt,
+        );
+        continue;
+      }
       const directlyFailedTicket = run.ticketStates.find(
         (state) =>
           state.status === "failed" &&

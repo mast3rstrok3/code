@@ -168,6 +168,7 @@ function ticketCurrentTarget(
       };
     }
     case "blocked":
+    case "awaiting-native-verification":
       return null;
   }
 }

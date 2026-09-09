@@ -6,6 +6,7 @@ import * as Struct from "effect/Struct";
 import { ProviderOptionSelections } from "./model.ts";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import { ChangeRequest } from "./sourceControl.ts";
+import { NativeVerificationAction, NativeVerificationHandoff } from "./nativeVerification.ts";
 import {
   APP_REVIEW_WORKFLOW_DEFAULT_CYCLES,
   AppReviewDocument,
@@ -1130,6 +1131,7 @@ export const OrchestrationImplementationTicketStateStatus = Schema.Literals([
   "code-reviewing",
   "succeeded",
   "failed",
+  "awaiting-native-verification",
 ]);
 export type OrchestrationImplementationTicketStateStatus =
   typeof OrchestrationImplementationTicketStateStatus.Type;
@@ -1137,6 +1139,7 @@ export type OrchestrationImplementationTicketStateStatus =
 export const OrchestrationImplementationTicketState = Schema.Struct({
   ticketId: OrchestrationPlanningTicketId,
   status: OrchestrationImplementationTicketStateStatus,
+  nativeVerification: Schema.optionalKey(Schema.NullOr(NativeVerificationHandoff)),
   dependencyTicketIds: Schema.Array(OrchestrationPlanningTicketId).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
@@ -3180,6 +3183,16 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
 });
 
 const InternalOrchestrationCommand = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("thread.native-verification.update"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: OrchestrationImplementationRunId,
+    ticketId: OrchestrationPlanningTicketId,
+    expectedRevision: Schema.NullOr(NonNegativeInt),
+    action: NativeVerificationAction,
+    createdAt: IsoDateTime,
+  }),
   ThreadAutoSettleCommand,
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,

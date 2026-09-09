@@ -32,6 +32,11 @@ import {
 } from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
+  NativeVerificationError,
+  NativeVerificationRequest,
+  NativeVerificationResponse,
+} from "./nativeVerification.ts";
+import {
   ClientOrchestrationCommand,
   DispatchResult,
   OrchestrationReadModel,
@@ -505,6 +510,14 @@ const EnvironmentOrchestrationThreadSnapshotQuery = {
 };
 
 export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
+  .add(
+    HttpApiEndpoint.post("nativeVerification", "/api/orchestration/native-verification", {
+      headers: OptionalBearerHeaders,
+      payload: Schema.Struct({ request: NativeVerificationRequest }),
+      success: NativeVerificationResponse,
+      error: [...EnvironmentOrchestrationDispatchErrors, NativeVerificationError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
   .add(
     HttpApiEndpoint.get("snapshot", "/api/orchestration/snapshot", {
       headers: OptionalBearerHeaders,

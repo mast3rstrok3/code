@@ -4,6 +4,7 @@ import {
   isTicketSkipped,
   isTicketStageSkipped,
 } from "@t3tools/contracts";
+import { NativeVerificationPanel } from "./NativeVerificationPanel";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import type {
   AppReviewWorkflowCycle,
@@ -1129,8 +1130,8 @@ export function TicketAppReviewCycles(props: {
                                   props.threads,
                                   props.run.activeThreadId === null
                                     ? []
-                                    : [threadById.get(props.run.activeThreadId)].flatMap((thread) =>
-                                        thread === undefined ? [] : [thread],
+                                    : [threadById.get(props.run.activeThreadId)].flatMap(
+                                        (thread) => (thread === undefined ? [] : [thread]),
                                       ),
                                 )}
                                 pausedScopeThreadIds={
@@ -1968,6 +1969,14 @@ function TicketPhases(props: {
                   </div>
                   {open ? (
                     <div className="mb-2 ml-5 border-l border-border/70 pl-3">
+                      {state?.workerResult &&
+                      (state.status !== "succeeded" || state.nativeVerification) ? (
+                        <NativeVerificationPanel
+                          environmentId={props.environmentId}
+                          runId={props.run.id}
+                          ticket={state}
+                        />
+                      ) : null}
                       {ticketTimeRange ? (
                         <TimelineTimeRange
                           {...ticketTimeRange}
@@ -2827,7 +2836,9 @@ function WorkflowGroupCard(props: {
                           const stepDisclosureId = workflowStepDisclosureId(group.id, step.id);
                           const stepOpen = disclosures.expanded[stepDisclosureId] ?? false;
                           const isTicketExecutionStep =
-                            (group.preset === "planning" || group.preset === "fast-engineering") &&
+                            (group.preset === "planning" ||
+                              group.preset === "fast-engineering" ||
+                              group.preset === "implementation") &&
                             workflowStepLabel(step).toLowerCase().includes("execute ticket waves");
                           const isCombinedAppReviewStep =
                             workflowStepLabel(step).toLowerCase().includes("app review") &&

@@ -1,4 +1,5 @@
 import { projectEvent } from "./projector.ts";
+import { nativeVerificationIsOpen, transitionNativeVerification } from "./nativeVerification.ts";
 import {
   type AppReviewDocument,
   AppReviewWorkflowCycleBudget,
@@ -9,6 +10,7 @@ import {
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
   IMPLEMENTATION_STAGE_MAX_LAUNCHES,
   MessageId,
+  NativeVerificationHandoff,
   type OrchestrationImplementationRerunTarget,
   type OrchestrationImplementationRun,
   UserInputRequestedPayload,
@@ -81,6 +83,8 @@ import {
   workflowStepCycleKeysEqual,
   type WorkflowStepCycleKey,
 } from "@t3tools/shared/workflowStepCycles";
+
+const nativeHandoffsEqual = Schema.toEquivalence(NativeVerificationHandoff);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const decodeUserInputRequestedPayload = Schema.decodeUnknownOption(UserInputRequestedPayload);
@@ -3645,6 +3649,71 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       return [orchestratorThreadCreatedEvent, bundleLoadedEvent, runLaunchedEvent];
     }
 
+    case "thread.native-verification.update": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      const existing = readModel.implementationRuns.find((run) => run.id === command.runId);
+      if (!existing)
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Implementation run not found.",
+        });
+      const owner = readModel.threads.find((thread) => thread.id === existing.orchestratorThreadId);
+      if ((owner?.parentThreadId ?? existing.orchestratorThreadId) !== command.threadId)
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "The native handoff belongs to another workflow thread.",
+        });
+      const ticket = existing.ticketStates.find((state) => state.ticketId === command.ticketId);
+      if (
+        command.action.type === "prepare" &&
+        readModel.appReviewWorkflowRuns?.some(
+          (review) => review.id === ticket?.appReviewWorkflowRunId && review.status === "running",
+        )
+      )
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail:
+            "Finish or cancel the ticket's App Review before handing its checkout to another machine.",
+        });
+      if (
+        command.action.type === "prepare" &&
+        ticket?.worktreePath &&
+        readModel.threads.some(
+          (thread) =>
+            thread.worktreePath === ticket.worktreePath &&
+            (thread.latestTurn?.state === "running" ||
+              thread.session?.activeTurnId ||
+              thread.session?.status === "running" ||
+              thread.session?.status === "starting"),
+        )
+      )
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Stop or finish the ticket's active turns before handing it off.",
+        });
+      const run = transitionNativeVerification({
+        run: existing,
+        ticketId: command.ticketId,
+        expectedRevision: command.expectedRevision,
+        action: command.action,
+        now: command.createdAt,
+      });
+      if (typeof run === "string")
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: run,
+        });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.implementation-run-updated",
+        payload: { sourceThreadId: command.threadId, run },
+      };
+    }
     case "thread.implementation-run.update": {
       yield* requireThread({
         readModel,
@@ -3657,6 +3726,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           commandType: command.type,
           detail: `Implementation Run '${command.run.id}' does not exist.`,
         });
+      }
+      for (const ticket of existingRun.ticketStates) {
+        const current = ticket.nativeVerification;
+        const next = command.run.ticketStates.find((state) => state.ticketId === ticket.ticketId);
+        if (
+          current &&
+          (next?.nativeVerification == null ||
+            !nativeHandoffsEqual(next.nativeVerification, current) ||
+            (nativeVerificationIsOpen(current) && next?.status !== "awaiting-native-verification"))
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail:
+              "Native verification changed while the workflow was updating. Retry with the current run.",
+          });
+        }
       }
       if (command.expectedStageExecutionTransition !== undefined) {
         const expected = command.expectedStageExecutionTransition;
@@ -3989,6 +4074,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       }
       const target = normalizeImplementationRerunTargetForHalt(existingRun, command.target);
       if (
+        existingRun.ticketStates.some(
+          (ticket) =>
+            nativeVerificationIsOpen(ticket.nativeVerification) &&
+            (target.kind === "run" || target.ticketId === ticket.ticketId),
+        )
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Complete or cancel the native handoff before changing this stage.",
+        });
+      }
+      if (
         existingRun.status === "canceled" &&
         !canRerunCanceledFinalCodeReview({ run: existingRun, target })
       ) {
@@ -4099,6 +4196,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       }
       const target = command.target;
       if (
+        existingRun.ticketStates.some(
+          (ticket) =>
+            nativeVerificationIsOpen(ticket.nativeVerification) &&
+            (target.kind === "run" || target.ticketId === ticket.ticketId),
+        )
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Complete or cancel the native handoff before changing this stage.",
+        });
+      }
+      if (
         target.kind === "ticket" &&
         !existingRun.ticketStates.some((state) => state.ticketId === target.ticketId)
       ) {
@@ -4149,6 +4258,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const target = command.target;
+      if (
+        existingRun.ticketStates.some(
+          (ticket) =>
+            nativeVerificationIsOpen(ticket.nativeVerification) &&
+            (target.kind === "run" || target.ticketId === ticket.ticketId),
+        )
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Complete or cancel the native handoff before changing this stage.",
+        });
+      }
       if (
         target.kind === "ticket" &&
         !existingRun.ticketStates.some((state) => state.ticketId === target.ticketId)
@@ -5112,6 +5233,23 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (
+        targetThread.worktreePath &&
+        readModel.implementationRuns.some((run) =>
+          run.ticketStates.some(
+            (ticket) =>
+              ticket.worktreePath === targetThread.worktreePath &&
+              nativeVerificationIsOpen(ticket.nativeVerification),
+          ),
+        )
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail:
+            "This checkout is awaiting native verification. Complete or cancel its handoff before starting another turn here.",
+        });
+      }
+
       if (
         command.commandId.startsWith("server:") &&
         isWorkflowThreadPaused(readModel.threads, targetThread.id)

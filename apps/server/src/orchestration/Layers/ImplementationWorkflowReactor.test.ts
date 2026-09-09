@@ -8,6 +8,7 @@ import {
   AppReviewId,
   AppReviewWorkflowRunId,
   type AppReviewWorkflowCycle,
+  type NativeVerificationAction,
   type AppReviewWorkflowFailure,
   type AppReviewWorkflowRun,
   EventId,
@@ -41,6 +42,8 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
@@ -49,6 +52,9 @@ import type * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { describe } from "vite-plus/test";
 
+import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
+import * as VcsProcess from "../../vcs/VcsProcess.ts";
+import { executeNativeVerification } from "../nativeVerificationService.ts";
 import { AppStackManager } from "../../appStack/AppStackManager.ts";
 import { ServerConfig } from "../../config.ts";
 import { GitWorkflowService, type GitMergeRefInput } from "../../git/GitWorkflowService.ts";
@@ -10580,3 +10586,355 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 });
+
+it.effect("resumes native handoffs from persisted state without accepting late Linux results", () =>
+  withSystem((system) =>
+    Effect.gen(function* () {
+      const { run, ticket } = yield* launchRun(system, {
+        appReviewStrategy: "nested-workflow",
+        tickets: [
+          {
+            ...planningTicket("TICKET-1"),
+            appReviewEligible: true,
+            appReviewPlanMarkdown: "Verify native acceptance.",
+          },
+        ],
+      });
+      yield* appendWorkerResult(system, { run, status: "failed" });
+      const checkpoint = `${run.ticketStates[0]!.branch}@commit`;
+      const change = (
+        action: NativeVerificationAction,
+        expectedRevision: number | null,
+        tag: string,
+      ) =>
+        system.engine.dispatch({
+          type: "thread.native-verification.update",
+          commandId: commandId(`native-${tag}`),
+          threadId: sourceThreadId,
+          runId: run.id,
+          ticketId: ticket.id,
+          expectedRevision,
+          action,
+          createdAt: "2026-01-01T00:00:05.000Z",
+        });
+      yield* change(
+        {
+          type: "prepare",
+          handoff: {
+            id: "native-1",
+            revision: 0,
+            status: "ready",
+            requiredPlatforms: ["macos"],
+            repositoryUrl: "https://github.com/example/app.git",
+            branch: "t3-native/native-1",
+            commitSha: checkpoint,
+            sourceThreadId,
+            runId: run.id,
+            ticketId: ticket.id,
+            title: "Native acceptance",
+            instructionsMarkdown: "Run native capture",
+            previewTargets: [],
+            claim: null,
+            results: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+        null,
+        "prepare",
+      );
+      yield* system.reactor.drain;
+      let current = (yield* system.query.getSnapshot()).implementationRuns.find(
+        (value) => value.id === run.id,
+      )!;
+      expect(current.ticketStates[0]?.status).toBe("awaiting-native-verification");
+      const stale = yield* system.engine
+        .dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("native-stale-update"),
+          threadId: sourceThreadId,
+          run,
+          createdAt: now,
+        })
+        .pipe(Effect.result);
+      expect(stale._tag).toBe("Failure");
+      const rerun = yield* system.engine
+        .dispatch({
+          type: "thread.implementation-run.rerun",
+          commandId: commandId("native-rerun"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "ticket", ticketId: ticket.id, stage: "implementation" },
+          createdAt: now,
+        })
+        .pipe(Effect.result);
+      expect(rerun._tag === "Success" && rerun.success.outcome?.type).toBe("rejected");
+      yield* appendWorkerResult(system, {
+        run,
+        status: "succeeded",
+        tag: "late",
+        completeTicketReview: false,
+      });
+      current = (yield* system.query.getSnapshot()).implementationRuns.find(
+        (value) => value.id === run.id,
+      )!;
+      expect(current.ticketStates[0]?.status).toBe("awaiting-native-verification");
+      yield* change(
+        {
+          type: "claim",
+          claim: {
+            id: "claim-1",
+            environmentId: "mac",
+            environmentLabel: "MacBook",
+            projectId,
+            threadId: ThreadId.make("native-worker"),
+            platform: "macos",
+            claimedAt: now,
+          },
+        },
+        0,
+        "claim",
+      );
+      const duplicate = yield* change(
+        { type: "release", claimId: "claim-1" },
+        0,
+        "stale-release",
+      ).pipe(Effect.result);
+      expect(duplicate._tag).toBe("Failure");
+      yield* change(
+        {
+          type: "submit",
+          claimId: "claim-1",
+          result: {
+            status: "passed",
+            platform: "macos",
+            commitSha: checkpoint,
+            validations: requiredValidations(),
+            summaryMarkdown: "Installed capture passed",
+            evidence: ["https://example.com/capture.mp4"],
+            completedAt: now,
+          },
+        },
+        1,
+        "submit",
+      );
+      yield* system.reactor.recoverIncompleteStages();
+      yield* system.reactor.drain;
+      const snapshot = yield* system.query.getSnapshot();
+      current = snapshot.implementationRuns.find((value) => value.id === run.id)!;
+      expect(current.ticketStates[0]?.nativeVerification?.status).toBe("completed");
+      expect(current.ticketStates[0]?.status).not.toBe("awaiting-native-verification");
+      expect(current.ticketStates[0]?.status).not.toBe("running");
+      expect(current.ticketStates[0]?.workerResult?.commitSha).toBe(checkpoint);
+      const review = snapshot.appReviewWorkflowRuns?.find(
+        (value) => value.id === current.ticketStates[0]?.appReviewWorkflowRunId,
+      );
+      expect(review?.supportingContextMarkdown).toContain("https://example.com/capture.mp4");
+    }),
+  ),
+);
+
+it.effect(
+  "native handoff service publishes checkpoints and refuses stale or mismatched returns before merging",
+  () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "failed" });
+        const branch = run.ticketStates[0]!.branch!;
+        const commitSha = "a".repeat(40);
+        const repaired = "b".repeat(40);
+        let dirty = true;
+        let fetched = "c".repeat(40);
+        const calls: string[][] = [];
+        const driver = yield* GitVcsDriver.make.pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              VcsProcess.layer,
+              ServerConfig.layerTest("/tmp/implementation-reactor", {
+                prefix: "t3-native-git-test-",
+              }),
+            ).pipe(Layer.provideMerge(NodeServices.layer)),
+          ),
+        );
+        const execute = (input: Parameters<typeof executeNativeVerification>[0]) =>
+          executeNativeVerification(input).pipe(
+            Effect.provideService(OrchestrationEngineService, system.engine),
+            Effect.provideService(ProjectionSnapshotQuery, system.query),
+            Effect.provideService(GitVcsDriver.GitVcsDriver, {
+              ...driver,
+              execute: (request) =>
+                Effect.sync(() => {
+                  calls.push([...request.args]);
+                  const args = request.args.join(" ");
+                  const stdout =
+                    args === "status --porcelain"
+                      ? dirty
+                        ? " M app.ts"
+                        : ""
+                      : args === "branch --show-current"
+                        ? branch
+                        : args === "rev-parse HEAD"
+                          ? commitSha
+                          : args === "rev-parse FETCH_HEAD"
+                            ? fetched
+                            : args === "remote get-url origin"
+                              ? "git@github.com:example/app.git"
+                              : "";
+                  return {
+                    exitCode: ChildProcessSpawner.ExitCode(0),
+                    stdout,
+                    stderr: "",
+                    stdoutTruncated: false,
+                    stderrTruncated: false,
+                  };
+                }),
+            }),
+            Effect.provide(NodeServices.layer),
+          );
+        const target = { runId: run.id, ticketId: ticket.id };
+        const rejected = yield* execute({
+          operation: "prepare",
+          ...target,
+          platforms: ["macos", "ios"],
+        }).pipe(Effect.result);
+        expect(rejected._tag).toBe("Failure");
+        expect(calls.some((args) => args[0] === "push")).toBe(false);
+        dirty = false;
+        const prepared = yield* execute({
+          operation: "prepare",
+          ...target,
+          platforms: ["macos", "ios"],
+        });
+        if (prepared.type !== "handoff") throw new Error("Missing handoff");
+        expect(calls).toContainEqual([
+          "push",
+          "origin",
+          `${commitSha}:refs/heads/${prepared.handoff.branch}`,
+        ]);
+        expect(prepared.handoff.sourceThreadId).toBe(sourceThreadId);
+        expect(prepared.handoff.instructionsMarkdown).toContain(ticket.bodyMarkdown);
+        yield* execute({
+          operation: "claim",
+          ...target,
+          revision: 0,
+          claim: {
+            id: "mac-claim",
+            environmentId: "mac",
+            environmentLabel: "MacBook",
+            projectId,
+            threadId: ThreadId.make("native-mac-worker"),
+            platform: "macos",
+            claimedAt: now,
+          },
+        });
+        const claimed = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (value) => value.id === run.id,
+        )?.ticketStates[0]?.nativeVerification;
+        if (!claimed) throw new Error("Missing claim");
+        fetched = commitSha;
+        const local = yield* execute({ operation: "checkout", handoff: claimed, projectId }).pipe(
+          Effect.provideService(HostProcessPlatform, "darwin"),
+        );
+        expect(local.type).toBe("checkout");
+        yield* execute({ operation: "checkout", handoff: claimed, projectId }).pipe(
+          Effect.provideService(HostProcessPlatform, "darwin"),
+        );
+        const localThread = (yield* system.query.getSnapshot()).threads.find(
+          (thread) => thread.id === claimed.claim?.threadId,
+        );
+        expect(localThread?.messages.filter((message) => message.role === "user")).toHaveLength(1);
+        expect(localThread?.messages[0]?.text).toContain("native-verification-result");
+        fetched = "c".repeat(40);
+        const result = {
+          status: "passed" as const,
+          platform: "macos" as const,
+          commitSha: repaired,
+          validations: requiredValidations(),
+          summaryMarkdown: "Native capture passed",
+          evidence: ["https://example.com/native.mp4"],
+          completedAt: now,
+        };
+        calls.length = 0;
+        const stale = yield* execute({
+          operation: "submit",
+          ...target,
+          revision: 0,
+          claimId: "mac-claim",
+          result,
+        }).pipe(Effect.result);
+        expect(stale._tag).toBe("Failure");
+        expect(calls).toEqual([]);
+        const mismatch = yield* execute({
+          operation: "submit",
+          ...target,
+          revision: 1,
+          claimId: "mac-claim",
+          result,
+        }).pipe(Effect.result);
+        expect(mismatch._tag).toBe("Failure");
+        expect(calls.some((args) => args[0] === "merge")).toBe(false);
+        fetched = repaired;
+        const returned = yield* execute({
+          operation: "submit",
+          ...target,
+          revision: 1,
+          claimId: "mac-claim",
+          result,
+        });
+        if (returned.type !== "handoff") throw new Error("Missing handoff");
+        expect(returned.handoff.commitSha).toBe(repaired);
+        expect(returned.handoff.status).toBe("ready");
+        expect(calls).toContainEqual(["merge-base", "--is-ancestor", commitSha, repaired]);
+        expect(calls).toContainEqual(["merge", "--ff-only", repaired]);
+      }),
+    ),
+);
+
+it.effect("refuses native handoff while the ticket App Review still owns its checkout", () =>
+  withSystem((system) =>
+    Effect.gen(function* () {
+      const { run, ticket } = yield* launchTicketAppReview(system);
+      const attempted = yield* system.engine
+        .dispatch({
+          type: "thread.native-verification.update",
+          commandId: commandId("native-live-review"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          ticketId: ticket.id,
+          expectedRevision: null,
+          action: {
+            type: "prepare",
+            handoff: {
+              id: "native-live",
+              revision: 0,
+              status: "ready",
+              requiredPlatforms: ["macos"],
+              repositoryUrl: "https://github.com/example/app.git",
+              branch: "t3-native/native-live",
+              commitSha: "a".repeat(40),
+              sourceThreadId,
+              runId: run.id,
+              ticketId: ticket.id,
+              title: "Native acceptance",
+              instructionsMarkdown: "Verify capture",
+              previewTargets: [],
+              claim: null,
+              results: [],
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+          createdAt: now,
+        })
+        .pipe(Effect.result);
+      expect(attempted._tag).toBe("Failure");
+      if (attempted._tag === "Failure") expect(attempted.failure.message).toContain("App Review");
+      const current = (yield* system.query.getSnapshot()).implementationRuns.find(
+        (value) => value.id === run.id,
+      );
+      expect(current?.ticketStates[0]?.nativeVerification).toBeUndefined();
+      expect(current?.ticketStates[0]?.status).toBe("app-reviewing");
+    }),
+  ),
+);

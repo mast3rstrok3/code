@@ -1544,6 +1544,16 @@ describe("resolveWorkflowStepRollup", () => {
 });
 
 describe("resolveWorkflowTicketStatus", () => {
+  it("shows native handoffs as awaiting verification", () => {
+    expect(
+      resolveWorkflowTicketStatus({
+        ticketState: "awaiting-native-verification",
+        threadStatuses: [],
+        skipped: false,
+        paused: false,
+      }),
+    ).toBe("awaiting");
+  });
   it("separates a ticket queued behind its dependencies from one nobody started", () => {
     expect(
       resolveWorkflowTicketStatus({

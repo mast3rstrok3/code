@@ -357,23 +357,19 @@ export function buildWorkflowTimeline<TThread extends WorkflowModelThread>(
   const childGroups = groups.filter((candidate) => candidate.parentGroupId === group.id);
   const nestedEntries = options?.flattenNestedWorkflows
     ? childGroups.flatMap((child) => buildWorkflowTimeline(child, groups, options))
-    : childGroups.map(
-        (child): WorkflowTimelineEntry<TThread> => ({
-          kind: "workflow",
-          id: child.id,
-          createdAt: child.createdAt,
-          group: child,
-        }),
-      );
+    : childGroups.map((child): WorkflowTimelineEntry<TThread> => ({
+        kind: "workflow",
+        id: child.id,
+        createdAt: child.createdAt,
+        group: child,
+      }));
   return [
-    ...group.rows.map(
-      (row): WorkflowTimelineEntry<TThread> => ({
-        kind: "thread",
-        id: workflowThreadKey(row.thread),
-        createdAt: row.thread.createdAt,
-        row,
-      }),
-    ),
+    ...group.rows.map((row): WorkflowTimelineEntry<TThread> => ({
+      kind: "thread",
+      id: workflowThreadKey(row.thread),
+      createdAt: row.thread.createdAt,
+      row,
+    })),
     ...nestedEntries,
   ].toSorted(
     (left, right) =>
@@ -1303,6 +1299,8 @@ export function resolveWorkflowTicketStatus(input: {
     return "awaiting";
   }
   switch (input.ticketState) {
+    case "awaiting-native-verification":
+      return "awaiting";
     // A run marks a ticket blocked while its dependencies are still building,
     // which is a queue rather than something the user has to unblock.
     case "blocked":

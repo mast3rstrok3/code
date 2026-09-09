@@ -119,6 +119,10 @@
       "types": "./src/state/orchestration.ts",
       "default": "./src/state/orchestration.ts"
     },
+    "./state/native-verification": {
+      "types": "./src/state/nativeVerification.ts",
+      "default": "./src/state/nativeVerification.ts"
+    },
     "./state/presentation": {
       "types": "./src/state/presentation.ts",
       "default": "./src/state/presentation.ts"
