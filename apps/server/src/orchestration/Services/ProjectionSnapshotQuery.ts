@@ -1,3 +1,12 @@
+export interface ProjectionThreadDetailQuery {
+  /**
+   * Limit activities before SQLite returns and decodes their payloads.
+   * Any explicit filter omits pinned-request reads. An empty list also skips
+   * the activity query. Omit this option to preserve the full detail response.
+   */
+  readonly activityKinds?: ReadonlyArray<string>;
+}
+
 /**
  * ProjectionSnapshotQuery - Read-model snapshot query service interface.
  *
@@ -7,9 +16,12 @@
  * @module ProjectionSnapshotQuery
  */
 import type {
+  AgentSessionImportSource,
   ApprovalRequestId,
   CheckpointRef,
+  MessageId,
   OrchestrationCheckpointSummary,
+  OrchestrationMessage,
   OrchestrationProject,
   OrchestrationProjectShell,
   OrchestrationReadModel,
@@ -158,6 +170,15 @@ export interface ProjectionSnapshotQueryShape {
     projectId: ProjectId,
   ) => Effect.Effect<Option.Option<ThreadId>, ProjectionRepositoryError>;
 
+  /** Read completed import sources without loading thread history. */
+  readonly getImportedAgentSessionSources: (projectId: ProjectId) => Effect.Effect<
+    ReadonlyArray<{
+      readonly threadId: ThreadId;
+      readonly source: AgentSessionImportSource;
+    }>,
+    ProjectionRepositoryError
+  >;
+
   /**
    * Read the checkpoint context needed to resolve a single thread diff.
    */
@@ -199,10 +220,26 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
 
   /**
+   * Read one requested message and whether another non-compaction user message exists.
+   * Newer queued messages count too, preserving first-turn title eligibility.
+   */
+  readonly getTurnStartMessage: (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+  }) => Effect.Effect<
+    Option.Option<{
+      readonly message: OrchestrationMessage;
+      readonly hasOtherUserMessages: boolean;
+    }>,
+    ProjectionRepositoryError
+  >;
+
+  /**
    * Read a single active thread detail snapshot by id.
    */
   readonly getThreadDetailById: (
     threadId: ThreadId,
+    query?: ProjectionThreadDetailQuery,
   ) => Effect.Effect<Option.Option<OrchestrationThread>, ProjectionRepositoryError>;
 
   /**

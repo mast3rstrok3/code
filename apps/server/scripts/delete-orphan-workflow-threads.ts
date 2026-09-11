@@ -41,7 +41,7 @@ import { OrchestrationLayerLive } from "../src/orchestration/runtimeLayer.ts";
 import { OrchestrationEngineService } from "../src/orchestration/Services/OrchestrationEngine.ts";
 import { selectOrphanWorkflowThreads } from "../src/orchestration/orphanWorkflowThreads.ts";
 
-export class OrphanCleanupDatabaseMissingError extends Schema.TaggedErrorClass<OrphanCleanupDatabaseMissingError>()(
+export class OrphanCleanupDatabaseMissingError extends Schema.TaggedError<OrphanCleanupDatabaseMissingError>()(
   "OrphanCleanupDatabaseMissingError",
   { databasePath: Schema.String },
 ) {

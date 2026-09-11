@@ -74,32 +74,8 @@ export function parseYaml<E extends string>(
   );
 }
 
-/**
- * Stringifies a present value as YAML.
- *
- * **When to use**
- *
- * Use when you need a schema getter to serialize a present decoded value to
- * YAML text during encoding.
- *
- * **Details**
- *
- * Stringify failures become `SchemaIssue.InvalidValue` values.
- *
- * **Example** (Stringify YAML)
- *
- * ```ts
- * import { stringifyYaml } from "@t3tools/shared/schemaYaml"
- *
- * const stringify = stringifyYaml()
- * // Getter<string, unknown>
- * ```
- *
- * @see {@link parseYaml} for the inverse operation
- */
-export function stringifyYaml(
-  options?: YamlStringifyOptions,
-): SchemaGetter.Getter<string, unknown> {
+/** Serializes YAML during encoding, reporting stringify failures as InvalidValue issues. */
+function stringifyYaml(options?: YamlStringifyOptions): SchemaGetter.Getter<string, unknown> {
   return SchemaGetter.transformOrFail((input: unknown) =>
     Effect.try({
       try: () => stringifyYamlValue(input, options),

@@ -4,7 +4,6 @@ import {
 } from "@t3tools/client-runtime/connection";
 import {
   createEnvironmentShellAtoms,
-  createEnvironmentShellSummaryAtom,
   createEnvironmentSnapshotAtom,
   createShellEnvironmentAtoms,
   type EnvironmentShellState,
@@ -33,10 +32,6 @@ export const environmentShell = createEnvironmentShellAtoms(connectionAtomRuntim
   userViewAtom: activeWorkspaceUserViewAtom,
 });
 export const environmentSnapshotAtom = createEnvironmentSnapshotAtom(environmentShell.stateAtom);
-export const environmentShellSummaryAtom = createEnvironmentShellSummaryAtom({
-  catalogValueAtom: environmentCatalog.catalogValueAtom,
-  shellStateValueAtom: environmentShell.stateValueAtom,
-});
 
 export const allEnvironmentShellsBootstrappedAtom = Atom.make((get) => {
   const catalog = AsyncResult.value(get(environmentCatalog.catalogAtom));

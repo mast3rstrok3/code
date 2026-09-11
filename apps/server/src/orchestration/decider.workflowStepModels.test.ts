@@ -32,6 +32,8 @@ function makeThread(input: {
   readonly workflowPreset?: WorkflowPreset;
 }): OrchestrationThread {
   return {
+    pullRequests: [],
+
     id: ThreadId.make(input.id),
     projectId: ProjectId.make("project-1"),
     ownerUserId: DEFAULT_WORKSPACE_USER_ID,

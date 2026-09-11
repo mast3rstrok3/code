@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import {
   type ContextMenuItem,
+  type ProviderInstanceId,
   type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
   type ThreadId,
@@ -41,6 +42,7 @@ import {
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { Button } from "~/components/ui/button";
 import { PanelTabCloseButton } from "~/components/ui/panel-tab-close-button";
+import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { readTextFromClipboard, writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
 import { type TerminalContextSelection } from "~/lib/terminalContext";
@@ -55,7 +57,7 @@ import {
 } from "~/terminal/ghostty/surface";
 import { type GhosttyColor, type GhosttyTheme } from "~/terminal/ghostty/core";
 import { useOpenInPreferredEditor } from "../editorPreferences";
-import { isTerminalLinkActivation, isTerminalUrl, resolvePathLinkTarget } from "../terminal-links";
+import { isTerminalUrl, resolvePathLinkTarget } from "../terminal-links";
 import {
   isDiffToggleShortcut,
   isTerminalClearShortcut,
@@ -182,16 +184,23 @@ function terminalFontOptions(family: string, size: number): { family?: string; s
 }
 
 export function terminalThemeFromApp(mountElement?: HTMLElement | null): GhosttyTheme {
-  const isDark = document.documentElement.classList.contains("dark");
-  const fallbackBackground = isDark ? "rgb(14, 18, 24)" : "rgb(255, 255, 255)";
-  const fallbackForeground = isDark ? "rgb(237, 241, 247)" : "rgb(28, 33, 41)";
   const drawerSurface =
     mountElement?.closest(".thread-terminal-drawer") ??
     document.querySelector(".thread-terminal-drawer") ??
     document.body;
   const drawerStyles = getComputedStyle(drawerSurface);
+  const themeStyles = mountElement ? getComputedStyle(mountElement) : drawerStyles;
+  const colorScheme = themeStyles.colorScheme;
+  const isDark =
+    colorScheme === "dark"
+      ? true
+      : colorScheme === "light"
+        ? false
+        : document.documentElement.classList.contains("dark");
+  const fallbackBackground = isDark ? "rgb(14, 18, 24)" : "rgb(255, 255, 255)";
+  const fallbackForeground = isDark ? "rgb(237, 241, 247)" : "rgb(28, 33, 41)";
   const bodyStyles = getComputedStyle(document.body);
-  const themeStyles = getComputedStyle(document.documentElement);
+  const rootThemeStyles = getComputedStyle(document.documentElement);
   const background = normalizeComputedColor(
     drawerStyles.backgroundColor,
     normalizeComputedColor(bodyStyles.backgroundColor, fallbackBackground),
@@ -200,8 +209,16 @@ export function terminalThemeFromApp(mountElement?: HTMLElement | null): Ghostty
     drawerStyles.color,
     normalizeComputedColor(bodyStyles.color, fallbackForeground),
   );
-  const terminalBackground = readThemeColor(themeStyles, "--terminal-background", background);
-  const terminalForeground = readThemeColor(themeStyles, "--terminal-foreground", foreground);
+  const terminalBackground = readThemeColor(
+    themeStyles,
+    "--terminal-background",
+    readThemeColor(rootThemeStyles, "--terminal-background", background),
+  );
+  const terminalForeground = readThemeColor(
+    themeStyles,
+    "--terminal-foreground",
+    readThemeColor(rootThemeStyles, "--terminal-foreground", foreground),
+  );
   const terminalCursor = readThemeColor(
     themeStyles,
     "--terminal-cursor",
@@ -242,10 +259,14 @@ export function terminalSelectionLineRange(position: {
 
 export type TerminalContextMenuAction = "add-to-chat" | "copy" | "paste";
 
-/** Post-selection popup: just the two selection actions, always enabled. */
-export function terminalSelectionMenuItems(): ContextMenuItem<"add-to-chat" | "copy">[] {
+/** Post-selection popup: available selection actions, always enabled. */
+export function terminalSelectionMenuItems(options?: {
+  canAddToChat?: boolean;
+}): ContextMenuItem<"add-to-chat" | "copy">[] {
   return [
-    { id: "add-to-chat", label: "Add to chat" },
+    ...(options?.canAddToChat === false
+      ? []
+      : ([{ id: "add-to-chat", label: "Add to chat" }] satisfies ContextMenuItem<"add-to-chat">[])),
     { id: "copy", label: "Copy" },
   ];
 }
@@ -258,11 +279,13 @@ export function terminalSelectionMenuItems(): ContextMenuItem<"add-to-chat" | "c
  */
 export function terminalContextMenuItems(options: {
   hasSelection: boolean;
+  canAddToChat?: boolean;
 }): ContextMenuItem<TerminalContextMenuAction>[] {
+  const { hasSelection, canAddToChat = true } = options;
   return [
-    ...terminalSelectionMenuItems().map((item) => ({
+    ...terminalSelectionMenuItems({ canAddToChat }).map((item) => ({
       ...item,
-      disabled: !options.hasSelection,
+      disabled: !hasSelection,
     })),
     { id: "paste", label: "Paste" },
   ];
@@ -302,8 +325,9 @@ interface TerminalViewportProps {
   cwd: string;
   worktreePath?: string | null;
   runtimeEnv?: Record<string, string>;
+  providerInstanceId?: ProviderInstanceId;
   onSessionExited: () => void;
-  onAddTerminalContext: (selection: TerminalContextSelection) => void;
+  onAddTerminalContext?: (selection: TerminalContextSelection) => void;
   focusRequestId: number;
   autoFocus: boolean;
   visible: boolean;
@@ -327,6 +351,7 @@ export function TerminalViewport({
   cwd,
   worktreePath,
   runtimeEnv,
+  providerInstanceId,
   onSessionExited,
   onAddTerminalContext,
   focusRequestId,
@@ -367,8 +392,9 @@ export function TerminalViewport({
     onSessionExited();
   });
   const handleAddTerminalContext = useEffectEvent((selection: TerminalContextSelection) => {
-    onAddTerminalContext(selection);
+    onAddTerminalContext?.(selection);
   });
+  const canAddSelectionToChat = useEffectEvent(() => onAddTerminalContext !== undefined);
   const readTerminalLabel = useEffectEvent(() => terminalLabel);
   const terminalFontFamily = useClientSettings((settings) =>
     resolveTerminalFontPreference({
@@ -393,6 +419,7 @@ export function TerminalViewport({
       cwd,
       ...(worktreePath !== undefined ? { worktreePath } : {}),
       ...(runtimeEnv ? { env: runtimeEnv } : {}),
+      ...(providerInstanceId ? { providerInstanceId } : {}),
     },
   });
   const writeTerminal = useEffectEvent((data: string) =>
@@ -645,7 +672,10 @@ export function TerminalViewport({
         let clicked: TerminalContextMenuAction | null;
         try {
           clicked = await localApi.contextMenu.show(
-            terminalContextMenuItems({ hasSelection: selectionAction !== null }),
+            terminalContextMenuItems({
+              hasSelection: selectionAction !== null,
+              canAddToChat: canAddSelectionToChat(),
+            }),
             { x: event.clientX, y: event.clientY },
           );
         } catch (error) {
@@ -658,7 +688,9 @@ export function TerminalViewport({
         }
         switch (clicked) {
           case "add-to-chat":
-            if (selectionAction) addSelectionToChat(selectionAction.selection);
+            if (selectionAction && canAddSelectionToChat()) {
+              addSelectionToChat(selectionAction.selection);
+            }
             return;
           case "copy":
             if (selectionAction) await copySelection(selectionAction.clipboardText, requestId);
@@ -685,7 +717,10 @@ export function TerminalViewport({
         const requestId = ++selectionActionRequestIdRef.current;
         openSelectionMenuRequestIdRef.current = requestId;
         const clicked = await localApi.contextMenu
-          .show(terminalSelectionMenuItems(), nextAction.position)
+          .show(
+            terminalSelectionMenuItems({ canAddToChat: canAddSelectionToChat() }),
+            nextAction.position,
+          )
           .finally(() => {
             if (openSelectionMenuRequestIdRef.current === requestId) {
               openSelectionMenuRequestIdRef.current = null;
@@ -696,7 +731,7 @@ export function TerminalViewport({
         }
         switch (clicked) {
           case "add-to-chat":
-            addSelectionToChat(nextAction.selection);
+            if (canAddSelectionToChat()) addSelectionToChat(nextAction.selection);
             return;
           case "copy":
             await copySelection(nextAction.clipboardText, requestId);
@@ -757,7 +792,6 @@ export function TerminalViewport({
       }
 
       function handleLinkActivate(text: string, event: MouseEvent): void {
-        if (!isTerminalLinkActivation(event)) return;
         const latestTerminal = terminalRef.current;
         if (!latestTerminal) return;
         if (isTerminalUrl(text)) {
@@ -778,6 +812,15 @@ export function TerminalViewport({
             threadRef,
             openPreview,
             fallbackToBrowser,
+            forceBrowser: event.metaKey || event.ctrlKey,
+          }).catch((error: unknown) => {
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Unable to open link",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
           });
           return;
         }

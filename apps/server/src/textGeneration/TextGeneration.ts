@@ -155,6 +155,7 @@ export const makeTextGenerationFromRegistry = (
 
 export type TextGenerationShape = TextGeneration["Service"];
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const registry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   return makeTextGenerationFromRegistry(registry);

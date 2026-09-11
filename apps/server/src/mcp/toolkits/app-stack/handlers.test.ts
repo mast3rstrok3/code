@@ -1,3 +1,4 @@
+import { DEFAULT_WORKSPACE_USER_ID } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import {
   AppStackError,
@@ -20,6 +21,11 @@ import { AppStackToolkitRegistrationLive } from "../../McpHttpServer.ts";
 import { handlers } from "./handlers.ts";
 
 const thread = Schema.decodeUnknownSync(OrchestrationThreadShell)({
+  ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+  parentThreadId: null,
+  workflowRole: null,
+  pullRequests: [],
+
   id: "thread-1",
   projectId: "project-1",
   title: "Check dev",
@@ -166,6 +172,8 @@ it.effect("registers app_stack_get and returns workspace status through MCP", ()
     Effect.provideService(McpSchema.McpServerClient, {
       clientId: 1,
       protocolVersion: "2025-06-18",
+      clientCapabilities: {},
+      clientInfo: { name: "app-stack-test", version: "1" },
       initializePayload: {
         protocolVersion: "2025-06-18",
         capabilities: {},

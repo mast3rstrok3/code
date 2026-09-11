@@ -103,6 +103,7 @@ const THREAD_SHELL = {
   archivedAt: null,
   settledOverride: null,
   settledAt: null,
+  pullRequests: [],
   session: null,
   latestUserMessageAt: null,
   hasPendingApprovals: false,
@@ -212,6 +213,8 @@ describe("environment entity projections", () => {
       title: "Cached thread",
       branch: "stale-branch",
       worktreePath: "/repo/stale-worktree",
+      activeOrderKey: "t",
+      unsettledAt: "2026-03-09T10:00:00.000Z",
       deletedAt: null,
       messages,
       proposedPlans: [],
@@ -226,6 +229,8 @@ describe("environment entity projections", () => {
       title: "Current thread",
       branch: "current-branch",
       worktreePath: "/repo/current-worktree",
+      activeOrderKey: "f",
+      unsettledAt: "2026-03-09T12:00:00.000Z",
     };
 
     const merged = mergeEnvironmentThread(detail, shell);
@@ -234,6 +239,8 @@ describe("environment entity projections", () => {
       title: "Current thread",
       branch: "current-branch",
       worktreePath: "/repo/current-worktree",
+      activeOrderKey: "f",
+      unsettledAt: "2026-03-09T12:00:00.000Z",
     });
     expect(merged?.messages).toBe(messages);
   });

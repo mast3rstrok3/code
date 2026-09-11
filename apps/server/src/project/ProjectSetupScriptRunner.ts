@@ -1,6 +1,10 @@
 import { ProjectId } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
-import { projectScriptRuntimeEnv, setupProjectScript } from "@t3tools/shared/projectScripts";
+import {
+  projectScriptRuntimeEnv,
+  resolveProjectScripts,
+  setupProjectScript,
+} from "@t3tools/shared/projectScripts";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -11,6 +15,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 
 export interface ProjectSetupScriptRunnerResultNoScript {
@@ -38,7 +43,7 @@ export interface ProjectSetupScriptRunnerInput {
   readonly preferredTerminalId?: string;
 }
 
-export class ProjectSetupScriptOperationError extends Schema.TaggedErrorClass<ProjectSetupScriptOperationError>()(
+export class ProjectSetupScriptOperationError extends Schema.TaggedError<ProjectSetupScriptOperationError>()(
   "ProjectSetupScriptOperationError",
   {
     threadId: Schema.String,
@@ -47,6 +52,7 @@ export class ProjectSetupScriptOperationError extends Schema.TaggedErrorClass<Pr
     worktreePath: Schema.String,
     operation: Schema.Literals([
       "resolveProject",
+      "readSettings",
       "resolveSetupScript",
       "openTerminal",
       "writeCommand",
@@ -60,7 +66,7 @@ export class ProjectSetupScriptOperationError extends Schema.TaggedErrorClass<Pr
   }
 }
 
-export class ProjectSetupScriptProjectNotFoundError extends Schema.TaggedErrorClass<ProjectSetupScriptProjectNotFoundError>()(
+export class ProjectSetupScriptProjectNotFoundError extends Schema.TaggedError<ProjectSetupScriptProjectNotFoundError>()(
   "ProjectSetupScriptProjectNotFoundError",
   {
     threadId: Schema.String,
@@ -117,6 +123,7 @@ export const make = Effect.gen(function* () {
   const platform = yield* HostProcessPlatform;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
 
   const runForThread: ProjectSetupScriptRunner["Service"]["runForThread"] = Effect.fn(
     "ProjectSetupScriptRunner.runForThread",
@@ -160,7 +167,17 @@ export const make = Effect.gen(function* () {
       return yield* new ProjectSetupScriptProjectNotFoundError(errorContext);
     }
 
-    const configuredScript = setupProjectScript(project.scripts);
+    const settings = yield* serverSettings.getSettings.pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProjectSetupScriptOperationError({
+            ...errorContext,
+            operation: "readSettings",
+            cause,
+          }),
+      ),
+    );
+    const configuredScript = setupProjectScript(resolveProjectScripts(settings, project));
     const script =
       configuredScript ??
       (yield* fileSystem.readFileString(path.join(input.worktreePath, "package.json")).pipe(

@@ -6,6 +6,7 @@ import {
   OrchestrationPlanningTicket,
   OrchestrationPlanningTicketId,
   PreviewAutomationUnavailableError,
+  McpCapabilityUnavailableError,
   ThreadWorkflowContext,
   WorkflowArtifactAccessError,
   WorkflowDocContract,
@@ -21,6 +22,7 @@ const failure = Schema.Union([
   WorkflowArtifactAccessError,
   OrchestrationGetSnapshotError,
   PreviewAutomationUnavailableError,
+  McpCapabilityUnavailableError,
 ]);
 const readonlyTool = <T extends Tool.Any>(tool: T): T =>
   tool

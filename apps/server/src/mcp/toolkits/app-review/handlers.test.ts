@@ -106,6 +106,8 @@ const makeHarness = (input: {
       issuedAt: 1,
     }),
     Layer.mock(ProjectionSnapshotQuery)({
+      getThreadDetailSnapshotById: () => Effect.die("unused"),
+
       getThreadDetailById: () =>
         Effect.succeed(
           Option.some({

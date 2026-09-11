@@ -38,6 +38,7 @@ import { OrchestrationCommandReceiptRepository } from "../../persistence/Service
 import {
   OrchestrationCommandIdConflictError,
   OrchestrationCommandInvariantError,
+  isOrchestrationCommandRejection,
   OrchestrationCommandPreviouslyRejectedError,
   type OrchestrationDispatchError,
   type OrchestrationProjectorDecodeError,
@@ -226,6 +227,23 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           });
         }
 
+        // The decider compares the lookup inputs. Only recreation needs an
+        // event check, since it can reset a thread to the same field values.
+        if (
+          envelope.command.type === "thread.pull-request.sync" &&
+          (yield* eventStore.hasEventAfter({
+            aggregateKind: "thread",
+            aggregateId: envelope.command.threadId,
+            sequenceExclusive: envelope.command.snapshotSequence,
+            type: "thread.created",
+          }))
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: envelope.command.type,
+            detail: `thread ${envelope.command.threadId} was recreated before pull request discovery`,
+          });
+        }
+
         if (
           envelope.command.type === "thread.auto-settle" &&
           threadBackgroundLiveness.getThreadBackgroundLiveness(envelope.command.threadId) !== null
@@ -284,11 +302,34 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             detail: "The server is draining workflow work for a planned restart.",
           });
         }
+        // New and moved projects do not carry a resolved identity in the event-derived
+        // command model. Legacy PR edits need it to identify the link they replace.
+        if (
+          envelope.command.type === "thread.meta.update" &&
+          envelope.command.linkedPullRequest !== undefined
+        ) {
+          const threadId = envelope.command.threadId;
+          const thread = commandReadModel.threads.find((thread) => thread.id === threadId);
+          if (thread !== undefined) {
+            const project = yield* projectionSnapshotQuery.getProjectShellById(thread.projectId);
+            if (Option.isSome(project)) {
+              commandReadModel = {
+                ...commandReadModel,
+                projects: commandReadModel.projects.map((entry) =>
+                  entry.id === thread.projectId
+                    ? { ...entry, repositoryIdentity: project.value.repositoryIdentity }
+                    : entry,
+                ),
+              };
+            }
+          }
+        }
 
         // Command snapshots omit activities at startup and cap them while running.
         // Read this request's durable state before deciding how to send the answer.
         const userInputActivity =
-          envelope.command.type === "thread.user-input.respond"
+          envelope.command.type === "thread.user-input.respond" ||
+          envelope.command.type === "thread.user-input.dismiss"
             ? yield* projectionSnapshotQuery.getUserInputActivity(envelope.command)
             : Option.none();
         const eventBase = yield* decideOrchestrationCommand({
@@ -300,7 +341,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         }).pipe(
           Effect.provideService(Crypto.Crypto, crypto),
           Effect.mapError((cause) =>
-            isOrchestrationCommandInvariantError(cause)
+            isOrchestrationCommandRejection(cause)
               ? cause
               : new OrchestrationCommandInvariantError({
                   commandType: envelope.command.type,
@@ -545,7 +586,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               ),
             );
 
-            if (isOrchestrationCommandInvariantError(error)) {
+            if (isOrchestrationCommandRejection(error)) {
               yield* commandReceiptRepository
                 .upsert({
                   commandId: envelope.command.commandId,

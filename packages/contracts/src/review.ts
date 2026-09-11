@@ -430,7 +430,7 @@ export const AppReviewRecord = Schema.Struct({
 });
 export type AppReviewRecord = typeof AppReviewRecord.Type;
 
-export class AppReviewError extends Schema.TaggedErrorClass<AppReviewError>()("AppReviewError", {
+export class AppReviewError extends Schema.TaggedError<AppReviewError>()("AppReviewError", {
   reviewId: Schema.optional(AppReviewId),
   message: TrimmedNonEmptyString,
   cause: Schema.optional(Schema.Defect()),

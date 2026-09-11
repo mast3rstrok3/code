@@ -25,7 +25,7 @@ export interface BrowserExecutableResolution {
   readonly source: "configured" | "system" | "playwright";
 }
 
-export class BrowserExecutableUnavailableError extends Schema.TaggedErrorClass<BrowserExecutableUnavailableError>()(
+export class BrowserExecutableUnavailableError extends Schema.TaggedError<BrowserExecutableUnavailableError>()(
   "BrowserExecutableUnavailableError",
   {
     message: Schema.String,

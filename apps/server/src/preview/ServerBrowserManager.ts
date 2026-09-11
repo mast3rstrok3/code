@@ -169,7 +169,7 @@ type NavigationStatusReport =
  * `serializeHostError` so `preview_recording_stop` callers can distinguish
  * "nothing was recording" from transport failures.
  */
-export class PreviewRecordingNotActiveError extends Schema.TaggedErrorClass<PreviewRecordingNotActiveError>()(
+export class PreviewRecordingNotActiveError extends Schema.TaggedError<PreviewRecordingNotActiveError>()(
   "PreviewAutomationRecordingNotActiveError",
   {
     tabId: Schema.NullOr(Schema.String),

@@ -2,6 +2,7 @@ import {
   OrchestrationDispatchCommandError,
   OrchestrationGetSnapshotError,
   PreviewAutomationUnavailableError,
+  McpCapabilityUnavailableError,
   TrimmedNonEmptyString,
   WORKFLOW_USER_INPUT_MAX_QUESTIONS,
   WorkflowUserInputError,
@@ -33,6 +34,7 @@ export const WorkflowRequestUserInputTool = Tool.make("workflow_request_user_inp
     OrchestrationDispatchCommandError,
     OrchestrationGetSnapshotError,
     PreviewAutomationUnavailableError,
+    McpCapabilityUnavailableError,
   ]),
   dependencies: [
     McpInvocationContext.McpInvocationContext,

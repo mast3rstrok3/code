@@ -53,6 +53,7 @@ const derivedPaths = {
   settingsPath: "/tmp/t3-app-dev-stack-manager-test/state/settings.json",
   providerStatusCacheDir: "/tmp/t3-app-dev-stack-manager-test/caches",
   worktreesDir: "/tmp/t3-app-dev-stack-manager-test/worktrees",
+  browserArtifactsDir: "/tmp/t3-app-dev-stack-manager-test/state/browser-artifacts",
   attachmentsDir: "/tmp/t3-app-dev-stack-manager-test/state/attachments",
   environmentThemesDir: "/tmp/t3-app-dev-stack-manager-test/state/themes",
   logsDir: "/tmp/t3-app-dev-stack-manager-test/state/logs",

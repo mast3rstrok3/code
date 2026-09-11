@@ -26,6 +26,8 @@ function thread(
   overrides: Partial<OrchestrationThread> = {},
 ): OrchestrationThread {
   return {
+    pullRequests: [],
+
     id,
     projectId,
     ownerUserId: DEFAULT_WORKSPACE_USER_ID,

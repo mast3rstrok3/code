@@ -1,9 +1,6 @@
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
-import * as ManagedRuntime from "effect/ManagedRuntime";
-import * as Scope from "effect/Scope";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
 
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ImplementationWorkflowReactor } from "../Services/ImplementationWorkflowReactor.ts";
@@ -13,182 +10,211 @@ import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeInge
 import { ProductWorkflowReactor } from "../Services/ProductWorkflowReactor.ts";
 import { PreviewLifecycleReactor } from "../Services/PreviewLifecycleReactor.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
+import * as ThreadSettlementReactor from "../ThreadSettlementReactor.ts";
+import * as PullRequestSyncReactor from "../PullRequestSyncReactor.ts";
+import * as ThreadPullRequestReactor from "../ThreadPullRequestReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
 
 describe("OrchestrationReactor", () => {
-  let runtime: ManagedRuntime.ManagedRuntime<OrchestrationReactor, never> | null = null;
+  it.effect(
+    "starts provider ingestion, provider command, checkpoint, workflow, and thread deletion reactors",
+    () =>
+      Effect.gen(function* () {
+        const started: string[] = [];
 
-  afterEach(async () => {
-    if (runtime) {
-      await runtime.dispose();
-    }
-    runtime = null;
-  });
-
-  it("starts provider ingestion, provider command, checkpoint, workflow, and thread deletion reactors", async () => {
-    const started: string[] = [];
-
-    runtime = ManagedRuntime.make(
-      Layer.effect(OrchestrationReactor, makeOrchestrationReactor).pipe(
-        Layer.provideMerge(
-          Layer.succeed(ProviderRuntimeIngestionService, {
-            start: () => {
-              started.push("provider-runtime-ingestion");
-              return Effect.void;
-            },
-            drain: Effect.void,
-          }),
-        ),
-        Layer.provideMerge(
-          Layer.succeed(ProviderCommandReactor, {
-            start: () => {
-              started.push("provider-command-reactor");
-              return Effect.void;
-            },
-            replayPendingWorkflowTurnStarts: Effect.sync(() => {
-              started.push("provider-command-replay");
+        const layer = Layer.effect(OrchestrationReactor, makeOrchestrationReactor).pipe(
+          Layer.provideMerge(
+            Layer.succeed(ProviderRuntimeIngestionService, {
+              start: () => {
+                started.push("provider-runtime-ingestion");
+                return Effect.void;
+              },
+              drain: Effect.void,
             }),
-            drain: Effect.sync(() => {
-              started.push("provider-command-drain");
-            }),
-          }),
-        ),
-        Layer.provideMerge(
-          Layer.succeed(CheckpointReactor, {
-            start: () => {
-              started.push("checkpoint-reactor");
-              return Effect.void;
-            },
-            drain: Effect.void,
-          }),
-        ),
-        Layer.provideMerge(
-          Layer.succeed(ProductWorkflowReactor, {
-            start: () => {
-              started.push("product-workflow-reactor");
-              return Effect.void;
-            },
-            drain: Effect.void,
-            flush: Effect.sync(() => {
-              started.push("product-workflow-flush");
-            }),
-            reconcileStartup: () =>
-              Effect.sync(() => {
-                started.push("product-workflow-reconcile");
+          ),
+          Layer.provideMerge(
+            Layer.succeed(ProviderCommandReactor, {
+              start: () => {
+                started.push("provider-command-reactor");
+                return Effect.void;
+              },
+              replayPendingWorkflowTurnStarts: Effect.sync(() => {
+                started.push("provider-command-replay");
               }),
-          }),
-        ),
-        Layer.provideMerge(
-          Layer.succeed(ImplementationWorkflowReactor, {
-            start: () => {
-              started.push("implementation-workflow-reactor");
-              return Effect.void;
-            },
-            drain: Effect.void,
-            flush: Effect.sync(() => {
-              started.push("implementation-workflow-flush");
-            }),
-            reconcileStartup: () =>
-              Effect.sync(() => {
-                started.push("implementation-workflow-reconcile");
+              drain: Effect.sync(() => {
+                started.push("provider-command-drain");
               }),
-            recoverRetryableRuns: () => Effect.void,
-            recoverIncompleteStages: () => Effect.void,
-          }),
-        ),
-        Layer.provideMerge(
-          Layer.succeed(AppReviewWorkflowReactor, {
-            start: () => {
-              started.push("app-review-workflow-reactor");
-              return Effect.void;
-            },
-            drain: Effect.void,
-            flush: Effect.sync(() => {
-              started.push("app-review-workflow-flush");
             }),
-            reconcile: () =>
-              Effect.sync(() => {
-                started.push("app-review-workflow-reconcile");
+          ),
+          Layer.provideMerge(
+            Layer.succeed(CheckpointReactor, {
+              start: () => {
+                started.push("checkpoint-reactor");
+                return Effect.void;
+              },
+              drain: Effect.void,
+            }),
+          ),
+          Layer.provideMerge(
+            Layer.succeed(ProductWorkflowReactor, {
+              start: () => {
+                started.push("product-workflow-reactor");
+                return Effect.void;
+              },
+              drain: Effect.void,
+              flush: Effect.sync(() => {
+                started.push("product-workflow-flush");
               }),
-          }),
-        ),
-        Layer.provideMerge(
-          Layer.succeed(PreviewLifecycleReactor, {
-            start: () => {
-              started.push("preview-lifecycle-reactor");
-              return Effect.void;
-            },
-            drain: Effect.void,
-          }),
-        ),
-        Layer.provideMerge(
-          Layer.succeed(ThreadDeletionReactor, {
-            start: () => {
-              started.push("thread-deletion-reactor");
-              return Effect.void;
-            },
-            cleanupEmptyWorkflowShells: Effect.sync(() => {
-              started.push("workflow-shell-cleanup");
-              return 0;
+              reconcileStartup: () =>
+                Effect.sync(() => {
+                  started.push("product-workflow-reconcile");
+                }),
             }),
-            drainThrough: () => Effect.void,
-          }),
-        ),
-        Layer.provideMerge(
-          Layer.succeed(AgentAwarenessRelay.AgentAwarenessRelay, {
-            publishThread: () => Effect.void,
-            start: () => {
-              started.push("agent-awareness-relay");
-              return Effect.void;
-            },
-          }),
-        ),
-      ),
-    );
+          ),
+          Layer.provideMerge(
+            Layer.succeed(ImplementationWorkflowReactor, {
+              start: () => {
+                started.push("implementation-workflow-reactor");
+                return Effect.void;
+              },
+              drain: Effect.void,
+              flush: Effect.sync(() => {
+                started.push("implementation-workflow-flush");
+              }),
+              reconcileStartup: () =>
+                Effect.sync(() => {
+                  started.push("implementation-workflow-reconcile");
+                }),
+              recoverRetryableRuns: () => Effect.void,
+              recoverIncompleteStages: () => Effect.void,
+            }),
+          ),
+          Layer.provideMerge(
+            Layer.succeed(AppReviewWorkflowReactor, {
+              start: () => {
+                started.push("app-review-workflow-reactor");
+                return Effect.void;
+              },
+              drain: Effect.void,
+              flush: Effect.sync(() => {
+                started.push("app-review-workflow-flush");
+              }),
+              reconcile: () =>
+                Effect.sync(() => {
+                  started.push("app-review-workflow-reconcile");
+                }),
+            }),
+          ),
+          Layer.provideMerge(
+            Layer.succeed(PreviewLifecycleReactor, {
+              start: () => {
+                started.push("preview-lifecycle-reactor");
+                return Effect.void;
+              },
+              drain: Effect.void,
+            }),
+          ),
+          Layer.provideMerge(
+            Layer.succeed(ThreadDeletionReactor, {
+              start: () => {
+                started.push("thread-deletion-reactor");
+                return Effect.void;
+              },
+              cleanupEmptyWorkflowShells: Effect.sync(() => {
+                started.push("workflow-shell-cleanup");
+                return 0;
+              }),
+              drainThrough: () => Effect.void,
+            }),
+          ),
+          Layer.provideMerge(
+            Layer.succeed(ThreadPullRequestReactor.ThreadPullRequestReactor, {
+              start: () => {
+                started.push("thread-pull-request-reactor");
+                return Effect.void;
+              },
+              drain: Effect.void,
+            }),
+          ),
+          Layer.provideMerge(
+            Layer.succeed(ThreadSettlementReactor.ThreadSettlementReactor, {
+              start: () => {
+                started.push("thread-settlement-reactor");
+                return Effect.void;
+              },
+              drain: Effect.void,
+            }),
+          ),
+          Layer.provideMerge(
+            Layer.succeed(PullRequestSyncReactor.PullRequestSyncReactor, {
+              start: () => {
+                started.push("pull-request-sync-reactor");
+                return Effect.void;
+              },
+              drain: Effect.void,
+              requestSync: () => Effect.void,
+            }),
+          ),
+          Layer.provideMerge(
+            Layer.succeed(AgentAwarenessRelay.AgentAwarenessRelay, {
+              publishThread: () => Effect.void,
+              start: () => {
+                started.push("agent-awareness-relay");
+                return Effect.void;
+              },
+            }),
+          ),
+        );
+        const context = yield* Layer.build(layer);
+        const reactor = yield* Effect.service(OrchestrationReactor).pipe(
+          Effect.provideContext(context),
+        );
+        yield* reactor.start();
 
-    const reactor = await runtime!.runPromise(Effect.service(OrchestrationReactor));
-    const scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(reactor.start().pipe(Scope.provide(scope)));
+        expect(started).toEqual([
+          "provider-runtime-ingestion",
+          "provider-command-reactor",
+          "checkpoint-reactor",
+          "product-workflow-reactor",
+          "implementation-workflow-reactor",
+          "app-review-workflow-reactor",
+          "preview-lifecycle-reactor",
+          "thread-deletion-reactor",
+          "thread-pull-request-reactor",
+          "thread-settlement-reactor",
+          "pull-request-sync-reactor",
+          "agent-awareness-relay",
+        ]);
 
-    expect(started).toEqual([
-      "provider-runtime-ingestion",
-      "provider-command-reactor",
-      "checkpoint-reactor",
-      "product-workflow-reactor",
-      "implementation-workflow-reactor",
-      "app-review-workflow-reactor",
-      "preview-lifecycle-reactor",
-      "thread-deletion-reactor",
-      "agent-awareness-relay",
-    ]);
-
-    await Effect.runPromise(reactor.drainPendingProviderCommands.pipe(Scope.provide(scope)));
-    await Effect.runPromise(reactor.reconcilePendingProviderCommands.pipe(Scope.provide(scope)));
-    expect(started).toEqual([
-      "provider-runtime-ingestion",
-      "provider-command-reactor",
-      "checkpoint-reactor",
-      "product-workflow-reactor",
-      "implementation-workflow-reactor",
-      "app-review-workflow-reactor",
-      "preview-lifecycle-reactor",
-      "thread-deletion-reactor",
-      "agent-awareness-relay",
-      "provider-command-replay",
-      "provider-command-drain",
-      "app-review-workflow-reconcile",
-      "app-review-workflow-flush",
-      "implementation-workflow-reconcile",
-      "implementation-workflow-flush",
-      "product-workflow-reconcile",
-      "product-workflow-flush",
-      "provider-command-replay",
-      "provider-command-drain",
-      "workflow-shell-cleanup",
-    ]);
-
-    await Effect.runPromise(Scope.close(scope, Exit.void));
-  });
+        yield* reactor.drainPendingProviderCommands;
+        yield* reactor.reconcilePendingProviderCommands;
+        expect(started).toEqual([
+          "provider-runtime-ingestion",
+          "provider-command-reactor",
+          "checkpoint-reactor",
+          "product-workflow-reactor",
+          "implementation-workflow-reactor",
+          "app-review-workflow-reactor",
+          "preview-lifecycle-reactor",
+          "thread-deletion-reactor",
+          "thread-pull-request-reactor",
+          "thread-settlement-reactor",
+          "pull-request-sync-reactor",
+          "agent-awareness-relay",
+          "provider-command-replay",
+          "provider-command-drain",
+          "app-review-workflow-reconcile",
+          "app-review-workflow-flush",
+          "implementation-workflow-reconcile",
+          "implementation-workflow-flush",
+          "product-workflow-reconcile",
+          "product-workflow-flush",
+          "provider-command-replay",
+          "provider-command-drain",
+          "workflow-shell-cleanup",
+        ]);
+      }),
+  );
 });

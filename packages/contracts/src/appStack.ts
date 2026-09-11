@@ -321,7 +321,7 @@ export const AppStackGetAllStackPodLogsResult = Schema.Struct({
 });
 export type AppStackGetAllStackPodLogsResult = typeof AppStackGetAllStackPodLogsResult.Type;
 
-export class AppStackError extends Schema.TaggedErrorClass<AppStackError>()("AppStackError", {
+export class AppStackError extends Schema.TaggedError<AppStackError>()("AppStackError", {
   operation: TrimmedNonEmptyString,
   reason: Schema.optional(Schema.Literals(["disabled", "request_failed", "invalid_response"])),
   status: Schema.optional(NonNegativeInt),

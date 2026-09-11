@@ -23,18 +23,39 @@ Use the \`t3-code\` MCP server for all browser work. Drive the browser with the 
 
 Evidence is required. A passed verdict needs a saved screen recording plus at least one captioned screenshot. A failed verdict normally uses the same evidence, but if recording finalization fails after product testing, preserve the failure when there is at least one failed check and every actionable finding references a captured screenshot. Tooling, preview, and evidence problems are failed reviews with concrete diagnostic detail, never a third verdict. See \`preview-browser-qa.md\` for the full workflow.`;
 
+const T3_CODE_DEVICE_TOOL_INSTRUCTIONS = `
+
+## T3 Code devices
+
+The \`t3-code\` MCP server also exposes \`device_*\` tools for iOS Simulators and Android Emulators on this environment. For mobile verification, call \`device_list\`, then \`device_open\` so the user can watch the device in their Device panel; its result explains how to drive the device. Driving happens through the \`agent-device\` CLI, which is on PATH. Keep the host config and session flags returned by \`device_open\` on every command so concurrent devices stay independent: prefer \`agent-device snapshot -i\` refs over coordinates, and use \`device_screenshot\` when you need to see the screen. Do not call simctl, adb, xcrun, or serve-sim directly while these tools are present. If \`device_list\` reports a platform as unavailable, say so instead of trying another route.
+`;
+
+export interface T3CodeToolAvailability {
+  readonly browser: boolean;
+  readonly device: boolean;
+}
+
+const normalizeAvailability = (
+  availability: boolean | T3CodeToolAvailability,
+): T3CodeToolAvailability =>
+  typeof availability === "boolean" ? { browser: availability, device: false } : availability;
+
 /**
- * The browser block is omitted entirely when the preview tools aren't attached.
- * Describing `preview_*` tools that aren't in the turn's tool list would be
+ * Each block is omitted entirely when its tools aren't attached. Describing
+ * `preview_*` or `device_*` tools that aren't in the turn's tool list would be
  * worse than saying nothing: the instructions actively steer the model away
- * from other browser automation, so leaving them in would talk it out of
- * the only browser automation it still has.
+ * from Playwright, agent-browser, and raw simctl/adb, so leaving them in would
+ * talk it out of the only automation it still has.
  */
-const browserToolInstructions = (browserToolsAvailable: boolean): string =>
-  browserToolsAvailable ? T3_CODE_BROWSER_TOOL_INSTRUCTIONS : "";
+const browserToolInstructions = (availability: boolean | T3CodeToolAvailability): string => {
+  const tools = normalizeAvailability(availability);
+  return `${tools.browser ? T3_CODE_BROWSER_TOOL_INSTRUCTIONS : ""}${
+    tools.device ? T3_CODE_DEVICE_TOOL_INSTRUCTIONS : ""
+  }`;
+};
 
 export const codexPlanModeDeveloperInstructions = (
-  browserToolsAvailable: boolean,
+  browserToolsAvailable: boolean | T3CodeToolAvailability,
 ): string => `<collaboration_mode># Plan Mode (Conversational)
 
 You work in 3 phases, and you should *chat your way* to a great plan before finalizing it. A great plan is very detailed-intent- and implementation-wise-so that it can be handed to another engineer or agent to be implemented right away. It must be **decision complete**, where the implementer does not need to make any decisions.
@@ -167,7 +188,7 @@ ${browserToolInstructions(browserToolsAvailable)}
 </collaboration_mode>`;
 
 export const codexDefaultModeDeveloperInstructions = (
-  browserToolsAvailable: boolean,
+  browserToolsAvailable: boolean | T3CodeToolAvailability,
 ): string => `<collaboration_mode># Collaboration Mode: Default
 
 You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
@@ -212,7 +233,7 @@ export function buildCodexDeveloperInstructions(
    * it from the session's actual MCP configuration rather than re-reading the
    * setting, so the prompt cannot claim tools the turn doesn't have.
    */
-  browserToolsAvailable = true,
+  browserToolsAvailable: boolean | T3CodeToolAvailability = true,
 ): string {
   const base =
     interactionMode === "plan"

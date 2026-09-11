@@ -1,3 +1,4 @@
+import { DEFAULT_WORKSPACE_USER_ID } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
@@ -77,6 +78,12 @@ const SHELL = {
 const THREAD = {
   snapshotSequence: 2,
   thread: {
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+    parentThreadId: null,
+    workflowRole: null,
+    planningWorkflow: null,
+    appReviews: [],
+
     id: ThreadId.make("thread-1"),
     projectId: ProjectId.make("project-1"),
     title: "Thread",
@@ -84,6 +91,7 @@ const THREAD = {
     runtimeMode: "full-access",
     interactionMode: "default",
     branch: null,
+    pullRequests: [],
     worktreePath: null,
     latestTurn: null,
     createdAt: "2026-09-04T00:00:00.000Z",

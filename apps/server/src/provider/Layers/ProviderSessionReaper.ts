@@ -63,18 +63,25 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
-        const effectiveLastSeenMs = Math.max(
-          lastSeenMs,
-          runtimeEventLastSeenMs.get(binding.threadId) ?? Number.NEGATIVE_INFINITY,
-        );
-        const idleDurationMs = now - effectiveLastSeenMs;
-        if (idleDurationMs < inactivityThresholdMs) {
+        if (now - lastSeenMs < inactivityThresholdMs) {
           continue;
         }
 
         const thread = yield* projectionSnapshotQuery
           .getThreadShellById(binding.threadId)
           .pipe(Effect.map(Option.getOrUndefined));
+        // Ingestion updates this timestamp alongside activeTurnId when a turn
+        // settles. Long turns must get a full idle window after that transition,
+        // even though the binding was last touched when the turn was sent.
+        const lastActivityMs = Math.max(
+          lastSeenMs,
+          runtimeEventLastSeenMs.get(binding.threadId) ?? Number.NEGATIVE_INFINITY,
+          Date.parse(thread?.session?.updatedAt ?? binding.lastSeenAt),
+        );
+        const idleDurationMs = now - lastActivityMs;
+        if (idleDurationMs < inactivityThresholdMs) {
+          continue;
+        }
         if (
           thread?.session?.activeTurnId != null &&
           idleDurationMs < activeTurnInactivityThresholdMs

@@ -16,6 +16,7 @@ import {
   type WorkspaceUserId as WorkspaceUserIdType,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -191,10 +192,7 @@ interface ChatHeaderProps {
   workspaceUsers: ReadonlyArray<WorkspaceUser>;
   /** Drafts have no server thread yet, so the title carries no action menu. */
   isServerThread: boolean;
-  activeProjectName: string | undefined;
-  activeProjectCwd: string | null;
-  activeProjectFaviconPath: string | null;
-  activeProjectIcon: import("@t3tools/contracts").ProjectIconOverride | null;
+  activeProject: EnvironmentProject | null;
   openInCwd: string | null;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
   preferredScriptId: string | null;
@@ -267,10 +265,7 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadOwnerUserId,
   workspaceUsers,
   isServerThread,
-  activeProjectName,
-  activeProjectCwd,
-  activeProjectFaviconPath,
-  activeProjectIcon,
+  activeProject,
   openInCwd,
   activeProjectScripts,
   preferredScriptId,
@@ -303,6 +298,8 @@ export const ChatHeader = memo(function ChatHeader({
     });
   }, [panelAnimationDurationMs, panelAnimationsActive]);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const activeProjectName = activeProject?.title;
+  const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const fileScripts = useT3ProjectFileScripts(
     activeThreadEnvironmentId,
     activeProjectScripts ? activeProjectCwd : null,
@@ -473,7 +470,7 @@ export const ChatHeader = memo(function ChatHeader({
         {/* The project always leads the header: knowing which project a
             thread lives in is priority zero, and the thread title alone
             doesn't answer it. */}
-        {activeProjectName ? (
+        {activeProject ? (
           <>
             <WorkspaceBreadcrumbItem className="shrink">
               <Tooltip>
@@ -487,14 +484,7 @@ export const ChatHeader = memo(function ChatHeader({
                     />
                   }
                 >
-                  <ProjectFavicon
-                    environmentId={activeThreadEnvironmentId}
-                    cwd={activeProjectCwd ?? ""}
-                    projectName={activeProjectName}
-                    faviconPath={activeProjectFaviconPath}
-                    projectIcon={activeProjectIcon}
-                    className="size-3.5"
-                  />
+                  <ProjectFavicon project={activeProject} className="size-3.5" />
                   <span className="max-w-40 truncate">{activeProjectName}</span>
                 </TooltipTrigger>
                 <TooltipPopup side="top">New thread in {activeProjectName}</TooltipPopup>

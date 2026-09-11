@@ -200,3 +200,11 @@ The per-worktree development stack (dev servers, preview) that implementation ru
 [33]: ../../apps/server/src/orchestration/workflowNudge.ts
 [34]: ../../apps/server/src/environmentTheme.ts
 [35]: ../user/appearance.md
+
+## Pull requests
+
+| Term                 | Meaning                                                                                                                                                                                  |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pull request link    | A persisted thread association identified by host, repository, and number. Links can cross projects within an environment and carry a server-maintained snapshot.                        |
+| Pull request sync    | The reactor that refreshes each distinct linked review once per cadence and discovers native stack layers. Explicit refreshes and failed stack reads trigger another read.               |
+| Current pull request | The link used by single-review controls and older clients. Open work takes precedence; a completed single chain points at its top layer. Unrelated terminal links use the latest update. |

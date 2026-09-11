@@ -116,7 +116,7 @@ export const NativeVerificationResponse = Schema.Union([
 ]);
 export type NativeVerificationResponse = typeof NativeVerificationResponse.Type;
 
-export class NativeVerificationError extends Schema.TaggedErrorClass<NativeVerificationError>()(
+export class NativeVerificationError extends Schema.TaggedError<NativeVerificationError>()(
   "NativeVerificationError",
   {
     message: Schema.String,

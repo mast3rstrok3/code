@@ -1,5 +1,6 @@
+import * as VcsProcess from "./vcs/VcsProcess.ts";
 import type { OrchestrationShellStreamItem } from "@t3tools/contracts";
-import { TurnId, type OrchestrationThreadActivity } from "@t3tools/contracts";
+import { OrchestrationShellSnapshot, type OrchestrationThreadActivity } from "@t3tools/contracts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -7,6 +8,7 @@ import * as NodeCrypto from "node:crypto";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import {
+  type DeviceServiceState,
   AuthAccessTokenType,
   AuthStandardClientScopes,
   AuthEnvironmentBootstrapTokenType,
@@ -36,7 +38,10 @@ import {
   type ProviderInstallState,
   ProviderSetupError,
   ResolvedKeybindingRule,
+  type ServerLifecycleStreamEvent,
   ThreadId,
+  TurnId,
+  UsageLimitSourceId,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -107,9 +112,15 @@ const collectQueueUntil = Effect.fn("TransferBudget.collectQueueUntil")(function
   );
 });
 
+const decodeTransferShellSnapshot = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(OrchestrationShellSnapshot),
+);
+const encodeTestJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ServerConfig from "./config.ts";
 import * as AppStackManager from "./appStack/AppStackManager.ts";
+import * as DeviceService from "./device/DeviceService.ts";
 import { makeRoutesLayer } from "./server.ts";
 import {
   isThreadDetailEvent,
@@ -127,6 +138,7 @@ import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngi
 import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
+import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { OrchestrationEventStoreLive } from "./persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationEventStore } from "./persistence/Services/OrchestrationEventStore.ts";
@@ -140,6 +152,7 @@ import {
   AntigravityInstallationError,
 } from "./provider/AntigravityInstallation.ts";
 import type { ProviderInstance } from "./provider/ProviderDriver.ts";
+import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
 import { ProviderAdapterRequestError } from "./provider/Errors.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -178,6 +191,7 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
+import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as DesktopTelemetryReceiver from "./resourceTelemetry/DesktopTelemetryReceiver.ts";
@@ -343,6 +357,7 @@ const makeDefaultOrchestrationReadModel = () => {
         runtimeMode: "full-access" as const,
         branch: null,
         worktreePath: null,
+        pullRequests: [],
         createdAt: now,
         updatedAt: now,
         archivedAt: null,
@@ -377,6 +392,7 @@ const makeDefaultOrchestrationThreadShell = (
     interactionMode: "default",
     branch: null,
     worktreePath: null,
+    pullRequests: [],
     latestTurn: null,
     createdAt: now,
     updatedAt: now,
@@ -402,7 +418,7 @@ const browserOtlpTracingLayer = Layer.mergeAll(
 
 const makeAuthTestLayer = () =>
   EnvironmentAuth.layer.pipe(
-    Layer.provide(SqlitePersistenceMemory),
+    Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provide(ServerSecretStore.layer),
     Layer.provide(
       Layer.mock(ServerEnvironment.ServerEnvironmentIdentity)({
@@ -518,6 +534,7 @@ const buildAppUnderTest = (options?: {
     keybindings?: Partial<Keybindings.Keybindings["Service"]>;
     environmentTheme?: Partial<EnvironmentTheme.EnvironmentThemeService["Service"]>;
     providerRegistry?: Partial<ProviderRegistry.ProviderRegistry["Service"]>;
+    usageLimitSources?: Partial<UsageLimitSources.UsageLimitSources["Service"]>;
     providerService?: Partial<ProviderService.ProviderService["Service"]>;
     providerAuth?: Partial<ProviderAuthService["Service"]>;
     providerInstanceRegistry?: Partial<ProviderInstanceRegistry["Service"]>;
@@ -535,6 +552,9 @@ const buildAppUnderTest = (options?: {
     vcsStatusBroadcaster?: Partial<VcsStatusBroadcaster.VcsStatusBroadcaster["Service"]>;
     projectSetupScriptRunner?: Partial<
       ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]
+    >;
+    providerSessionDirectory?: Partial<
+      ProviderSessionDirectory.ProviderSessionDirectory["Service"]
     >;
     terminalManager?: Partial<TerminalManager.TerminalManager["Service"]>;
     orchestrationEngine?: Partial<OrchestrationEngine.OrchestrationEngineService["Service"]>;
@@ -808,8 +828,9 @@ const buildAppUnderTest = (options?: {
           }),
           Layer.mock(UsageLimitSources.UsageLimitSources)({
             current: Effect.succeed([]),
-            streamChanges: Stream.empty,
+            streamChanges: Stream.make([]),
             refresh: Effect.void,
+            ...options?.layers?.usageLimitSources,
           }),
         ),
       ),
@@ -842,6 +863,18 @@ const buildAppUnderTest = (options?: {
           Layer.mock(AntigravityInstallation)({
             managedDirectory: "unused-test-antigravity-runtime",
             ...options?.layers?.antigravityInstallation,
+          }),
+          Layer.mock(ProviderSessionDirectory.ProviderSessionDirectory)({
+            upsert: () => Effect.void,
+            getBinding: () => Effect.succeed(Option.none()),
+            listThreadIds: () => Effect.succeed([]),
+            listBindings: () => Effect.succeed([]),
+            ...options?.layers?.providerSessionDirectory,
+          }),
+          Layer.mock(DeviceService.DeviceService)({
+            state: Effect.succeed(EMPTY_DEVICE_STATE),
+            currentReadiness: () => Effect.succeed(null),
+            sessionsForThread: () => Effect.succeed([]),
           }),
         ),
       ),
@@ -887,7 +920,8 @@ const buildAppUnderTest = (options?: {
             }),
         }),
       ),
-      Layer.provide(
+      Layer.provide([
+        HostResources.layer,
         Layer.mock(ProcessResourceMonitor.ProcessResourceMonitor)({
           readHistory: (input) =>
             Effect.succeed({
@@ -902,7 +936,7 @@ const buildAppUnderTest = (options?: {
               error: Option.none(),
             }),
         }),
-      ),
+      ]),
       Layer.provide(
         Layer.mock(TraceDiagnostics.TraceDiagnostics)({
           read: () =>
@@ -1015,6 +1049,11 @@ const buildAppUnderTest = (options?: {
             drainThrough: () => Effect.void,
             ...options?.layers?.threadDeletionReactor,
           }),
+          Layer.mock(PullRequestSyncReactor.PullRequestSyncReactor)({
+            start: () => Effect.void,
+            drain: Effect.void,
+            requestSync: () => Effect.void,
+          }),
         ),
       ),
       Layer.provide(
@@ -1025,6 +1064,8 @@ const buildAppUnderTest = (options?: {
           getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
           getShellSnapshot: () =>
             Effect.succeed({
+              implementationRuns: [],
+
               snapshotSequence: 0,
               projects: [],
               threads: [],
@@ -1032,6 +1073,8 @@ const buildAppUnderTest = (options?: {
             }),
           getArchivedShellSnapshot: () =>
             Effect.succeed({
+              implementationRuns: [],
+
               snapshotSequence: 0,
               projects: [],
               threads: [],
@@ -1047,6 +1090,7 @@ const buildAppUnderTest = (options?: {
           getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
           getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
           getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+          getImportedAgentSessionSources: () => Effect.succeed([]),
           getThreadCheckpointContext: () => Effect.succeed(Option.none()),
           ...options?.layers?.projectionSnapshotQuery,
         }),
@@ -1073,6 +1117,7 @@ const buildAppUnderTest = (options?: {
     );
 
     const appLayer = servedRoutesLayer.pipe(
+      Layer.provide(VcsProcess.layer),
       Layer.provide(resourceTelemetryLayer),
       Layer.provide(UsageService.layerTest),
       Layer.provide(
@@ -1748,6 +1793,18 @@ const NodeHttpServerTestWithWsDeflate = HttpServer.layerTestClient.pipe(
     ),
   ),
 );
+
+const EMPTY_DEVICE_STATE: DeviceServiceState = {
+  hosts: [],
+  hostStatus: "disabled",
+  hostStatuses: {},
+  devices: [],
+  sessions: [],
+  onboardingCompleted: false,
+  agentAccessEnabled: false,
+  hubBasePath: DeviceService.DEVICE_HUB_ROUTE_PREFIX,
+  revision: 0,
+};
 
 it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("parks HTTP ingress until command readiness", () =>
@@ -5382,6 +5439,103 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("keeps agent session import project failures structured over websocket rpc", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const projectId = ProjectId.make("missing-import-project");
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const error = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.agentSessionsImport]({ projectId }).pipe(Effect.flip),
+        ),
+      );
+
+      assert.equal(error._tag, "AgentSessionImportProjectNotFoundError");
+      if (error._tag === "AgentSessionImportProjectNotFoundError") {
+        assert.equal(error.projectId, projectId);
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("returns scanner skip counts over websocket rpc", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const codexHome = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-agent-import-rpc-codex-",
+      });
+      const workspaceRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-agent-import-rpc-workspace-",
+      });
+      const transcriptDirectory = path.join(codexHome, "sessions", "2026", "08", "31");
+      const transcriptPath = path.join(transcriptDirectory, "rollout-skipped.jsonl");
+      yield* fileSystem.makeDirectory(transcriptDirectory, { recursive: true });
+      yield* fileSystem.writeFileString(
+        transcriptPath,
+        encodeTestJson({
+          timestamp: "2026-08-31T12:00:00.000Z",
+          type: "session_meta",
+          payload: { id: "rpc-skipped-session", cwd: workspaceRoot },
+        }),
+      );
+      yield* fileSystem.utimes(transcriptPath, 0, 0);
+
+      const projectId = ProjectId.make("agent-import-rpc-project");
+      const project = {
+        id: projectId,
+        title: "Agent import RPC",
+        workspaceRoot,
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: "2026-08-31T12:00:00.000Z",
+        updatedAt: "2026-08-31T12:00:00.000Z",
+      } as const;
+      yield* buildAppUnderTest({
+        layers: {
+          serverSettings: {
+            getSettings: Effect.succeed({
+              ...DEFAULT_SERVER_SETTINGS,
+              providerInstances: {
+                [ProviderInstanceId.make("codex")]: {
+                  driver: ProviderDriverKind.make("codex"),
+                  config: { homePath: codexHome },
+                },
+                [ProviderInstanceId.make("claudeAgent")]: {
+                  driver: ProviderDriverKind.make("claudeAgent"),
+                  enabled: false,
+                  config: {},
+                },
+              },
+            }),
+          },
+          projectionSnapshotQuery: {
+            getProjectShellById: (requestedProjectId) =>
+              Effect.succeed(
+                requestedProjectId === projectId ? Option.some(project) : Option.none(),
+              ),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const scan = yield* client[WS_METHODS.agentSessionsScan]({});
+            assert.deepEqual(
+              scan.candidates.map((candidate) => candidate.path),
+              [workspaceRoot],
+            );
+            return yield* client[WS_METHODS.agentSessionsImport]({ projectId });
+          }),
+        ),
+      );
+
+      assert.deepEqual(result, { importedCount: 0, skippedCount: 1 });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("uploads Codex thread feedback through websocket rpc", () =>
     Effect.gen(function* () {
       const input = {
@@ -5404,6 +5558,43 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.deepStrictEqual(response, { feedbackId: "codex-thread-feedback" });
       assert.deepStrictEqual(uploadFeedback.mock.calls, [[input]]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("serves absolute host media without a local thread and rejects relative media", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-host-media-" });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const threadId = ThreadId.make("thread-on-another-environment");
+
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            for (const [name, mimeType] of [
+              ["screenshot.png", "image/png"],
+              ["recording.mp4", "video/mp4"],
+            ] as const) {
+              const filePath = path.join(directory, name);
+              yield* fileSystem.writeFileString(filePath, "host media bytes");
+              const issued = yield* client[WS_METHODS.assetsCreateUrl]({
+                resource: { _tag: "media-file", threadId, path: filePath },
+              });
+              const response = yield* HttpClient.get(issued.relativeUrl);
+              assert.equal(response.status, 200);
+              assert.equal(response.headers["content-type"], mimeType);
+              assert.equal(yield* response.text, "host media bytes");
+
+              const error = yield* client[WS_METHODS.assetsCreateUrl]({
+                resource: { _tag: "media-file", threadId, path: name },
+              }).pipe(Effect.flip);
+              assert.equal(error._tag, "AssetWorkspaceContextNotFoundError");
+            }
+          }),
+        ),
+      );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -6090,6 +6281,94 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("returns cached whole-host resources over websocket", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const [first, second] = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.all(
+            [
+              client[WS_METHODS.serverGetHostResources]({}),
+              client[WS_METHODS.serverGetHostResources]({}),
+            ],
+            { concurrency: "unbounded" },
+          ),
+        ),
+      );
+      assert.deepEqual(first, second);
+      assert.isAtLeast(first.sampledAt, 0);
+      assert.isAbove(first.cpuCount, 0);
+      assert.isAbove(first.totalMemoryBytes, 0);
+      assert.isAtLeast(first.availableMemoryBytes, 0);
+      assert.isAtMost(first.availableMemoryBytes, first.totalMemoryBytes);
+      if (first.cpuUtilization !== null) {
+        assert.isAtLeast(first.cpuUtilization, 0);
+        assert.isAtMost(first.cpuUtilization, 1);
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest), TestClock.withLive),
+  );
+
+  it.effect("counts macOS reclaimable memory once and shares concurrent samples", () =>
+    Effect.gen(function* () {
+      const commandCalls = yield* Ref.make(0);
+      const hostResources = yield* HostResources.make().pipe(
+        Effect.provideService(HostProcessPlatform, "darwin"),
+        Effect.provide(
+          Layer.mock(ChildProcessSpawner.ChildProcessSpawner)({
+            string: () =>
+              Ref.update(commandCalls, (count) => count + 1).pipe(
+                Effect.as(
+                  "Mach Virtual Memory Statistics: (page size of 16384 bytes)\n" +
+                    "Pages free: 10.\nPages inactive: 20.\nPages speculative: 5.\n" +
+                    "Pages purgeable: 999.\n",
+                ),
+              ),
+          }),
+        ),
+      );
+      const [first, second] = yield* Effect.all([hostResources.read, hostResources.read], {
+        concurrency: "unbounded",
+      });
+      assert.equal(first.availableMemoryBytes, 35 * 16384);
+      assert.deepEqual(first, second);
+      assert.deepEqual(yield* hostResources.read, first);
+      assert.equal(yield* Ref.get(commandCalls), 1);
+    }).pipe(TestClock.withLive),
+  );
+
+  it.effect("retries host sampling immediately after its caller is interrupted", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const commandCalls = yield* Ref.make(0);
+      const hostResources = yield* HostResources.make().pipe(
+        Effect.provideService(HostProcessPlatform, "darwin"),
+        Effect.provide(
+          Layer.mock(ChildProcessSpawner.ChildProcessSpawner)({
+            string: () =>
+              Effect.gen(function* () {
+                const call = yield* Ref.updateAndGet(commandCalls, (count) => count + 1);
+                if (call === 1) {
+                  yield* Deferred.succeed(started, undefined);
+                  return yield* Effect.never;
+                }
+                return (
+                  "Mach Virtual Memory Statistics: (page size of 4096 bytes)\n" +
+                  "Pages free: 10.\nPages inactive: 20.\nPages speculative: 5.\n"
+                );
+              }),
+          }),
+        ),
+      );
+      const firstRead = yield* hostResources.read.pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(firstRead);
+      const recovered = yield* hostResources.read;
+      assert.equal(recovered.availableMemoryBytes, 35 * 4096);
+      assert.equal(yield* Ref.get(commandCalls), 2);
+    }).pipe(TestClock.withLive),
+  );
+
   it.effect("routes websocket resource telemetry through the subscription", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
@@ -6185,10 +6464,94 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("routes websocket rpc subscribeServerConfig emits provider status updates", () =>
-    Effect.gen(function* () {
-      const nextProviders = [
-        {
+  it.effect.each([false, true])(
+    "routes websocket rpc subscribeServerConfig emits provider status updates (limits: %s)",
+    (hasLimits) =>
+      Effect.gen(function* () {
+        const nextProviders = [
+          {
+            instanceId: ProviderInstanceId.make("codex"),
+            driver: ProviderDriverKind.make("codex"),
+            enabled: true,
+            installed: true,
+            version: "1.0.0",
+            status: "ready" as const,
+            auth: { status: "authenticated" as const },
+            checkedAt: "2026-04-11T00:00:00.000Z",
+            models: [],
+            slashCommands: [],
+            skills: [],
+            ...(hasLimits
+              ? {
+                  usageLimits: {
+                    checkedAt: "2026-04-11T00:00:00.000Z",
+                    windows: [
+                      { id: "weekly", kind: "weekly" as const, label: "Weekly", usedPercent: 25 },
+                    ],
+                  },
+                }
+              : {}),
+          },
+        ] as const;
+
+        yield* buildAppUnderTest({
+          layers: {
+            keybindings: {
+              loadConfigState: Effect.succeed({
+                keybindings: [],
+                tickets: [],
+              }),
+              streamChanges: Stream.empty,
+            },
+            providerRegistry: {
+              getProviders: Effect.succeed([]),
+              streamChanges: Stream.succeed(nextProviders),
+            },
+          },
+        });
+
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const events = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.subscribeServerConfig]({ usageLimitsCommand: true }).pipe(
+              Stream.take(2),
+              Stream.runCollect,
+            ),
+          ),
+        );
+
+        const [first, second] = Array.from(events);
+        assert.equal(first?.type, "snapshot");
+        if (first?.type === "snapshot") {
+          assert.deepEqual(first.config.providers, []);
+        }
+        assert.deepEqual(second, {
+          version: 1,
+          type: "providerStatuses",
+          payload: {
+            providers: hasLimits
+              ? [
+                  {
+                    ...nextProviders[0],
+                    slashCommands: [
+                      {
+                        name: "usage-limits",
+                        description: "Show this provider's usage limits",
+                      },
+                    ],
+                  },
+                ]
+              : nextProviders,
+          },
+        });
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "routes websocket rpc subscribeServerConfig keeps the limits command from clients that do not ask for it",
+    () =>
+      Effect.gen(function* () {
+        const codex = {
           instanceId: ProviderInstanceId.make("codex"),
           driver: ProviderDriverKind.make("codex"),
           enabled: true,
@@ -6200,43 +6563,129 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           models: [],
           slashCommands: [],
           skills: [],
-        },
-      ] as const;
-
-      yield* buildAppUnderTest({
-        layers: {
-          keybindings: {
-            loadConfigState: Effect.succeed({
-              keybindings: [],
-              tickets: [],
-            }),
-            streamChanges: Stream.empty,
+          usageLimits: {
+            checkedAt: "2026-04-11T00:00:00.000Z",
+            windows: [{ id: "weekly", kind: "weekly" as const, label: "Weekly", usedPercent: 25 }],
           },
-          providerRegistry: {
-            getProviders: Effect.succeed([]),
-            streamChanges: Stream.succeed(nextProviders),
+        };
+        yield* buildAppUnderTest({
+          layers: {
+            keybindings: {
+              loadConfigState: Effect.succeed({ keybindings: [], tickets: [] }),
+              streamChanges: Stream.empty,
+            },
+            providerRegistry: {
+              getProviders: Effect.succeed([codex]),
+              streamChanges: Stream.succeed([{ ...codex, version: "1.0.1" }]),
+            },
           },
-        },
-      });
+        });
 
-      const wsUrl = yield* getWsServerUrl("/ws");
-      const events = yield* Effect.scoped(
-        withWsRpcClient(wsUrl, (client) =>
-          client[WS_METHODS.subscribeServerConfig]({}).pipe(Stream.take(2), Stream.runCollect),
-        ),
-      );
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const events = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.subscribeServerConfig]({}).pipe(Stream.take(2), Stream.runCollect),
+          ),
+        );
 
-      const [first, second] = Array.from(events);
-      assert.equal(first?.type, "snapshot");
-      if (first?.type === "snapshot") {
-        assert.deepEqual(first.config.providers, []);
-      }
-      assert.deepEqual(second, {
-        version: 1,
-        type: "providerStatuses",
-        payload: { providers: nextProviders },
-      });
-    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+        const [first, second] = Array.from(events);
+        assert.equal(first?.type, "snapshot");
+        if (first?.type === "snapshot") {
+          assert.deepEqual(first.config.providers, [codex]);
+        }
+        assert.deepEqual(second, {
+          version: 1,
+          type: "providerStatuses",
+          payload: { providers: [{ ...codex, version: "1.0.1" }] },
+        });
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "routes websocket rpc subscribeServerConfig republishes commands when only a limits source changes",
+    () =>
+      Effect.gen(function* () {
+        const codex = {
+          instanceId: ProviderInstanceId.make("codex"),
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+          installed: true,
+          version: "1.0.0",
+          status: "ready" as const,
+          auth: { status: "authenticated" as const },
+          checkedAt: "2026-04-11T00:00:00.000Z",
+          models: [],
+          slashCommands: [],
+          skills: [],
+        };
+        const hub = {
+          id: UsageLimitSourceId.make("hub"),
+          kind: "cliproxy" as const,
+          label: "Accounts",
+          checkedAt: "2026-04-11T00:00:00.000Z",
+          accounts: [
+            {
+              id: "work",
+              driver: ProviderDriverKind.make("codex"),
+              usageLimits: {
+                checkedAt: "2026-04-11T00:00:00.000Z",
+                windows: [
+                  { id: "weekly", kind: "weekly" as const, label: "Weekly", usedPercent: 25 },
+                ],
+              },
+            },
+          ],
+        };
+
+        yield* buildAppUnderTest({
+          layers: {
+            keybindings: {
+              loadConfigState: Effect.succeed({ keybindings: [], tickets: [] }),
+              streamChanges: Stream.empty,
+            },
+            // The registry emits no change: only the source refresh can carry it.
+            providerRegistry: {
+              getProviders: Effect.succeed([codex]),
+              streamChanges: Stream.empty,
+            },
+            usageLimitSources: {
+              current: Effect.succeed([]),
+              // Replay the empty snapshot, then a later refresh, as the live stream does.
+              streamChanges: Stream.concat(Stream.make([]), Stream.make([hub])),
+            },
+          },
+        });
+
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const events = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.subscribeServerConfig]({ usageLimitsCommand: true }).pipe(
+              Stream.take(2),
+              Stream.runCollect,
+            ),
+          ),
+        );
+
+        const [first, second] = Array.from(events);
+        assert.equal(first?.type, "snapshot");
+        if (first?.type === "snapshot") {
+          assert.deepEqual(first.config.providers, [codex]);
+        }
+        assert.deepEqual(second, {
+          version: 1,
+          type: "providerStatuses",
+          payload: {
+            providers: [
+              {
+                ...codex,
+                slashCommands: [
+                  { name: "usage-limits", description: "Show this provider's usage limits" },
+                ],
+              },
+            ],
+          },
+        });
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect(
@@ -6287,6 +6736,98 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(second?.type, "ready");
         assert.equal(second?.sequence, 2);
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("subscribeServerLifecycle buffers updates published during snapshot capture", () =>
+    Effect.gen(function* () {
+      const pubsub = yield* PubSub.unbounded<ServerLifecycleStreamEvent>();
+      const streamSubscribed = yield* Deferred.make<void>();
+      const snapshotPublished = yield* Deferred.make<void>();
+      const bootstrapProjectId = ProjectId.make("project-bootstrap");
+      const bootstrapThreadId = ThreadId.make("thread-bootstrap");
+      const snapshotEvent = {
+        version: 1 as const,
+        sequence: 1,
+        type: "welcome" as const,
+        payload: {
+          environment: testEnvironmentDescriptor,
+          cwd: "/tmp/project",
+          projectName: "project",
+          bootstrapStatus: "pending" as const,
+        },
+      };
+      const gapEvent = {
+        version: 1 as const,
+        sequence: 2,
+        type: "welcome" as const,
+        payload: {
+          environment: testEnvironmentDescriptor,
+          cwd: "/tmp/project",
+          projectName: "project",
+          bootstrapStatus: "complete" as const,
+          bootstrapProjectId,
+          bootstrapThreadId,
+          bootstrapProjectCreated: true,
+          bootstrapThreadCreated: true,
+        },
+      };
+      const sentinelEvent = {
+        version: 1 as const,
+        sequence: 3,
+        type: "ready" as const,
+        payload: { at: "2026-01-01T00:00:01.000Z", environment: testEnvironmentDescriptor },
+      };
+      const liveStream = Stream.unwrap(
+        Effect.gen(function* () {
+          const subscription = yield* PubSub.subscribe(pubsub);
+          yield* Deferred.succeed(streamSubscribed, undefined);
+          return Stream.fromSubscription(subscription);
+        }),
+      );
+
+      yield* buildAppUnderTest({
+        layers: {
+          serverLifecycleEvents: {
+            snapshot: PubSub.publish(pubsub, gapEvent).pipe(
+              Effect.andThen(Deferred.succeed(snapshotPublished, undefined)),
+              Effect.as({ sequence: 1, events: [snapshotEvent] }),
+            ),
+            stream: liveStream,
+          },
+        },
+      });
+
+      yield* Effect.gen(function* () {
+        yield* Deferred.await(snapshotPublished);
+        yield* Deferred.await(streamSubscribed);
+        yield* PubSub.publish(pubsub, sentinelEvent);
+      }).pipe(Effect.forkScoped);
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const events = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.subscribeServerLifecycle]({}).pipe(Stream.take(2), Stream.runCollect),
+        ),
+      );
+
+      const [first, second] = Array.from(events);
+      assert.equal(first?.type, "welcome");
+      assert.equal(first?.sequence, 1);
+      if (first?.type !== "welcome") {
+        assert.fail("expected the pending bootstrap event");
+      }
+      assert.equal(first.payload.bootstrapStatus, "pending");
+      assert.equal(second?.type, "welcome");
+      assert.equal(second?.sequence, 2);
+      if (second?.type !== "welcome") {
+        assert.fail("expected the bootstrap completion event");
+      }
+      assert.equal(second.payload.bootstrapStatus, "complete");
+      assert.equal(second.payload.bootstrapProjectId, bootstrapProjectId);
+      assert.equal(second.payload.bootstrapThreadId, bootstrapThreadId);
+      assert.equal(second.payload.bootstrapProjectCreated, true);
+      assert.equal(second.payload.bootstrapThreadCreated, true);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("routes websocket rpc projects.searchEntries", () =>
@@ -7655,6 +8196,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             runtimeMode: "full-access" as const,
             branch: null,
             worktreePath: null,
+            pullRequests: [],
             createdAt: now,
             updatedAt: now,
             archivedAt: null,
@@ -7840,6 +8382,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const snapshotSequence = 7;
       const readModel = makeDefaultOrchestrationReadModel();
       const shellSnapshot = {
+        implementationRuns: [],
+
         snapshotSequence,
         projects: readModel.projects.map(({ deletedAt: _, ...project }) => project),
         threads: [makeDefaultOrchestrationThreadShell()],
@@ -7983,6 +8527,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               Effect.gen(function* () {
                 yield* PubSub.publish(liveEvents, deletedEvent);
                 return {
+                  implementationRuns: [],
+
                   snapshotSequence: 1,
                   projects: [],
                   threads: [makeDefaultOrchestrationThreadShell()],
@@ -8637,6 +9183,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               Effect.sync(() => {
                 snapshotCalls += 1;
                 return {
+                  implementationRuns: [],
+
                   snapshotSequence: headSequence,
                   projects: headSequence === 1 ? [project] : [],
                   threads: headSequence === 1 ? [thread] : [],
@@ -8848,6 +9396,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               eventId: EventId.make(`create-before-final-delete-${oversized}`),
               type: "thread.created",
               payload: {
+                ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+
                 threadId: defaultThreadId,
                 projectId: thread.projectId,
                 title: thread.title,
@@ -9057,6 +9607,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           projectionSnapshotQuery: {
             getShellSnapshot: () =>
               Effect.succeed({
+                implementationRuns: [],
+
                 snapshotSequence: 100_000,
                 projects: [],
                 threads: [makeDefaultOrchestrationThreadShell({ id: snapshotThreadId })],
@@ -9127,6 +9679,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               Effect.succeed(Option.some({ snapshotSequence: 5, thread })),
             getShellSnapshot: () =>
               Effect.succeed({
+                implementationRuns: [],
+
                 snapshotSequence: 5,
                 projects: [],
                 threads: [shell],
@@ -9181,6 +9735,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           projectionSnapshotQuery: {
             getShellSnapshot: () =>
               Effect.succeed({
+                implementationRuns: [],
+
                 snapshotSequence: 5,
                 projects: [],
                 threads: [],

@@ -33,7 +33,7 @@ const PROVIDER_UPDATE_ACTION_TOAST_MESSAGE = "Install the update now or review p
  * move on their own, so this mostly bounds how stale a Homebrew "latest" can
  * get; the npm registry check keeps its own cache.
  */
-export const MAINTENANCE_CAPABILITIES_CACHE_TTL = Duration.hours(1);
+const MAINTENANCE_CAPABILITIES_CACHE_TTL = Duration.hours(1);
 
 const compactEnv = (input: Record<string, Option.Option<string>>): NodeJS.ProcessEnv =>
   Object.fromEntries(
@@ -240,6 +240,12 @@ export function npmGlobalPrefixFromCommandPath(
   if (packageIndex < 0 || normalized.slice(0, packageIndex).includes("/node_modules/")) {
     return null;
   }
+  // Mise's npm backend uses a global-looking layout inside a tool version.
+  // Globals under its Node installation still belong to npm.
+  const miseTool = /\/mise\/installs\/([^/]+)\/[^/]+$/.exec(normalized.slice(0, packageIndex))?.[1];
+  if (miseTool && miseTool !== "node") {
+    return null;
+  }
   return packageIndex === 0 ? "/" : slashPath.slice(0, packageIndex);
 }
 
@@ -426,6 +432,10 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
 
   const homebrew = homebrewOwnershipFromCommandPath(context.realCommandPath);
   if (homebrew) {
+    // Mise shims resolve to the version manager, not the provider.
+    if (homebrew.kind === "formula" && homebrew.name.toLowerCase() === "mise") {
+      return manual;
+    }
     const brewPath = yield* resolveCommandPath("brew", { env: context.env }).pipe(
       Effect.catchTags({ CommandResolutionError: () => Effect.succeed(null) }),
     );

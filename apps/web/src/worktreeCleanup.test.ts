@@ -30,6 +30,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     session: null,
     messages: [],
     checkpoints: [],
+    pullRequests: [],
     activities: [],
     proposedPlans: [],
     planningWorkflow: null,

@@ -39,6 +39,8 @@ const question = (index: number) => ({
 });
 
 const snapshotLayer = Layer.mock(ProjectionSnapshotQuery)({
+  getThreadDetailSnapshotById: () => Effect.die("unused"),
+
   getThreadDetailById: () => Effect.succeed(Option.some({ id: threadId, latestTurn: { turnId } })),
 } as unknown as Partial<ProjectionSnapshotQuery["Service"]>);
 
@@ -158,7 +160,7 @@ describe("workflow-user-input toolkit handlers", () => {
       const error = yield* handlers
         .workflow_request_user_input({ questions: [question(1)] })
         .pipe(Effect.flip);
-      assert.strictEqual(error._tag, "PreviewAutomationUnavailableError");
+      assert.strictEqual(error._tag, "McpCapabilityUnavailableError");
       assert.deepStrictEqual(activitiesOf(environment.commands), []);
     }).pipe(Effect.provide(environment.layer), Effect.scoped);
   });

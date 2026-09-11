@@ -30,7 +30,7 @@ export const WorkflowArtifactsSnapshot = Schema.Struct({
 });
 export type WorkflowArtifactsSnapshot = typeof WorkflowArtifactsSnapshot.Type;
 
-export class WorkflowArtifactAccessError extends Schema.TaggedErrorClass<WorkflowArtifactAccessError>()(
+export class WorkflowArtifactAccessError extends Schema.TaggedError<WorkflowArtifactAccessError>()(
   "WorkflowArtifactAccessError",
   {
     threadId: ThreadId,
@@ -135,7 +135,7 @@ export const WORKFLOW_USER_INPUT_WAIT_WINDOW_MS = 3.5 * 60 * 1000;
  */
 export const WORKFLOW_USER_INPUT_ABANDON_GRACE_MS = 3 * 60 * 1000;
 
-export class WorkflowUserInputError extends Schema.TaggedErrorClass<WorkflowUserInputError>()(
+export class WorkflowUserInputError extends Schema.TaggedError<WorkflowUserInputError>()(
   "WorkflowUserInputError",
   {
     threadId: ThreadId,

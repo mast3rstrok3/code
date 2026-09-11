@@ -238,7 +238,7 @@ export function useGitStackedAction(scope: SourceControlActionScope) {
         ...(input.commitMessage ? { commitMessage: input.commitMessage } : {}),
         ...(input.featureBranch ? { featureBranch: true } : {}),
         ...(input.filePaths?.length ? { filePaths: input.filePaths } : {}),
-        ...(input.threadId ? { threadId: input.threadId } : {}),
+        ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
         ...(input.onProgress ? { onProgress: input.onProgress } : {}),
       });
     },

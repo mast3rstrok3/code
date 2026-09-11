@@ -24,6 +24,8 @@ function makeThread(input: {
 }): OrchestrationThread {
   const settledOverride = input.settledOverride ?? null;
   return {
+    pullRequests: [],
+
     id: ThreadId.make(input.id),
     projectId: ProjectId.make("project-1"),
     ownerUserId: DEFAULT_WORKSPACE_USER_ID,

@@ -114,7 +114,6 @@ export const GitRunStackedActionInput = Schema.Struct({
   actionId: TrimmedNonEmptyStringSchema,
   cwd: TrimmedNonEmptyStringSchema,
   action: GitStackedAction,
-  threadId: Schema.optional(ThreadId),
   commitMessage: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(10_000))),
   featureBranch: Schema.optional(Schema.Boolean),
   pullRequestBaseBranch: Schema.optional(TrimmedNonEmptyStringSchema),
@@ -125,6 +124,8 @@ export const GitRunStackedActionInput = Schema.Struct({
   filePaths: Schema.optional(
     Schema.Array(TrimmedNonEmptyStringSchema).check(Schema.isMinLength(1)),
   ),
+  /** The thread the action runs beside; a pull request it creates is linked to it. */
+  threadId: Schema.optional(ThreadId),
 });
 export type GitRunStackedActionInput = typeof GitRunStackedActionInput.Type;
 
@@ -207,11 +208,9 @@ const VcsStatusChangeRequest = Schema.Struct({
   /** Optional for compatibility with older servers and providers. */
   isDraft: Schema.optional(Schema.Boolean),
   /**
-   * Last provider-side activity (ISO). For a merged/closed change request
-   * this bounds when it reached that state, so clients can tell a PR that
-   * terminated during a thread's life from one that was already history
-   * when the thread was created. Optional for old servers and providers
-   * whose lookups do not report it.
+   * Last provider-side activity (ISO), including comments and metadata edits.
+   * This is not the time a change request closed or merged. Optional for old
+   * servers and providers whose lookups do not report it.
    */
   updatedAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
@@ -344,7 +343,7 @@ export const VcsPullResult = Schema.Struct({
 export type VcsPullResult = typeof VcsPullResult.Type;
 
 // RPC / domain errors
-export class GitCommandError extends Schema.TaggedErrorClass<GitCommandError>()("GitCommandError", {
+export class GitCommandError extends Schema.TaggedError<GitCommandError>()("GitCommandError", {
   operation: Schema.String,
   command: Schema.String,
   cwd: Schema.String,
@@ -361,7 +360,7 @@ export class GitCommandError extends Schema.TaggedErrorClass<GitCommandError>()(
   }
 }
 
-export class TextGenerationError extends Schema.TaggedErrorClass<TextGenerationError>()(
+export class TextGenerationError extends Schema.TaggedError<TextGenerationError>()(
   "TextGenerationError",
   {
     operation: Schema.String,
@@ -374,7 +373,7 @@ export class TextGenerationError extends Schema.TaggedErrorClass<TextGenerationE
   }
 }
 
-export class GitManagerError extends Schema.TaggedErrorClass<GitManagerError>()("GitManagerError", {
+export class GitManagerError extends Schema.TaggedError<GitManagerError>()("GitManagerError", {
   operation: Schema.String,
   cwd: Schema.String,
   detail: Schema.String,
@@ -385,7 +384,7 @@ export class GitManagerError extends Schema.TaggedErrorClass<GitManagerError>()(
   }
 }
 
-export class GitPullRequestMaterializationError extends Schema.TaggedErrorClass<GitPullRequestMaterializationError>()(
+export class GitPullRequestMaterializationError extends Schema.TaggedError<GitPullRequestMaterializationError>()(
   "GitPullRequestMaterializationError",
   {
     cwd: TrimmedNonEmptyStringSchema,

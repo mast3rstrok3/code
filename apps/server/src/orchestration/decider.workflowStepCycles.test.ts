@@ -29,6 +29,8 @@ const TICKET_WAVE_PROMPT_ID = WORKFLOW_PROMPT_IDS.implementationTddCodex;
 
 function thread(id: ThreadId, overrides: Partial<OrchestrationThread> = {}): OrchestrationThread {
   return {
+    pullRequests: [],
+
     id,
     projectId,
     ownerUserId: DEFAULT_WORKSPACE_USER_ID,
