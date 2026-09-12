@@ -348,6 +348,40 @@ describe("workflow stage reconciliation", () => {
     expect(actions.some((action) => action.type === "derive-dependency-eligibility")).toBe(false);
   });
 
+  it.each(["planned-restart", "server-crash"] as const)(
+    "preserves a publication failure with settled tickets after %s",
+    (cause) => {
+      const original = {
+        ...run({
+          status: "needs-human-attention",
+          tickets: [
+            ticket({
+              ticketId: "ticket-a",
+              status: "succeeded",
+              executions: [execution({ ticketId: "ticket-a", state: "succeeded" })],
+            }),
+          ],
+        }),
+        integrationHeadSha: "reviewed-head",
+        codeReviewedHeadSha: "reviewed-head",
+        validatedHeadSha: "reviewed-head",
+        changeRequestFailure: {
+          reason: "unknown" as const,
+          detail: "GitHub CLI command failed.",
+          failedAt: now,
+        },
+      };
+      const recovered = recoverWorkflowRunsAfterStartup({
+        readModel: model(original),
+        cause,
+        now: "2026-01-01T01:00:00.000Z",
+      }).implementationRuns[0]!;
+
+      expect(recovered).toEqual(normalizeImplementationRunExecutions(original));
+      expect(recovered.status).toBe("needs-human-attention");
+    },
+  );
+
   it("resets planned restart recovery without spending product counters", () => {
     const active = execution({
       ticketId: "ticket-a",

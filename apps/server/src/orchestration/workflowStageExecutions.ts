@@ -971,12 +971,16 @@ export function recoverWorkflowRunsAfterStartup(input: {
       const stageExecutions = run.stageExecutions.map((execution) =>
         recoverExecutionAtStartup(execution, input.cause, input.now),
       );
-      const ticketStates = run.ticketStates.map((ticket) => ({
-        ...ticket,
-        stageExecutions: ticket.stageExecutions.map((execution) =>
+      const ticketStates = run.ticketStates.map((ticket) => {
+        const stageExecutions = ticket.stageExecutions.map((execution) =>
           recoverExecutionAtStartup(execution, input.cause, input.now),
-        ),
-      }));
+        );
+        return stageExecutions.some(
+          (execution, index) => execution !== ticket.stageExecutions[index],
+        )
+          ? { ...ticket, stageExecutions }
+          : ticket;
+      });
       const changed =
         stageExecutions.some((execution, index) => execution !== run.stageExecutions[index]) ||
         ticketStates.some((ticket, index) => ticket !== run.ticketStates[index]);

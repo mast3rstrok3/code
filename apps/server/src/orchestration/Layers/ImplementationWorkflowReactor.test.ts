@@ -10525,7 +10525,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("hands an exhausted failed merge gate to a fixer with the failed checks", () =>
+  it.effect("preserves the gate launch ceiling after a successful automatic repair", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system);
@@ -10544,6 +10544,7 @@ describe("ImplementationWorkflowReactor", () => {
           threadId: sourceThreadId,
           run: {
             ...current,
+            mergeGateAttemptCount: IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS,
             retryableFailure: {
               stage: "merge-gate",
               detail: "The prior validator could not establish the integrated result.",
@@ -10587,6 +10588,38 @@ describe("ImplementationWorkflowReactor", () => {
         expect(fixing?.fixOrigin).toBe("merge-gate");
         expect(fixing?.automationHalt).toBeNull();
         expect(fixer?.messages.at(-1)?.text).toContain("The validator reported a failed gate.");
+        if (fixer === undefined) throw new Error("Fixer missing.");
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("merge-gate-repair-at-ceiling"),
+          threadId: fixer.id,
+          activity: {
+            id: eventId("merge-gate-repair-at-ceiling"),
+            tone: "info",
+            kind: "implementation-fix-result",
+            summary: "Integration repair succeeded",
+            payload: {
+              type: "implementation-fix-result",
+              runId: run.id,
+              status: "succeeded",
+              validations: requiredValidations(),
+              notesMarkdown: "Repaired the integration checks.",
+            },
+            turnId: null,
+            createdAt: "2026-01-01T00:05:02.000Z",
+          },
+          createdAt: "2026-01-01T00:05:02.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const repaired = yield* system.query.getSnapshot();
+        const halted = repaired.implementationRuns.find((candidate) => candidate.id === run.id);
+        expect(halted?.mergeGateAttemptCount).toBe(5);
+        expect(halted?.status).toBe("needs-human-attention");
+        expect(halted?.automationHalt?.category).toBe("retry-exhausted");
+        expect(
+          repaired.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
+        ).toHaveLength(1);
       }),
     ),
   );
@@ -10762,7 +10795,7 @@ describe("ImplementationWorkflowReactor", () => {
         expect(halted?.status).toBe("needs-human-attention");
         expect(halted?.automationHalt).toMatchObject({ category: "retry-exhausted" });
         expect(halted?.automationHalt?.detail).toContain("Merge Gate");
-        // The point of the ceiling: no twenty-first validator.
+        // The exhausted budget must prevent another validator launch.
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
         ).toHaveLength(0);

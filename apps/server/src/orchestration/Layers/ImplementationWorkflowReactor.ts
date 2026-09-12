@@ -7320,7 +7320,6 @@ const make = Effect.gen(function* () {
       ...run,
       status: "integrating",
       integrationHeadSha: head.commitSha,
-      mergeGateAttemptCount: run.fixOrigin === "merge-gate" ? 0 : run.mergeGateAttemptCount,
       activeValidationKind: null,
       activeValidationHeadSha: null,
       activeValidatorThreadId: null,
