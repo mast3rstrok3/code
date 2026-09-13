@@ -1327,7 +1327,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
 
-      yield* clearMcpSession(input.binding.threadId);
+      yield* prepareMcpSession({
+        threadId: input.binding.threadId,
+        providerInstanceId: bindingInstanceId,
+      });
       const resumed = yield* adapter
         .startSession({
           threadId: input.binding.threadId,

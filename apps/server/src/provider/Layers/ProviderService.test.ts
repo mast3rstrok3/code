@@ -4864,6 +4864,7 @@ describe("agent browser access", () => {
     access: boolean | { readonly browser: boolean; readonly device: boolean },
     threadId: ThreadId,
     projectOverride?: boolean,
+    recoverSession = false,
   ) =>
     Effect.gen(function* () {
       const enableAgentBrowserAccess = typeof access === "boolean" ? access : access.browser;
@@ -4964,12 +4965,17 @@ describe("agent browser access", () => {
 
       yield* Effect.gen(function* () {
         const provider = yield* ProviderService.ProviderService;
-        return yield* provider.startSession(threadId, {
+        yield* provider.startSession(threadId, {
           provider: CODEX_DRIVER,
           providerInstanceId: codexInstanceId,
           threadId,
           runtimeMode: "full-access",
         });
+        if (recoverSession) {
+          yield* provider.stopSession({ threadId });
+          yield* provider.sendTurn({ threadId, input: "Resume this thread", attachments: [] });
+          assert.equal(codex.startSession.mock.calls.length, 2);
+        }
       }).pipe(Effect.provide(providerLayer));
 
       return issued;
@@ -4996,6 +5002,28 @@ describe("agent browser access", () => {
 
       assert.deepEqual(issued, [
         { threadId, capabilities: ["device", "preview", "pull-requests"] },
+      ]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("reissues MCP credentials when a stopped thread resumes", () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("thread-mcp-recovery");
+      const issued = yield* startSessionWith(true, threadId, undefined, true);
+      assert.deepEqual(issued, [
+        { threadId, capabilities: ["device", "preview", "pull-requests"] },
+        { threadId, capabilities: ["device", "preview", "pull-requests"] },
+      ]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps browser and device access disabled when a thread resumes", () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("thread-mcp-recovery-access-off");
+      const issued = yield* startSessionWith(false, threadId, undefined, true);
+      assert.deepEqual(issued, [
+        { threadId, capabilities: ["pull-requests"] },
+        { threadId, capabilities: ["pull-requests"] },
       ]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );

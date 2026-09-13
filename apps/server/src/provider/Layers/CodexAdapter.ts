@@ -71,7 +71,6 @@ import {
   type CodexSessionRuntimeShape,
 } from "./CodexSessionRuntime.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
-import { isRegisteredWorkflowPromptId } from "../WorkflowPromptRegistry.ts";
 import { resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import { classifyProviderFailure } from "../providerFailureRecovery.ts";
 import {
@@ -2284,21 +2283,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           input.modelSelection?.instanceId === boundInstanceId
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
-        const registeredWorkflow =
-          input.workflowPromptId !== undefined &&
-          isRegisteredWorkflowPromptId(input.workflowPromptId);
-        const mcpSession = registeredWorkflow
-          ? McpProviderSession.readMcpProviderSession(input.threadId)
-          : undefined;
-        const appServerArgs =
-          registeredWorkflow && mcpSession
-            ? [
-                "-c",
-                `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
-                "-c",
-                'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
-              ]
-            : undefined;
+        const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
@@ -2333,7 +2318,6 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                 mcpCapabilities: mcpSession.capabilities,
               }
             : {}),
-          ...(appServerArgs ? { appServerArgs } : {}),
           ...(input.workflowPromptId ? { workflowPromptId: input.workflowPromptId } : {}),
         };
         const turnTokenUsage = makeCodexTurnTokenUsageState();

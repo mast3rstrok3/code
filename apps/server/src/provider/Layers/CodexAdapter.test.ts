@@ -334,7 +334,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
     }),
   );
 
-  it.effect("omits the T3 MCP server for non-workflow sessions", () =>
+  it.effect("includes the scoped T3 MCP server for non-workflow sessions", () =>
     Effect.gen(function* () {
       validationRuntimeFactory.factory.mockClear();
       const adapter = yield* CodexAdapter;
@@ -357,8 +357,14 @@ validationLayer("CodexAdapterLive validation", (it) => {
       });
 
       const runtimeOptions = validationRuntimeFactory.factory.mock.calls[0]?.[0];
-      NodeAssert.equal(runtimeOptions?.appServerArgs, undefined);
-      NodeAssert.equal(runtimeOptions?.environment?.T3_MCP_BEARER_TOKEN, undefined);
+      NodeAssert.deepEqual(runtimeOptions?.appServerArgs, [
+        "-c",
+        "mcp_servers.t3-code.url=http://127.0.0.1/mcp",
+        "-c",
+        'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
+      ]);
+      NodeAssert.equal(runtimeOptions?.environment?.T3_MCP_BEARER_TOKEN, "token");
+      NodeAssert.deepEqual(runtimeOptions?.mcpCapabilities, new Set(["preview"]));
       McpProviderSession.clearMcpProviderSession(threadId);
     }),
   );

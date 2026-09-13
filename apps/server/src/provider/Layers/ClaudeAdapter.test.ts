@@ -587,7 +587,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("omits the T3 MCP server for non-workflow sessions", () => {
+  it.effect("includes the scoped T3 MCP server for non-workflow sessions", () => {
     const harness = makeHarness();
     const threadId = ThreadId.make("thread-claude-mcp-non-workflow");
     return Effect.gen(function* () {
@@ -607,7 +607,13 @@ describe("ClaudeAdapterLive", () => {
         runtimeMode: "full-access",
       });
 
-      assert.equal(harness.getLastCreateQueryInput()?.options.mcpServers, undefined);
+      assert.deepEqual(harness.getLastCreateQueryInput()?.options.mcpServers, {
+        "t3-code": {
+          type: "http",
+          url: "http://127.0.0.1/mcp",
+          headers: { Authorization: "Bearer token" },
+        },
+      });
       McpProviderSession.clearMcpProviderSession(threadId);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),

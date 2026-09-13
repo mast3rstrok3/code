@@ -113,7 +113,6 @@ import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
   isInteractiveStructuredInputWorkflowPromptId,
-  isRegisteredWorkflowPromptId,
   resolveWorkflowSystemInstructions,
 } from "../WorkflowPromptRegistry.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
@@ -4762,35 +4761,29 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           ? { autoCompactWindow: Number(claudeSettings.autoCompactWindow) }
           : {}),
       };
-      const registeredWorkflow =
-        input.workflowPromptId !== undefined &&
-        isRegisteredWorkflowPromptId(input.workflowPromptId);
-      const mcpSession = registeredWorkflow
-        ? McpProviderSession.readMcpProviderSession(input.threadId)
-        : undefined;
+      const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
       // A grill parks `workflow_request_user_input` on a human, so the tool call
       // is held open for as long as someone might reasonably take to answer,
       // and the toolkit is loaded up front instead of hiding behind tool search
       // where the model settles for its own 4-question fallback.
       const interactiveGrill = isInteractiveStructuredInputWorkflowPromptId(input.workflowPromptId);
-      const mcpServers =
-        registeredWorkflow && mcpSession
-          ? {
-              "t3-code": {
-                type: "http" as const,
-                url: mcpSession.endpoint,
-                headers: {
-                  Authorization: mcpSession.authorizationHeader,
-                },
-                ...(interactiveGrill
-                  ? {
-                      timeout: WORKFLOW_USER_INPUT_TOOL_TIMEOUT_MS,
-                      alwaysLoad: true,
-                    }
-                  : {}),
+      const mcpServers = mcpSession
+        ? {
+            "t3-code": {
+              type: "http" as const,
+              url: mcpSession.endpoint,
+              headers: {
+                Authorization: mcpSession.authorizationHeader,
               },
-            }
-          : undefined;
+              ...(interactiveGrill
+                ? {
+                    timeout: WORKFLOW_USER_INPUT_TOOL_TIMEOUT_MS,
+                    alwaysLoad: true,
+                  }
+                : {}),
+            },
+          }
+        : undefined;
       // The attachments dir grant lets the agent read pasted images without
       // exposing sibling runtime state such as secrets or state.sqlite.
       const additionalDirectories = [
