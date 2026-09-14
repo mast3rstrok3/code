@@ -32,10 +32,11 @@ export function createNativeVerificationCommand<R, E>(
           signer,
           remoteAuthorization,
           method: "POST",
+          group: "orchestration",
           timeoutMs: 180_000,
           url: (base) => environmentEndpointUrl(base, "/api/orchestration/native-verification"),
           request: ({ client, headers }) =>
-            client.orchestration.nativeVerification({ payload: { request: input }, headers }),
+            client.nativeVerification({ payload: { request: input }, headers }),
         }).pipe(Effect.provide(FetchHttpClient.layer));
       }),
   });

@@ -1,10 +1,13 @@
 import { ProjectId } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import {
   projectScriptRuntimeEnv,
   resolveProjectScripts,
   setupProjectScript,
 } from "@t3tools/shared/projectScripts";
+import * as NodeCrypto from "node:crypto";
+
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -26,9 +29,24 @@ export interface ProjectSetupScriptRunnerResultStarted {
   readonly status: "started";
   readonly scriptId: string;
   readonly scriptName: string;
+  readonly scriptCommand: string;
   readonly terminalId: string;
   readonly cwd: string;
-  readonly completion: Effect.Effect<void, ProjectSetupScriptOperationError>;
+  /**
+   * Resolves when the script's shell prints the completion sentinel. The
+   * exit code is null when the terminal exited or was closed before the
+   * sentinel arrived. Only present when `observeCompletion` was requested.
+   */
+  readonly completion?: Effect.Effect<ProjectSetupScriptCompletion>;
+}
+
+export interface ProjectSetupScriptCompletion {
+  readonly exitCode: number | null;
+  readonly durationMs: number;
+}
+
+export interface ProjectSetupScriptOutputLine {
+  readonly line: string;
 }
 
 export type ProjectSetupScriptRunnerResult =
@@ -41,6 +59,14 @@ export interface ProjectSetupScriptRunnerInput {
   readonly projectCwd?: string;
   readonly worktreePath: string;
   readonly preferredTerminalId?: string;
+  /**
+   * Wrap the command so the shell reports its exit code back through the
+   * terminal stream, and forward cleaned output lines while it runs. The
+   * bootstrap flow uses this to drive the worktree setup card.
+   */
+  readonly observeCompletion?: {
+    readonly onOutputLine?: (line: string) => Effect.Effect<void>;
+  };
 }
 
 export class ProjectSetupScriptOperationError extends Schema.TaggedError<ProjectSetupScriptOperationError>()(
@@ -117,13 +143,172 @@ const conventionalBootstrapCommand = (packageManager: string | undefined) => {
   }
 };
 
+/** @public Service construction is part of the canonical Effect module API. */
+/**
+ * Marker the wrapped setup command echoes so the exit code can be read from
+ * the PTY stream. Each run gets its own random token so script output cannot
+ * spoof completion, and the sentinel pattern is built per run from it.
+ */
+const COMPLETION_SENTINEL_PREFIX = "__T3_SETUP_DONE__";
+const OUTPUT_LINE_MAX_LENGTH = 400;
+/** A partial line longer than this is a byte stream, not a line. Keep only the tail. */
+const PARTIAL_LINE_MAX_LENGTH = 4_096;
+
+function completionSentinel(token: string): string {
+  return `${COMPLETION_SENTINEL_PREFIX}_${token}:`;
+}
+
+function completionSentinelPattern(token: string): RegExp {
+  return new RegExp(`${COMPLETION_SENTINEL_PREFIX}_${token}:(-?\\d+)`);
+}
+
+/** Removes ANSI escape sequences and cursor controls so lines can be shown as plain text. */
+function stripTerminalControl(text: string): string {
+  return (
+    text
+      .replace(
+        // eslint-disable-next-line no-control-regex
+        /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>]/g,
+        "",
+      )
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
+  );
+}
+
+type CompletionShell = "posix" | "fish" | "powershell";
+
+/**
+ * Predicts the shell TerminalManager will spawn for the setup terminal. The
+ * manager takes `$SHELL` on POSIX and PowerShell on Windows, falling back to
+ * other shells only when that one fails to spawn.
+ */
+function resolveCompletionShell(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): CompletionShell {
+  if (platform === "win32") return "powershell";
+  const shell = env.SHELL ?? "";
+  const name = shell.split("/").at(-1) ?? shell;
+  if (name === "fish") return "fish";
+  if (name === "pwsh" || name === "powershell") return "powershell";
+  return "posix";
+}
+
+/**
+ * Builds the shell input for the setup script. The command runs inside a
+ * block and the block closes on its own line, so a trailing `# comment` or a
+ * heredoc terminator in the command cannot swallow the sentinel. The shell
+ * reads the whole block before running any of it, so a script that reads
+ * stdin cannot consume the sentinel line either. Lines are separated by `\r`
+ * because that is the Enter key for every shell's line editor.
+ */
+function wrapCommandForCompletion(
+  command: string,
+  shell: CompletionShell,
+  sentinel: string,
+): string {
+  const body = command.replace(/\r?\n/g, "\r");
+  switch (shell) {
+    case "powershell":
+      return `$global:LASTEXITCODE = $null; & {\r${body}\r}; if ($null -ne $LASTEXITCODE) { $__t3c = $LASTEXITCODE } elseif ($?) { $__t3c = 0 } else { $__t3c = 1 }; Write-Host "${sentinel}$__t3c"`;
+    case "fish":
+      return `begin\r${body}\rend; printf '\\n${sentinel}%s\\n' $status`;
+    case "posix":
+      return `( ${body}\r); printf '\\n${sentinel}%s\\n' "$?"`;
+  }
+}
+
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const terminalManager = yield* TerminalManager.TerminalManager;
-  const platform = yield* HostProcessPlatform;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const completionShell = resolveCompletionShell(
+    yield* HostProcessPlatform,
+    yield* HostProcessEnvironment,
+  );
+
+  /**
+   * Watches the setup terminal for the completion sentinel. Terminal output is
+   * a byte stream, so partial lines are buffered until a newline. The
+   * subscription is torn down once the sentinel, an exit, or a close arrives.
+   */
+  const observeTerminalCompletion = (input: {
+    readonly threadId: string;
+    readonly terminalId: string;
+    /** Per-run sentinel, so only this run's wrapper can settle completion. */
+    readonly sentinel: string;
+    readonly sentinelPattern: RegExp;
+    /** The shell echoes typed input; lines ending with these are the wrapper, not output. */
+    readonly echoedWrapperLines: ReadonlyArray<string>;
+    readonly onOutputLine: ((line: string) => Effect.Effect<void>) | undefined;
+  }) =>
+    Effect.gen(function* () {
+      const startedAtMs = yield* Clock.currentTimeMillis;
+      const done = yield* Deferred.make<ProjectSetupScriptCompletion>();
+      let lineBuffer = "";
+      let settled = false;
+
+      const settle = (exitCode: number | null) =>
+        Effect.suspend(() => {
+          if (settled) return Effect.void;
+          settled = true;
+          return Clock.currentTimeMillis.pipe(
+            Effect.flatMap((nowMs) =>
+              Deferred.succeed(done, { exitCode, durationMs: nowMs - startedAtMs }),
+            ),
+            Effect.asVoid,
+          );
+        });
+
+      const handleLine = (rawLine: string) =>
+        Effect.suspend(() => {
+          const sentinel = input.sentinelPattern.exec(rawLine);
+          if (sentinel) {
+            const parsed = Number(sentinel[1]);
+            return settle(Number.isFinite(parsed) ? parsed : null);
+          }
+          const cleaned = stripTerminalControl(rawLine).trimEnd();
+          if (
+            cleaned.length === 0 ||
+            cleaned.includes(input.sentinel) ||
+            input.echoedWrapperLines.some((echoed) => cleaned.endsWith(echoed)) ||
+            input.onOutputLine === undefined
+          ) {
+            return Effect.void;
+          }
+          return input.onOutputLine(cleaned.slice(0, OUTPUT_LINE_MAX_LENGTH));
+        });
+
+      const unsubscribe = yield* terminalManager.subscribe((event) => {
+        if (event.threadId !== input.threadId || event.terminalId !== input.terminalId) {
+          return Effect.void;
+        }
+        if (event.type === "output") {
+          lineBuffer += event.data;
+          const lines = lineBuffer.split(/\r?\n/);
+          lineBuffer = lines.pop() ?? "";
+          // A script that never prints a newline must not grow this forever.
+          // The sentinel is always on its own line, so keeping the tail is safe.
+          if (lineBuffer.length > PARTIAL_LINE_MAX_LENGTH) {
+            lineBuffer = lineBuffer.slice(-PARTIAL_LINE_MAX_LENGTH);
+          }
+          return Effect.forEach(lines, handleLine, { discard: true });
+        }
+        if (event.type === "exited" || event.type === "closed") {
+          return settle(null);
+        }
+        return Effect.void;
+      });
+
+      const completion = Deferred.await(done).pipe(
+        Effect.ensuring(Effect.sync(() => unsubscribe())),
+      );
+      return { completion, unsubscribe };
+    });
 
   const runForThread: ProjectSetupScriptRunner["Service"]["runForThread"] = Effect.fn(
     "ProjectSetupScriptRunner.runForThread",
@@ -223,6 +408,16 @@ export const make = Effect.gen(function* () {
       project: { cwd: project.workspaceRoot },
       worktreePath: input.worktreePath,
     });
+    const observe = input.observeCompletion;
+    const completionToken = observe ? NodeCrypto.randomUUID().replaceAll("-", "") : null;
+    const commandLine =
+      observe && completionToken
+        ? wrapCommandForCompletion(
+            script.command,
+            completionShell,
+            completionSentinel(completionToken),
+          )
+        : script.command;
 
     yield* terminalManager
       .open({
@@ -242,51 +437,24 @@ export const make = Effect.gen(function* () {
             }),
         ),
       );
+    // Subscribe before writing so the sentinel cannot race past the listener.
+    const observed =
+      observe && completionToken
+        ? yield* observeTerminalCompletion({
+            threadId: input.threadId,
+            terminalId,
+            sentinel: completionSentinel(completionToken),
+            sentinelPattern: completionSentinelPattern(completionToken),
+            echoedWrapperLines: commandLine.split("\r").filter((line) => line.length > 0),
+            onOutputLine: observe.onOutputLine,
+          })
+        : undefined;
 
-    const completionSignal = yield* Deferred.make<
-      | {
-          readonly type: "exited";
-          readonly exitCode: number | null;
-          readonly exitSignal: number | null;
-        }
-      | { readonly type: "error"; readonly message: string }
-      | { readonly type: "closed" }
-    >();
-    const unsubscribe = yield* terminalManager.subscribe((event) => {
-      if (event.threadId !== input.threadId || event.terminalId !== terminalId) {
-        return Effect.void;
-      }
-      switch (event.type) {
-        case "exited":
-          return Deferred.succeed(completionSignal, {
-            type: "exited",
-            exitCode: event.exitCode,
-            exitSignal: event.exitSignal,
-          }).pipe(Effect.asVoid);
-        case "error":
-          return Deferred.succeed(completionSignal, {
-            type: "error",
-            message: event.message,
-          }).pipe(Effect.asVoid);
-        case "closed":
-          return Deferred.succeed(completionSignal, { type: "closed" }).pipe(Effect.asVoid);
-        case "started":
-        case "output":
-        case "cleared":
-        case "restarted":
-        case "activity":
-          return Effect.void;
-      }
-    });
-    const command =
-      platform === "win32"
-        ? `& { ${script.command} }; $t3SetupSucceeded = $?; $t3SetupExit = $LASTEXITCODE; if (-not $t3SetupSucceeded) { if ($null -ne $t3SetupExit -and $t3SetupExit -ne 0) { exit $t3SetupExit }; exit 1 }; exit 0`
-        : `exec sh -lc '${script.command.replaceAll("'", `'"'"'`)}'`;
     yield* terminalManager
       .write({
         threadId: input.threadId,
         terminalId,
-        data: `${command}\r`,
+        data: `${commandLine}\r`,
       })
       .pipe(
         Effect.mapError(
@@ -297,40 +465,18 @@ export const make = Effect.gen(function* () {
               cause,
             }),
         ),
-        Effect.tapError(() => Effect.sync(unsubscribe)),
+        // Nothing will ever settle the completion if the command never ran.
+        Effect.tapError(() => Effect.sync(() => observed?.unsubscribe())),
       );
-
-    const completion = Deferred.await(completionSignal).pipe(
-      Effect.flatMap((event) => {
-        if (event.type === "exited" && event.exitCode === 0) {
-          return Effect.void;
-        }
-        const cause =
-          event.type === "error"
-            ? new Error(event.message)
-            : event.type === "closed"
-              ? new Error("Setup terminal closed before the command completed.")
-              : new Error(
-                  `Setup command exited with code ${event.exitCode ?? "unknown"} and signal ${event.exitSignal ?? "none"}.`,
-                );
-        return Effect.fail(
-          new ProjectSetupScriptOperationError({
-            ...errorContext,
-            operation: "executeCommand",
-            cause,
-          }),
-        );
-      }),
-      Effect.ensuring(Effect.sync(unsubscribe)),
-    );
 
     return {
       status: "started",
       scriptId: script.id,
       scriptName: script.name,
+      scriptCommand: script.command,
       terminalId,
       cwd,
-      completion,
+      ...(observed ? { completion: observed.completion } : {}),
     } as const;
   });
 

@@ -4692,11 +4692,26 @@ const make = Effect.gen(function* () {
           threadId: integratedRun.orchestratorThreadId,
           projectId: orchestratorThread.projectId,
           worktreePath: integratedRun.orchestratorWorktreePath,
+          observeCompletion: {},
         })
         .pipe(
-          Effect.flatMap((result) =>
-            result.status === "started" ? result.completion : Effect.void,
-          ),
+          Effect.flatMap((result) => {
+            if (result.status !== "started" || !result.completion) return Effect.void;
+            return result.completion.pipe(
+              Effect.flatMap((completion) =>
+                completion.exitCode === 0
+                  ? Effect.void
+                  : Effect.fail(
+                      new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
+                        threadId: integratedRun.orchestratorThreadId,
+                        worktreePath: integratedRun.orchestratorWorktreePath,
+                        operation: "executeCommand",
+                        cause: `Setup command exited with code ${completion.exitCode ?? "unknown"}.`,
+                      }),
+                    ),
+              ),
+            );
+          }),
           Effect.result,
         );
       if (setupResult._tag === "Failure") {

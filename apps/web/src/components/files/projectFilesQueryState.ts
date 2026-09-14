@@ -32,8 +32,15 @@ interface ProjectQueryState<A> {
   readonly refresh: () => void;
 }
 
-function getProjectEntriesQueryAtom(environmentId: EnvironmentId, cwd: string) {
-  return projectEnvironment.listEntries({ environmentId, input: { cwd } });
+function getProjectEntriesQueryAtom(
+  environmentId: EnvironmentId,
+  cwd: string,
+  directoryPath?: string,
+) {
+  return projectEnvironment.listEntries({
+    environmentId,
+    input: { cwd, ...(directoryPath !== undefined ? { directoryPath } : {}) },
+  });
 }
 
 export function getProjectFileQueryAtom(
@@ -121,8 +128,9 @@ export function clearProjectFileQueryData(
 export function useProjectEntriesQuery(
   environmentId: EnvironmentId,
   cwd: string,
+  directoryPath?: string,
 ): ProjectQueryState<ProjectListEntriesResult> {
-  const atom = getProjectEntriesQueryAtom(environmentId, cwd);
+  const atom = getProjectEntriesQueryAtom(environmentId, cwd, directoryPath);
   return useEnvironmentQuery(atom);
 }
 

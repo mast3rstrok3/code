@@ -21,6 +21,7 @@ import {
   shouldHardenPublicDevServerCache,
   viteInternalModuleFallbackGuardPlugin,
 } from "./viteDevServerHardening";
+import { thirdPartyLicensesPlugin } from "../../scripts/lib/third-party-licenses";
 import { tailwindPlugins } from "./vite/tailwind";
 
 const repoEnv = loadRepoEnv();
@@ -157,6 +158,15 @@ export default defineConfig(({ command }) => {
     plugins: [
       viteInternalModuleFallbackGuardPlugin(),
       devCompressionPlugin(),
+      thirdPartyLicensesPlugin({
+        bundleName: "web",
+        configFile: new URL("../../third-party-licenses.config.json", import.meta.url),
+        packageManifests: [
+          { bundle: "web", path: new URL("./package.json", import.meta.url) },
+          { bundle: "server", path: new URL("../server/package.json", import.meta.url) },
+          { bundle: "desktop", path: new URL("../desktop/package.json", import.meta.url) },
+        ],
+      }),
       // Route components load as split chunks so settings, pull-request, and
       // usage code stay out of the cold-start payload; the router prefetches
       // them on navigation intent (see getRouter's defaultPreload).

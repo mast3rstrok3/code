@@ -1,10 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, expect, it, vi } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
+import * as Option from "effect/Option";
 
 import { GitCommandError, VcsRepositoryDetectionError } from "@t3tools/contracts";
 
@@ -94,6 +96,35 @@ function makeLayer(input: {
 }
 
 describe("GitWorkflowService", () => {
+  it.effect("reports a non-Git VCS repository as not a Git repository", () =>
+    Effect.gen(function* () {
+      const workflow = yield* GitWorkflowService.GitWorkflowService;
+      const isRepository = yield* workflow.isRepository("/jj-repo");
+
+      assert.equal(isRepository, false);
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          detect: () =>
+            Effect.succeed({
+              kind: "jj",
+              repository: {
+                kind: "jj",
+                rootPath: "/jj-repo",
+                metadataPath: "/jj-repo/.jj",
+                freshness: {
+                  source: "live-local",
+                  observedAt: DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"),
+                  expiresAt: Option.none(),
+                },
+              },
+              driver: {} as VcsDriverRegistry.VcsDriverHandle["driver"],
+            }),
+        }),
+      ),
+    ),
+  );
+
   it.effect("returns an empty local status when no VCS repository is detected", () =>
     Effect.gen(function* () {
       const workflow = yield* GitWorkflowService.GitWorkflowService;

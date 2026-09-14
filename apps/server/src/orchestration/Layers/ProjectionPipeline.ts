@@ -982,12 +982,20 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
-          yield* projectionThreadPullRequestRepository.delete({
+          const links = yield* projectionThreadPullRequestRepository.listByThreadId({
             threadId: event.payload.threadId,
-            host: event.payload.host.toLowerCase(),
-            repository: event.payload.repository.toLowerCase(),
-            number: event.payload.number,
           });
+          const link = links.find((candidate) =>
+            threadPullRequestKeysEqual(candidate, event.payload),
+          );
+          if (link !== undefined) {
+            yield* projectionThreadPullRequestRepository.delete({
+              threadId: event.payload.threadId,
+              host: link.host,
+              repository: link.repository,
+              number: link.number,
+            });
+          }
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             updatedAt: event.payload.updatedAt,
@@ -1441,6 +1449,27 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
 
         case "thread.message-sent": {
+          if (event.payload.streaming) {
+            const attachments =
+              event.payload.attachments !== undefined
+                ? yield* materializeAttachmentsForProjection({
+                    attachments: event.payload.attachments,
+                  })
+                : undefined;
+            yield* projectionThreadMessageRepository.appendStreaming({
+              messageId: event.payload.messageId,
+              threadId: event.payload.threadId,
+              turnId: event.payload.turnId,
+              role: event.payload.role,
+              text: event.payload.text,
+              ...(attachments !== undefined ? { attachments: [...attachments] } : {}),
+              ...(event.payload.context !== undefined ? { context: event.payload.context } : {}),
+              createdAt: event.payload.createdAt,
+              updatedAt: event.payload.updatedAt,
+            });
+            return;
+          }
+
           const existingMessage = yield* projectionThreadMessageRepository.getByMessageId({
             messageId: event.payload.messageId,
           });
@@ -1471,7 +1500,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             text: nextText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
             workflowPromptId: previousMessage?.workflowPromptId ?? null,
-            isStreaming: event.payload.streaming,
+            ...((event.payload.context ?? previousMessage?.context) !== undefined
+              ? { context: event.payload.context ?? previousMessage?.context }
+              : {}),
+            isStreaming: false,
             createdAt: previousMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
           });

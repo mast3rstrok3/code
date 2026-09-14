@@ -35,7 +35,11 @@ import { useServerConfigs } from "~/state/entities";
 import { useEnvironmentHttpBaseUrl } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { selectThreadPreviewMiniPlayer, usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
+import {
+  browserMiniPlayerSource,
+  selectThreadPreviewMiniPlayerTabId,
+  usePreviewMiniPlayerStore,
+} from "~/previewMiniPlayerStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 
 import { previewBridge } from "./previewBridge";
@@ -116,8 +120,8 @@ export function PreviewView({
     threadRef,
     BROWSER_HISTORY_MAX_ENTRIES_PER_PROJECT,
   );
-  const miniPlayer = usePreviewMiniPlayerStore((state) =>
-    selectThreadPreviewMiniPlayer(state.byThreadKey, threadRef),
+  const miniPlayerTabId = usePreviewMiniPlayerStore((state) =>
+    selectThreadPreviewMiniPlayerTabId(state.byThreadKey, threadRef),
   );
   const addPreviewAnnotation = useComposerDraftStore((store) => store.addPreviewAnnotation);
   const addImage = useComposerDraftStore((store) => store.addImage);
@@ -324,13 +328,13 @@ export function PreviewView({
 
   const handlePictureInPicture = useCallback(() => {
     if (!tabId) return;
-    if (miniPlayer?.tabId === tabId) {
+    if (miniPlayerTabId === tabId) {
       usePreviewMiniPlayerStore.getState().close(threadRef);
       return;
     }
-    usePreviewMiniPlayerStore.getState().open(threadRef, tabId);
+    usePreviewMiniPlayerStore.getState().open(threadRef, browserMiniPlayerSource(tabId));
     useRightPanelStore.getState().close(threadRef);
-  }, [miniPlayer?.tabId, tabId, threadRef]);
+  }, [miniPlayerTabId, tabId, threadRef]);
 
   const handleNativePictureInPicture = useCallback(() => {
     if (!previewBridge || !runtimeTabId) return;
@@ -797,7 +801,7 @@ export function PreviewView({
         captureDisabled={!browserSurfaceReady || isUnreachable}
         recording={recordingRuntimeTabId !== null}
         onPictureInPicture={previewBridge && tabId ? handlePictureInPicture : undefined}
-        pictureInPicture={miniPlayer?.tabId === tabId}
+        pictureInPicture={miniPlayerTabId === tabId}
         pictureInPictureDisabled={!desktopOverlay?.hasWebContents || isUnreachable}
         onPickElement={
           runtimeBridge?.supportsElementPicking && previewBridge && tabId

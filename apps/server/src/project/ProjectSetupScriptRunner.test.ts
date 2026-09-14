@@ -1,8 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as FileSystem from "effect/FileSystem";
 import { describe, expect, it, vi } from "@effect/vitest";
 import { type OrchestrationProject, ProjectId, type TerminalEvent } from "@t3tools/contracts";
+import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -36,10 +37,12 @@ const makeProjectionSnapshotQueryLayer = (project: OrchestrationProject) =>
     getArchivedShellSnapshot: () => Effect.die("unused"),
     getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
     getCounts: () => Effect.die("unused"),
+    getEventReplayStats: () => Effect.die("unused"),
     getActiveProjectByWorkspaceRoot: (workspaceRoot) =>
       Effect.succeed(
         workspaceRoot === project.workspaceRoot ? Option.some(project) : Option.none(),
       ),
+    getProjectShells: () => Effect.die("unused"),
     getProjectShellById: (projectId) =>
       Effect.succeed(projectId === project.id ? Option.some(project) : Option.none()),
     getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
@@ -49,38 +52,37 @@ const makeProjectionSnapshotQueryLayer = (project: OrchestrationProject) =>
     getThreadRuntimeContext: () => Effect.die("unused"),
     getTurnStartMessage: () => Effect.die("unused"),
     getThreadShellById: () => Effect.die("unused"),
-    getThreadDetailSnapshotById: () => Effect.die("unused"),
     getThreadDetailById: () => Effect.die("unused"),
+    getThreadDetailSnapshotById: () => Effect.die("unused"),
     getThreadDetailSnapshot: () => Effect.die("unused"),
     searchThreads: () => Effect.succeed({ matches: [] }),
   });
 
-const makeTerminalManagerLayer = (
-  overrides: Pick<TerminalManager.TerminalManager["Service"], "open" | "write"> &
-    Partial<Pick<TerminalManager.TerminalManager["Service"], "subscribe">>,
-) =>
+type TerminalOverrides = Pick<TerminalManager.TerminalManager["Service"], "open" | "write"> &
+  Partial<Pick<TerminalManager.TerminalManager["Service"], "subscribe">>;
+
+const makeTerminalManagerLayer = (overrides: TerminalOverrides) =>
   Layer.succeed(TerminalManager.TerminalManager, {
-    ...overrides,
     attachStream: () => Effect.die(new Error("unused")),
     resize: () => Effect.void,
     clear: () => Effect.void,
     restart: () => Effect.die(new Error("unused")),
     close: () => Effect.void,
-    subscribe: overrides.subscribe ?? (() => Effect.succeed(() => undefined)),
+    subscribe: () => Effect.succeed(() => undefined),
     subscribeMetadata: () => Effect.succeed(() => undefined),
+    ...overrides,
   });
 
 const testLayer = (
   project: OrchestrationProject,
-  terminal: Pick<TerminalManager.TerminalManager["Service"], "open" | "write"> &
-    Partial<Pick<TerminalManager.TerminalManager["Service"], "subscribe">>,
+  terminal: TerminalOverrides,
   settings = ServerSettings.layerTest(),
 ) =>
   ProjectSetupScriptRunner.layer.pipe(
     Layer.provideMerge(makeProjectionSnapshotQueryLayer(project)),
     Layer.provideMerge(makeTerminalManagerLayer(terminal)),
-    Layer.provideMerge(NodeServices.layer),
     Layer.provide(settings),
+    Layer.provideMerge(NodeServices.layer),
   );
 
 describe("ProjectSetupScriptRunner", () => {
@@ -164,7 +166,6 @@ describe("ProjectSetupScriptRunner", () => {
   it.effect(
     "opens the deterministic setup terminal with worktree env and writes the command",
     () => {
-      let listener: ((event: TerminalEvent) => Effect.Effect<void>) | undefined;
       const open = vi.fn(() =>
         Effect.succeed({
           threadId: "thread-1",
@@ -180,22 +181,7 @@ describe("ProjectSetupScriptRunner", () => {
           updatedAt: "2026-01-01T00:00:00.000Z",
         }),
       );
-      const write = vi.fn(
-        () =>
-          listener?.({
-            type: "exited",
-            threadId: "thread-1",
-            terminalId: "setup-setup",
-            exitCode: 0,
-            exitSignal: null,
-          }) ?? Effect.void,
-      );
-      const subscribe = vi.fn((nextListener: (event: TerminalEvent) => Effect.Effect<void>) =>
-        Effect.sync(() => {
-          listener = nextListener;
-          return () => undefined;
-        }),
-      );
+      const write = vi.fn(() => Effect.void);
       const project = makeProject([
         {
           id: "setup",
@@ -213,14 +199,12 @@ describe("ProjectSetupScriptRunner", () => {
           projectCwd: "/repo/project",
           worktreePath: "/repo/worktrees/a",
         });
-        if (result.status === "started") {
-          yield* result.completion;
-        }
 
-        expect(result).toMatchObject({
+        expect(result).toEqual({
           status: "started",
           scriptId: "setup",
           scriptName: "Setup",
+          scriptCommand: "bun install",
           terminalId: "setup-setup",
           cwd: "/repo/worktrees/a",
         });
@@ -237,11 +221,214 @@ describe("ProjectSetupScriptRunner", () => {
         expect(write).toHaveBeenCalledWith({
           threadId: "thread-1",
           terminalId: "setup-setup",
-          data: "exec sh -lc 'bun install'\r",
+          data: "bun install\r",
         });
-      }).pipe(Effect.provide(testLayer(project, { open, write, subscribe })));
+      }).pipe(Effect.provide(testLayer(project, { open, write })));
     },
   );
+
+  it.effect(
+    "wraps the command with a completion sentinel and resolves the exit code from terminal output",
+    () => {
+      const open = vi.fn(() =>
+        Effect.succeed({
+          threadId: "thread-1",
+          terminalId: "setup-setup",
+          cwd: "/repo/worktrees/a",
+          worktreePath: "/repo/worktrees/a",
+          status: "running" as const,
+          pid: 123,
+          history: "",
+          exitCode: null,
+          exitSignal: null,
+          label: "setup-setup",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      );
+      const writes: string[] = [];
+      const write = vi.fn((input: { data: string }) =>
+        Effect.sync(() => void writes.push(input.data)),
+      );
+      let listener: ((event: TerminalEvent) => Effect.Effect<void>) | null = null;
+      const subscribe = vi.fn((next: (event: TerminalEvent) => Effect.Effect<void>) => {
+        listener = next;
+        return Effect.succeed(() => {
+          listener = null;
+        });
+      });
+      const project = makeProject([
+        {
+          id: "setup",
+          name: "Setup",
+          command: "bun install",
+          icon: "configure",
+          runOnWorktreeCreate: true,
+        },
+      ]);
+      const emit = (data: string) =>
+        Effect.suspend(() =>
+          listener
+            ? listener({ threadId: "thread-1", terminalId: "setup-setup", type: "output", data })
+            : Effect.void,
+        );
+
+      return Effect.gen(function* () {
+        const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+        const seen: string[] = [];
+        const result = yield* runner.runForThread({
+          threadId: "thread-1",
+          projectCwd: "/repo/project",
+          worktreePath: "/repo/worktrees/a",
+          observeCompletion: {
+            onOutputLine: (line) => Effect.sync(() => void seen.push(line)),
+          },
+        });
+        expect(result.status).toBe("started");
+        if (result.status !== "started") return;
+        expect(result.completion).toBeDefined();
+
+        // The subscription is attached before the command is written.
+        expect(subscribe).toHaveBeenCalledTimes(1);
+        expect(writes).toHaveLength(1);
+        // The block closes on its own line so a trailing comment in the
+        // command cannot swallow the sentinel, and the sentinel carries a
+        // per-run token so script output cannot spoof it.
+        const written = writes[0] ?? "";
+        const sentinel = /__T3_SETUP_DONE___[0-9a-f]{32}:/.exec(written)?.[0];
+        expect(sentinel).toBeDefined();
+        expect(written).toBe(`( bun install\r); printf '\\n${sentinel}%s\\n' "$?"\r`);
+
+        // Output arrives in chunks; partial lines are buffered until a newline,
+        // control sequences are stripped, and the echoed wrapper is hidden.
+        yield* emit(`( bun install\r\n> ); printf '\\n${sentinel}%s\\n' "$?"\r\n`);
+        yield* emit("\u001b[32mResolving");
+        yield* emit(" deps\u001b[0m\r\nDone in 2s\r\n");
+        // A spoofed sentinel from the script itself must not settle completion.
+        yield* emit("__T3_SETUP_DONE__:0\r\n");
+        yield* emit(`__T3_SETUP_DONE___${"0".repeat(32)}:0\r\n`);
+        yield* emit(`${sentinel}3\r\n`);
+
+        const completion = yield* result.completion!;
+        expect(completion.exitCode).toBe(3);
+        expect(seen).toEqual([
+          "Resolving deps",
+          "Done in 2s",
+          "__T3_SETUP_DONE__:0",
+          `__T3_SETUP_DONE___${"0".repeat(32)}:0`,
+        ]);
+        // The subscription is torn down once the sentinel arrives.
+        expect(listener).toBeNull();
+      }).pipe(
+        Effect.provide(testLayer(project, { open, write, subscribe })),
+        Effect.provideService(HostProcessPlatform, "linux"),
+        Effect.provideService(HostProcessEnvironment, { SHELL: "/bin/zsh" }),
+      );
+    },
+  );
+
+  it.effect("unsubscribes from terminal output when the command cannot be written", () => {
+    const open = vi.fn(() =>
+      Effect.succeed({
+        threadId: "thread-1",
+        terminalId: "setup-setup",
+        cwd: "/repo/worktrees/a",
+        worktreePath: "/repo/worktrees/a",
+        status: "running" as const,
+        pid: 123,
+        history: "",
+        exitCode: null,
+        exitSignal: null,
+        label: "setup-setup",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    const write = vi.fn(() =>
+      Effect.fail(
+        new TerminalManager.TerminalCwdStatError({ cwd: "/repo/worktrees/a", cause: {} }),
+      ),
+    );
+    const unsubscribe = vi.fn();
+    const subscribe = vi.fn(() => Effect.succeed(unsubscribe));
+    const project = makeProject([
+      {
+        id: "setup",
+        name: "Setup",
+        command: "bun install",
+        icon: "configure",
+        runOnWorktreeCreate: true,
+      },
+    ]);
+
+    return Effect.gen(function* () {
+      const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+      const result = yield* runner
+        .runForThread({
+          threadId: "thread-1",
+          projectCwd: "/repo/project",
+          worktreePath: "/repo/worktrees/a",
+          observeCompletion: {},
+        })
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+    }).pipe(Effect.provide(testLayer(project, { open, write, subscribe })));
+  });
+
+  it.effect.each([
+    {
+      shell: "/usr/bin/fish",
+      expected:
+        /^begin\rbun install\rend; printf '\\n__T3_SETUP_DONE___[0-9a-f]{32}:%s\\n' \$status\r$/,
+    },
+    {
+      shell: "/bin/bash",
+      expected: /^\( bun install\r\); printf '\\n__T3_SETUP_DONE___[0-9a-f]{32}:%s\\n' "\$\?"\r$/,
+    },
+  ])("wraps the command for the $shell syntax", ({ shell, expected }) => {
+    const open = vi.fn(() =>
+      Effect.succeed({
+        threadId: "thread-1",
+        terminalId: "setup-setup",
+        cwd: "/repo/worktrees/a",
+        worktreePath: "/repo/worktrees/a",
+        status: "running" as const,
+        pid: 123,
+        history: "",
+        exitCode: null,
+        exitSignal: null,
+        label: "setup-setup",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    const writes: string[] = [];
+    const write = vi.fn((input: { data: string }) =>
+      Effect.sync(() => void writes.push(input.data)),
+    );
+    const project = makeProject([
+      {
+        id: "setup",
+        name: "Setup",
+        command: "bun install",
+        icon: "configure",
+        runOnWorktreeCreate: true,
+      },
+    ]);
+    return Effect.gen(function* () {
+      const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+      yield* runner.runForThread({
+        threadId: "thread-1",
+        projectCwd: "/repo/project",
+        worktreePath: "/repo/worktrees/a",
+        observeCompletion: {},
+      });
+      expect(writes).toHaveLength(1);
+      expect(writes[0]).toMatch(expected);
+    }).pipe(
+      Effect.provide(testLayer(project, { open, write })),
+      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.provideService(HostProcessEnvironment, { SHELL: shell }),
+    );
+  });
 
   it.effect("runs a conventional package bootstrap before reporting no setup script", () => {
     let listener: ((event: TerminalEvent) => Effect.Effect<void>) | undefined;
@@ -293,9 +480,10 @@ describe("ProjectSetupScriptRunner", () => {
         threadId: "thread-1",
         projectId: "project-1",
         worktreePath,
+        observeCompletion: {},
       });
       if (result.status === "started") {
-        yield* result.completion;
+        yield* result.completion!;
       }
 
       expect(result).toMatchObject({
@@ -305,67 +493,8 @@ describe("ProjectSetupScriptRunner", () => {
         terminalId: "setup-bootstrap-worktree",
         cwd: worktreePath,
       });
-      expect(write).toHaveBeenCalledWith({
-        threadId: "thread-1",
-        terminalId: "setup-bootstrap-worktree",
-        data: "exec sh -lc 'pnpm run bootstrap:worktree'\r",
-      });
+      expect(write).toHaveBeenCalled();
     }).pipe(Effect.scoped, Effect.provide(testLayer(project, { open, write, subscribe })));
-  });
-
-  it.effect("fails completion when the setup command exits unsuccessfully", () => {
-    let listener: ((event: TerminalEvent) => Effect.Effect<void>) | undefined;
-    const project = makeProject([
-      {
-        id: "setup",
-        name: "Setup",
-        command: "bun install",
-        icon: "configure",
-        runOnWorktreeCreate: true,
-      },
-    ]);
-    const open = () =>
-      Effect.succeed({
-        threadId: "thread-1",
-        terminalId: "setup-setup",
-        cwd: "/repo/worktrees/a",
-        worktreePath: "/repo/worktrees/a",
-        status: "running" as const,
-        pid: 123,
-        history: "",
-        exitCode: null,
-        exitSignal: null,
-        label: "setup-setup",
-        updatedAt: "2026-01-01T00:00:00.000Z",
-      });
-    const subscribe = (nextListener: (event: TerminalEvent) => Effect.Effect<void>) =>
-      Effect.sync(() => {
-        listener = nextListener;
-        return () => undefined;
-      });
-    const write = () =>
-      listener?.({
-        type: "exited",
-        threadId: "thread-1",
-        terminalId: "setup-setup",
-        exitCode: 1,
-        exitSignal: null,
-      }) ?? Effect.void;
-
-    return Effect.gen(function* () {
-      const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
-      const result = yield* runner.runForThread({
-        threadId: "thread-1",
-        projectId: "project-1",
-        worktreePath: "/repo/worktrees/a",
-      });
-      expect(result.status).toBe("started");
-      if (result.status !== "started") return;
-
-      const error = yield* result.completion.pipe(Effect.flip);
-      expect(error.operation).toBe("executeCommand");
-      expect(String(error.cause)).toContain("code 1");
-    }).pipe(Effect.provide(testLayer(project, { open, write, subscribe })));
   });
 
   it.effect("keeps terminal failures as the exact cause of a structured operation error", () => {

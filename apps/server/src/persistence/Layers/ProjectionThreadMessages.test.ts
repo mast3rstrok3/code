@@ -71,6 +71,263 @@ layer("ProjectionThreadMessageRepository", (it) => {
     }),
   );
 
+  it.effect("persists structured context and keeps it across updates without context", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.make("thread-context");
+      const messageId = MessageId.make("message-context");
+      const createdAt = "2026-02-28T19:05:00.000Z";
+      const context = {
+        version: 1 as const,
+        records: [
+          {
+            version: 1 as const,
+            contextId: "ctx_1" as never,
+            kind: "terminal" as const,
+            label: "Terminal 1 line 4",
+            terminalId: "default",
+            terminalLabel: "Terminal 1",
+            lineStart: 4,
+            lineEnd: 4,
+            text: "boom",
+          },
+        ],
+      };
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "user",
+        text: "see [Terminal 1 line 4](t3-context://v1/terminal/ctx_1)",
+        context,
+        isStreaming: false,
+        createdAt,
+        updatedAt: createdAt,
+      });
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "user",
+        text: "see [Terminal 1 line 4](t3-context://v1/terminal/ctx_1)",
+        isStreaming: false,
+        createdAt,
+        updatedAt: "2026-02-28T19:05:01.000Z",
+      });
+      const rows = yield* repository.listByThreadId({ threadId });
+      assert.deepStrictEqual(rows[0]?.context, context);
+    }),
+  );
+
+  it.effect("appends streaming text and applies attachment updates", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.make("thread-streaming-append");
+      const messageId = MessageId.make("message-streaming-append");
+      const createdAt = "2026-02-28T19:05:00.000Z";
+      const attachments = [
+        {
+          type: "image" as const,
+          id: "thread-streaming-append-att-1",
+          name: "example.png",
+          mimeType: "image/png",
+          sizeBytes: 5,
+        },
+      ];
+
+      yield* repository.appendStreaming({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "assistant",
+        text: "hello",
+        attachments,
+        createdAt,
+        updatedAt: createdAt,
+      });
+      yield* repository.appendStreaming({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "assistant",
+        text: " world",
+        createdAt: "2026-02-28T19:05:01.000Z",
+        updatedAt: "2026-02-28T19:05:01.000Z",
+      });
+
+      const rowWithPreservedAttachments = yield* repository.getByMessageId({ messageId });
+      assert.equal(rowWithPreservedAttachments._tag, "Some");
+      if (rowWithPreservedAttachments._tag === "Some") {
+        assert.deepEqual(rowWithPreservedAttachments.value.attachments, attachments);
+      }
+
+      yield* repository.appendStreaming({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "assistant",
+        text: "",
+        attachments: [],
+        createdAt: "2026-02-28T19:05:02.000Z",
+        updatedAt: "2026-02-28T19:05:02.000Z",
+      });
+
+      const row = yield* repository.getByMessageId({ messageId });
+      assert.equal(row._tag, "Some");
+      if (row._tag === "Some") {
+        assert.equal(row.value.text, "hello world");
+        assert.deepEqual(row.value.attachments, []);
+        assert.equal(row.value.createdAt, createdAt);
+        assert.equal(row.value.updatedAt, "2026-02-28T19:05:02.000Z");
+        assert.isTrue(row.value.isStreaming);
+      }
+    }),
+  );
+
+  it.effect("preserves existing attachments when upsert omits attachments", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.make("thread-preserve-attachments");
+      const messageId = MessageId.make("message-preserve-attachments");
+      const createdAt = "2026-02-28T19:00:00.000Z";
+      const updatedAt = "2026-02-28T19:00:01.000Z";
+      const persistedAttachments = [
+        {
+          type: "image" as const,
+          id: "thread-preserve-attachments-att-1",
+          name: "example.png",
+          mimeType: "image/png",
+          sizeBytes: 5,
+        },
+      ];
+
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "user",
+        text: "initial",
+        attachments: persistedAttachments,
+        isStreaming: false,
+        createdAt,
+        updatedAt,
+      });
+
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "user",
+        text: "updated",
+        isStreaming: false,
+        createdAt,
+        updatedAt: "2026-02-28T19:00:02.000Z",
+      });
+
+      const rows = yield* repository.listByThreadId({ threadId });
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0]?.text, "updated");
+      assert.deepEqual(rows[0]?.attachments, persistedAttachments);
+
+      const rowById = yield* repository.getByMessageId({ messageId });
+      assert.equal(rowById._tag, "Some");
+      if (rowById._tag === "Some") {
+        assert.equal(rowById.value.text, "updated");
+        assert.deepEqual(rowById.value.attachments, persistedAttachments);
+      }
+    }),
+  );
+
+  it.effect("allows explicit attachment clearing with an empty array", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.make("thread-clear-attachments");
+      const messageId = MessageId.make("message-clear-attachments");
+      const createdAt = "2026-02-28T19:10:00.000Z";
+
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "assistant",
+        text: "with attachment",
+        attachments: [
+          {
+            type: "image",
+            id: "thread-clear-attachments-att-1",
+            name: "example.png",
+            mimeType: "image/png",
+            sizeBytes: 5,
+          },
+        ],
+        isStreaming: false,
+        createdAt,
+        updatedAt: "2026-02-28T19:10:01.000Z",
+      });
+
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "assistant",
+        text: "cleared",
+        attachments: [],
+        isStreaming: false,
+        createdAt,
+        updatedAt: "2026-02-28T19:10:02.000Z",
+      });
+
+      const rows = yield* repository.listByThreadId({ threadId });
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0]?.text, "cleared");
+      assert.deepEqual(rows[0]?.attachments, []);
+    }),
+  );
+
+  it.effect("checks assistant turn state without hydrating message text", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.make("thread-assistant-turn-state");
+      const turnId = TurnId.make("turn-assistant-state");
+      const createdAt = "2026-03-01T00:00:00.000Z";
+
+      yield* repository.upsert({
+        messageId: MessageId.make("message-assistant-turn-state"),
+        threadId,
+        turnId,
+        role: "assistant",
+        text: "large text that the existence query must not select",
+        isStreaming: false,
+        createdAt,
+        updatedAt: createdAt,
+      });
+
+      assert.equal(
+        yield* repository.hasAssistantMessageForTurn({
+          threadId,
+          turnId,
+          streamingOnly: false,
+        }),
+        true,
+      );
+      assert.equal(
+        yield* repository.hasAssistantMessageForTurn({
+          threadId,
+          turnId,
+          streamingOnly: true,
+        }),
+        false,
+      );
+      assert.equal(
+        yield* repository.hasAssistantMessageForTurn({
+          threadId,
+          turnId: TurnId.make("turn-assistant-state-missing"),
+          streamingOnly: false,
+        }),
+        false,
+      );
+    }),
+  );
   it.effect("preserves an associated workflow prompt across message updates", () =>
     Effect.gen(function* () {
       const repository = yield* ProjectionThreadMessageRepository;

@@ -17,7 +17,7 @@ it.effect("upgrades a fork database at 90 without replacing workflow data", () =
         'full-access', 'planning-workflow', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', '{}'
       )
     `;
-    const executed = yield* runMigrations();
+    const executed = yield* runMigrations({ toMigrationInclusive: 93 });
     assert.deepEqual(
       executed.map(([id]) => id),
       [91, 92, 93],
@@ -35,6 +35,6 @@ it.effect("upgrades a fork database at 90 without replacing workflow data", () =
       },
     ]);
     assert.deepEqual(yield* sql`SELECT * FROM projection_thread_pull_requests`, []);
-    assert.deepEqual(yield* runMigrations(), []);
+    assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 93 }), []);
   }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
 );

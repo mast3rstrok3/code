@@ -23,8 +23,6 @@ const ticketKey = {
 it("defaults to E2E only and lets a ticket key fall back to the step entry", () => {
   expect(resolveAppReviewStepParts({ overrides: undefined, key: stepKey })).toEqual(
     DEFAULT_APP_REVIEW_PARTS,
-    resolveReviewTestPlatforms,
-    setTicketTestPlatforms,
   );
   expect(resolveAppReviewStepParts({ overrides: [], key: ticketKey })).toEqual({
     e2e: true,

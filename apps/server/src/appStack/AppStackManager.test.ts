@@ -101,6 +101,8 @@ const makeConfigLayer = (input?: {
     traceBatchWindowMs: 200,
     traceMaxBytes: 10 * 1024 * 1024,
     traceMaxFiles: 10,
+    otlpHeaders: undefined,
+    otlpProtocol: "http/json",
     otlpTracesUrl: undefined,
     otlpMetricsUrl: undefined,
     otlpExportIntervalMs: 10_000,

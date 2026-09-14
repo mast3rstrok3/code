@@ -1,4 +1,5 @@
 import * as NetService from "@t3tools/shared/Net";
+import { OtlpHeadersFromString, OtlpProtocol } from "@t3tools/shared/observability";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
 import * as Config from "effect/Config";
@@ -184,6 +185,13 @@ const EnvServerConfig = Config.all({
     Config.withDefault(10_000),
   ),
   otlpServiceName: Config.string("T3CODE_OTLP_SERVICE_NAME").pipe(Config.withDefault("t3-server")),
+  otlpHeaders: Config.schema(OtlpHeadersFromString, "T3CODE_OTLP_HEADERS").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  otlpProtocol: Config.schema(OtlpProtocol, "T3CODE_OTLP_PROTOCOL").pipe(
+    Config.withDefault("http/json"),
+  ),
   mode: Config.schema(ServerConfig.RuntimeMode, "T3CODE_MODE").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -301,6 +309,26 @@ const EnvServerConfig = Config.all({
     "T3CODE_PREVIEW_RECORDING_MODE",
   ).pipe(Config.withDefault("auto")),
 });
+
+const DevAuthTokenConfig = Config.redacted("T3CODE_DEV_AUTH_TOKEN").pipe(
+  Config.map((token) => Redacted.make(Redacted.value(token).trim())),
+  Config.mapOrFail((token) =>
+    Redacted.value(token).length === 0 || Redacted.value(token).length >= 32
+      ? Effect.succeed(token)
+      : Effect.fail(
+          new Config.ConfigError(
+            new Schema.SchemaError(
+              new SchemaIssue.InvalidValue({
+                message: "T3CODE_DEV_AUTH_TOKEN must contain at least 32 characters.",
+              }),
+            ),
+          ),
+        ),
+  ),
+  Config.option,
+  Config.map(Option.filter((token) => Redacted.value(token).length > 0)),
+  Config.map(Option.getOrUndefined),
+);
 
 export interface CliServerFlags {
   readonly mode: Option.Option<ServerConfig.RuntimeMode>;
@@ -432,6 +460,8 @@ export const resolveServerConfig = (
       resolveOptionPrecedence(normalizedFlags.devUrl, Option.fromUndefinedOr(env.devUrl)),
       () => undefined,
     );
+    const devAuthToken =
+      mode === "web" && devUrl !== undefined ? yield* DevAuthTokenConfig : undefined;
     const explicitBaseDir = resolveOptionPrecedence(
       normalizedFlags.baseDir,
       Option.fromUndefinedOr(env.t3Home),
@@ -567,6 +597,8 @@ export const resolveServerConfig = (
         persistedObservabilitySettings.otlpMetricsUrl,
       otlpExportIntervalMs: env.otlpExportIntervalMs,
       otlpServiceName: env.otlpServiceName,
+      otlpHeaders: env.otlpHeaders,
+      otlpProtocol: env.otlpProtocol,
       mode,
       port,
       cwd,
@@ -586,6 +618,7 @@ export const resolveServerConfig = (
       appStackBackendOidcClientSecret:
         env.appStackBackendOidcClientSecret ?? env.codeOidcClientSecret,
       appStackNative,
+      ...(devAuthToken === undefined ? {} : { devAuthToken }),
       devAllowedOrigins: env.devAllowedOrigins,
       noBrowser,
       startupPresentation,

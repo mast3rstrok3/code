@@ -1191,6 +1191,7 @@ function makeTestLayer(
               uuid: "stack-uuid-1",
               userId: "user-1",
               worktreePath: "/tmp/implementation-reactor.worktrees/checkout",
+              observeCompletion: {},
               composePath: "/tmp/compose.yml",
               displayName: "Implementation test",
               description: null,
@@ -7047,6 +7048,7 @@ describe("ImplementationWorkflowReactor", () => {
             threadId: run.orchestratorThreadId,
             projectId,
             worktreePath: run.orchestratorWorktreePath,
+            observeCompletion: {},
           },
         ]);
         const snapshot = yield* system.query.getSnapshot();
