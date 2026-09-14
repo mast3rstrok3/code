@@ -1,3 +1,4 @@
+import { TicketTestPlatformPicker } from "./ReviewTestPlatformPicker";
 import type {
   ImplementationWorkflowSettings,
   ModelSelection,
@@ -698,6 +699,13 @@ export function EngineeringWorkflowSettings(props: EngineeringWorkflowSettingsPr
   return (
     <div className="space-y-3">
       <WorkflowModelSetup {...props} effectivePinFor={effectivePinFor} />
+      <div className="max-w-lg rounded-lg border border-border/70 p-3">
+        <TicketTestPlatformPicker
+          overrides={props.stepReviewParts}
+          defaults={props.defaultStepReviewParts}
+          onSetStepReviewParts={props.onSetStepReviewParts}
+        />
+      </div>
       {(
         [
           { id: "planning", label: "Planning phase" },

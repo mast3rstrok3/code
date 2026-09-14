@@ -1,3 +1,4 @@
+import { ReviewTestPlatforms } from "./reviewPlatforms.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
@@ -226,6 +227,7 @@ export const AppReviewWorkflowRun = Schema.Struct({
   targetThreadId: ThreadId,
   controllerThreadId: ThreadId,
   caller: AppReviewWorkflowCaller,
+  testPlatforms: Schema.optionalKey(ReviewTestPlatforms),
   briefMarkdown: TrimmedNonEmptyString,
   supportingContextMarkdown: Schema.NullOr(Schema.String),
   previewTargets: Schema.Array(TrimmedNonEmptyString),

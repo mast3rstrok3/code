@@ -11248,3 +11248,38 @@ it.effect("refuses native handoff while the ticket App Review still owns its che
     }),
   ),
 );
+
+it.effect("launches ticket App Review with the user's selected test platforms", () =>
+  withSystem((system) =>
+    Effect.gen(function* () {
+      const { run, ticket } = yield* launchRun(system, {
+        appReviewStrategy: "nested-workflow",
+        tickets: [
+          {
+            ...planningTicket("TICKET-1"),
+            appReviewEligible: true,
+            appReviewPlanMarkdown: "Verify checkout.",
+          },
+        ],
+      });
+      yield* system.engine.dispatch({
+        type: "thread.workflow.step-review-parts.set",
+        commandId: commandId("ticket-platforms"),
+        threadId: sourceThreadId,
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+        stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+        parts: {
+          e2e: true,
+          browser: true,
+          testPlatforms: ["web", "windows"],
+          ticketTestPlatforms: [{ ticketId: ticket.id, platforms: ["web", "android", "ios"] }],
+        },
+        createdAt: now,
+      });
+      yield* appendWorkerResult(system, { run, status: "succeeded", completeTicketReview: false });
+      const snapshot = yield* system.query.getSnapshot();
+      expect(snapshot.appReviewWorkflowRuns?.[0]?.testPlatforms).toEqual(["web", "android", "ios"]);
+      expect(snapshot.appReviewWorkflowRuns?.[0]?.appReviewScope).toBe("both");
+    }),
+  ),
+);

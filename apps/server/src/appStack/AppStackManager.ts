@@ -3,6 +3,13 @@ import {
   AppStackAutoCreateResult,
   AppStackByWorktreeResult,
   AppStackDeleteResult,
+  AppStackAndroidStatus,
+  AppStackWindowsStatus,
+  AppStackDeviceLease,
+  type AppStackDeviceInput,
+  type AppStackDeviceStartInput,
+  type AppStackDeviceStopInput,
+  type AppStackDeviceStatus,
   AppStackError,
   type AppStackGetAllStackPodLogsInput,
   type AppStackGetAllStackPodLogsResult,
@@ -69,6 +76,18 @@ export class AppStackManager extends Context.Service<
   AppStackManager,
   {
     readonly status: Effect.Effect<AppStackBackendStatus>;
+    readonly startDevice: (
+      input: AppStackDeviceStartInput,
+    ) => Effect.Effect<AppStackDeviceLease, AppStackError>;
+    readonly stopDevice: (
+      input: AppStackDeviceStopInput,
+    ) => Effect.Effect<AppStackDeviceLease, AppStackError>;
+    readonly getDeviceLease: (
+      input: AppStackDeviceInput,
+    ) => Effect.Effect<AppStackDeviceLease, AppStackError>;
+    readonly getDeviceStatus: (
+      input: AppStackDeviceInput,
+    ) => Effect.Effect<AppStackDeviceStatus, AppStackError>;
     readonly list: (input: AppStackListInput) => Effect.Effect<AppStackListResult, AppStackError>;
     readonly getByWorktree: (input: {
       readonly worktreePath: string;
@@ -113,13 +132,26 @@ export class AppStackManager extends Context.Service<
 
       if (config.appStackNative !== undefined && baseUrl === null) {
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        return AppStackManager.of(
-          makeNativeAppStackService(
+        const unavailable = (operation: string) =>
+          Effect.fail(
+            new AppStackError({
+              operation,
+              reason: "disabled",
+              message:
+                "Cluster device leases require a Stacks controller. Configure T3CODE_APP_STACK_BACKEND_URL and its authentication on this Code server.",
+            }),
+          );
+        return AppStackManager.of({
+          ...makeNativeAppStackService(
             config.appStackNative,
             makeKubectlRunner(config.appStackNative.kubectlPath, spawner),
             makeNativeCommandRunner(spawner),
           ),
-        );
+          startDevice: () => unavailable("startDevice"),
+          stopDevice: () => unavailable("stopDevice"),
+          getDeviceLease: () => unavailable("getDeviceLease"),
+          getDeviceStatus: () => unavailable("getDeviceStatus"),
+        });
       }
 
       const bearerToken =
@@ -743,7 +775,64 @@ export class AppStackManager extends Context.Service<
         };
       });
 
+      const startDevice = Effect.fn("AppStackManager.startDevice")(function* (
+        input: AppStackDeviceStartInput,
+      ) {
+        const base = yield* requireBaseUrl("startDevice");
+        return yield* executeJson(
+          "startDevice",
+          HttpClientRequest.post(
+            appStackUrl(base, `/${encodeURIComponent(input.stackId)}/${input.platform}/start`),
+          ).pipe(
+            HttpClientRequest.bodyJsonUnsafe({
+              leaseId: input.leaseId,
+              ttlSeconds: input.ttlSeconds ?? 1800,
+            }),
+          ),
+          AppStackDeviceLease,
+        );
+      });
+      const stopDevice = Effect.fn("AppStackManager.stopDevice")(function* (
+        input: AppStackDeviceStopInput,
+      ) {
+        const base = yield* requireBaseUrl("stopDevice");
+        return yield* executeJson(
+          "stopDevice",
+          HttpClientRequest.post(
+            appStackUrl(base, `/${encodeURIComponent(input.stackId)}/${input.platform}/stop`),
+          ).pipe(HttpClientRequest.bodyJsonUnsafe({ leaseId: input.leaseId })),
+          AppStackDeviceLease,
+        );
+      });
+      const getDeviceLease = Effect.fn("AppStackManager.getDeviceLease")(function* (
+        input: AppStackDeviceInput,
+      ) {
+        const base = yield* requireBaseUrl("getDeviceLease");
+        return yield* executeJson(
+          "getDeviceLease",
+          HttpClientRequest.get(
+            appStackUrl(base, `/${encodeURIComponent(input.stackId)}/${input.platform}/lease`),
+          ),
+          AppStackDeviceLease,
+        );
+      });
+      const getDeviceStatus = Effect.fn("AppStackManager.getDeviceStatus")(function* (
+        input: AppStackDeviceInput,
+      ) {
+        const base = yield* requireBaseUrl("getDeviceStatus");
+        const request = HttpClientRequest.get(
+          appStackUrl(base, `/${encodeURIComponent(input.stackId)}/${input.platform}/status`),
+        );
+        return input.platform === "android"
+          ? yield* executeJson("getDeviceStatus", request, AppStackAndroidStatus)
+          : yield* executeJson("getDeviceStatus", request, AppStackWindowsStatus);
+      });
+
       return AppStackManager.of({
+        startDevice,
+        stopDevice,
+        getDeviceLease,
+        getDeviceStatus,
         status,
         list,
         getByWorktree,

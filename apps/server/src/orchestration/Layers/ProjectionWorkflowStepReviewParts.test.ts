@@ -76,6 +76,65 @@ const seedWorkflowRoot = Effect.fn("seedWorkflowRoot")(function* () {
 });
 
 layer("workflow step review parts projection", (it) => {
+  it.effect("persists platform choices and ticket overrides in command and client snapshots", () =>
+    Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const query = yield* ProjectionSnapshotQuery;
+      yield* seedWorkflowRoot();
+      const parts = {
+        e2e: true,
+        browser: true,
+        testPlatforms: ["web", "windows", "android"] as const,
+        ticketTestPlatforms: [{ ticketId: "ticket-1", platforms: ["ios", "macos"] as const }],
+      };
+      yield* engine.dispatch({
+        type: "thread.workflow.step-review-parts.set",
+        commandId: CommandId.make("cmd-platforms"),
+        threadId: ROOT_THREAD_ID,
+        workflowPromptId: "implementation.browser-app-review.codex",
+        stepWorkflowPromptId: "implementation.tdd.codex",
+        parts,
+        createdAt: CREATED_AT,
+      });
+      const expected = [
+        {
+          workflowPromptId: "implementation.browser-app-review.codex",
+          stepWorkflowPromptId: "implementation.tdd.codex",
+          ...parts,
+        },
+      ];
+      assert.deepEqual(
+        (yield* query.getCommandReadModel()).threads.find((t) => t.id === ROOT_THREAD_ID)
+          ?.workflowStepReviewParts,
+        expected,
+      );
+      assert.deepEqual(
+        (yield* query.getShellSnapshot()).threads.find((t) => t.id === ROOT_THREAD_ID)
+          ?.workflowStepReviewParts,
+        expected,
+      );
+      assert.deepEqual(
+        Option.getOrUndefined(yield* query.getThreadShellById(ROOT_THREAD_ID))
+          ?.workflowStepReviewParts,
+        expected,
+      );
+      yield* engine.dispatch({
+        type: "thread.workflow.step-review-parts.set",
+        commandId: CommandId.make("cmd-clear-platforms"),
+        threadId: ROOT_THREAD_ID,
+        workflowPromptId: "implementation.browser-app-review.codex",
+        stepWorkflowPromptId: "implementation.tdd.codex",
+        parts: null,
+        createdAt: CREATED_AT,
+      });
+      assert.deepEqual(
+        (yield* query.getCommandReadModel()).threads.find((t) => t.id === ROOT_THREAD_ID)
+          ?.workflowStepReviewParts ?? [],
+        [],
+      );
+    }),
+  );
+
   // The reactors read the run's parts from the command read model and the
   // panel's switches read them from the shell snapshot. A projection that
   // stored the override without reading it back left the toggle looking dead

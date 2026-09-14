@@ -1116,8 +1116,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
                       ...(event.payload.stepWorkflowPromptId === undefined
                         ? {}
                         : { stepWorkflowPromptId: event.payload.stepWorkflowPromptId }),
-                      e2e: parts.e2e,
-                      browser: parts.browser,
+                      ...parts,
                     },
                   ],
           });

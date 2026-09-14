@@ -69,6 +69,8 @@ describe("buildWorktreeRuntimeContext", () => {
               error: null,
               previewUrl: "https://cortex.example.test",
             },
+            { name: "android-emulator", status: "stopped", health: "unknown" },
+            { name: "windows", status: "queued", health: "unknown" },
           ],
           serviceCount: 0,
           lastError: null,
@@ -90,6 +92,7 @@ describe("buildWorktreeRuntimeContext", () => {
     expect(context).toContain("App Stack URL: https://verify-email.example.test");
     expect(context).toContain("authoritative runtime and browser targets");
     expect(context).toContain("cortex: https://cortex.example.test");
+    expect(context).toContain("Use app_stack_device_start/status/stop");
   });
 
   it("does not authorize runtime evidence from a stack that is still starting", () => {

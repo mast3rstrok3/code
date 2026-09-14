@@ -955,8 +955,7 @@ export function projectEvent(
                         ...(payload.stepWorkflowPromptId === undefined
                           ? {}
                           : { stepWorkflowPromptId: payload.stepWorkflowPromptId }),
-                        e2e: payload.parts.e2e,
-                        browser: payload.parts.browser,
+                        ...payload.parts,
                       },
                     ],
               // Configuration, not activity: see the step-model case.

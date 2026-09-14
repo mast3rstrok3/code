@@ -47,11 +47,33 @@ In web and desktop threads, the App Stack status beside the workspace and branch
 this panel. It shows the dev stack for the thread's worktree, or the repository directory when
 the thread uses the local checkout. Agents receive fresh dev stack status and service URLs at
 each turn. Agents with T3's MCP tools can use `app_stack_get` to refresh status during a turn or
-request the prod variant.
+request the prod variant. You can ask an agent to start, stop, restart, or delete that workspace's
+stack, list its pods, and read recent container logs. These actions default to dev; ask for prod
+explicitly when needed. Starting reuses an existing stack or resumes a stopped one. Stopping keeps
+the namespace, while deleting removes it. Explicit stop, restart, and delete actions apply even
+when the stack is protected.
 
 Stacks created for a workflow are labeled **Workflow-owned**. If historical implementation runs
 map more than one visible stack to the same workflow, the panel reports the conflict but never
 deletes either stack automatically.
+
+## Android and Windows checks
+
+On an environment connected to a Stacks controller, ask your thread's agent to test on
+Android or Windows through the App Stack device tools. The repository's compose contract
+must enable `x-stacks-app-dev.androidEmulator` or `x-stacks-app-dev.windowsVm`. This
+repository enables both for dev stacks. Use a worktree stack with a generated namespace;
+standing deployments do not provide disposable device leases.
+
+The agent acquires a lease with `app_stack_device_start`, waits for readiness with
+`app_stack_device_status`, and uses the returned commands to install and test the app.
+Guests may queue while the cluster is busy. No Android SDK or Windows VM is needed on
+the agent's Linux host, but its configured Kubernetes account must allow execution in
+the stack's namespace. These tools are separate from the local device settings.
+
+The default lease lasts 30 minutes once the guest is ready. The agent can renew it with
+the same lease ID. Save test artifacts before calling `app_stack_device_stop`, which
+deletes the guest and leaves the application backend running.
 
 ## Automatic teardown and protected stacks
 

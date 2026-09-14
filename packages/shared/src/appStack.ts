@@ -1,4 +1,26 @@
 const DNS_LABEL_MAX_LENGTH = 63;
+
+// The Stacks controller reports leased guests under these service names. They
+// start on demand and their lifecycle does not determine application readiness.
+export function isAppStackDeviceService(service: { readonly name: string }): boolean {
+  return service.name === "android-emulator" || service.name === "windows";
+}
+
+export function appStackServiceBlocksReadiness(service: {
+  readonly name: string;
+  readonly status: string;
+  readonly health?: string | null | undefined;
+  readonly error?: string | null | undefined;
+}): boolean {
+  return (
+    !isAppStackDeviceService(service) &&
+    (service.error != null ||
+      service.health === "unhealthy" ||
+      service.status === "error" ||
+      service.status === "stopped")
+  );
+}
+
 export const DEFAULT_APP_STACK_PREVIEW_DOMAIN = "nightingale-ai.com";
 
 export type AppStackVariant = "dev" | "prod";

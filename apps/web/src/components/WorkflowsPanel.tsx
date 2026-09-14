@@ -1,3 +1,4 @@
+import { TicketTestPlatformPicker } from "./ReviewTestPlatformPicker";
 import {
   findWorkflowPauseScope,
   isRunStageSkipped,
@@ -1625,6 +1626,9 @@ export function implementationRunWorkflowIds(
 }
 
 function TicketPhases(props: {
+  readonly stepReviewParts: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
+  readonly defaultStepReviewParts: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
+  readonly onSetStepReviewParts: SetWorkflowStepReviewParts | undefined;
   readonly groupId: string;
   readonly tickets: readonly OrchestrationPlanningTicket[];
   readonly run: OrchestrationImplementationRun;
@@ -1981,6 +1985,14 @@ function TicketPhases(props: {
                   </div>
                   {open ? (
                     <div className="mb-2 ml-5 border-l border-border/70 pl-3">
+                      <div className="mb-3 rounded-md border border-border p-2">
+                        <TicketTestPlatformPicker
+                          ticketId={ticket.id}
+                          overrides={props.stepReviewParts}
+                          defaults={props.defaultStepReviewParts}
+                          onSetStepReviewParts={props.onSetStepReviewParts}
+                        />
+                      </div>
                       {state?.workerResult &&
                       (state.status !== "succeeded" || state.nativeVerification) ? (
                         <NativeVerificationPanel
@@ -2408,6 +2420,7 @@ function WorkflowGroupCard(props: {
   const [expandedStepEntries, setExpandedStepEntries] = useState<Record<string, boolean>>({});
   const [pendingScrollTarget, setPendingScrollTarget] = useState<string | null>(null);
   const [openPlanningArtifact, setOpenPlanningArtifact] = useState<{
+    readonly ticketId?: string;
     readonly title: string;
     readonly markdown: string;
   } | null>(null);
@@ -3009,6 +3022,9 @@ function WorkflowGroupCard(props: {
                               ticketWaveTickets.length > 0 ? (
                                 <div className="mt-1 border-t border-border/70 p-1">
                                   <TicketPhases
+                                    stepReviewParts={props.workflowRoot.workflowStepReviewParts}
+                                    defaultStepReviewParts={props.defaultStepReviewParts}
+                                    onSetStepReviewParts={props.onSetStepReviewParts}
                                     groupId={group.id}
                                     tickets={ticketWaveTickets}
                                     run={linkedImplementationRun}
@@ -3170,6 +3186,7 @@ function WorkflowGroupCard(props: {
                             setOpenPlanningArtifact({
                               title: `${ticket.key ?? `Ticket ${ticket.ordinal + 1}`} · ${ticket.title}`,
                               markdown: ticket.bodyMarkdown,
+                              ticketId: ticket.id,
                             })
                           }
                         />
@@ -3194,6 +3211,16 @@ function WorkflowGroupCard(props: {
             <DialogDescription>Durable workflow artifact</DialogDescription>
           </DialogHeader>
           <DialogPanel className="max-h-[70vh]">
+            {openPlanningArtifact?.ticketId !== undefined ? (
+              <div className="mb-4 rounded-md border border-border p-3">
+                <TicketTestPlatformPicker
+                  ticketId={openPlanningArtifact.ticketId}
+                  overrides={props.workflowRoot.workflowStepReviewParts}
+                  defaults={props.defaultStepReviewParts}
+                  onSetStepReviewParts={props.onSetStepReviewParts}
+                />
+              </div>
+            ) : null}
             <ChatMarkdown text={openPlanningArtifact?.markdown ?? ""} cwd={undefined} />
           </DialogPanel>
         </DialogPopup>

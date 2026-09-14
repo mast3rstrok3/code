@@ -1,5 +1,9 @@
 import type { AppStackByWorktreeResult, WorkflowPreset } from "@t3tools/contracts";
-import { appStackVariantForComposePath } from "@t3tools/shared/appStack";
+import {
+  appStackVariantForComposePath,
+  appStackServiceBlocksReadiness,
+  isAppStackDeviceService,
+} from "@t3tools/shared/appStack";
 
 const WORKFLOWS_WITH_EARLY_APP_STACK = new Set<WorkflowPreset>([
   "planning",
@@ -19,13 +23,7 @@ export function buildWorktreeRuntimeContext(input: {
   readonly stackFailureDetail?: string | null;
 }): string {
   const stack = input.stackLookup?.stack ?? null;
-  const unhealthyService = stack?.services?.find(
-    (service) =>
-      (service.error !== null && service.error !== undefined) ||
-      service.health === "unhealthy" ||
-      service.status === "error" ||
-      service.status === "stopped",
-  );
+  const unhealthyService = stack?.services?.find(appStackServiceBlocksReadiness);
   const stackHealthy =
     stack !== null &&
     stack.status === "running" &&
@@ -88,6 +86,11 @@ export function buildWorktreeRuntimeContext(input: {
     `- Worktree path: ${input.worktreePath}`,
     `- Git branch: ${input.branch ?? "rename pending"}`,
     ...stackLines,
+    ...(stack?.services?.some(isAppStackDeviceService)
+      ? [
+          "This stack has cluster test guests. Use app_stack_device_start/status/stop to lease Android or Windows and obtain access commands. Host device settings and missing local SDKs do not describe these cluster guests.",
+        ]
+      : []),
     "Use only this worktree for source and Git operations.",
     "Do not inspect, query, modify, or claim evidence from a host container, database, development server, deployment URL, or App Stack belonging to another worktree.",
     !stackHealthy && input.workflowPreset !== null

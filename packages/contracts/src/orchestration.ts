@@ -1,3 +1,4 @@
+import { ReviewTestPlatforms, TicketTestPlatforms } from "./reviewPlatforms.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
@@ -666,6 +667,8 @@ export const WorkflowStepReviewPartsOverride = Schema.Struct({
   stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
   e2e: Schema.Boolean,
   browser: Schema.Boolean,
+  testPlatforms: Schema.optionalKey(ReviewTestPlatforms),
+  ticketTestPlatforms: Schema.optionalKey(Schema.Array(TicketTestPlatforms)),
 });
 export type WorkflowStepReviewPartsOverride = typeof WorkflowStepReviewPartsOverride.Type;
 
@@ -2404,7 +2407,14 @@ const ThreadWorkflowStepReviewPartsSetCommand = Schema.Struct({
   workflowPromptId: TrimmedNonEmptyString,
   /** Set when the override targets one sub-step of a step rather than the step. */
   stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
-  parts: Schema.NullOr(Schema.Struct({ e2e: Schema.Boolean, browser: Schema.Boolean })),
+  parts: Schema.NullOr(
+    Schema.Struct({
+      e2e: Schema.Boolean,
+      browser: Schema.Boolean,
+      testPlatforms: Schema.optionalKey(ReviewTestPlatforms),
+      ticketTestPlatforms: Schema.optionalKey(Schema.Array(TicketTestPlatforms)),
+    }),
+  ),
   createdAt: IsoDateTime,
 });
 
@@ -2997,6 +3007,7 @@ export const ThreadAppReviewWorkflowLaunchCommand = Schema.Struct({
   targetThreadId: ThreadId,
   controllerThreadId: ThreadId,
   caller: AppReviewWorkflowCaller,
+  testPlatforms: Schema.optionalKey(ReviewTestPlatforms),
   briefMarkdown: TrimmedNonEmptyString,
   supportingContextMarkdown: Schema.optionalKey(Schema.NullOr(Schema.String)),
   previewTargets: Schema.Array(TrimmedNonEmptyString),
@@ -3823,7 +3834,14 @@ export const ThreadWorkflowStepReviewPartsSetPayload = Schema.Struct({
   /** Set when the override targets one sub-step of a step rather than the step. */
   stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
   /** Null clears the override and returns the step to the standing Settings. */
-  parts: Schema.NullOr(Schema.Struct({ e2e: Schema.Boolean, browser: Schema.Boolean })),
+  parts: Schema.NullOr(
+    Schema.Struct({
+      e2e: Schema.Boolean,
+      browser: Schema.Boolean,
+      testPlatforms: Schema.optionalKey(ReviewTestPlatforms),
+      ticketTestPlatforms: Schema.optionalKey(Schema.Array(TicketTestPlatforms)),
+    }),
+  ),
   updatedAt: IsoDateTime,
 });
 

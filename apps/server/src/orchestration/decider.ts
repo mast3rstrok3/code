@@ -4776,6 +4776,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         targetThreadId: command.targetThreadId,
         controllerThreadId: command.controllerThreadId,
         caller: command.caller,
+        ...(command.testPlatforms === undefined ? {} : { testPlatforms: command.testPlatforms }),
         briefMarkdown: command.briefMarkdown,
         supportingContextMarkdown: command.supportingContextMarkdown ?? null,
         previewTargets: command.previewTargets,

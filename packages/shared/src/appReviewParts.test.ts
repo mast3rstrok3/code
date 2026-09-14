@@ -2,6 +2,8 @@ import { expect, it } from "vite-plus/test";
 
 import {
   DEFAULT_APP_REVIEW_PARTS,
+  resolveReviewTestPlatforms,
+  setTicketTestPlatforms,
   appReviewPartsForScope,
   appReviewScopeForParts,
   describeAppReviewParts,
@@ -21,6 +23,8 @@ const ticketKey = {
 it("defaults to E2E only and lets a ticket key fall back to the step entry", () => {
   expect(resolveAppReviewStepParts({ overrides: undefined, key: stepKey })).toEqual(
     DEFAULT_APP_REVIEW_PARTS,
+    resolveReviewTestPlatforms,
+    setTicketTestPlatforms,
   );
   expect(resolveAppReviewStepParts({ overrides: [], key: ticketKey })).toEqual({
     e2e: true,
@@ -102,4 +106,26 @@ it("sets, replaces, and clears one step's override", () => {
   expect(replaced).toHaveLength(1);
   expect(replaced[0]).toMatchObject({ e2e: false, browser: true });
   expect(setWorkflowStepReviewPartsOverride(replaced, stepKey, null)).toEqual([]);
+});
+
+it("keeps ticket platforms through settings resolution and restores the workflow default", () => {
+  expect(resolveReviewTestPlatforms(DEFAULT_APP_REVIEW_PARTS)).toEqual(["web"]);
+  const parts = setTicketTestPlatforms(
+    { e2e: true, browser: true, testPlatforms: ["web", "windows"] },
+    "ticket-1",
+    ["web", "android", "ios"],
+  );
+  const overrides = setWorkflowStepReviewPartsOverride([], ticketKey, parts);
+  const resolved = resolveLayeredAppReviewStepParts({
+    threadOverrides: overrides,
+    settingsOverrides: [],
+    key: ticketKey,
+  });
+  expect(resolveReviewTestPlatforms(resolved, "ticket-1")).toEqual(["web", "android", "ios"]);
+  expect(resolveReviewTestPlatforms(resolved, "ticket-2")).toEqual(["web", "windows"]);
+  expect(
+    resolveReviewTestPlatforms(setTicketTestPlatforms(resolved, "ticket-1", null), "ticket-1"),
+  ).toEqual(["web", "windows"]);
+  expect(resolved.e2e).toBe(true);
+  expect(resolved.browser).toBe(true);
 });

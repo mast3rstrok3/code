@@ -1,4 +1,8 @@
-import type { AppReviewScope, WorkflowStepReviewPartsOverride } from "@t3tools/contracts";
+import type {
+  AppReviewScope,
+  ReviewTestPlatform,
+  WorkflowStepReviewPartsOverride,
+} from "@t3tools/contracts";
 
 import {
   APP_REVIEW_WORKFLOW_PROMPT_ID,
@@ -10,6 +14,10 @@ import {
 export interface AppReviewParts {
   readonly e2e: boolean;
   readonly browser: boolean;
+  readonly testPlatforms?: readonly [ReviewTestPlatform, ...ReviewTestPlatform[]];
+  readonly ticketTestPlatforms?: NonNullable<
+    WorkflowStepReviewPartsOverride["ticketTestPlatforms"]
+  >;
 }
 
 export const DEFAULT_APP_REVIEW_PARTS: AppReviewParts = { e2e: true, browser: false };
@@ -50,12 +58,12 @@ function partsFromOverrides(
 ): AppReviewParts | undefined {
   const entries = overrides ?? [];
   const exact = entries.find((entry) => workflowStepCycleKeysEqual(entry, key));
-  if (exact !== undefined) return { e2e: exact.e2e, browser: exact.browser };
+  if (exact !== undefined) return reviewPartsFromOverride(exact);
   if (key.stepWorkflowPromptId !== undefined) {
     const stepLevel = entries.find((entry) =>
       workflowStepCycleKeysEqual(entry, { workflowPromptId: key.workflowPromptId }),
     );
-    if (stepLevel !== undefined) return { e2e: stepLevel.e2e, browser: stepLevel.browser };
+    if (stepLevel !== undefined) return reviewPartsFromOverride(stepLevel);
   }
   return undefined;
 }
@@ -128,8 +136,53 @@ export function setWorkflowStepReviewPartsOverride(
       ...(key.stepWorkflowPromptId === undefined
         ? {}
         : { stepWorkflowPromptId: key.stepWorkflowPromptId }),
-      e2e: parts.e2e,
-      browser: parts.browser,
+      ...parts,
     },
   ];
+}
+
+function reviewPartsFromOverride(entry: WorkflowStepReviewPartsOverride): AppReviewParts {
+  return {
+    e2e: entry.e2e,
+    browser: entry.browser,
+    ...(entry.testPlatforms === undefined ? {} : { testPlatforms: entry.testPlatforms }),
+    ...(entry.ticketTestPlatforms === undefined
+      ? {}
+      : { ticketTestPlatforms: entry.ticketTestPlatforms }),
+  };
+}
+
+export const REVIEW_TEST_PLATFORMS = ["web", "windows", "android", "ios", "macos"] as const;
+export const REVIEW_TEST_PLATFORM_LABELS: Record<ReviewTestPlatform, string> = {
+  web: "Web",
+  windows: "Windows",
+  android: "Android",
+  ios: "iOS",
+  macos: "macOS",
+};
+export const TICKET_APP_REVIEW_PARTS_KEY = {
+  workflowPromptId: APP_REVIEW_WORKFLOW_PROMPT_ID,
+  stepWorkflowPromptId: "implementation.tdd.codex",
+};
+
+export function resolveReviewTestPlatforms(
+  parts: AppReviewParts,
+  ticketId?: string,
+): readonly [ReviewTestPlatform, ...ReviewTestPlatform[]] {
+  return (
+    parts.ticketTestPlatforms?.find((entry) => entry.ticketId === ticketId)?.platforms ??
+    parts.testPlatforms ?? ["web"]
+  );
+}
+
+export function setTicketTestPlatforms(
+  parts: AppReviewParts,
+  ticketId: string,
+  platforms: readonly [ReviewTestPlatform, ...ReviewTestPlatform[]] | null,
+): AppReviewParts {
+  const others = (parts.ticketTestPlatforms ?? []).filter((entry) => entry.ticketId !== ticketId);
+  return {
+    ...parts,
+    ticketTestPlatforms: platforms === null ? others : [...others, { ticketId, platforms }],
+  };
 }

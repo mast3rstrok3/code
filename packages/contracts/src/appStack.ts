@@ -321,6 +321,64 @@ export const AppStackGetAllStackPodLogsResult = Schema.Struct({
 });
 export type AppStackGetAllStackPodLogsResult = typeof AppStackGetAllStackPodLogsResult.Type;
 
+export const AppStackDevicePlatform = Schema.Literals(["android", "windows"]);
+export type AppStackDevicePlatform = typeof AppStackDevicePlatform.Type;
+
+export const AppStackDeviceInput = Schema.Struct({
+  stackId: TrimmedNonEmptyString,
+  platform: AppStackDevicePlatform,
+});
+export type AppStackDeviceInput = typeof AppStackDeviceInput.Type;
+
+export const AppStackDeviceStopInput = Schema.Struct({
+  ...AppStackDeviceInput.fields,
+  leaseId: Schema.String.check(Schema.isUUID()),
+});
+export type AppStackDeviceStopInput = typeof AppStackDeviceStopInput.Type;
+
+export const AppStackDeviceStartInput = Schema.Struct({
+  ...AppStackDeviceStopInput.fields,
+  ttlSeconds: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 60, maximum: 7200 })),
+  ),
+});
+export type AppStackDeviceStartInput = typeof AppStackDeviceStartInput.Type;
+
+export const AppStackDeviceLease = Schema.Struct({
+  platform: AppStackDevicePlatform,
+  status: TrimmedNonEmptyString,
+  leaseId: Schema.NullOr(Schema.String.check(Schema.isUUID())),
+  expiresAt: Schema.NullOr(IsoDateTime),
+  queueReason: NullableString,
+  queuePosition: Schema.NullOr(PositiveInt),
+  queuedAt: Schema.NullOr(IsoDateTime),
+  queueExpiresAt: Schema.NullOr(IsoDateTime),
+  retryAfterSeconds: Schema.NullOr(PositiveInt),
+  error: NullableString,
+  stopReason: NullableString,
+});
+export type AppStackDeviceLease = typeof AppStackDeviceLease.Type;
+
+export const AppStackAndroidStatus = Schema.Struct({
+  present: Schema.Boolean,
+  booted: Schema.Boolean,
+  serial: NullableString,
+  currentFocus: NullableString,
+  viewerUrl: NullableString,
+  metroUrl: NullableString,
+  message: NullableString,
+});
+
+export const AppStackWindowsStatus = Schema.Struct({
+  present: Schema.Boolean,
+  phase: Schema.String,
+  guestAgentConnected: Schema.Boolean,
+  ready: Schema.Boolean,
+});
+
+export const AppStackDeviceStatus = Schema.Union([AppStackAndroidStatus, AppStackWindowsStatus]);
+export type AppStackDeviceStatus = typeof AppStackDeviceStatus.Type;
+
 export class AppStackError extends Schema.TaggedError<AppStackError>()("AppStackError", {
   operation: TrimmedNonEmptyString,
   reason: Schema.optional(Schema.Literals(["disabled", "request_failed", "invalid_response"])),

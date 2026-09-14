@@ -2,12 +2,39 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   appStackComposePathForVariant,
+  appStackServiceBlocksReadiness,
   appStackPreviewUrlForService,
   appStackVariantForComposePath,
   appStackVariantForNamespace,
   deriveAppStackNamespaceFromPath,
   normalizeKubernetesNamespace,
 } from "./appStack.ts";
+
+describe("App Stack readiness", () => {
+  it("leaves idle, queued, and failed test guests out of application readiness", () => {
+    for (const name of ["android-emulator", "windows"]) {
+      for (const status of ["stopped", "queued", "starting", "error"]) {
+        expect(appStackServiceBlocksReadiness({ name, status, health: "unknown" })).toBe(false);
+      }
+    }
+  });
+
+  it("still blocks a failed application service", () => {
+    for (const name of ["frontend", "backend", "windows-api", "android-api"]) {
+      expect(appStackServiceBlocksReadiness({ name, status: "stopped" })).toBe(true);
+      expect(appStackServiceBlocksReadiness({ name, status: "error" })).toBe(true);
+      expect(appStackServiceBlocksReadiness({ name, status: "running", health: "unhealthy" })).toBe(
+        true,
+      );
+      expect(appStackServiceBlocksReadiness({ name, status: "running", error: "crashed" })).toBe(
+        true,
+      );
+      expect(appStackServiceBlocksReadiness({ name, status: "running", health: "healthy" })).toBe(
+        false,
+      );
+    }
+  });
+});
 
 describe("app stack namespace helpers", () => {
   it("derives a repo-dev namespace from a worktree path", () => {

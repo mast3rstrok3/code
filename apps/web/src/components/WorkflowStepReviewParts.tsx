@@ -1,6 +1,8 @@
+import { ReviewTestPlatformPicker } from "./ReviewTestPlatformPicker";
 import type { WorkflowStepReviewPartsOverride } from "@t3tools/contracts";
 import {
   APP_REVIEW_PARTS_TARGETS,
+  resolveReviewTestPlatforms,
   describeAppReviewParts,
   resolveLayeredAppReviewStepParts,
   type AppReviewParts,
@@ -98,6 +100,12 @@ export function WorkflowStepReviewPartPins(props: {
                 />
               </label>
             </div>
+            <ReviewTestPlatformPicker
+              platforms={resolveReviewTestPlatforms(parts)}
+              onChange={(testPlatforms) =>
+                props.onSetStepReviewParts(target.key, { ...parts, testPlatforms })
+              }
+            />
             <p className="text-[11px] leading-relaxed text-muted-foreground">
               {describeAppReviewParts(parts)}
               {parts.e2e || parts.browser ? "" : " — this review step is skipped entirely"} ·{" "}

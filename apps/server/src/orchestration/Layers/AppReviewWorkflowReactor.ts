@@ -1,3 +1,4 @@
+import { appStackServiceBlocksReadiness } from "@t3tools/shared/appStack";
 import {
   type AppStackStatus,
   APP_REVIEW_PREVIEW_URL_ENV,
@@ -26,6 +27,8 @@ import {
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
 } from "@t3tools/contracts";
 import {
+  resolveReviewTestPlatforms,
+  REVIEW_TEST_PLATFORM_LABELS,
   appReviewPartsForScope,
   appReviewScopeForParts,
   intersectAppReviewParts,
@@ -352,13 +355,7 @@ export function selectStandalonePreviewTargets(input: {
         detailMarkdown: `The App Stack '${stack.displayName ?? stack.id}' for this worktree is '${stack.status}', not 'running'.`,
       };
     }
-    const failedService = stack?.services?.find(
-      (service) =>
-        (service.error !== null && service.error !== undefined) ||
-        service.health === "unhealthy" ||
-        service.status === "error" ||
-        service.status === "stopped",
-    );
+    const failedService = stack?.services?.find(appStackServiceBlocksReadiness);
     if (failedService !== undefined) {
       return {
         _tag: "Blocked",
@@ -1226,11 +1223,15 @@ export function terminalReviewPassFailure(input: {
       .join(", ")}.`;
   }
   const checksById = new Map(checks.map((check) => [check.id, check]));
-  const missingE2eChecks = (input.e2eCheckIds ?? []).filter((id) => !checksById.has(id));
+  const requiredE2eChecks = [
+    ...(input.e2eCheckIds ?? []),
+    ...(input.review.appReviewScope === "e2e" ? platformCheckIds(input.run) : []),
+  ];
+  const missingE2eChecks = requiredE2eChecks.filter((id) => !checksById.has(id));
   if (missingE2eChecks.length > 0) {
     return `${sectionLabel} reported a pass without the required end-to-end checks: ${missingE2eChecks.join(", ")}.`;
   }
-  const carriedE2eChecks = (input.e2eCheckIds ?? []).filter(
+  const carriedE2eChecks = requiredE2eChecks.filter(
     (id) => checksById.get(id)?.carriedFromCycle !== undefined,
   );
   if (carriedE2eChecks.length > 0) {
@@ -1313,6 +1314,7 @@ export function buildE2eReviewPrompt(input: {
             ...input.e2eCommands.map((command, index) => `- e2e-${index + 1}: ${command}`),
             "Record each command as one check with the exact id shown.",
           ]),
+      ...buildPlatformTestInstructions(input.run),
       "Set blockerKind on every blocked check, including the aggregate e2e-ticket check. Use external-prerequisite if a check combines missing coverage with an external prerequisite.",
       "Summarize test results in notes. When command output publishes an inspectable web replay URL, copy it into that check's replayUrl field so a human can open it from the App Review panel.",
       "A failing command is a failed check. Turn each distinct in-scope product failure into an actionable finding. Keep unrelated or pre-existing failures in check notes or note-severity findings.",
@@ -1370,6 +1372,7 @@ export function buildReviewPrompt(input: {
         : ["", "End-to-end section result:", input.e2eSummaryMarkdown]),
       "",
       "Use the linked durable App Review record. Record the complete flow, capture captioned screenshots, and report every actionable finding. A missing or unavailable preview is a failed review.",
+      "Keep the rrweb session recording as replay evidence alongside the captioned screenshots. Platform E2E results do not replace this LLM-driven browser review or its evidence. rrweb records the web flow; native test recordings belong with their platform checks.",
       ...(run.reviewOnly === true
         ? [
             "This run reviews only. Nothing you find will be repaired, so the findings you record are the whole deliverable: state every one concretely enough that someone else can reproduce and fix it. Do not edit files.",
@@ -1629,7 +1632,7 @@ const make = Effect.gen(function* () {
     run: AppReviewWorkflowRun,
   ) {
     if (cwd === null) return [] as ReadonlyArray<string>;
-    const requiresE2e = (yield* reviewScopeForRun(run)) !== "browser";
+    const requiresE2e = (yield* reviewSettingsForRun(run)).scope !== "browser";
     const projectFile = yield* (
       requiresE2e ? projectFileLoader.loadStrict(cwd) : projectFileLoader.load(cwd)
     ).pipe(
@@ -1654,32 +1657,38 @@ const make = Effect.gen(function* () {
    * sub-step entry (falling back to the step entry); everything else resolves
    * the step entry directly.
    */
-  const reviewScopeForRun = Effect.fn("AppReviewWorkflowReactor.reviewScopeForRun")(function* (
-    run: AppReviewWorkflowRun,
-  ) {
-    const settings = yield* serverSettingsService.getSettings.pipe(
-      Effect.orElseSucceed(() => undefined),
-    );
-    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-    const controller = readModel.threads.find(
-      (candidate) => candidate.id === run.controllerThreadId,
-    );
-    const settingsParts = resolveLayeredAppReviewStepParts({
-      threadOverrides:
-        controller === undefined
-          ? undefined
-          : findWorkflowStepReviewParts(controller, readModel.threads),
-      settingsOverrides: settings?.workflowStepReviewParts,
-      key:
-        run.caller.type === "implementation" && run.caller.ticketId !== undefined
-          ? {
-              workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
-              stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
-            }
-          : { workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex },
-    });
-    return resolveEffectiveAppReviewScope({ run, settingsParts });
-  });
+  const reviewSettingsForRun = Effect.fn("AppReviewWorkflowReactor.reviewSettingsForRun")(
+    function* (run: AppReviewWorkflowRun) {
+      const settings = yield* serverSettingsService.getSettings.pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const controller = readModel.threads.find(
+        (candidate) => candidate.id === run.controllerThreadId,
+      );
+      const settingsParts = resolveLayeredAppReviewStepParts({
+        threadOverrides:
+          controller === undefined
+            ? undefined
+            : findWorkflowStepReviewParts(controller, readModel.threads),
+        settingsOverrides: settings?.workflowStepReviewParts,
+        key:
+          run.caller.type === "implementation" && run.caller.ticketId !== undefined
+            ? {
+                workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+                stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+              }
+            : { workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex },
+      });
+      return {
+        scope: resolveEffectiveAppReviewScope({ run, settingsParts }),
+        testPlatforms: resolveReviewTestPlatforms(
+          settingsParts,
+          run.caller.type === "implementation" ? run.caller.ticketId : undefined,
+        ),
+      };
+    },
+  );
 
   const updateRun = Effect.fn("AppReviewWorkflowReactor.updateRun")(function* (
     run: AppReviewWorkflowRun,
@@ -2133,8 +2142,13 @@ const make = Effect.gen(function* () {
     const cwd = target.cwd;
     const stableRun = yield* assertStableRevision(currentRun, cwd, occurredAt);
     if (stableRun === null) return;
-    const run = yield* resolveStandalonePreviewTargetsForRun(stableRun, cwd, occurredAt);
-    if (run === null) return;
+    const previewRun = yield* resolveStandalonePreviewTargetsForRun(stableRun, cwd, occurredAt);
+    if (previewRun === null) return;
+    const reviewSettings = yield* reviewSettingsForRun(previewRun);
+    const run = {
+      ...previewRun,
+      testPlatforms: previewRun.testPlatforms ?? reviewSettings.testPlatforms,
+    };
     if (run.caller.type === "implementation") {
       const status = yield* gitWorkflow.localStatus({ cwd });
       if (
@@ -2151,7 +2165,7 @@ const make = Effect.gen(function* () {
         return;
       }
     }
-    const reviewScope = yield* reviewScopeForRun(run);
+    const reviewScope = reviewSettings.scope;
     if (reviewScope === null) {
       yield* failRun({
         run,
@@ -2863,7 +2877,7 @@ const make = Effect.gen(function* () {
     );
     // A review that never gates on the e2e suite does not ask its fixer to
     // run it either.
-    const fixerScope = yield* reviewScopeForRun(run);
+    const fixerScope = (yield* reviewSettingsForRun(run)).scope;
     const e2eCommands = fixerScope === "e2e" || fixerScope === "both" ? declaredE2eCommands : [];
     if (existing === undefined) {
       yield* orchestrationEngine.dispatch({
@@ -4108,3 +4122,23 @@ const make = Effect.gen(function* () {
 });
 
 export const AppReviewWorkflowReactorLive = Layer.effect(AppReviewWorkflowReactor, make);
+
+function buildPlatformTestInstructions(run: AppReviewWorkflowRun): string[] {
+  if (run.testPlatforms === undefined || platformCheckIds(run).length === 0) return [];
+  return [
+    "Selected E2E platforms, in priority order:",
+    ...run.testPlatforms.map(
+      (platform) => `- e2e-platform-${platform}: ${REVIEW_TEST_PLATFORM_LABELS[platform]}`,
+    ),
+    "Run focused acceptance tests on every selected platform and record one fresh check with the exact platform id above, in addition to the required command or ticket checks. Include the runner, operating system, commit, exact command, acceptance coverage, and evidence in its notes. A web viewport or user-agent change does not verify a native platform.",
+    "Use configured Windows runners or VMs and Android emulators or devices autonomously from the Linux dev environment when available. Verify runner readiness first. iOS and macOS require a Mac runner or a native verification handoff. Stay within the assigned worktree and its App Stack.",
+    "A missing runner, SDK, emulator, device, or host capability is a blocked platform check with blockerKind external-prerequisite. Name the missing prerequisite and recovery action. A selected platform cannot pass on another platform's evidence. Keep platform videos, screenshots, logs, and replay links with the platform result.",
+  ];
+}
+
+function platformCheckIds(run: AppReviewWorkflowRun): string[] {
+  const platforms = run.testPlatforms ?? ["web"];
+  return platforms.length === 1 && platforms[0] === "web"
+    ? []
+    : platforms.map((platform) => `e2e-platform-${platform}`);
+}

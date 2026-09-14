@@ -69,7 +69,8 @@ const requireDeviceAccess = McpInvocationContext.requireMcpCapability("device").
   Effect.mapError(
     () =>
       new DeviceToolUnavailableError({
-        reason: "Agent device access is turned off for this environment.",
+        reason:
+          "Agent access to T3's device hosts is disabled for this session. Cluster Android and Windows guests use app_stack_device_start/status/stop when a Stacks controller is configured.",
       }),
   ),
 );

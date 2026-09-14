@@ -1,3 +1,4 @@
+import { appStackServiceBlocksReadiness } from "@t3tools/shared/appStack";
 import { nativeVerificationEvidenceMarkdown } from "../nativeVerification.ts";
 import { parseWorkflowDirectiveFromMarkdown } from "../workflowDirectives.ts";
 import { deferredTicketValidationCommands } from "../appReviewValidation.ts";
@@ -38,6 +39,9 @@ import {
   type VcsRef,
 } from "@t3tools/contracts";
 import {
+  resolveReviewTestPlatforms,
+  TICKET_APP_REVIEW_PARTS_KEY,
+  REVIEW_TEST_PLATFORMS,
   appReviewScopeForParts,
   describeAppReviewParts,
   resolveLayeredAppReviewStepParts,
@@ -4141,6 +4145,7 @@ const make = Effect.gen(function* () {
         orchestratorThreadId: currentRun.orchestratorThreadId,
         ticketId: input.ticketId,
       },
+      testPlatforms: resolveReviewTestPlatforms(configuredParts, input.ticketId),
       briefMarkdown: ticket.appReviewPlanMarkdown,
       supportingContextMarkdown: `Review only ticket ${input.ticketId}: ${ticket.title}. Treat its attached plan and acceptance criteria as authoritative.\n\n${nativeVerificationEvidenceMarkdown(state.nativeVerification)}`,
       previewTargets: [frontendUrl],
@@ -4903,13 +4908,7 @@ const make = Effect.gen(function* () {
         stack !== null && stack.stack !== null && stack.stack.status !== "running"
           ? stack.stack.status
           : null;
-      const failedService = stack?.stack?.services?.find(
-        (service) =>
-          (service.error !== null && service.error !== undefined) ||
-          service.health === "unhealthy" ||
-          service.status === "error" ||
-          service.status === "stopped",
-      );
+      const failedService = stack?.stack?.services?.find(appStackServiceBlocksReadiness);
       if (frontendUrl === null || pendingStackStatus !== null || failedService !== undefined) {
         const detail =
           failedService !== undefined
@@ -5140,6 +5139,20 @@ const make = Effect.gen(function* () {
           settingsOverrides: combinedSettings?.workflowStepReviewParts,
           key: { workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex },
         });
+        const ticketParts = resolveLayeredAppReviewStepParts({
+          threadOverrides: findWorkflowStepReviewParts(orchestratorThread, readModel.threads),
+          settingsOverrides: combinedSettings?.workflowStepReviewParts,
+          key: TICKET_APP_REVIEW_PARTS_KEY,
+        });
+        const selectedPlatforms = new Set([
+          ...resolveReviewTestPlatforms(combinedParts),
+          ...cycleRun.planningTicketIds.flatMap((ticketId) =>
+            resolveReviewTestPlatforms(ticketParts, ticketId),
+          ),
+        ]);
+        const [firstPlatform = "web", ...otherPlatforms] = REVIEW_TEST_PLATFORMS.filter(
+          (platform) => selectedPlatforms.has(platform),
+        );
         if (appReviewScopeForParts(combinedParts) === null) {
           yield* continueWithoutBrowserReview(readyRun);
           return;
@@ -5160,6 +5173,7 @@ const make = Effect.gen(function* () {
             implementationRunId: cycleRun.id,
             orchestratorThreadId: cycleRun.orchestratorThreadId,
           },
+          testPlatforms: [firstPlatform, ...otherPlatforms],
           briefMarkdown:
             artifactMarkdown ??
             `Verify Implementation run '${cycleRun.id}' against its complete Spec and Planning Tickets. Treat every acceptance criterion as required.`,

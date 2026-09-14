@@ -34,6 +34,20 @@ const noStackByWorktree = {
   frontendServiceName: null,
 } as const;
 
+const deviceLeaseJson = {
+  platform: "android" as const,
+  status: "queued",
+  leaseId: "935970a8-0032-4c65-b87f-5c36fd46bb91",
+  expiresAt: null,
+  queueReason: "capacity",
+  queuePosition: 2,
+  queuedAt: "2026-09-13T00:00:00Z",
+  queueExpiresAt: "2026-09-13T01:00:00Z",
+  retryAfterSeconds: 10,
+  error: null,
+  stopReason: null,
+};
+
 const decodeWorkflowRequest = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ workflow_id: Schema.optional(Schema.String) })),
 );
@@ -944,5 +958,110 @@ it.effect("derives the variant from the compose file name for listed stacks", ()
       stacks.map((stack) => stack.variant),
       ["dev", "prod"],
     );
+  }).pipe(Effect.provide(layer));
+});
+
+for (const platform of ["android", "windows"] as const) {
+  it.effect(`authenticates ${platform} lifecycle calls and preserves queue and lease data`, () => {
+    const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+    const lease = { ...deviceLeaseJson, platform };
+    const readiness =
+      platform === "android"
+        ? {
+            present: true,
+            booted: true,
+            serial: "emulator-5554",
+            currentFocus: null,
+            viewerUrl: null,
+            metroUrl: null,
+            message: null,
+          }
+        : {
+            present: true,
+            phase: "Running",
+            guestAgentConnected: true,
+            ready: true,
+            conditions: [],
+          };
+    const layer = makeLayer({
+      bearerToken: "backend-token",
+      requests,
+      response: (request) => Response.json(request.url.endsWith("/status") ? readiness : lease),
+    });
+    return Effect.gen(function* () {
+      const manager = yield* AppStackManager;
+      const input = { stackId: stackJson.id, platform };
+      assert.deepEqual(yield* manager.startDevice({ ...input, leaseId: lease.leaseId }), lease);
+      assert.deepEqual(yield* manager.getDeviceLease(input), lease);
+      const status = yield* manager.getDeviceStatus(input);
+      assert.equal(status.present, true);
+      if ("booted" in status) assert.equal(status.booted, true);
+      else assert.equal(status.ready, true);
+      yield* manager.stopDevice({ ...input, leaseId: lease.leaseId });
+      assert.deepEqual(
+        requests.map((r) => [r.method, r.url, r.headers.authorization]),
+        [
+          [
+            "POST",
+            `${backendUrl.href}api/app-dev-stacks/${stackJson.id}/${platform}/start`,
+            "Bearer backend-token",
+          ],
+          [
+            "GET",
+            `${backendUrl.href}api/app-dev-stacks/${stackJson.id}/${platform}/lease`,
+            "Bearer backend-token",
+          ],
+          [
+            "GET",
+            `${backendUrl.href}api/app-dev-stacks/${stackJson.id}/${platform}/status`,
+            "Bearer backend-token",
+          ],
+          [
+            "POST",
+            `${backendUrl.href}api/app-dev-stacks/${stackJson.id}/${platform}/stop`,
+            "Bearer backend-token",
+          ],
+        ],
+      );
+      const bodies = requests
+        .filter((r) => r.method === "POST")
+        .map((r) => {
+          if (r.body._tag !== "Uint8Array") return assert.fail("expected a JSON request body");
+          return JSON.parse(new TextDecoder().decode(r.body.body));
+        });
+      assert.deepEqual(bodies, [
+        { leaseId: lease.leaseId, ttlSeconds: 1800 },
+        { leaseId: lease.leaseId },
+      ]);
+    }).pipe(Effect.provide(layer));
+  });
+}
+
+it.effect("preserves lease conflicts and does not retry a device mutation", () => {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const layer = makeLayer({
+    requests,
+    response: () =>
+      Response.json({ detail: "Device belongs to another test session" }, { status: 409 }),
+  });
+  return Effect.gen(function* () {
+    const manager = yield* AppStackManager;
+    const error = yield* manager
+      .stopDevice({ stackId: stackJson.id, platform: "windows", leaseId: deviceLeaseJson.leaseId })
+      .pipe(Effect.flip);
+    assert.equal(error.status, 409);
+    assert.include(error.message, "another test session");
+    assert.lengthOf(requests, 1);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("rejects a malformed device response instead of claiming a lease was acquired", () => {
+  const layer = makeLayer({ requests: [], response: () => Response.json({ status: "running" }) });
+  return Effect.gen(function* () {
+    const manager = yield* AppStackManager;
+    const error = yield* manager
+      .startDevice({ stackId: stackJson.id, platform: "android", leaseId: deviceLeaseJson.leaseId })
+      .pipe(Effect.flip);
+    assert.equal(error.reason, "invalid_response");
   }).pipe(Effect.provide(layer));
 });

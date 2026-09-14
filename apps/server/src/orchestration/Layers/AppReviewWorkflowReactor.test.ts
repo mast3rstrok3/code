@@ -1530,7 +1530,7 @@ it("selects only the latest idle run for a new review cycle", () => {
   expect(selectReviewRunToStart(staleEventRun.id, [staleEventRun])).toBe(staleEventRun);
 });
 
-it("resolves standalone previews from the matching running App Stack", () => {
+it("resolves standalone previews while cluster test guests are stopped or queued", () => {
   expect(
     selectStandalonePreviewTargets({
       lookup: {
@@ -1538,7 +1538,11 @@ it("resolves standalone previews from the matching running App Stack", () => {
           id: "stack-1",
           displayName: "feature checkout",
           status: "running",
-          services: [{ name: "frontend", status: "running", health: "healthy" }],
+          services: [
+            { name: "frontend", status: "running", health: "healthy" },
+            { name: "android-emulator", status: "stopped", health: "unknown" },
+            { name: "windows", status: "queued", health: "unknown" },
+          ],
         },
         frontendUrl: "https://feature.example.test",
       },
@@ -2980,4 +2984,83 @@ it("preserves shared failures omitted from a later focused repair report", () =>
     ],
   };
   expect(deferredTicketValidationCommands(repaired, [])).toEqual(["project-tests"]);
+});
+
+it("requires fresh results for every selected E2E platform", () => {
+  const selectedRun = run({ testPlatforms: ["web", "windows", "android"] });
+  const passed = review("passed");
+  const checks = ["web", "windows", "android"].map((platform) => ({
+    id: `e2e-platform-${platform}`,
+    label: platform,
+    status: "passed" as const,
+    notes: "Runner command passed at the current commit.",
+  }));
+  const platformReview = {
+    ...passed,
+    appReviewScope: "e2e" as const,
+    document: { ...passed.document, checks },
+  };
+  expect(
+    terminalReviewPassFailure({ run: selectedRun, review: platformReview, priorReviews: [] }),
+  ).toBeNull();
+  expect(
+    terminalReviewPassFailure({
+      run: selectedRun,
+      review: {
+        ...platformReview,
+        document: { ...platformReview.document, checks: checks.slice(0, 2) },
+      },
+      priorReviews: [],
+    }),
+  ).toContain("e2e-platform-android");
+  expect(
+    terminalReviewPassFailure({
+      run: selectedRun,
+      review: {
+        ...platformReview,
+        document: {
+          ...platformReview.document,
+          checks: checks.map((check) => ({ ...check, carriedFromCycle: 1 })),
+        },
+      },
+      priorReviews: [],
+    }),
+  ).toContain("instead of rerunning");
+  expect(
+    terminalReviewPassFailure({
+      run: selectedRun,
+      review: {
+        ...platformReview,
+        document: {
+          ...platformReview.document,
+          checks: checks.map((check) => ({ ...check, status: "blocked" as const })),
+        },
+      },
+      priorReviews: [],
+    }),
+  ).toContain("incomplete checks");
+});
+
+it("directs selected platforms to real runners and retains browser recording evidence", () => {
+  const selectedRun = run({ testPlatforms: ["windows", "android", "ios", "macos"] });
+  const cycle = carryCycle(1, AppReviewId.make("app-review-platforms"));
+  const prompt = buildE2eReviewPrompt({
+    run: selectedRun,
+    cycle,
+    priorFindingIds: [],
+    e2eCommands: ["pnpm e2e"],
+  });
+  for (const platform of selectedRun.testPlatforms!)
+    expect(prompt).toContain(`e2e-platform-${platform}`);
+  expect(prompt).toContain("external-prerequisite");
+  expect(prompt).toContain("A web viewport or user-agent change does not verify a native platform");
+  const browser = buildReviewPrompt({
+    run: selectedRun,
+    cycle,
+    priorFindingIds: [],
+    carryableChecks: [],
+  });
+  expect(browser).toContain("rrweb session recording");
+  expect(browser).toContain("captioned screenshots");
+  expect(browser).not.toContain("e2e-platform-");
 });
