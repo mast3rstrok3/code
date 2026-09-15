@@ -1,7 +1,8 @@
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import {
   DEFAULT_WORKSPACE_USER_ID,
   AppReviewId,
+  AppReviewRecord,
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
@@ -11,11 +12,14 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import { McpSchema, McpServer } from "effect/unstable/ai";
 
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { getWorkflowArtifactsForThread } from "../../../orchestration/workflowArtifacts.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { handlers } from "./handlers.ts";
+import { handlers, WorkflowArtifactsToolkitHandlersLive } from "./handlers.ts";
+import { WorkflowArtifactsToolkit } from "./tools.ts";
 
 const projectId = ProjectId.make("project-workflow-artifacts");
 const otherProjectId = ProjectId.make("project-other");
@@ -70,6 +74,9 @@ const readModel = {
           workflowId: "workflow-artifacts-1",
           title: "Canonical Wayfinder Map",
           summaryMarkdown: "Map body",
+          tenantId: null,
+          teamId: null,
+          createdBy: null,
           sourceThreadId: rootThreadId,
           sourceMessageIds: [],
           ticketCount: 0,
@@ -81,6 +88,9 @@ const readModel = {
           workflowId: "workflow-artifacts-1",
           title: "Canonical Spec",
           summaryMarkdown: "Canonical body",
+          tenantId: null,
+          teamId: null,
+          createdBy: null,
           sourceThreadId: rootThreadId,
           sourceMessageIds: [],
           ticketCount: 1,
@@ -95,6 +105,7 @@ const readModel = {
             ordinal: 1,
             title: "Canonical ticket",
             bodyMarkdown: "Ticket body",
+            plannedFileChanges: [],
             dependencies: [],
             status: "open",
             createdAt: "2026-01-01T00:00:00.000Z",
@@ -120,7 +131,7 @@ const readModel = {
           planningTicketIds: [ticketId],
           status: "passed",
           document: {
-            verdict: "pass",
+            verdict: "passed",
             summary: "Reviewed",
             checks: [],
             findings: [],
@@ -178,10 +189,19 @@ const readModel = {
           planningTicketIds: [ticketId],
           status: "running",
           document: {
-            verdict: "blocked",
+            verdict: "failed",
             summary: "Reviewing",
             checks: [],
-            findings: [],
+            findings: [
+              {
+                id: "save-draft",
+                severity: "major",
+                title: "Draft disappears after reload",
+                details: "Cycle 2 lost the saved draft after a successful save.",
+                reproduction: "Save a draft, reload, and check the campaign list.",
+                evidenceIds: ["cycle-2-screenshot"],
+              },
+            ],
             questions: [],
             nextSteps: [],
           },
@@ -268,13 +288,135 @@ const nestedReviewerInvocationLayer = Layer.succeed(McpInvocationContext.McpInvo
   issuedAt: 1,
 });
 
+const mcpClient = McpSchema.McpServerClient.of({
+  clientId: 1,
+  clientCapabilities: {},
+  clientInfo: { name: "workflow-artifacts-test", version: "1.0.0" },
+  protocolVersion: "2025-06-18",
+  initializePayload: {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "workflow-artifacts-test", version: "1.0.0" },
+  },
+  getClient: Effect.die("unused"),
+});
+const mcpLayer = (threadId = nestedReviewerThreadId) =>
+  McpServer.toolkit(WorkflowArtifactsToolkit).pipe(
+    Layer.provide(WorkflowArtifactsToolkitHandlersLive),
+    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(queryLayer),
+    Layer.provideMerge(
+      Layer.succeed(McpInvocationContext.McpInvocationContext, {
+        environmentId: EnvironmentId.make("environment-1"),
+        threadId,
+        providerSessionId: "provider-session-mcp",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        capabilities: new Set(["workflow-artifacts"] as const),
+        issuedAt: 1,
+      }),
+    ),
+    Layer.provideMerge(Layer.succeed(McpSchema.McpServerClient, mcpClient)),
+  );
+const decodeReviews = Schema.decodeUnknownSync(
+  Schema.Struct({ appReviews: Schema.Array(AppReviewRecord) }),
+);
+const decodeReviewsText = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ appReviews: Schema.Array(AppReviewRecord) })),
+);
+const decodeMcpObject = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Unknown));
+
+it.effect(
+  "returns review history as an MCP object without losing findings or evidence references",
+  () =>
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const result = yield* server.callTool({ name: "workflow_app_reviews_list", arguments: {} });
+      expect(result.isError).toBe(false);
+      const history = decodeReviews(result.structuredContent);
+      expect(
+        server.tools.find(({ tool }) => tool.name === "workflow_app_reviews_list")?.tool
+          .outputSchema,
+      ).toMatchObject({ type: "object" });
+      expect(history.appReviews.map((review) => review.id)).toContain("app-review-1");
+      const review = history.appReviews.find((entry) => entry.id === "app-review-nested");
+      expect(review?.document.verdict).toBe("failed");
+      expect(review?.document.findings).toEqual(
+        readModel.threads.find((thread) => thread.id === appReviewControllerThreadId)?.appReviews[0]
+          ?.document.findings,
+      );
+      expect(review?.document.findings[0]?.evidenceIds).toEqual(["cycle-2-screenshot"]);
+      const retrieved = yield* server.callTool({
+        name: "workflow_app_review_get",
+        arguments: { reviewId: "app-review-nested" },
+      });
+      expect(retrieved.isError).toBe(false);
+      expect(retrieved.structuredContent).toEqual(review);
+      const text = result.content.find((entry) => entry.type === "text");
+      expect(text?.type).toBe("text");
+      if (text?.type === "text") expect(decodeReviewsText(text.text)).toEqual(history);
+    }).pipe(Effect.provide(mcpLayer())),
+);
+
+it.effect("returns populated planning artifacts through the registered MCP tools", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    for (const [name, field, expected] of [
+      ["workflow_tickets_list", "tickets", [{ id: ticketId }]],
+      ["workflow_spec_get", "spec", { id: "spec-1", summaryMarkdown: "Canonical body" }],
+      [
+        "workflow_wayfinder_map_get",
+        "wayfinderMap",
+        { id: "wayfinder-map-1", summaryMarkdown: "Map body" },
+      ],
+    ] as const) {
+      const result = yield* server.callTool({ name, arguments: {} });
+      expect(result.isError).toBe(false);
+      expect(decodeMcpObject(result.structuredContent)[field]).toMatchObject(expected);
+    }
+  }).pipe(Effect.provide(mcpLayer())),
+);
+
+it.effect("returns a readable MCP error for unauthorized review access", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const result = yield* server.callTool({
+      name: "workflow_app_review_get",
+      arguments: { reviewId: "app-review-nested" },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([
+      { type: "text", text: "App Review 'app-review-nested' is not in this workflow." },
+    ]);
+    if (result.structuredContent !== undefined) decodeMcpObject(result.structuredContent);
+  }).pipe(Effect.provide(mcpLayer(detachedThreadId))),
+);
+
+it.effect("returns empty histories and absent planning artifacts as MCP objects", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    for (const [name, expected] of [
+      ["workflow_app_reviews_list", { appReviews: [] }],
+      ["workflow_tickets_list", { tickets: [] }],
+      ["workflow_spec_get", { spec: null }],
+      ["workflow_wayfinder_map_get", { wayfinderMap: null }],
+    ] as const) {
+      const result = yield* server.callTool({ name, arguments: {} });
+      expect(result.isError).toBe(false);
+      expect(result.structuredContent).toEqual(expected);
+      expect(server.tools.find(({ tool }) => tool.name === name)?.tool.outputSchema).toMatchObject({
+        type: "object",
+      });
+    }
+  }).pipe(Effect.provide(mcpLayer(detachedThreadId))),
+);
+
 describe("workflow-artifacts toolkit handlers", () => {
   it.effect("resolves canonical artifacts and many-to-many App Review links from a child", () =>
     Effect.gen(function* () {
       const context = yield* handlers.workflow_context_get();
-      const wayfinderMap = yield* handlers.workflow_wayfinder_map_get();
-      const spec = yield* handlers.workflow_spec_get();
-      const tickets = yield* handlers.workflow_tickets_list();
+      const { wayfinderMap } = yield* handlers.workflow_wayfinder_map_get();
+      const { spec } = yield* handlers.workflow_spec_get();
+      const { tickets } = yield* handlers.workflow_tickets_list();
       const review = yield* handlers.workflow_app_review_get({
         reviewId: AppReviewId.make("app-review-1"),
       });
@@ -309,8 +451,8 @@ describe("workflow-artifacts toolkit handlers", () => {
   it.effect("resolves planning artifacts through nested workflow ancestry", () =>
     Effect.gen(function* () {
       const context = yield* handlers.workflow_context_get();
-      const spec = yield* handlers.workflow_spec_get();
-      const tickets = yield* handlers.workflow_tickets_list();
+      const { spec } = yield* handlers.workflow_spec_get();
+      const { tickets } = yield* handlers.workflow_tickets_list();
       const ticket = yield* handlers.workflow_ticket_get({ ticketId });
 
       assert.strictEqual(context.workflowId, implementationWorkflowId);

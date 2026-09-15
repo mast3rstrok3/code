@@ -3054,6 +3054,7 @@ it("directs selected platforms to real runners and retains browser recording evi
   for (const platform of selectedRun.testPlatforms!)
     expect(prompt).toContain(`e2e-platform-${platform}`);
   expect(prompt).toContain("external-prerequisite");
+  expect(prompt).toContain("Workflow-service or MCP failures outside the reviewed worktree");
   expect(prompt).toContain("A web viewport or user-agent change does not verify a native platform");
   const browser = buildReviewPrompt({
     run: selectedRun,
@@ -3226,6 +3227,12 @@ for (const verdict of ["passed", "failed"] as const) {
           expect(turns[0]?.workflowPromptId).toBe("matt-pocock.to-tickets");
           expect(turns[0]?.message.text).toContain("Database configuration is missing");
           expect(turns[0]?.message.text).toContain("Submit does not recover");
+          expect(turns[0]?.message.text).toContain(
+            "Each repair ticket must belong to the reviewed product",
+          );
+          expect(turns[0]?.message.text).toContain(
+            "even when the reviewer listed them as actionable findings",
+          );
         }
       }).pipe(Effect.provide(layer)),
     );

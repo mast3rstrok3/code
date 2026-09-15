@@ -16,9 +16,11 @@ const notFound = (threadId: ThreadId, message: string) =>
 
 export const handlers = {
   workflow_context_get: () => resolve().pipe(Effect.map((snapshot) => snapshot.context)),
-  workflow_spec_get: () => resolve().pipe(Effect.map((snapshot) => snapshot.spec)),
-  workflow_wayfinder_map_get: () => resolve().pipe(Effect.map((snapshot) => snapshot.wayfinderMap)),
-  workflow_tickets_list: () => resolve().pipe(Effect.map((snapshot) => snapshot.tickets)),
+  workflow_spec_get: () => resolve().pipe(Effect.map((snapshot) => ({ spec: snapshot.spec }))),
+  workflow_wayfinder_map_get: () =>
+    resolve().pipe(Effect.map((snapshot) => ({ wayfinderMap: snapshot.wayfinderMap }))),
+  workflow_tickets_list: () =>
+    resolve().pipe(Effect.map((snapshot) => ({ tickets: snapshot.tickets }))),
   workflow_ticket_get: (input) =>
     Effect.gen(function* () {
       const snapshot = yield* resolve();
@@ -31,7 +33,8 @@ export const handlers = {
       }
       return ticket;
     }),
-  workflow_app_reviews_list: () => resolve().pipe(Effect.map((snapshot) => snapshot.appReviews)),
+  workflow_app_reviews_list: () =>
+    resolve().pipe(Effect.map((snapshot) => ({ appReviews: snapshot.appReviews }))),
   workflow_app_review_get: (input) =>
     Effect.gen(function* () {
       const snapshot = yield* resolve();

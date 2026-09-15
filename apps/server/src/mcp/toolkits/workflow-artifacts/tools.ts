@@ -41,11 +41,12 @@ export const WorkflowContextGetTool = readonlyTool(
   }).annotate(Tool.Title, "Get workflow context"),
 );
 
+// MCP structuredContent requires an object, including for absent artifacts and empty lists.
 export const WorkflowSpecGetTool = readonlyTool(
   Tool.make("workflow_spec_get", {
     description: "Get the canonical Spec for the calling thread's workflow.",
     parameters: Tool.EmptyParams,
-    success: Schema.NullOr(OrchestrationPlanningSpec),
+    success: Schema.Struct({ spec: Schema.NullOr(OrchestrationPlanningSpec) }),
     failure,
     dependencies,
   }).annotate(Tool.Title, "Get workflow Spec"),
@@ -55,7 +56,7 @@ export const WorkflowWayfinderMapGetTool = readonlyTool(
   Tool.make("workflow_wayfinder_map_get", {
     description: "Get the canonical Wayfinder Map for the calling thread's workflow.",
     parameters: Tool.EmptyParams,
-    success: Schema.NullOr(OrchestrationPlanningSpec),
+    success: Schema.Struct({ wayfinderMap: Schema.NullOr(OrchestrationPlanningSpec) }),
     failure,
     dependencies,
   }).annotate(Tool.Title, "Get workflow Wayfinder Map"),
@@ -65,7 +66,7 @@ export const WorkflowTicketsListTool = readonlyTool(
   Tool.make("workflow_tickets_list", {
     description: "List canonical planning tickets visible to the calling workflow thread.",
     parameters: Tool.EmptyParams,
-    success: Schema.Array(OrchestrationPlanningTicket),
+    success: Schema.Struct({ tickets: Schema.Array(OrchestrationPlanningTicket) }),
     failure,
     dependencies,
   }).annotate(Tool.Title, "List workflow tickets"),
@@ -86,7 +87,7 @@ export const WorkflowAppReviewsListTool = readonlyTool(
   Tool.make("workflow_app_reviews_list", {
     description: "List App Reviews linked to tickets in the calling thread's workflow.",
     parameters: Tool.EmptyParams,
-    success: Schema.Array(AppReviewRecord),
+    success: Schema.Struct({ appReviews: Schema.Array(AppReviewRecord) }),
     failure,
     dependencies,
   }).annotate(Tool.Title, "List workflow App Reviews"),
