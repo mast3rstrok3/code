@@ -1237,6 +1237,25 @@ function buildMergeGatePrompt(input: {
   ].join("\n");
 }
 
+export function workerValidationContext(
+  result:
+    | Pick<OrchestrationImplementationWorkerResult, "validations" | "notesMarkdown">
+    | null
+    | undefined,
+): string {
+  if (result == null) return "";
+  const validations = currentWorkflowValidations(result.validations).filter(
+    (validation) => validation.purpose !== "reproduction",
+  );
+  return [
+    "Worker validation setup and results, for selecting fresh review commands:",
+    ...validations.map(
+      (validation) => `- ${validation.status}: ${validation.command}\n${validation.outputMarkdown}`,
+    ),
+    result.notesMarkdown,
+  ].join("\n\n");
+}
+
 export function buildBrowserAppReviewPrompt(input: {
   readonly run: OrchestrationImplementationRun;
   readonly frontendUrl: string | null;
@@ -1250,9 +1269,9 @@ export function buildBrowserAppReviewPrompt(input: {
         `- ${state.ticketId}: ${state.warningMarkdown?.trim() || "implementation did not complete"}`,
     );
   return [
-    `Perform browser app review for implementation run ${input.run.id}.`,
+    `Run automated acceptance review for implementation run ${input.run.id}.`,
     "",
-    "Open the app with preview_open, record the session with app_review_recording_start/stop, exercise the product with the preview_* tools, and capture captioned screenshots with app_review_capture_screenshot. Do not ask the user questions.",
+    "Verify the integrated acceptance criteria with automated tests against the assigned App Stack. Do not ask the user questions.",
     "Review cross-ticket and multi-step behavior across the complete integrated change. Recheck every ticket-level App Review that failed, exhausted, was blocked, or could not run.",
     ...input.run.ticketStates
       .filter((state) => isTicketStageSkipped(input.run.skips, state.ticketId, "app-review"))
@@ -4147,7 +4166,7 @@ const make = Effect.gen(function* () {
       },
       testPlatforms: resolveReviewTestPlatforms(configuredParts, input.ticketId),
       briefMarkdown: ticket.appReviewPlanMarkdown,
-      supportingContextMarkdown: `Review only ticket ${input.ticketId}: ${ticket.title}. Treat its attached plan and acceptance criteria as authoritative.\n\n${nativeVerificationEvidenceMarkdown(state.nativeVerification)}`,
+      supportingContextMarkdown: `Review only ticket ${input.ticketId}: ${ticket.title}. Treat its attached plan and acceptance criteria as authoritative.\n\n${workerValidationContext(state.workerResult)}\n\n${nativeVerificationEvidenceMarkdown(state.nativeVerification)}`,
       previewTargets: [frontendUrl],
       appReviewScope: effectiveScope,
       cycleBudget: AppReviewWorkflowCycleBudget.make(

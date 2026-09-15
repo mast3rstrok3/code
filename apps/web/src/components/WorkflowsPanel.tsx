@@ -991,7 +991,7 @@ export function TicketAppReviewCycles(props: {
               threadId: cycle.fixerThreadId,
               thread: threadRow(cycle.fixerThreadId),
             },
-          ];
+          ].filter((step) => step.phase !== "review" || cycle.appReviewScope !== "e2e");
           // Only the newest cycle can start again: every phase entry point on
           // the server works on the run's current cycle.
           const isCurrentCycle = cycle.cycleNumber === latestCycleNumber;

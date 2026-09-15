@@ -10,7 +10,7 @@ import {
   type WorkflowStepCycleKey,
 } from "./workflowStepCycles.ts";
 
-/** The two independently switchable test steps in an App Review. */
+/** Automated review settings. The browser field remains readable for older saved settings. */
 export interface AppReviewParts {
   readonly e2e: boolean;
   readonly browser: boolean;
@@ -118,7 +118,7 @@ export function appReviewScopeForParts(parts: AppReviewParts): AppReviewScope | 
 
 /** The one-line statement of what a review runs, shown wherever parts matter. */
 export function describeAppReviewParts(parts: AppReviewParts): string {
-  return `E2E tests: ${parts.e2e ? "yes" : "no"} · Browser review: ${parts.browser ? "yes" : "no"}`;
+  return `E2E tests: ${parts.e2e ? "yes" : "no"}`;
 }
 
 /** The overrides after setting or clearing one step's parts. */
@@ -144,7 +144,7 @@ export function setWorkflowStepReviewPartsOverride(
 function reviewPartsFromOverride(entry: WorkflowStepReviewPartsOverride): AppReviewParts {
   return {
     e2e: entry.e2e,
-    browser: entry.browser,
+    browser: false,
     ...(entry.testPlatforms === undefined ? {} : { testPlatforms: entry.testPlatforms }),
     ...(entry.ticketTestPlatforms === undefined
       ? {}

@@ -139,7 +139,7 @@ export function AppReviewPanel(props: {
             <div className="max-w-sm">
               <h3 className="text-sm font-medium">No App Review workflow</h3>
               <p className="mt-2 text-sm text-muted-foreground">
-                Launch a review loop to collect durable browser evidence and repair failed findings.
+                Run automated acceptance tests and repair the failures they find.
               </p>
             </div>
           </div>
@@ -301,20 +301,20 @@ function RunDetails(props: {
                             ? { onOpen: () => props.onOpenThread(cycle.e2eThreadId!) }
                             : {})}
                         />
+                        {cycle.appReviewScope !== "e2e" ? (
+                          <CycleStep
+                            number={2}
+                            title="Human-style UI review"
+                            description="Use the app UI, test the acceptance brief, and save evidence."
+                            status={reviewStatus}
+                            actionLabel="Review thread"
+                            onOpen={() => props.onOpenThread(cycle.reviewerThreadId)}
+                          />
+                        ) : null}
                         <CycleStep
-                          number={2}
-                          title="Human-style UI review"
-                          description="Use the app UI, test the acceptance brief, and save evidence."
-                          status={reviewStatus}
-                          actionLabel="Review thread"
-                          {...(cycle.appReviewScope === "e2e"
-                            ? {}
-                            : { onOpen: () => props.onOpenThread(cycle.reviewerThreadId) })}
-                        />
-                        <CycleStep
-                          number={3}
+                          number={cycle.appReviewScope === "e2e" ? 2 : 3}
                           title="Gap analysis & repair tickets"
-                          description="Analyze both review sections and create durable child tickets in a separate planning thread."
+                          description="Turn actionable findings into repair tickets in a separate planning thread."
                           status={planningStatus}
                           actionLabel={
                             cycle.repairTickets?.length
@@ -331,7 +331,7 @@ function RunDetails(props: {
                           }
                         />
                         <CycleStep
-                          number={4}
+                          number={cycle.appReviewScope === "e2e" ? 3 : 4}
                           title="Implement the repair tickets"
                           description="Use the Implement skill in a fresh thread and validate every child ticket."
                           status={implementationStatus}

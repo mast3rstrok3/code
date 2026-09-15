@@ -112,7 +112,6 @@ it("keeps nested worker and review agents under their workflow step", () => {
   ]);
   expect(appReview?.subSteps.map((subStep) => subStep.label)).toEqual([
     "End-to-end test",
-    "Browser review",
     "Gap analysis & repair tickets",
     "Repair implementation",
   ]);

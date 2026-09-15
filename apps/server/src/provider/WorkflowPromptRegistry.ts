@@ -159,15 +159,19 @@ function buildWorkflowCatalog(): WorkflowCatalog {
     description: definition.description,
     interactionMode: definition.interactionMode,
     steps: definition.helpSteps.map((step) => {
-      const skillId = step.skillId ? catalogSkillIdForPromptId(step.skillId) : undefined;
+      const workflowPromptId =
+        step.skillId === WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex
+          ? WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex
+          : step.skillId;
+      const skillId = workflowPromptId ? catalogSkillIdForPromptId(workflowPromptId) : undefined;
       const skillTitle = skillId
         ? promptContractById.get(skillId)?.title.replace(/^\d+\.\s+/, "")
         : undefined;
       const stepContext = skillTitle && skillTitle !== step.label ? step.label : undefined;
       return {
-        label: skillTitle ?? step.label,
+        label: workflowPromptId !== step.skillId ? step.label : (skillTitle ?? step.label),
         ...(skillId ? { skillId } : {}),
-        ...(step.skillId ? { workflowPromptId: step.skillId } : {}),
+        ...(workflowPromptId ? { workflowPromptId } : {}),
         ...(step.threadBoundary ? { threadBoundary: step.threadBoundary } : {}),
         ...(stepContext || step.note
           ? { note: [stepContext, step.note].filter(Boolean).join(" · ") }

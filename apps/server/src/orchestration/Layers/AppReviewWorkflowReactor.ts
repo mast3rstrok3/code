@@ -29,9 +29,6 @@ import {
 import {
   resolveReviewTestPlatforms,
   REVIEW_TEST_PLATFORM_LABELS,
-  appReviewPartsForScope,
-  appReviewScopeForParts,
-  intersectAppReviewParts,
   resolveLayeredAppReviewStepParts,
   type AppReviewParts,
 } from "@t3tools/shared/appReviewParts";
@@ -517,14 +514,11 @@ export function appReviewPhaseThreadState(input: {
 
 export function terminalReviewAction(review: AppReviewRecord): "passed" | "planning" | "blocked" {
   const blockedChecks = review.document.checks.filter((check) => check.status === "blocked");
-  if (
-    blockedChecks.some((check) => check.blockerKind === "external-prerequisite") ||
-    (blockedChecks.some((check) => check.blockerKind !== "coverage-gap") &&
-      !review.document.findings.some((finding) => finding.severity !== "note"))
-  ) {
-    return "blocked";
-  }
-  if (blockedChecks.length > 0) return "planning";
+  const hasRepairs =
+    review.document.findings.some((finding) => finding.severity !== "note") ||
+    blockedChecks.some((check) => check.blockerKind === "coverage-gap");
+  if (hasRepairs) return "planning";
+  if (blockedChecks.length > 0) return "blocked";
   if (review.status === "passed" && review.document.verdict === "passed") return "passed";
   return "planning";
 }
@@ -539,6 +533,9 @@ export function appReviewRepairFindingsMarkdown(review: AppReviewRecord): string
     ...review.document.checks
       .filter((check) => check.status === "blocked" && check.blockerKind === "coverage-gap")
       .map((check) => `[${check.id}] Coverage gap: ${check.label}\n\n${check.notes}`),
+    ...review.document.checks
+      .filter((check) => check.status === "blocked" && check.blockerKind !== "coverage-gap")
+      .map((check) => `[${check.id}] Unresolved prerequisite: ${check.label}\n\n${check.notes}`),
     ...review.document.nextSteps,
   ].join("\n\n");
 }
@@ -1130,9 +1127,7 @@ export function priorCycleChecks(input: {
         ...document.findings
           .filter((finding) => finding.severity !== "note")
           .map((finding) => finding.id),
-        ...document.checks
-          .filter((check) => check.status === "blocked" && check.blockerKind === "coverage-gap")
-          .map((check) => check.id),
+        ...document.checks.filter((check) => check.status === "blocked").map((check) => check.id),
       ];
     }),
   );
@@ -1189,17 +1184,12 @@ export function e2eCheckIdsForCommands(
   return commands.map((_, index) => `e2e-${index + 1}`);
 }
 
-/** Keep the requested scope within the user's enabled review parts. */
+/** Workflow cycles run automated tests. Direct browser reviews use their own launch command. */
 export function resolveEffectiveAppReviewScope(input: {
   readonly run: Pick<AppReviewWorkflowRun, "appReviewScope">;
   readonly settingsParts: AppReviewParts;
 }): AppReviewScope | null {
-  return appReviewScopeForParts(
-    intersectAppReviewParts(
-      input.settingsParts,
-      appReviewPartsForScope(input.run.appReviewScope ?? "both"),
-    ),
-  );
+  return input.settingsParts.e2e ? "e2e" : null;
 }
 
 export function terminalReviewPassFailure(input: {
@@ -1291,7 +1281,7 @@ export function buildE2eReviewPrompt(input: {
   return appendWorkflowSkillCommandSection(
     [
       `Run the end-to-end test phase for App Review cycle ${input.cycle.cycleNumber} of ${input.run.cycleBudget}.`,
-      "This phase owns only the automated test run. The workflow starts a separate Browser App Review thread after this thread finishes.",
+      "Run automated acceptance tests. Actionable failures enter gap analysis and implementation, followed by a fresh E2E cycle. Manual browser review is a separate user-requested task; this workflow does not require its screenshots, recording, or fixture handoff.",
       "",
       "The original brief is the acceptance boundary:",
       input.run.briefMarkdown,
@@ -1301,6 +1291,7 @@ export function buildE2eReviewPrompt(input: {
       "",
       `Use ${APP_REVIEW_PREVIEW_URL_ENV}=${input.run.previewTargets[0] ?? "the-authoritative-preview-target"} in the selected worktree.`,
       "Before acceptance commands, check the selected tests' required services, provider routes, deployment approvals, and managed credential availability in the assigned App Stack. Check presence and readiness without exposing secret values. A running stack alone does not establish provider readiness.",
+      "Reuse the worker's recorded test commands and non-secret setup after checking that they still apply to these tests. For isolated tests, configuration needed only to import application settings can use the repository's test fixtures or documented non-routable values. Missing test setup that can be repaired in this worktree is an actionable finding. Request real service credentials only when the selected test actually connects to that service.",
       "If provisioning or a controller action is required, record blocked checks with blockerKind external-prerequisite and the missing prerequisite, its owner, and the action needed to resume. Keep these external blockers in notes and nextSteps; actionable findings describe product defects or repairable acceptance coverage gaps. Preserve any actual failed command results. Resume acceptance after the prerequisite changes.",
       ...(isTicketAppReview(input.run)
         ? [
@@ -1322,7 +1313,7 @@ export function buildE2eReviewPrompt(input: {
         ? []
         : [
             "",
-            "This cycle verifies a repair. The test run must verify every earlier actionable finding and add a passed check with the same id before this section can pass:",
+            "This cycle verifies a repair. The test run must verify every earlier actionable finding and blocked check and add a passed check with the same id before this section can pass:",
             ...input.priorFindingIds.map((findingId) => `- ${findingId}`),
           ]),
       "",
@@ -1454,7 +1445,7 @@ export function buildAppReviewFixPrompt(input: {
       "",
       "Finish with exactly one fenced JSON block:",
       "Validation status is passed, failed, or blocked. Use blocked for a check you could not run, explain why in outputMarkdown, and report the overall result as blocked with the concrete blocker in notesMarkdown.",
-      "Use an overall blocked result when progress requires provisioning, credentials, or a controller action outside this thread's capabilities, even if an attempted command failed. Name the owner and the action needed to resume in notesMarkdown. Preserve actual command results and completed repairs. The controller stops blocked results until an explicit phase rerun; use failed for product defects that still need code repair.",
+      "Complete all independent code and test-setup repairs before reporting an external blocker. Keep unresolved prerequisites visible and never mark their checks passed. Use an overall blocked result when remaining progress requires provisioning, credentials, or a controller action outside this thread's capabilities, even if an attempted command failed. Name the owner and the action needed to resume in notesMarkdown. Preserve actual command results and completed repairs. The controller stops blocked results until an explicit phase rerun; use failed for product defects that still need code repair.",
       WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
       "Set each validation's scope to focused for ticket acceptance and repair checks, or project for unrelated broader regression checks. Preserve failure history with accurate completedAt timestamps. The newest execution of the same command determines its status; a narrower passing command cannot replace a failed broad command.",
       "```json",
@@ -2171,7 +2162,7 @@ const make = Effect.gen(function* () {
         run,
         reason: "automation-unavailable",
         detailMarkdown:
-          "App Review is turned off for this step in Settings → Workflows (E2E tests: no · Browser review: no), so no cycle can verify anything.",
+          "E2E testing is turned off for this step in Settings → Workflows, so no cycle can verify anything.",
         occurredAt,
       });
       return;
@@ -2571,6 +2562,7 @@ const make = Effect.gen(function* () {
             "",
             "The review that produced these findings ran in a separate thread; the brief and the complete actionable findings below are the whole input. Do not edit files, browse the app, or ask questions. Apply the To Tickets vertical-slice discipline to every actionable finding.",
             "Every ticket must name the automated test that verifies its gap. Product defects require a failing reproduction before the repair and a passing test after it. Coverage gaps require adding and running the missing test or assertion, which may pass immediately if the product already works. Create repair tickets for coverage gaps even when no product defect was established.",
+            "Plan all independent code, coverage, and test-setup repairs even when external prerequisites remain. Keep real credentials, billing, approvals, and operator actions as unresolved prerequisites; do not create product repair tickets for those actions or treat them as completed.",
             "This App Review adapter owns persistence. Do not emit planning-tickets-artifact, create external issues, or modify the parent planning-ticket set; emit only app-review-repair-tickets below.",
             `Use '${parentTicketKey}' as the parent key. Number child tickets consecutively from '${firstChildKey}' (for example '${parentTicketKey}.1', '${parentTicketKey}.2').`,
             input.run.caller.type === "implementation" && input.run.caller.ticketId !== undefined
@@ -2615,31 +2607,6 @@ const make = Effect.gen(function* () {
       workflowPromptId: APP_REVIEW_TO_TICKETS_SKILL_ID,
       createdAt: input.occurredAt,
     });
-  });
-
-  const startBrowserReview = Effect.fn("AppReviewWorkflowReactor.startBrowserReview")(function* (
-    run: AppReviewWorkflowRun,
-    occurredAt: string,
-  ) {
-    const cycle = run.cycles.at(-1);
-    if (cycle === undefined) return;
-    const reviewingCycle: AppReviewWorkflowCycle = {
-      ...cycle,
-      status: "reviewing",
-      reviewLaunchCount: appReviewPhaseLaunchCount(cycle, "review") + 1,
-      failure: null,
-    };
-    const reviewingRun: AppReviewWorkflowRun = {
-      ...run,
-      activePhase: "review",
-      activeThreadId: cycle.reviewerThreadId,
-      cycles: run.cycles.map((entry) =>
-        entry.cycleNumber === cycle.cycleNumber ? reviewingCycle : entry,
-      ),
-      updatedAt: occurredAt,
-    };
-    yield* updateRun(reviewingRun);
-    yield* ensureReviewLaunch(reviewingRun, reviewingCycle);
   });
 
   const reconcileE2e = Effect.fn("AppReviewWorkflowReactor.reconcileE2e")(function* (
@@ -2699,7 +2666,9 @@ const make = Effect.gen(function* () {
     const completedE2eRun: AppReviewWorkflowRun = {
       ...stableRun,
       cycles: stableRun.cycles.map((entry) =>
-        entry.cycleNumber === cycle.cycleNumber ? { ...entry, e2eVerdict } : entry,
+        entry.cycleNumber === cycle.cycleNumber
+          ? { ...entry, appReviewScope: "e2e", e2eVerdict }
+          : entry,
       ),
       updatedAt: occurredAt,
     };
@@ -2711,10 +2680,6 @@ const make = Effect.gen(function* () {
         detailMarkdown: appReviewBlockerDetail(review),
         occurredAt,
       });
-      return;
-    }
-    if (cycle.appReviewScope === "both") {
-      yield* startBrowserReview(completedE2eRun, occurredAt);
       return;
     }
     const e2eCommands = yield* e2eCommandsForCwd(target.cwd, run);

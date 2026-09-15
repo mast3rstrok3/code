@@ -245,6 +245,10 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(resolvingMergeConflictsDoc?.content ?? "", /never [`]--abort[`]/);
     for (const workflow of catalog.workflows) {
       for (const step of workflow.steps) {
+        NodeAssert.notEqual(
+          step.workflowPromptId,
+          WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+        );
         if (step.skillId !== undefined) {
           NodeAssert.ok(catalog.skills.some((skill) => skill.id === step.skillId));
         }

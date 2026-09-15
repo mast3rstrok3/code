@@ -15,21 +15,21 @@ describe("workflowModelQuickActions", () => {
   it("offers concrete review roles for the Engineering Workflow", () => {
     const actions = workflowModelQuickActions("planning");
     expect(actions.map((action) => [action.id, action.label])).toEqual([
-      ["e2e-browser-review", "E2E tests and browser review"],
+      ["e2e-review", "E2E tests"],
       ["ticket-code-review", "Ticket Code Review"],
       ["final-code-review", "Final Code Review"],
     ]);
-    const e2eBrowserReview = actions.find((action) => action.id === "e2e-browser-review");
+    const e2eBrowserReview = actions.find((action) => action.id === "e2e-review");
     const ticketCodeReview = actions.find((action) => action.id === "ticket-code-review");
     const finalCodeReview = actions.find((action) => action.id === "final-code-review");
 
     expect(e2eBrowserReview?.pinKeys).toEqual([
       {
-        workflowPromptId: "implementation.browser-app-review.codex",
+        workflowPromptId: "implementation.e2e-app-review.codex",
         stepWorkflowPromptId: "implementation.tdd.codex",
       },
       {
-        workflowPromptId: "implementation.browser-app-review.codex",
+        workflowPromptId: "implementation.e2e-app-review.codex",
         stepWorkflowPromptId: "implementation.browser-app-review.codex",
       },
     ]);
@@ -44,9 +44,9 @@ describe("workflowModelQuickActions", () => {
     ]);
   });
 
-  it("only offers the E2E and browser review assignment in the App Review workflow", () => {
+  it("only offers the E2E test assignment in the App Review workflow", () => {
     expect(workflowModelQuickActions("app-review").map((action) => action.id)).toEqual([
-      "e2e-browser-review",
+      "e2e-review",
     ]);
   });
 
@@ -75,7 +75,7 @@ describe("workflowModelQuickActions", () => {
 
   it("reports mixed when ticket and standalone App Review models differ", () => {
     const keys = workflowModelQuickActions("planning").find(
-      (action) => action.id === "e2e-browser-review",
+      (action) => action.id === "e2e-review",
     )!.pinKeys;
     const otherSelection: ModelSelection = {
       instanceId: ProviderInstanceId.make("claudeAgent"),

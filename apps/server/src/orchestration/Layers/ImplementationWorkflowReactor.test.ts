@@ -94,6 +94,7 @@ import {
   summarizeTicketAppReviewHalt,
   deferredTicketAppReviewInstructions,
   buildBrowserAppReviewPrompt,
+  workerValidationContext,
 } from "./ImplementationWorkflowReactor.ts";
 import {
   ORPHANED_PROVIDER_SESSION_ERROR,
@@ -9131,17 +9132,33 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("provisions a ticket stack for browser-only App Review", () =>
+  it.effect("ignores saved browser-only settings without provisioning a ticket stack", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
-          const { nestedRun } = yield* launchTicketAppReview(system);
-          expect(nestedRun.appReviewScope).toBe("browser");
-          expect(yield* Ref.get(system.autoCreateInputs)).toEqual([
-            expect.objectContaining({
-              worktreePath: "/tmp/implementation-reactor.worktrees/checkout-ticket-1",
-            }),
-          ]);
+          const { run } = yield* launchRun(system, {
+            appReviewStrategy: "nested-workflow",
+            tickets: [
+              {
+                ...planningTicket("TICKET-1"),
+                appReviewEligible: true,
+                appReviewPlanMarkdown: "Review the ticket.",
+              },
+            ],
+          });
+          yield* appendWorkerResult(system, {
+            run,
+            status: "succeeded",
+            completeTicketReview: false,
+          });
+
+          const snapshot = yield* system.query.getSnapshot();
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
+          expect(snapshot.appReviewWorkflowRuns ?? []).toHaveLength(0);
+          expect(snapshot.implementationRuns[0]?.ticketStates[0]).toMatchObject({
+            status: "code-reviewing",
+            appReviewOutcome: "skipped",
+          });
         }),
       {
         serverSettings: {
@@ -9170,12 +9187,12 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("runs both ticket review parts when the user enables browser review", () =>
+  it.effect("keeps ticket review E2E-only with saved browser-enabled settings", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
           const { nestedRun } = yield* launchTicketAppReview(system);
-          expect(nestedRun.appReviewScope).toBe("both");
+          expect(nestedRun.appReviewScope).toBe("e2e");
           expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
         }),
       {
@@ -11281,7 +11298,41 @@ it.effect("launches ticket App Review with the user's selected test platforms", 
       yield* appendWorkerResult(system, { run, status: "succeeded", completeTicketReview: false });
       const snapshot = yield* system.query.getSnapshot();
       expect(snapshot.appReviewWorkflowRuns?.[0]?.testPlatforms).toEqual(["web", "android", "ios"]);
-      expect(snapshot.appReviewWorkflowRuns?.[0]?.appReviewScope).toBe("both");
+      expect(snapshot.appReviewWorkflowRuns?.[0]?.appReviewScope).toBe("e2e");
     }),
   ),
 );
+
+it("preserves worker test setup and the latest command results for review", () => {
+  const command = "DATABASE_URL=postgresql://unused@127.0.0.1:1/unused pytest tests/drafts.py";
+  const context = workerValidationContext({
+    notesMarkdown: "These tests use isolated SQLite fixtures.",
+    validations: [
+      {
+        command,
+        status: "failed",
+        outputMarkdown: "Earlier failure",
+        completedAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        command,
+        status: "passed",
+        outputMarkdown: "14 passed",
+        completedAt: "2026-01-01T00:01:00.000Z",
+      },
+      {
+        command: "pytest reproduce.py",
+        purpose: "reproduction",
+        status: "failed",
+        outputMarkdown: "Expected failure",
+        completedAt: "2026-01-01T00:02:00.000Z",
+      },
+    ],
+  });
+  expect(context).toContain(command);
+  expect(context).toContain("14 passed");
+  expect(context).toContain("isolated SQLite");
+  expect(context).not.toContain("Earlier failure");
+  expect(context).not.toContain("pytest reproduce.py");
+  expect(workerValidationContext(null)).toBe("");
+});

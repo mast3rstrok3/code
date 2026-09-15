@@ -104,8 +104,8 @@ export function AppReviewLaunchDialog(props: AppReviewLaunchDialogProps) {
             />
             <span className="text-xs font-medium text-foreground">Only review</span>
             <span className="col-start-2 text-xs text-muted-foreground">
-              One browser review and the gap analysis that tickets what it finds, then stop. Nothing
-              is repaired.
+              One automated test review and the gap analysis that tickets what it finds, then stop.
+              Nothing is repaired.
             </span>
           </label>
           {reviewOnly ? null : (

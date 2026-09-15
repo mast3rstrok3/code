@@ -39,7 +39,7 @@ it("defaults to E2E only and lets a ticket key fall back to the step entry", () 
   ];
   expect(resolveAppReviewStepParts({ overrides: both, key: ticketKey })).toEqual({
     e2e: false,
-    browser: true,
+    browser: false,
   });
 });
 
@@ -64,7 +64,7 @@ it("lets run-level overrides outrank the standing Settings entirely", () => {
       settingsOverrides: settings,
       key: ticketKey,
     }),
-  ).toEqual({ e2e: false, browser: true });
+  ).toEqual({ e2e: false, browser: false });
   // A run-level step entry covers the ticket key before any Settings entry.
   expect(
     resolveLayeredAppReviewStepParts({
@@ -72,7 +72,7 @@ it("lets run-level overrides outrank the standing Settings entirely", () => {
       settingsOverrides: [{ ...ticketKey, e2e: true, browser: false }],
       key: ticketKey,
     }),
-  ).toEqual({ e2e: false, browser: true });
+  ).toEqual({ e2e: false, browser: false });
   expect(
     resolveLayeredAppReviewStepParts({
       threadOverrides: undefined,
@@ -90,9 +90,7 @@ it("lets run-level overrides outrank the standing Settings entirely", () => {
 });
 
 it("states the parts as the insert line", () => {
-  expect(describeAppReviewParts({ e2e: true, browser: false })).toBe(
-    "E2E tests: yes · Browser review: no",
-  );
+  expect(describeAppReviewParts({ e2e: true, browser: false })).toBe("E2E tests: yes");
 });
 
 it("sets, replaces, and clears one step's override", () => {
@@ -125,5 +123,5 @@ it("keeps ticket platforms through settings resolution and restores the workflow
     resolveReviewTestPlatforms(setTicketTestPlatforms(resolved, "ticket-1", null), "ticket-1"),
   ).toEqual(["web", "windows"]);
   expect(resolved.e2e).toBe(true);
-  expect(resolved.browser).toBe(true);
+  expect(resolved.browser).toBe(false);
 });

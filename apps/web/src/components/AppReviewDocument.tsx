@@ -384,11 +384,13 @@ export function AppReviewCycleDocument(props: {
         record={props.e2eRecord}
         environmentId={props.environmentId}
       />
-      <ReviewEvidenceSection
-        title="Browser review"
-        record={props.browserRecord}
-        environmentId={props.environmentId}
-      />
+      {props.cycle.appReviewScope !== "e2e" || props.browserRecord !== undefined ? (
+        <ReviewEvidenceSection
+          title="Browser review"
+          record={props.browserRecord}
+          environmentId={props.environmentId}
+        />
+      ) : null}
     </div>
   );
 }

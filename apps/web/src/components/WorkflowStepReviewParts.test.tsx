@@ -21,7 +21,7 @@ describe("WorkflowStepReviewPartPins", () => {
     );
 
     expect(markup).toContain("App Review parts");
-    expect(markup).toContain("E2E tests: yes · Browser review: no");
+    expect(markup).toContain("E2E tests: yes");
     expect(markup).toContain("Auto");
   });
 
@@ -36,7 +36,7 @@ describe("WorkflowStepReviewPartPins", () => {
       />,
     );
 
-    expect(markup).toContain("E2E tests: yes · Browser review: no");
+    expect(markup).toContain("E2E tests: yes");
     // Nothing to clear: the run is following the layer below it.
     expect(markup).not.toContain("Auto");
   });
@@ -51,7 +51,7 @@ describe("WorkflowStepReviewPartPins", () => {
       />,
     );
 
-    expect(markup).toContain("this review step is skipped entirely");
+    expect(markup).toContain("This review step is skipped");
   });
 
   it("targets the ticket review from the step that starts it", () => {

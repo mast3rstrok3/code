@@ -13,7 +13,7 @@ Review the Spec, conversation context, durable project context, and drafted plan
 - When several slices share a central registry or service seam, prefer an early extension-point/foundation ticket, parallel isolated feature modules, and one small final assembly ticket.
 - Reject any remaining long serial chain unless every edge is justified in the dependent ticket body.
 - Check that ticket bodies are ready for AFK agents: concrete outcome, clear acceptance criteria, useful tests, and no stale implementation path prescriptions.
-- Check every ticket's App Review classification. UI-verifiable tickets require `appReviewEligible: true` and a concrete `appReviewPlanMarkdown`; non-UI tickets use false and null. When the repository declares `e2eCommands`, an eligible ticket's acceptance criteria must plan e2e coverage for its flow, its `appReviewScope` (`"e2e"`, `"browser"`, or `"both"`) must match what actually verifies it, and its review plan must cover only what that coverage cannot prove rather than restating the tested flows. Preserve or correct these fields in reviewer ticket edits.
+- Check every ticket's App Review classification. Tickets verifiable through automated acceptance tests require `appReviewEligible: true`, `appReviewScope: "e2e"`, and a concrete `appReviewPlanMarkdown`. The plan names the assigned stack, test setup, focused runner selection, expected results, and cleanup. Check that every acceptance criterion has executable coverage or a planned test repair. Ineligible tickets use false and null. Manual browser inspection is a separate user-requested task. Preserve or correct these fields in reviewer ticket edits.
 
 ## Review cycle
 

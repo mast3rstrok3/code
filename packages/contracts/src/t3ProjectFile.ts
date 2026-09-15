@@ -97,7 +97,7 @@ export const T3ProjectFile = Schema.Struct({
       trimmedNonEmpty(
         {
           description:
-            "Complete end-to-end test command App Review runs from the worktree before each browser review.",
+            "Complete end-to-end test command App Review runs from the worktree in each verification cycle.",
         },
         T3_PROJECT_FILE_VALIDATION_COMMAND_MAX_LENGTH,
       ),

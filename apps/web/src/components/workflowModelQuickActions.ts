@@ -7,12 +7,13 @@ import {
 
 import type { WorkflowModelPinKey } from "./WorkflowModelPins";
 
-const APP_REVIEW_PROMPT_ID = "implementation.browser-app-review.codex";
+const APP_REVIEW_PROMPT_ID = "implementation.e2e-app-review.codex";
+const APP_REVIEW_STEP_ID = "implementation.browser-app-review.codex";
 const CODE_REVIEW_PROMPT_ID = "implementation.code-review.codex";
 const TICKET_WAVE_PROMPT_ID = "implementation.tdd.codex";
 
 export interface WorkflowModelQuickAction {
-  readonly id: "e2e-browser-review" | "ticket-code-review" | "final-code-review";
+  readonly id: "e2e-review" | "ticket-code-review" | "final-code-review";
   readonly label: string;
   readonly description: string;
   readonly pinKeys: ReadonlyArray<WorkflowModelPinKey>;
@@ -20,13 +21,13 @@ export interface WorkflowModelQuickAction {
 
 const QUICK_ACTION_DEFINITIONS = [
   {
-    id: "e2e-browser-review",
-    label: "E2E tests and browser review",
-    description: "Set the expensive review thread for ticket and combined App Reviews.",
+    id: "e2e-review",
+    label: "E2E tests",
+    description: "Set the test runner model for ticket and combined App Reviews.",
     workflowPromptId: APP_REVIEW_PROMPT_ID,
     matches: (key: WorkflowModelPinKey) =>
       key.stepWorkflowPromptId === TICKET_WAVE_PROMPT_ID ||
-      key.stepWorkflowPromptId === APP_REVIEW_PROMPT_ID,
+      key.stepWorkflowPromptId === APP_REVIEW_STEP_ID,
   },
   {
     id: "ticket-code-review",
@@ -61,7 +62,11 @@ function pinKeysForPrompt(
       }
       if (step.skillId === undefined) continue;
       for (const subStep of step.subSteps ?? []) {
-        if (subStep.workflowPromptId !== workflowPromptId) continue;
+        const ticketE2e =
+          workflowPromptId === APP_REVIEW_PROMPT_ID &&
+          step.skillId === TICKET_WAVE_PROMPT_ID &&
+          subStep.workflowPromptId === APP_REVIEW_STEP_ID;
+        if (subStep.workflowPromptId !== workflowPromptId && !ticketE2e) continue;
         const key = {
           workflowPromptId,
           stepWorkflowPromptId: step.skillId,

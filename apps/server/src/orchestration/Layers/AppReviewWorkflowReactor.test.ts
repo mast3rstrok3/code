@@ -2,6 +2,7 @@ import { deferredTicketValidationCommands } from "../appReviewValidation.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -11,6 +12,7 @@ import {
   AppReviewWorkflowCycleBudget,
   AppReviewWorkflowRunId,
   OrchestrationThread,
+  ServerSettings,
   ThreadId,
   TurnId,
   type AppReviewCheck,
@@ -96,6 +98,7 @@ import {
 
 const now = "2026-01-01T00:00:00.000Z";
 const decodeThread = Schema.decodeUnknownSync(OrchestrationThread);
+const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 
 it("reconciles running App Reviews after projection lag", () => {
   expect(APP_REVIEW_RECOVERY_SWEEP_INTERVAL_MS).toBe(30_000);
@@ -992,7 +995,7 @@ it("starts a new review cycle for a nonterminal run", () => {
   expect(nextAppReviewWorkflowAction(run())).toBe("review");
 });
 
-it("reconciles the isolated end-to-end phase before browser review", () => {
+it("reconciles the isolated end-to-end phase", () => {
   expect(
     nextAppReviewWorkflowAction(
       run({
@@ -1970,38 +1973,23 @@ it("derives stable e2e check ids from command order", () => {
   ]);
 });
 
-it("keeps disabled review parts off and preserves enabled E2E testing", () => {
-  // Settings turn a part off: it stays off whatever the ticket asked for.
-  expect(
-    resolveEffectiveAppReviewScope({
-      run: {},
-      settingsParts: { e2e: true, browser: false },
-    }),
-  ).toBe("e2e");
-  expect(
-    resolveEffectiveAppReviewScope({
-      run: {},
-      settingsParts: { e2e: false, browser: true },
-    }),
-  ).toBe("browser");
-  expect(
-    resolveEffectiveAppReviewScope({
-      run: { appReviewScope: "e2e" },
-      settingsParts: { e2e: false, browser: true },
-    }),
-  ).toBeNull();
-  expect(
-    resolveEffectiveAppReviewScope({
-      run: {},
-      settingsParts: { e2e: false, browser: false },
-    }),
-  ).toBeNull();
-  expect(
-    resolveEffectiveAppReviewScope({
-      run: { appReviewScope: "both" },
-      settingsParts: { e2e: true, browser: true },
-    }),
-  ).toBe("both");
+it("runs only E2E cycles even when older scope and settings enable browser review", () => {
+  for (const appReviewScope of [undefined, "e2e", "both", "browser"] as const) {
+    for (const browser of [false, true]) {
+      expect(
+        resolveEffectiveAppReviewScope({
+          run: appReviewScope === undefined ? {} : { appReviewScope },
+          settingsParts: { e2e: true, browser },
+        }),
+      ).toBe("e2e");
+      expect(
+        resolveEffectiveAppReviewScope({
+          run: appReviewScope === undefined ? {} : { appReviewScope },
+          settingsParts: { e2e: false, browser },
+        }),
+      ).toBeNull();
+    }
+  }
 });
 
 it("keeps the end-to-end test in its own durable section", () => {
@@ -2013,7 +2001,9 @@ it("keeps the end-to-end test in its own durable section", () => {
   });
   const launchSection = prompt.split("<workflow-skill")[0]!;
   expect(launchSection).toContain("- e2e-1: pnpm e2e:review");
-  expect(launchSection).toContain("separate Browser App Review thread");
+  expect(launchSection).toContain("Actionable failures enter gap analysis and implementation");
+  expect(launchSection).not.toContain("separate Browser App Review thread");
+  expect(launchSection).toContain("non-routable values");
   expect(launchSection).toContain("replayUrl");
   expect(launchSection).toContain("Do not call preview_* tools");
 });
@@ -2349,28 +2339,39 @@ it("plans missing acceptance tests without requiring a product defect", () => {
   ).toBe("planning");
 });
 
-it("keeps external prerequisites stopped when coverage gaps or product defects also exist", () => {
-  const original = review("failed");
-  for (const blockerKind of [undefined, "external-prerequisite"] as const) {
+it("repairs product defects and coverage gaps while preserving external blockers", () => {
+  const external: AppReviewCheck = {
+    id: "backend-configuration",
+    label: "Backend configuration",
+    status: "blocked",
+    blockerKind: "external-prerequisite",
+    notes: "The stack operator must supply configuration before acceptance can pass.",
+  };
+  for (const productFinding of [false, true]) {
+    const original = review("failed", productFinding);
     const blocked: AppReviewRecord = {
       ...original,
       document: {
         ...original.document,
-        findings: blockerKind === undefined ? [] : original.document.findings,
-        checks: [
-          coverageGap,
-          {
-            id: "provider-balance",
-            label: "Provider balance",
-            status: "blocked",
-            ...(blockerKind === undefined ? {} : { blockerKind }),
-            notes: "The account owner must add provider credit.",
-          },
-        ],
+        checks: productFinding ? [external] : [external, coverageGap],
       },
     };
-    expect(terminalReviewAction(blocked)).toBe("blocked");
+    expect(terminalReviewAction(blocked)).toBe("planning");
+    expect(appReviewRepairFindingsMarkdown(blocked)).toContain(external.notes);
+    const prior = priorCycleChecks({
+      run: run({ cyclesUsed: 1, cycles: [carryCycle(1, blocked.id)] }),
+      currentCycleNumber: 2,
+      priorReviews: [blocked],
+    });
+    expect(prior.findingIds).toContain(external.id);
   }
+  const original = review("failed", false);
+  expect(
+    terminalReviewAction({
+      ...original,
+      document: { ...original.document, checks: [external] },
+    }),
+  ).toBe("blocked");
 });
 
 it("requires fresh verification of a repaired coverage gap before accepting a later pass", () => {
@@ -3064,3 +3065,169 @@ it("directs selected platforms to real runners and retains browser recording evi
   expect(browser).toContain("captioned screenshots");
   expect(browser).not.toContain("e2e-platform-");
 });
+
+for (const verdict of ["passed", "failed"] as const) {
+  effectIt.effect(`reconciles ${verdict} E2E without launching a browser phase`, () => {
+    const original = review(verdict);
+    const e2eReview: AppReviewRecord = {
+      ...original,
+      appReviewScope: "e2e",
+      document: {
+        ...original.document,
+        checks: [
+          { id: "e2e-1", label: "Draft tests", status: verdict, notes: "Fresh command result" },
+          ...(verdict === "failed"
+            ? [
+                {
+                  id: "database-setup",
+                  label: "Test database setup",
+                  status: "blocked" as const,
+                  blockerKind: "external-prerequisite" as const,
+                  notes: "Database configuration is missing from the review process.",
+                },
+              ]
+            : []),
+        ],
+      },
+    };
+    let storedRun = run({
+      cyclesUsed: 1,
+      appReviewScope: "both",
+      activePhase: "e2e",
+      activeThreadId: e2eReview.reviewThreadId,
+      cycles: [
+        {
+          ...carryCycle(1, AppReviewId.make("unused-browser-review")),
+          appReviewScope: "both",
+          status: "e2e-testing",
+          e2eThreadId: e2eReview.reviewThreadId,
+          e2eReviewId: e2eReview.id,
+          e2eLaunchCount: 1,
+          reviewLaunchCount: 0,
+        },
+      ],
+    });
+    const thread = (id: ThreadId) =>
+      decodeThread({
+        id,
+        projectId: "project",
+        title: id,
+        modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
+        runtimeMode: "full-access",
+        branch: "drafts",
+        worktreePath: "/tmp/review-drafts",
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+        messages: [],
+        activities: [],
+        latestTurn: null,
+        session: null,
+        checkpoints: [],
+      });
+    const target = thread(storedRun.targetThreadId);
+    const controller = { ...thread(storedRun.controllerThreadId), appReviews: [e2eReview] };
+    const tester = decodeThread({
+      ...thread(e2eReview.reviewThreadId),
+      parentThreadId: controller.id,
+      workflowRole: "app-review-reviewer",
+      latestTurn: {
+        turnId: "test-turn",
+        state: "completed",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: now,
+        assistantMessageId: null,
+      },
+      checkpoints: [
+        {
+          turnId: "test-turn",
+          checkpointTurnCount: 1,
+          checkpointRef: "refs/t3/checkpoints/test-turn",
+          status: "ready",
+          files: [],
+          assistantMessageId: null,
+          completedAt: now,
+        },
+      ],
+    });
+    const threads = [target, controller, tester];
+    const commands: OrchestrationCommand[] = [];
+    const layer = AppReviewWorkflowReactorLive.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          Layer.mock(OrchestrationEngineService)({
+            dispatch: (command) =>
+              Effect.sync(() => {
+                commands.push(command);
+                if (command.type === "thread.app-review-workflow.update") storedRun = command.run;
+                return { sequence: commands.length };
+              }),
+          }),
+          Layer.mock(ProjectionSnapshotQuery)({
+            getCommandReadModel: () =>
+              Effect.sync(() => ({
+                snapshotSequence: commands.length,
+                projects: [],
+                threads,
+                implementationRuns: [],
+                appReviewWorkflowRuns: [storedRun],
+                updatedAt: now,
+              })),
+            getThreadDetailById: (id) =>
+              Effect.succeed(Option.fromUndefinedOr(threads.find((entry) => entry.id === id))),
+          }),
+          Layer.mock(GitWorkflowService)({
+            resolveCommit: () => Effect.succeed({ commitSha: "abc123" }),
+          }),
+          Layer.mock(ReviewService)({
+            getDiffPreview: ({ cwd }) =>
+              Effect.succeed({
+                cwd,
+                generatedAt: DateTime.makeUnsafe(now),
+                sources: (["working-tree", "branch-range"] as const).map((kind) => ({
+                  id: kind,
+                  kind,
+                  title: kind,
+                  baseRef: null,
+                  headRef: null,
+                  diff: "",
+                  diffHash: kind === "working-tree" ? "working" : "branch",
+                  truncated: false,
+                })),
+              }),
+          }),
+          Layer.mock(AppStackManager)({}),
+          Layer.mock(ServerSettingsService)({
+            getSettings: Effect.succeed(decodeServerSettings({})),
+          }),
+          Layer.mock(T3ProjectFileLoader)({
+            loadStrict: () =>
+              Effect.succeed(Option.some({ e2eCommands: ["pytest tests/drafts.py"] })),
+          }),
+        ),
+      ),
+    );
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const reactor = yield* AppReviewWorkflowReactor;
+        yield* reactor.reconcile();
+        expect(storedRun.cycles[0]?.appReviewScope).toBe("e2e");
+        expect(storedRun.cycles[0]?.reviewLaunchCount).toBe(0);
+        const turns = commands.filter((command) => command.type === "thread.turn.start");
+        if (verdict === "passed") {
+          expect(storedRun.status).toBe("passed");
+          expect(turns).toHaveLength(0);
+        } else {
+          expect(storedRun.status).toBe("running");
+          expect(storedRun.activePhase).toBe("planning");
+          expect(turns).toHaveLength(1);
+          expect(turns[0]?.workflowPromptId).toBe("matt-pocock.to-tickets");
+          expect(turns[0]?.message.text).toContain("Database configuration is missing");
+          expect(turns[0]?.message.text).toContain("Submit does not recover");
+        }
+      }).pipe(Effect.provide(layer)),
+    );
+  });
+}

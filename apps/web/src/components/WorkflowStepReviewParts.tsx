@@ -89,16 +89,6 @@ export function WorkflowStepReviewPartPins(props: {
                   aria-label={`E2E tests for ${target.label}`}
                 />
               </label>
-              <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                Browser review
-                <Switch
-                  checked={parts.browser}
-                  onCheckedChange={(checked) =>
-                    props.onSetStepReviewParts(target.key, { ...parts, browser: checked === true })
-                  }
-                  aria-label={`Browser review for ${target.label}`}
-                />
-              </label>
             </div>
             <ReviewTestPlatformPicker
               platforms={resolveReviewTestPlatforms(parts)}
@@ -108,8 +98,7 @@ export function WorkflowStepReviewPartPins(props: {
             />
             <p className="text-[11px] leading-relaxed text-muted-foreground">
               {describeAppReviewParts(parts)}
-              {parts.e2e || parts.browser ? "" : " — this review step is skipped entirely"} ·{" "}
-              {target.description}
+              {parts.e2e ? "" : ". This review step is skipped"} · {target.description}
             </p>
           </div>
         );

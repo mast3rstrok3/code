@@ -59,13 +59,6 @@ const TICKET_APP_REVIEW_PHASES = [
     note: "runs the project's e2e commands when t3.json declares them",
   },
   {
-    label: "Browser LLM review",
-    addLabel: "Add browser LLM review step",
-    part: "browser",
-    key: TICKET_APP_REVIEW_KEY,
-    note: "the quick assignment at the top sets this expensive ticket review thread",
-  },
-  {
     label: "Gap analysis and repair tickets",
     part: null,
     key: {
@@ -94,16 +87,6 @@ const APP_REVIEW_PHASES = [
       stepWorkflowPromptId: "implementation.browser-app-review.codex",
     },
     note: "runs the project's e2e commands when t3.json declares them",
-  },
-  {
-    label: "Browser LLM review",
-    addLabel: "Add browser LLM review step",
-    part: "browser",
-    key: {
-      workflowPromptId: "implementation.browser-app-review.codex",
-      stepWorkflowPromptId: "implementation.browser-app-review.codex",
-    },
-    note: "the quick assignment at the top sets this expensive review thread",
   },
   {
     label: "Gap analysis and repair tickets",
