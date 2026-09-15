@@ -5961,6 +5961,101 @@ describe("ImplementationWorkflowReactor", () => {
       ),
   );
 
+  for (const discarded of [false, true]) {
+    it.effect(
+      `continues a ${discarded ? "discarded" : "recorded"} successful worker after another ticket halted the run`,
+      () =>
+        withSystem((system) =>
+          Effect.gen(function* () {
+            const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+            const halt = {
+              stage: "app-review" as const,
+              category: "review-blocked" as const,
+              detail: "Another ticket needs review recovery.",
+              haltedAt: now,
+            };
+            yield* system.engine.dispatch({
+              type: "thread.implementation-run.update",
+              commandId: commandId("other-ticket-halt"),
+              threadId: sourceThreadId,
+              run: { ...run, status: "needs-human-attention", automationHalt: halt },
+              createdAt: now,
+            });
+            yield* system.reactor.drain;
+            yield* appendWorkerResult(system, {
+              run,
+              status: "succeeded",
+              completeTicketReview: false,
+            });
+            let snapshot = yield* system.query.getSnapshot();
+            const recorded = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
+            const state = recorded.ticketStates[0]!;
+            expect(state.workerResult?.status).toBe("succeeded");
+            const workerMessages = snapshot.threads.find(
+              (thread) => thread.id === state.workerThreadId,
+            )!.messages.length;
+            yield* system.reactor.recoverIncompleteStages();
+            yield* system.reactor.drain;
+            expect(
+              (yield* system.query.getSnapshot()).implementationRuns.find(
+                (entry) => entry.id === run.id,
+              )?.automationHalt,
+            ).toEqual(halt);
+            const updatedAt = "2026-01-01T00:05:00.000Z";
+            yield* system.engine.dispatch({
+              type: "thread.implementation-run.update",
+              commandId: commandId("resume-recorded-worker"),
+              threadId: sourceThreadId,
+              run: {
+                ...recorded,
+                status: discarded ? "needs-human-attention" : "running",
+                automationHalt: discarded
+                  ? {
+                      stage: "implementation",
+                      category: "retry-exhausted",
+                      ticketId: state.ticketId,
+                      detail: "Implementation launch budget exhausted.",
+                      haltedAt: updatedAt,
+                    }
+                  : null,
+                ticketStates: recorded.ticketStates.map((entry) => ({
+                  ...entry,
+                  ...(discarded
+                    ? {
+                        status: "ready" as const,
+                        workerResult: null,
+                        warningMarkdown:
+                          "Recovery continued the existing Implementation thread after its provider session stopped.",
+                      }
+                    : {}),
+                  updatedAt,
+                })),
+                updatedAt,
+              },
+              createdAt: updatedAt,
+            });
+            yield* system.reactor.drain;
+            yield* system.reactor.recoverIncompleteStages();
+            yield* system.reactor.drain;
+            yield* system.reactor.recoverIncompleteStages();
+            yield* system.reactor.drain;
+            snapshot = yield* system.query.getSnapshot();
+            const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
+            expect(recovered.automationHalt).toBeNull();
+            expect(recovered.ticketStates[0]?.status).toBe("code-reviewing");
+            expect(recovered.ticketStates[0]?.workerResult?.commitSha).toBe(
+              state.workerResult?.commitSha,
+            );
+            expect(recovered.ticketStates[0]?.attemptCount).toBe(state.attemptCount);
+            expect(recovered.workerResults).toHaveLength(1);
+            expect(
+              snapshot.threads.find((thread) => thread.id === state.workerThreadId)!.messages,
+            ).toHaveLength(workerMessages);
+          }),
+        ),
+    );
+  }
+
   it.effect("replays a completed worker result after clearing a legacy dirty-worktree halt", () =>
     withSystem((system) =>
       Effect.gen(function* () {

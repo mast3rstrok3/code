@@ -1874,10 +1874,34 @@ export function workerReportedCurrentAttempt(
   thread: OrchestrationThread | undefined,
 ): boolean {
   return (
-    thread?.activities.some(
+    state.workerResult != null ||
+    (thread?.activities.some(
       (activity) =>
         activity.kind === "implementation-worker-result" && activity.createdAt >= state.updatedAt,
-    ) ?? false
+    ) ??
+      false)
+  );
+}
+
+function discardedWorkerResult(
+  run: OrchestrationImplementationRun,
+  state: OrchestrationImplementationTicketState,
+) {
+  if (
+    state.status !== "ready" ||
+    state.workerResult !== null ||
+    state.workerThreadId === null ||
+    state.warningMarkdown !==
+      "Recovery continued the existing Implementation thread after its provider session stopped."
+  )
+    return undefined;
+  return run.workerResults.findLast(
+    (result) =>
+      result.workerThreadId === state.workerThreadId &&
+      result.ticketId === state.ticketId &&
+      result.branch === state.branch &&
+      result.worktreePath === state.worktreePath &&
+      result.status === "succeeded",
   );
 }
 
@@ -6693,7 +6717,10 @@ const make = Effect.gen(function* () {
               }
             : state,
         ),
-        workerResults: [...run.workerResults, acceptedDirective],
+        workerResults: [
+          ...run.workerResults.filter((result) => result.workerThreadId !== threadId),
+          acceptedDirective,
+        ],
         retryableFailure:
           run.automationHalt === null &&
           (run.retryableFailure?.stage === "worker-setup" ||
@@ -10289,6 +10316,8 @@ const make = Effect.gen(function* () {
     let recovered = false;
     for (const run of readModel.implementationRuns) {
       const halt = run.automationHalt;
+      if (run.ticketStates.some((state) => discardedWorkerResult(run, state) !== undefined))
+        continue;
       const persistedTicketAppReviewLaunchFallout =
         input.recoverPersistedLaunchFallout &&
         halt?.category === "retry-exhausted" &&
@@ -10661,22 +10690,65 @@ const make = Effect.gen(function* () {
         break;
       }
       if (recoveredWorker) continue;
-      const returnedNativeTicket =
-        run.automationHalt === null
-          ? run.ticketStates.find(
-              (state) =>
-                state.status === "running" &&
-                state.nativeVerification?.status === "completed" &&
-                state.workerResult?.status === "succeeded",
-            )
-          : undefined;
-      if (returnedNativeTicket?.workerResult && returnedNativeTicket.workerThreadId) {
+      const recordedWorker = run.ticketStates.find(
+        (state) =>
+          state.status === "running" &&
+          state.workerResult?.status === "succeeded" &&
+          state.workerThreadId !== null &&
+          !isWorkflowThreadPaused(readModel.threads, state.workerThreadId),
+      );
+      if (
+        run.automationHalt === null &&
+        recordedWorker?.workerResult &&
+        recordedWorker.workerThreadId
+      ) {
         yield* handleWorkerResult(
-          returnedNativeTicket.workerThreadId,
-          { type: "implementation-worker-result", ...returnedNativeTicket.workerResult },
+          recordedWorker.workerThreadId,
+          { type: "implementation-worker-result", ...recordedWorker.workerResult },
           createdAt,
         );
         continue;
+      }
+      // Older recovery sweeps cleared accepted results while another ticket held the run.
+      // Explicit reruns remove their old workerResults, so only this discarded-result state qualifies.
+      const discardedWorker = run.ticketStates.find(
+        (state) =>
+          state.workerThreadId !== null &&
+          !isWorkflowThreadPaused(readModel.threads, state.workerThreadId) &&
+          discardedWorkerResult(run, state) !== undefined,
+      );
+      if (discardedWorker?.workerThreadId) {
+        const result = discardedWorkerResult(run, discardedWorker);
+        if (result) {
+          const ownsExhaustion =
+            run.automationHalt?.stage === "implementation" &&
+            run.automationHalt.category === "retry-exhausted" &&
+            run.automationHalt.ticketId === discardedWorker.ticketId;
+          const restored = {
+            ...run,
+            ...(ownsExhaustion
+              ? { status: "running" as const, automationHalt: null, retryableFailure: null }
+              : {}),
+            ticketStates: run.ticketStates.map((state) =>
+              state.ticketId === discardedWorker.ticketId
+                ? {
+                    ...state,
+                    status: "running" as const,
+                    workerResult: result,
+                    updatedAt: createdAt,
+                  }
+                : state,
+            ),
+            updatedAt: createdAt,
+          };
+          yield* updateRun({ sourceThreadId, run: restored, createdAt });
+          yield* handleWorkerResult(
+            discardedWorker.workerThreadId,
+            { type: "implementation-worker-result", ...result },
+            createdAt,
+          );
+          continue;
+        }
       }
       const directlyFailedTicket = run.ticketStates.find(
         (state) =>
