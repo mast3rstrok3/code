@@ -3692,6 +3692,7 @@ const make = Effect.gen(function* () {
       readonly warningMarkdown?: string;
       readonly appReviewOutcome?: "skipped" | "failed";
       readonly createdAt: string;
+      readonly resultProblem?: string;
     }) {
       if (input.run.automationHalt !== null) return;
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
@@ -3736,6 +3737,7 @@ const make = Effect.gen(function* () {
       ) {
         return;
       }
+      const resultProblem = input.resultProblem ?? null;
       // Starting the stage always claims another launch, and the decider refuses
       // a claim past the budget. Without this the stage recovery sweep asks for
       // that refused transition every minute forever, on a run that carries no
@@ -3745,7 +3747,12 @@ const make = Effect.gen(function* () {
           sourceThreadId: input.sourceThreadId,
           run: input.run,
           ticketId: state.ticketId,
-          reasonMarkdown: `Ticket '${state.ticketId}' exhausted its Code Review launch budget.`,
+          reasonMarkdown: [
+            `Ticket '${state.ticketId}' exhausted its Code Review launch budget.`,
+            resultProblem === null ? "" : `Latest result was rejected: ${resultProblem}`,
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
           updatedAt: input.createdAt,
           haltCategory: "retry-exhausted",
           haltStage: "code-review",
@@ -3926,8 +3933,11 @@ const make = Effect.gen(function* () {
                 .filter((validation) => validation.status !== "passed")
                 .map(
                   (validation) =>
-                    `Unresolved check from the previous result: ${validation.command}\n${validation.outputMarkdown}\nRepair and rerun these checks. If a corrected command covers the same checks, retain the failed attempt and name it in supersedesCommand. Do not replace it with an unrelated passing test.`,
+                    `Unresolved check from the previous result: ${validation.command}\n\nOriginal validation record:\n\n\`\`\`json\n${JSON.stringify(validation, null, 2)}\n\`\`\`\n\nRetain this record, including its original completedAt. Repair and rerun these checks. If a corrected command covers the same checks, retain the failed attempt and name it in supersedesCommand. Do not replace it with an unrelated passing test.`,
                 ),
+              resultProblem === null
+                ? ""
+                : `Your previous Code Review result was rejected: ${resultProblem}\nCorrect the result and re-emit the complete directive. Preserve completed repairs and the original validation timestamps. Reuse passing evidence for unchanged HEAD; rerun only checks whose required evidence is missing.`,
               nativeVerificationEvidenceMarkdown(state.nativeVerification),
               `Retrieve the durable ticket with workflow_ticket_get. Review Standards and Spec, apply and commit clear fixes, and leave the worktree clean.`,
               input.warningMarkdown === undefined
@@ -7716,7 +7726,7 @@ const make = Effect.gen(function* () {
 
   const handleCodeReviewResult = Effect.fn("ImplementationWorkflowReactor.handleCodeReviewResult")(
     function* (
-      event: Extract<ImplementationWorkflowEvent, { type: "thread.activity-appended" }>,
+      input: { readonly threadId: ThreadId; readonly createdAt: string },
       directive: CodeReviewDirective,
     ) {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
@@ -7726,16 +7736,16 @@ const make = Effect.gen(function* () {
         const state = run.ticketStates.find(
           (candidate) =>
             candidate.ticketId === directive.ticketId &&
-            candidate.codeReviewThreadId === event.payload.threadId,
+            candidate.codeReviewThreadId === input.threadId,
         );
         if (
           sourceThreadId === null ||
           state?.worktreePath == null ||
           state.branch == null ||
-          state.status === "awaiting-native-verification"
+          state.status !== "code-reviewing"
         )
           return;
-        const updatedAt = event.payload.activity.createdAt;
+        const updatedAt = input.createdAt;
         if (
           directive.status === "blocked" &&
           directive.reportMarkdown === WORKFLOW_INTERRUPTION_ERROR_MESSAGE
@@ -7965,13 +7975,13 @@ const make = Effect.gen(function* () {
       if (
         run === null ||
         run.status !== "code-reviewing" ||
-        run.activeCodeReviewThreadId !== event.payload.threadId
+        run.activeCodeReviewThreadId !== input.threadId
       ) {
         return;
       }
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) return;
-      const updatedAt = event.payload.activity.createdAt;
+      const updatedAt = input.createdAt;
       const finalPass = isFinalCodeReviewPass(run);
       if (
         directive.status === "blocked" &&
@@ -9959,7 +9969,11 @@ const make = Effect.gen(function* () {
       }
       case "implementation-code-review-result": {
         const directive = asCodeReviewDirective(event.payload.activity.payload);
-        if (directive !== null) yield* handleCodeReviewResult(event, directive);
+        if (directive !== null)
+          yield* handleCodeReviewResult(
+            { threadId: event.payload.threadId, createdAt: event.payload.activity.createdAt },
+            directive,
+          );
         return;
       }
       case "implementation-fast-build-result": {
@@ -10488,6 +10502,57 @@ const make = Effect.gen(function* () {
     return recovered;
   });
 
+  const recoverTicketCodeReview = Effect.fn(
+    "ImplementationWorkflowReactor.recoverTicketCodeReview",
+  )(function* (input: {
+    readonly sourceThreadId: ThreadId;
+    readonly run: OrchestrationImplementationRun;
+    readonly ticketId: string;
+    readonly warningMarkdown?: string;
+    readonly createdAt: string;
+  }) {
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const state = input.run.ticketStates.find((candidate) => candidate.ticketId === input.ticketId);
+    const existingReviewer =
+      state?.codeReviewThreadId == null ? null : findThread(readModel, state.codeReviewThreadId);
+    let resultProblem: string | null = null;
+    if (
+      existingReviewer?.latestTurn?.state === "completed" &&
+      existingReviewer.session?.activeTurnId == null
+    ) {
+      const detail = yield* projectionSnapshotQuery
+        .getThreadDetailById(existingReviewer.id)
+        .pipe(Effect.map(Option.getOrUndefined));
+      const message = detail?.messages.findLast(
+        (candidate) =>
+          candidate.role === "assistant" &&
+          !candidate.streaming &&
+          candidate.turnId === existingReviewer.latestTurn?.turnId,
+      );
+      const parsed = parseWorkflowDirectiveFromMarkdown(message?.text ?? "");
+      if (
+        parsed.kind === "parsed" &&
+        parsed.directive.type === "implementation-code-review-result" &&
+        parsed.directive.runId === input.run.id &&
+        parsed.directive.ticketId === input.ticketId
+      ) {
+        yield* handleCodeReviewResult(
+          { threadId: existingReviewer.id, createdAt: input.createdAt },
+          parsed.directive,
+        );
+        return;
+      }
+      resultProblem =
+        parsed.kind === "error"
+          ? parsed.message
+          : "The completed turn did not report an implementation-code-review-result for this run and ticket.";
+    }
+    yield* startTicketCodeReview({
+      ...input,
+      ...(resultProblem === null ? {} : { resultProblem }),
+    });
+  });
+
   const recoverIncompleteStages = Effect.fn(
     "ImplementationWorkflowReactor.recoverIncompleteStages",
   )(function* (recoverPersistedLaunchFallout = false) {
@@ -10977,7 +11042,7 @@ const make = Effect.gen(function* () {
           yield* recoverRunStage(
             run.id,
             "ticket-code-review",
-            startTicketCodeReview({
+            recoverTicketCodeReview({
               sourceThreadId,
               run,
               ticketId: interruptedTicketCodeReview.ticketId,

@@ -6621,6 +6621,10 @@ describe("ImplementationWorkflowReactor", () => {
                 snapshot.threads.find((thread) => thread.id === nextReviewer)?.messages.at(-1)
                   ?.text,
               ).toContain("Unresolved check from the previous result: test writing.test.ts");
+              expect(
+                snapshot.threads.find((thread) => thread.id === nextReviewer)?.messages.at(-1)
+                  ?.text,
+              ).toContain('"completedAt": "2026-01-01T00:00:02.000Z"');
               yield* appendCodeReviewResult(system, {
                 run,
                 threadId: nextReviewer,
@@ -10358,6 +10362,137 @@ describe("ImplementationWorkflowReactor", () => {
       }),
     ),
   );
+
+  for (const outcome of ["clean", "findings", "malformed"] as const) {
+    it.effect(`recovers a ${outcome} ticket Code Review result`, () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+          yield* appendWorkerResult(system, {
+            run,
+            status: "succeeded",
+            completeTicketReview: false,
+          });
+          let snapshot = yield* system.query.getSnapshot();
+          const reviewing = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          const state = reviewing?.ticketStates[0];
+          const threadId = state?.codeReviewThreadId;
+          if (!reviewing || !state || !threadId) throw new Error("Ticket reviewer missing.");
+          const turnId = TurnId.make("completed-code-review-turn");
+          const messageId = MessageId.make("completed-code-review-result");
+          const createdAt = "2026-01-01T00:01:00.000Z";
+          yield* system.engine.dispatch({
+            type: "thread.session.set",
+            commandId: commandId("review-running"),
+            threadId,
+            session: {
+              threadId,
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: turnId,
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          });
+          const result = {
+            type: "implementation-code-review-result",
+            runId: run.id,
+            ticketId: state.ticketId,
+            status: outcome === "findings" ? "findings" : "clean",
+            ...(outcome === "findings" ? { commitSha: state.workerResult?.commitSha } : {}),
+            reportMarkdown: "Reviewed the ticket; no remaining findings.",
+            validations:
+              outcome === "malformed"
+                ? [
+                    {
+                      command: "pytest tests/drafts.py",
+                      status: "passed",
+                      outputMarkdown: "27 passed",
+                    },
+                  ]
+                : requiredValidations(),
+          };
+          yield* system.engine.dispatch({
+            type: "thread.message.assistant.delta",
+            commandId: commandId("review-result-text"),
+            threadId,
+            turnId,
+            messageId,
+            delta: `\`\`\`json\n${yield* encodeJson(result)}\n\`\`\``,
+            createdAt,
+          });
+          yield* system.engine.dispatch({
+            type: "thread.message.assistant.complete",
+            commandId: commandId("review-result-complete"),
+            threadId,
+            turnId,
+            messageId,
+            createdAt,
+          });
+          yield* system.engine.dispatch({
+            type: "thread.session.set",
+            commandId: commandId("review-ready"),
+            threadId,
+            session: {
+              threadId,
+              status: "ready",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          });
+          yield* system.reactor.drain;
+          yield* TestClock.adjust(Duration.minutes(11));
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
+          snapshot = yield* system.query.getSnapshot();
+          const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(recovered?.automationHalt).toBeNull();
+          if (outcome === "malformed") {
+            expect(recovered?.ticketStates[0]?.codeReviewPassCount).toBe(0);
+            expect(recovered?.ticketStates[0]?.codeReviewLaunchCount).toBe(
+              state.codeReviewLaunchCount + 1,
+            );
+            expect(recovered?.ticketStates[0]?.codeReviewThreadId).toBe(threadId);
+            expect(
+              snapshot.threads.find((thread) => thread.id === threadId)?.messages.at(-1)?.text,
+            ).toContain(
+              "Your previous Code Review result was rejected: Directive field 'completedAt'",
+            );
+          } else if (outcome === "findings") {
+            expect(recovered?.ticketStates[0]?.status).toBe("code-reviewing");
+            expect(recovered?.ticketStates[0]?.codeReviewPassCount).toBe(1);
+            expect(recovered?.ticketStates[0]?.codeReviewThreadId).not.toBe(threadId);
+            yield* system.reactor.recoverIncompleteStages();
+            yield* system.reactor.drain;
+            expect(
+              (yield* system.query.getSnapshot()).implementationRuns.find(
+                (entry) => entry.id === run.id,
+              )?.ticketStates[0]?.codeReviewPassCount,
+            ).toBe(1);
+          } else {
+            expect(recovered?.ticketStates[0]?.status).toBe("succeeded");
+            expect(recovered?.ticketStates[0]?.codeReviewPassCount).toBe(1);
+            expect(recovered?.ticketStates[0]?.codeReviewLaunchCount).toBe(
+              state.codeReviewLaunchCount,
+            );
+            yield* system.reactor.recoverIncompleteStages();
+            yield* system.reactor.drain;
+            expect(
+              (yield* system.query.getSnapshot()).implementationRuns.find(
+                (entry) => entry.id === run.id,
+              )?.ticketStates[0]?.codeReviewPassCount,
+            ).toBe(1);
+          }
+        }),
+      ),
+    );
+  }
 
   it.effect("halts a ticket Code Review that has no launch budget left", () =>
     withSystem((system) =>
