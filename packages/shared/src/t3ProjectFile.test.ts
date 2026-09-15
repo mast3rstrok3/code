@@ -49,7 +49,7 @@ describe("buildT3ProjectFileJsonSchema", () => {
     ]);
     const e2eCommands = JSON.stringify(schema.properties.e2eCommands);
     expect(e2eCommands).toContain('"minItems":1');
-    expect(e2eCommands).toContain('"maxItems":10');
+    expect(e2eCommands).not.toContain('"maxItems"');
     expect(e2eCommands).toContain('"maxLength":512');
     expect(schema.required).toBeUndefined();
     expect(schema.properties.iconPath?.description).toContain("Workspace-relative path");

@@ -5,6 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 
 import * as T3ProjectFileLoader from "./T3ProjectFileLoader.ts";
 
@@ -54,6 +55,22 @@ it.layer(TestLayer)("T3ProjectFileLoader", (it) => {
         expect(yield* loader.loadStrict(cwd)).toEqual(
           Option.some({ e2eCommands: ["pnpm test:e2e"] }),
         );
+      }),
+    );
+
+    it.effect("loads every focused E2E command when a project grows beyond ten suites", () =>
+      Effect.gen(function* () {
+        const loader = yield* T3ProjectFileLoader.T3ProjectFileLoader;
+        const cwd = yield* makeTempDir;
+        const commands = Array.from(
+          { length: 18 },
+          (_, index) => `pnpm e2e:review tests/ticket-${index + 1}.py`,
+        );
+        const contents = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+          e2eCommands: commands,
+        });
+        yield* writeProjectFile(cwd, contents);
+        expect(yield* loader.loadStrict(cwd)).toEqual(Option.some({ e2eCommands: commands }));
       }),
     );
 

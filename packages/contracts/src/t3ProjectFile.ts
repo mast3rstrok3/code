@@ -104,9 +104,9 @@ export const T3ProjectFile = Schema.Struct({
     )
       .annotate({
         description:
-          "Ordered end-to-end test commands App Review runs at the start of every review cycle. Absent means reviews go straight to the browser.",
+          "Ordered end-to-end test commands available to App Review. E2E review requires at least one command.",
       })
-      .check(Schema.isMinLength(1), Schema.isMaxLength(T3_PROJECT_FILE_MAX_VALIDATION_COMMANDS)),
+      .check(Schema.isMinLength(1)),
   ),
   defaultThreadEnvMode: Schema.optionalKey(
     ThreadEnvMode.annotate({
