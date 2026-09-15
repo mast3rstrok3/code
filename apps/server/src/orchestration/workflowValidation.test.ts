@@ -67,6 +67,32 @@ describe("workflow validation evidence", () => {
     expect(currentWorkflowValidations([failure, unlinked])).toEqual([failure, unlinked]);
   });
 
+  it("allows one passing execution to supersede multiple failed command variants", () => {
+    const failures = ["missing-url e2e", "old-output-dir e2e", "old-cycle-dir e2e"].map(
+      (command) => ({
+        ...green,
+        command,
+        status: "failed" as const,
+      }),
+    );
+    const replacements = failures.map((failure) => ({
+      ...green,
+      command: "fresh-output-dir e2e",
+      supersedesCommand: failure.command,
+      completedAt: "2026-09-07T23:30:00.000Z",
+    }));
+    for (const reports of [replacements, [...replacements].reverse()]) {
+      expect(currentWorkflowValidations([...failures, ...reports])).toEqual([reports[0]]);
+    }
+    for (const completedAt of [replacements[0]!.completedAt, "2026-09-07T23:31:00.000Z"]) {
+      const regression = { ...replacements[0]!, status: "failed" as const, completedAt };
+      expect(currentWorkflowValidations([...failures, ...replacements, regression])).toEqual([
+        ...failures,
+        regression,
+      ]);
+    }
+  });
+
   it("keeps failures unless their explicit replacement is newer and still passing", () => {
     const failure = { ...green, status: "failed" as const };
     const retry = {

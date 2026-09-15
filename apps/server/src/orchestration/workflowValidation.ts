@@ -24,8 +24,21 @@ export function currentWorkflowValidations<T extends Validation>(validations: Re
     }
   }
   const superseded = new Set<string>();
-  for (const validation of latest.values()) {
-    if (validation.status !== "passed" || validation.supersedesCommand === undefined) continue;
+  for (const validation of validations) {
+    if (
+      validation.purpose === "reproduction" ||
+      validation.status !== "passed" ||
+      validation.supersedesCommand === undefined
+    )
+      continue;
+    const current = latest.get(validation.command.trim());
+    // One passing execution can explicitly replace several failed setup attempts.
+    // Preserve every link from that execution while rejecting stale or conflicting evidence.
+    if (
+      current?.status !== "passed" ||
+      Date.parse(current.completedAt) !== Date.parse(validation.completedAt)
+    )
+      continue;
     const command = validation.supersedesCommand.trim();
     const previous = latest.get(command);
     if (
