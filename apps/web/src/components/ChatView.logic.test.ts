@@ -35,6 +35,7 @@ import {
 } from "../previewMiniPlayerStore";
 import {
   MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
+  resolveComposerWorkflowPreset,
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   buildLocalDraftThread,
   agentControlledBrowserCloseConfirmation,
@@ -2748,4 +2749,13 @@ describe("restorePlanFollowUpComposer", () => {
       detectTrigger: true,
     });
   });
+});
+
+it("keeps App Review repair and planning follow-ups in the owning workflow", () => {
+  expect(resolveComposerWorkflowPreset("app-review", "app-review-fixer")).toBeNull();
+  expect(resolveComposerWorkflowPreset("app-review", "app-review-planner")).toBeNull();
+  expect(resolveComposerWorkflowPreset(null, "app-review-fixer")).toBeNull();
+  expect(resolveComposerWorkflowPreset("app-review", null)).toBe("app-review");
+  expect(resolveComposerWorkflowPreset("app-review", "app-review-orchestrator")).toBe("app-review");
+  expect(resolveComposerWorkflowPreset("fix", null)).toBe("fix");
 });

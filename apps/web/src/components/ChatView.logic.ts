@@ -8,6 +8,8 @@ import {
   type EnvironmentId,
   isProviderDriverKind,
   type OrchestrationImplementationRun,
+  type OrchestrationThreadWorkflowRole,
+  type WorkflowPreset,
   ProjectId,
   type MessageId,
   type ModelSelection,
@@ -22,6 +24,15 @@ import {
   type ThreadLinkedPullRequest,
   type TurnId,
 } from "@t3tools/contracts";
+
+export function resolveComposerWorkflowPreset(
+  preset: WorkflowPreset | null,
+  role: OrchestrationThreadWorkflowRole | null | undefined,
+): WorkflowPreset | null {
+  return preset === "app-review" && (role === "app-review-fixer" || role === "app-review-planner")
+    ? null
+    : preset;
+}
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
 import {

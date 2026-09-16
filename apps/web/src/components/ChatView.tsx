@@ -507,6 +507,7 @@ import {
   toolGroupConsumesUpwardNavigation,
   waitForStartedServerThread,
   shouldRefocusComposerOnWindowFocus,
+  resolveComposerWorkflowPreset,
 } from "./ChatView.logic";
 import type { ThreadSyncPhase } from "../threadSync";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
@@ -2061,10 +2062,12 @@ export default function ChatView(props: ChatViewProps) {
   // Implicit drafts follow their current project/environment, including retargets.
   // Explicit composer choices and existing server threads retain their permissions.
   const runtimeMode = composerRuntimeMode ?? activeServerThread?.runtimeMode ?? defaultRuntimeMode;
-  const workflowPreset =
+  const workflowPreset = resolveComposerWorkflowPreset(
     composerInteractionMode !== null
       ? composerWorkflowPreset
-      : (activeThread?.workflowPreset ?? null);
+      : (activeThread?.workflowPreset ?? null),
+    activeThread?.workflowRole,
+  );
   const workflowImplementationSettings =
     composerInteractionMode !== null
       ? composerWorkflowImplementationSettings

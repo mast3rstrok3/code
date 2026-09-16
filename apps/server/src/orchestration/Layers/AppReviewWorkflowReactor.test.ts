@@ -87,6 +87,7 @@ import {
   isMissingAppReviewFixResult,
   reopenFailedAppReviewPhase,
   rerunPlanningPhaseInCycle,
+  rerunFixingPhaseInCycle,
   priorCycleChecks,
   findAppReviewParentTicket,
   isSupersededAppReviewPhaseThread,
@@ -347,6 +348,77 @@ const failedValidationResult = {
     },
   ],
 };
+
+it("retries a blocked repair in its durable thread with the remaining checks and evidence", () => {
+  const original = validationFixingRun();
+  const cycle = original.cycles[0]!;
+  const result = {
+    ...failedValidationResult,
+    status: "blocked" as const,
+    notesMarkdown: "Repair committed. Recover the assigned test database connection.",
+    validations: [
+      failedValidationResult.validations[0]!,
+      { ...failedValidationResult.validations[1]!, status: "blocked" as const },
+    ],
+  };
+  const retried = rerunFixingPhaseInCycle({
+    cycle,
+    previousResult: result,
+    validationFailure: "project-tests: blocked",
+    workspaceRevision: original.workspaceRevision,
+    occurredAt: "2026-01-01T01:00:00.000Z",
+  });
+  expect(retried.fixerThreadId).toBe(cycle.fixerThreadId);
+  expect(retried.cycleNumber).toBe(cycle.cycleNumber);
+  expect(retried.repairTickets).toEqual(cycle.repairTickets);
+  expect(retried.validationRepair?.requiredCommands).toEqual(["project-tests"]);
+  expect(retried.validationRepair?.result).toEqual(result);
+  expect(retried.fixResult).toBeNull();
+  expect(appReviewRecoveryEvidenceIsCurrent(original, retried, now)).toBe(false);
+  expect(
+    appReviewValidationRepairNeedsLaunch(retried, {
+      latestTurn: { requestedAt: now },
+      session: null,
+    }),
+  ).toBe(true);
+  const prompt = buildAppReviewValidationRepairPrompt({ run: original, cycle: retried });
+  expect(prompt).toContain("explicit retry of a blocked repair");
+  expect(prompt).toContain(result.notesMarkdown);
+  expect(prompt).toContain("Do not start a separate workflow");
+});
+
+it("starts a fresh repair thread when repeating a successful repair without remaining checks", () => {
+  const original = validationFixingRun();
+  const retried = rerunFixingPhaseInCycle({
+    cycle: original.cycles[0]!,
+    previousResult: { ...failedValidationResult, validations: [] },
+    validationFailure: null,
+    workspaceRevision: original.workspaceRevision,
+    occurredAt: now,
+  });
+  expect(retried.fixerThreadId).toBeNull();
+  expect(retried.validationRepair).toBeNull();
+});
+
+it("preserves a notes-only blocker when an explicit retry has no failed validation entry", () => {
+  const original = validationFixingRun();
+  const result = {
+    ...failedValidationResult,
+    status: "blocked" as const,
+    notesMarkdown: "Missing permission to create the test database.",
+    validations: [failedValidationResult.validations[0]!],
+  };
+  const retried = rerunFixingPhaseInCycle({
+    cycle: original.cycles[0]!,
+    previousResult: result,
+    validationFailure: null,
+    workspaceRevision: original.workspaceRevision,
+    occurredAt: now,
+  });
+  expect(retried.validationRepair?.requiredCommands).toEqual([]);
+  expect(retried.validationRepair?.detailMarkdown).toBe(result.notesMarkdown);
+  expect(retried.validationRepair?.result.commitSha).toBe("saved-commit");
+});
 
 it("preserves blocked repair results without spending validation attempts", () => {
   const original = validationFixingRun();
@@ -3389,7 +3461,7 @@ for (const verdict of ["passed", "failed", "rejected"] as const) {
   });
 }
 
-for (const mode of ["e2e", "fixing", "validation"] as const) {
+for (const mode of ["e2e", "fixing", "fixing-existing", "validation"] as const) {
   const phase = mode === "e2e" ? "e2e" : "fixing";
   for (const outcome of [
     "ready",
@@ -3420,6 +3492,7 @@ for (const mode of ["e2e", "fixing", "validation"] as const) {
             e2eReviewId: AppReviewId.make("e2e-review"),
             e2eLaunchCount: 1,
             fixingLaunchCount: 1,
+            recoveryContinuationCount: mode === "fixing-existing" ? 1 : 0,
             fixerThreadId: phase === "fixing" ? ThreadId.make("fixer") : null,
             repairTickets: [
               {
@@ -3470,6 +3543,9 @@ for (const mode of ["e2e", "fixing", "validation"] as const) {
           controller,
           reviewer,
           ...(mode === "validation" ? [thread(ThreadId.make("fixer"))] : []),
+          ...(mode === "fixing-existing"
+            ? [{ ...thread(ThreadId.make("fixer")), workflowPreset: "app-review" as const }]
+            : []),
           ...(phase === "fixing" ? [thread(ThreadId.make("tester"))] : []),
         ];
         const commands: OrchestrationCommand[] = [];
@@ -3633,7 +3709,9 @@ for (const mode of ["e2e", "fixing", "validation"] as const) {
                 expect(storedRun.cyclesUsed).toBe(1);
                 expect(storedRun.cycles[0]?.e2eLaunchCount).toBe(1);
                 expect(storedRun.cycles[0]?.fixingLaunchCount).toBe(1);
-                expect(storedRun.cycles[0]?.recoveryContinuationCount ?? 0).toBe(0);
+                expect(storedRun.cycles[0]?.recoveryContinuationCount ?? 0).toBe(
+                  mode === "fixing-existing" ? 1 : 0,
+                );
                 if (outcome === "ready") {
                   expect(storedRun.status).toBe("running");
                   expect(storedRun.activePhase).toBe(phase);
@@ -3643,6 +3721,25 @@ for (const mode of ["e2e", "fixing", "validation"] as const) {
                     phase === "e2e" ? { reviewThreadId: "tester" } : { threadId: "fixer" },
                   );
                   expect(probes).toHaveLength(2);
+                  if (mode === "fixing") {
+                    expect(
+                      commands.find(
+                        (command) =>
+                          command.type === "thread.create" && command.threadId === "fixer",
+                      ),
+                    ).toMatchObject({
+                      interactionMode: "default",
+                      workflowPreset: null,
+                    });
+                  }
+                  if (mode === "fixing-existing") {
+                    expect(commands.some((command) => command.type === "thread.create")).toBe(
+                      false,
+                    );
+                    expect(
+                      commands.find((command) => command.type === "thread.composer-mode.set"),
+                    ).toMatchObject({ threadId: "fixer", workflowPreset: null });
+                  }
                 } else {
                   expect(launches).toHaveLength(0);
                   expect(storedRun.status).toBe(

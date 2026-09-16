@@ -1133,6 +1133,42 @@ export function rerunPlanningPhaseInCycle(input: {
   };
 }
 
+export function rerunFixingPhaseInCycle(input: {
+  readonly cycle: AppReviewWorkflowCycle;
+  readonly previousResult: AppReviewWorkflowFixResult | null;
+  readonly validationFailure: string | null;
+  readonly workspaceRevision: AppReviewWorkflowWorkspaceRevision;
+  readonly occurredAt: string;
+}): AppReviewWorkflowCycle {
+  const result = input.previousResult;
+  const detail =
+    result?.status === "blocked"
+      ? [result.notesMarkdown, input.validationFailure].filter(Boolean).join("\n\n") ||
+        "Resolve the previously reported prerequisite before repeating validation."
+      : input.validationFailure;
+  return {
+    ...input.cycle,
+    status: "fixing",
+    fixerThreadId: result !== null && detail !== null ? input.cycle.fixerThreadId : null,
+    fixResult: null,
+    validationRepair:
+      result !== null && detail !== null
+        ? {
+            attempt: 1,
+            requestedAt: input.occurredAt,
+            requiredCommands: currentWorkflowValidations(result.validations)
+              .filter((validation) => validation.status !== "passed")
+              .map((validation) => validation.command.trim()),
+            result,
+            detailMarkdown: detail,
+          }
+        : null,
+    workspaceRevision: input.workspaceRevision,
+    failure: null,
+    completedAt: null,
+  };
+}
+
 /** Whether a provider turn belongs to a phase the run has already left. */
 export function isSupersededAppReviewPhaseThread(
   run: Pick<AppReviewWorkflowRun, "activeThreadId" | "cycles">,
@@ -1464,7 +1500,8 @@ export function buildAppReviewFixPrompt(input: {
   readonly cycle: AppReviewWorkflowCycle;
   readonly e2eCommands: ReadonlyArray<string>;
 }): string {
-  const continuesInterruptedFix = (input.cycle.fixingLaunchCount ?? 0) > 1;
+  const continuesInterruptedFix =
+    (input.cycle.fixingLaunchCount ?? 0) > 1 && input.cycle.validationRepair == null;
   return appendWorkflowSkillCommandSection(
     [
       `Implement the App Review repair tickets for run '${input.run.id}', cycle ${input.cycle.cycleNumber}.`,
@@ -1480,6 +1517,7 @@ export function buildAppReviewFixPrompt(input: {
       "",
       "For product defects, write the test each ticket names, watch it fail, then repair. For coverage gaps, add the missing executable test or assertion and run it; it may pass immediately when the product already works. Repair any defects it exposes. Missing test code is repair work, not an external prerequisite. Address every actionable finding together, preserve unrelated work, and run focused validation. Do not ask the user questions.",
       APP_REVIEW_FIXER_IMPLEMENTATION_ONLY_INSTRUCTION,
+      "Before declaring a test prerequisite unavailable, inspect this worktree's supported test setup and assigned App Stack. Use an existing authorized test service when available, verify its identity and required permissions, and pass its configuration only to the test processes. A missing environment variable alone does not establish that the service is unavailable. Never use another worktree's database, expose credentials, or provision services without authorization. Record reusable setup instructions without secret values so the next reviewer can recover the same environment.",
       ...(isTicketAppReview(input.run)
         ? [
             "Run focused tests for this ticket and its repairs. Do not run full project suites or repair unrelated project failures here. Record unrelated failures with scope project; the parent workflow collects those commands for validation and a shared repair on the integrated branch. Set the overall repair status from ticket acceptance and repair checks; unrelated project failures do not make the ticket blocked. Existing dependency merges carry committed repairs to dependent tickets.",
@@ -1608,6 +1646,11 @@ export function buildAppReviewValidationRepairPrompt(input: {
     isTicketAppReview(input.run)
       ? "Continue the ticket repair in this worktree, preserving completed repairs and commits. Fix acceptance failures for this ticket. Record unrelated project failures for the parent workflow to repair on the integrated branch."
       : "Your previous repair did not pass validation. Continue in this thread and worktree, preserving completed repairs and commits. Fix every reported test failure, including project-wide failures outside the original tickets. Those failures are now part of this repair assignment.",
+    ...(repair.result.status === "blocked"
+      ? [
+          "This is an explicit retry of a blocked repair. First resolve its recorded prerequisite using the assigned environment and existing authorization. Preserve the completed repair and validate the commands that were blocked. If the prerequisite still requires an unavailable permission or operator action, report blocked with the attempted recovery and its result. Do not start a separate workflow.",
+        ]
+      : []),
     "Reproduce each failure, repair its cause, and rerun the failed command. Do not skip or quarantine tests, weaken assertions, or raise timeouts to hide a failure. A narrower passing test does not replace a failed broad command.",
     "Report the current result for each required command below. Preserve passing results if the code has not changed since they ran. Keep earlier executions as history with their original timestamps; the newest execution of the identical command determines its current status.",
     ...appReviewValidationRepairCommands(input.run, input.cycle).map((command) => `- ${command}`),
@@ -2698,7 +2741,7 @@ const make = Effect.gen(function* () {
         modelSelection: yield* modelForPrompt(APP_REVIEW_TO_TICKETS_SKILL_ID, reviewer, input.run),
         runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
         interactionMode: "default",
-        workflowPreset: "app-review",
+        workflowPreset: null,
         branch: reviewer.branch,
         worktreePath: reviewer.worktreePath,
         createdAt: input.occurredAt,
@@ -3018,9 +3061,19 @@ const make = Effect.gen(function* () {
         modelSelection: yield* modelForPrompt(APP_REVIEW_IMPLEMENT_SKILL_ID, reviewer, run),
         runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
         interactionMode: "default",
-        workflowPreset: "app-review",
+        workflowPreset: null,
         branch: target.branch,
         worktreePath: target.worktreePath,
+        createdAt: run.updatedAt,
+      });
+    }
+    if (existing?.workflowPreset === "app-review") {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.composer-mode.set",
+        commandId: yield* serverCommandId("app-review-workflow-fixer-composer"),
+        threadId: cycle.fixerThreadId,
+        interactionMode: "default",
+        workflowPreset: null,
         createdAt: run.updatedAt,
       });
     }
@@ -3735,26 +3788,13 @@ const make = Effect.gen(function* () {
       ...reopened,
       cycles: run.cycles.map((entry) =>
         entry.cycleNumber === cycle.cycleNumber
-          ? {
-              ...entry,
-              status: "fixing" as const,
-              fixerThreadId: null,
-              fixResult: null,
-              validationRepair:
-                previousResult !== null && previousFailure !== null
-                  ? {
-                      attempt: 1,
-                      requestedAt: occurredAt,
-                      requiredCommands: currentWorkflowValidations(previousResult.validations)
-                        .filter((validation) => validation.status !== "passed")
-                        .map((validation) => validation.command.trim()),
-                      result: previousResult,
-                      detailMarkdown: previousFailure,
-                    }
-                  : null,
+          ? rerunFixingPhaseInCycle({
+              cycle: entry,
+              previousResult,
+              validationFailure: previousFailure,
               workspaceRevision,
-              completedAt: null,
-            }
+              occurredAt,
+            })
           : entry,
       ),
     };
