@@ -604,6 +604,18 @@ export const APP_REVIEW_RECOVERY_SWEEP_INTERVAL_MS = 30_000;
 const APP_REVIEW_FIX_RESULT_MISSING_MESSAGE =
   "The App Review implementation thread stopped without the required result directive.";
 
+function isRejectedAppReviewFixResult(detail: string): boolean {
+  return (
+    detail.startsWith("App Review fixer directive was rejected:") ||
+    detail.startsWith(
+      "App Review fixer completed without the required app-review-fix-result directive.",
+    ) ||
+    detail.startsWith(
+      "App Review fixer completed with a directive for the wrong run or proposed plan.",
+    )
+  );
+}
+
 export function isMissingAppReviewFixResult(failure: AppReviewWorkflowFailure | null): boolean {
   return (
     failure?.phase === "fixing" &&
@@ -663,7 +675,9 @@ export function recoverableFailedAppReviewPhase(input: {
   const failure = run.failure ?? cycle?.failure ?? null;
   const phase = failure?.phase ?? null;
   const recoveryContinuationCount = cycle?.recoveryContinuationCount ?? 0;
-  const missingFixResult = isMissingAppReviewFixResult(failure);
+  const rejectedFixResult =
+    phase === "fixing" && isRejectedAppReviewFixResult(failure?.detailMarkdown ?? "");
+  const missingFixResult = isMissingAppReviewFixResult(failure) || rejectedFixResult;
   const retryableFailure = failure?.retryable === true || missingFixResult;
   const phaseLaunchCount =
     cycle === undefined || phase === null ? null : appReviewPhaseLaunchCount(cycle, phase);
@@ -673,11 +687,12 @@ export function recoverableFailedAppReviewPhase(input: {
     phase === null ||
     recoveryContinuationCount > 1 ||
     phaseLaunchCount === null ||
-    phaseLaunchCount < APP_REVIEW_PHASE_MAX_LAUNCHES ||
+    (!rejectedFixResult && phaseLaunchCount < APP_REVIEW_PHASE_MAX_LAUNCHES) ||
     !retryableFailure ||
-    !failure?.detailMarkdown.includes(
-      `${phase} exhausted its ${String(APP_REVIEW_PHASE_MAX_LAUNCHES)} phase launches.`,
-    ) ||
+    (!rejectedFixResult &&
+      !failure?.detailMarkdown.includes(
+        `${phase} exhausted its ${String(APP_REVIEW_PHASE_MAX_LAUNCHES)} phase launches.`,
+      )) ||
     (missingFixResult &&
       (cycle.fixResultContinuationCount ?? 0) >= APP_REVIEW_FIX_RESULT_MAX_CONTINUATIONS)
   ) {
@@ -979,7 +994,6 @@ export function appReviewRecoveryEvidenceIsCurrent(
   cycle: AppReviewWorkflowCycle,
   createdAt: string,
 ): boolean {
-  if (cycle.validationRepair != null) return createdAt > cycle.validationRepair.requestedAt;
   const failedAt = run.failure?.failedAt ?? cycle.failure?.failedAt ?? null;
   const baseline =
     run.status === "failed"
@@ -987,7 +1001,10 @@ export function appReviewRecoveryEvidenceIsCurrent(
       : (cycle.recoveryContinuationCount ?? 0) > 0 || (cycle.fixResultContinuationCount ?? 0) > 0
         ? run.updatedAt
         : null;
-  return baseline === null || createdAt > baseline;
+  return (
+    (baseline === null || createdAt > baseline) &&
+    (cycle.validationRepair == null || createdAt > cycle.validationRepair.requestedAt)
+  );
 }
 
 export function retryReviewPhaseInCycle(input: {
@@ -1484,6 +1501,12 @@ export function buildAppReviewFixResultContinuationPrompt(input: {
   return appendWorkflowSkillCommandSection(
     [
       `Your App Review repair turn for run '${input.run.id}', cycle ${input.cycle.cycleNumber}, ended without its required result directive.`,
+      ...(isRejectedAppReviewFixResult(input.cycle.fixResult?.notesMarkdown ?? "")
+        ? [
+            input.cycle.fixResult!.notesMarkdown,
+            "Correct the rejected report. Serialize the complete result as valid JSON, escaping quotes and newlines inside string values. supersedesCommand must contain only the exact command being replaced, never a report or JSON block.",
+          ]
+        : []),
       "Continue in the existing thread and worktree. Do not restart the repair or broaden its scope.",
       "Inspect the current Git state, recent commits, and the validation output already in this thread. If the repair is complete, run only the focused checks still needed to report it accurately. If the work is incomplete or unsafe to claim, report blocked or failed with concrete notes.",
       input.run.caller.type === "implementation"
@@ -3280,6 +3303,10 @@ const make = Effect.gen(function* () {
       ),
     };
     if (result.status === "blocked") {
+      if (isRejectedAppReviewFixResult(result.notesMarkdown)) {
+        const continued = yield* continueFixerForMissingResult(reportedRun, occurredAt);
+        if (continued !== null) return;
+      }
       yield* failRun({
         run: reportedRun,
         reason: "review-blocked",

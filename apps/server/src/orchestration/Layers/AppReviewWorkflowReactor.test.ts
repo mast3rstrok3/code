@@ -9,6 +9,7 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 import {
   AppReviewId,
+  EventId,
   AppReviewWorkflowCycleBudget,
   AppReviewWorkflowRunId,
   OrchestrationThread,
@@ -1274,6 +1275,89 @@ it("claims one result-only continuation for a missing fixer result", () => {
   expect(APP_REVIEW_FIX_RESULT_MAX_CONTINUATIONS).toBe(1);
   expect(
     recoverableFailedAppReviewPhase({ run: continued!, implementationRuns: [parent] }),
+  ).toBeNull();
+});
+
+it("ignores a rejected validation-repair report after requesting its correction", () => {
+  const continuedAt = "2026-01-01T00:03:00.000Z";
+  const current = run({ updatedAt: continuedAt });
+  const cycle = {
+    ...current.cycles[0]!,
+    fixResultContinuationCount: 1,
+    validationRepair: {
+      attempt: 1,
+      requestedAt: "2026-01-01T00:01:00.000Z",
+      requiredCommands: [],
+      detailMarkdown: "Repair validation.",
+      result: {
+        runId: current.id,
+        planId: "plan-1",
+        status: "succeeded" as const,
+        validations: [],
+        notesMarkdown: "Repaired.",
+      },
+    },
+  };
+  expect(appReviewRecoveryEvidenceIsCurrent(current, cycle, "2026-01-01T00:02:00.000Z")).toBe(
+    false,
+  );
+  expect(appReviewRecoveryEvidenceIsCurrent(current, cycle, "2026-01-01T00:04:00.000Z")).toBe(true);
+});
+
+it("recovers a rejected fixer report once without spending another repair launch", () => {
+  const original = failedImplementationReview();
+  const detail = "App Review fixer directive was rejected: Workflow directive JSON is malformed.";
+  const failure = {
+    ...original.failure!,
+    reason: "review-blocked" as const,
+    retryable: false,
+    detailMarkdown: detail,
+  };
+  const failed = run({
+    ...original,
+    failure,
+    cycles: [
+      {
+        ...original.cycles[0]!,
+        failure,
+        fixingLaunchCount: 1,
+        fixResult: {
+          runId: original.id,
+          planId: "plan-1",
+          status: "blocked",
+          validations: [],
+          notesMarkdown: detail,
+        },
+      },
+    ],
+  });
+  const parent = {
+    id: "implementation-run-1",
+    status: "needs-human-attention",
+    automationHalt: { stage: "app-review", category: "review-blocked", detail, haltedAt: now },
+    appReviewWorkflowRunIds: [failed.id],
+    ticketStates: [],
+  } as unknown as OrchestrationImplementationRun;
+  expect(recoverableFailedAppReviewPhase({ run: failed, implementationRuns: [parent] })?.mode).toBe(
+    "request-result",
+  );
+  expect(
+    buildAppReviewFixResultContinuationPrompt({ run: failed, cycle: failed.cycles[0]! }),
+  ).toContain(detail);
+  const exhausted = run({
+    ...failed,
+    cycles: [{ ...failed.cycles[0]!, fixResultContinuationCount: 1 }],
+  });
+  expect(
+    recoverableFailedAppReviewPhase({ run: exhausted, implementationRuns: [parent] }),
+  ).toBeNull();
+  expect(
+    recoverableFailedAppReviewPhase({
+      run: failed,
+      implementationRuns: [
+        { ...parent, appReviewWorkflowRunIds: [AppReviewWorkflowRunId.make("newer-review")] },
+      ],
+    }),
   ).toBeNull();
 });
 
@@ -3067,16 +3151,21 @@ it("directs selected platforms to real runners and retains browser recording evi
   expect(browser).not.toContain("e2e-platform-");
 });
 
-for (const verdict of ["passed", "failed"] as const) {
-  effectIt.effect(`reconciles ${verdict} E2E without launching a browser phase`, () => {
-    const original = review(verdict);
+for (const verdict of ["passed", "failed", "rejected"] as const) {
+  effectIt.effect(`reconciles ${verdict} review results without launching a browser phase`, () => {
+    const original = review(verdict === "rejected" ? "failed" : verdict);
     const e2eReview: AppReviewRecord = {
       ...original,
       appReviewScope: "e2e",
       document: {
         ...original.document,
         checks: [
-          { id: "e2e-1", label: "Draft tests", status: verdict, notes: "Fresh command result" },
+          {
+            id: "e2e-1",
+            label: "Draft tests",
+            status: verdict === "rejected" ? "failed" : verdict,
+            notes: "Fresh command result",
+          },
           ...(verdict === "failed"
             ? [
                 {
@@ -3108,6 +3197,21 @@ for (const verdict of ["passed", "failed"] as const) {
         },
       ],
     });
+    if (verdict === "rejected") {
+      storedRun = {
+        ...storedRun,
+        activePhase: "fixing",
+        cycles: [
+          {
+            ...storedRun.cycles[0]!,
+            status: "fixing",
+            fixerThreadId: e2eReview.reviewThreadId,
+            planId: "plan-1",
+            fixingLaunchCount: 1,
+          },
+        ],
+      };
+    }
     const thread = (id: ThreadId) =>
       decodeThread({
         id,
@@ -3128,7 +3232,7 @@ for (const verdict of ["passed", "failed"] as const) {
       });
     const target = thread(storedRun.targetThreadId);
     const controller = { ...thread(storedRun.controllerThreadId), appReviews: [e2eReview] };
-    const tester = decodeThread({
+    let tester = decodeThread({
       ...thread(e2eReview.reviewThreadId),
       parentThreadId: controller.id,
       workflowRole: "app-review-reviewer",
@@ -3152,6 +3256,30 @@ for (const verdict of ["passed", "failed"] as const) {
         },
       ],
     });
+    if (verdict === "rejected") {
+      tester = {
+        ...tester,
+        activities: [
+          {
+            id: EventId.make("rejected-fix"),
+            tone: "error",
+            kind: "app-review-fix-result",
+            summary: "Rejected result",
+            turnId: null,
+            createdAt: now,
+            payload: {
+              type: "app-review-fix-result",
+              runId: storedRun.id,
+              planId: "plan-1",
+              status: "blocked",
+              validations: [],
+              notesMarkdown:
+                "App Review fixer directive was rejected: Workflow directive JSON is malformed.",
+            },
+          },
+        ],
+      };
+    }
     const threads = [target, controller, tester];
     const commands: OrchestrationCommand[] = [];
     const layer = AppReviewWorkflowReactorLive.pipe(
@@ -3214,10 +3342,19 @@ for (const verdict of ["passed", "failed"] as const) {
       Effect.gen(function* () {
         const reactor = yield* AppReviewWorkflowReactor;
         yield* reactor.reconcile();
-        expect(storedRun.cycles[0]?.appReviewScope).toBe("e2e");
+        if (verdict !== "rejected") expect(storedRun.cycles[0]?.appReviewScope).toBe("e2e");
         expect(storedRun.cycles[0]?.reviewLaunchCount).toBe(0);
         const turns = commands.filter((command) => command.type === "thread.turn.start");
-        if (verdict === "passed") {
+        if (verdict === "rejected") {
+          expect(storedRun.status).toBe("running");
+          expect(storedRun.activePhase).toBe("fixing");
+          expect(storedRun.cycles[0]?.fixResultContinuationCount).toBe(1);
+          expect(storedRun.cycles[0]?.fixingLaunchCount).toBe(1);
+          expect(turns).toHaveLength(1);
+          expect(turns[0]?.threadId).toBe(tester.id);
+          expect(turns[0]?.message.text).toContain("Workflow directive JSON is malformed");
+          expect(turns[0]?.message.text).toContain("Do not restart the repair");
+        } else if (verdict === "passed") {
           expect(storedRun.status).toBe("passed");
           expect(turns).toHaveLength(0);
         } else {
