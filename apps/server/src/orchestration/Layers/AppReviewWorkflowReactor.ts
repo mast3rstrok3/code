@@ -51,6 +51,7 @@ import {
   WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
 } from "../workflowValidation.ts";
 import { isTicketAppReview } from "../appReviewValidation.ts";
+import { APP_REVIEW_PREFLIGHT_RETRY_MS, runAppReviewPreflight } from "../appReviewPreflight.ts";
 
 import { AppStackManager } from "../../appStack/AppStackManager.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
@@ -765,6 +766,7 @@ export function reopenFailedAppReviewPhase(input: {
     status: "running",
     outcome: null,
     failure: null,
+    prerequisiteCheck: null,
     finalHeadSha: null,
     activePhase: input.phase,
     activeThreadId:
@@ -808,6 +810,55 @@ export function reopenFailedAppReviewPhase(input: {
     updatedAt: input.occurredAt,
     completedAt: null,
   };
+}
+
+/** Only the review still owned by its caller may retry a prerequisite check. */
+export function appReviewPrerequisiteRecoveryIsCurrent(
+  run: AppReviewWorkflowRun,
+  implementationRuns: ReadonlyArray<OrchestrationImplementationRun>,
+): boolean {
+  const check = run.prerequisiteCheck;
+  const cycle = run.cycles.at(-1);
+  if (
+    run.status !== "running" ||
+    check == null ||
+    cycle == null ||
+    cycle.cycleNumber !== check.cycleNumber ||
+    run.activePhase !== check.phase ||
+    run.failure?.reason !== "review-blocked" ||
+    run.failure.phase !== check.phase
+  )
+    return false;
+  if (run.caller.type !== "implementation") return true;
+  const caller = run.caller;
+  const parent = implementationRuns.find(
+    (candidate) => candidate.id === caller.implementationRunId,
+  );
+  if (parent === undefined) return false;
+  const halt = parent.automationHalt;
+  if (
+    halt != null &&
+    !(
+      parent.status === "needs-human-attention" &&
+      halt.stage === "app-review" &&
+      halt.category === "review-blocked" &&
+      halt.ticketId === caller.ticketId
+    )
+  )
+    return false;
+  if (caller.ticketId === undefined) {
+    return (
+      parent.appReviewWorkflowRunIds.at(-1) === run.id &&
+      (parent.status === "qa-reviewing" ||
+        (parent.status === "needs-human-attention" && halt != null))
+    );
+  }
+  const ticket = parent.ticketStates.find((state) => state.ticketId === caller.ticketId);
+  return (
+    ticket?.status === "app-reviewing" &&
+    ticket.appReviewWorkflowRunId === run.id &&
+    (parent.status === "running" || (parent.status === "needs-human-attention" && halt != null))
+  );
 }
 
 export function claimAppReviewFixResultContinuation(input: {
@@ -1807,6 +1858,85 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const checkPrerequisites = Effect.fn("AppReviewWorkflowReactor.checkPrerequisites")(function* (
+    run: AppReviewWorkflowRun,
+    cwd: string,
+    phase: "e2e" | "fixing",
+  ) {
+    const config = Option.getOrUndefined(yield* projectFileLoader.loadStrict(cwd))?.e2ePreflight;
+    if (config === undefined) return true;
+    const result = yield* runAppReviewPreflight({
+      command: config.command,
+      cwd,
+      previewUrl: run.previewTargets[0] ?? null,
+    });
+    const workspaceRevision =
+      result === "waiting" ? yield* computeWorkspaceRevision(cwd) : run.workspaceRevision;
+    const latest = yield* projectionSnapshotQuery.getCommandReadModel();
+    const current = latest.appReviewWorkflowRuns?.find((entry) => entry.id === run.id);
+    if (
+      current?.status !== "running" ||
+      current.updatedAt !== run.updatedAt ||
+      current.activePhase !== phase ||
+      isWorkflowThreadPaused(latest.threads, run.controllerThreadId)
+    )
+      return false;
+    if (result === "ready") return true;
+    const occurredAt = yield* nowIso;
+    const detailMarkdown = [
+      result === "waiting"
+        ? "Waiting for test prerequisites."
+        : "The test readiness command could not run successfully.",
+      config.blockedReason,
+      result === "waiting"
+        ? "Only the readiness check will retry, once per minute. This phase will resume automatically when it passes. No repair cycle is spent while waiting."
+        : "Fix e2ePreflight in t3.json, then rerun this phase. Exit 0 means ready; exit 1 means a prerequisite is unavailable. Other exit codes stop automatic checks.",
+    ].join("\n\n");
+    if (result === "error") {
+      yield* failRun({
+        run: { ...run, activeThreadId: null },
+        reason: "review-blocked",
+        retryable: false,
+        detailMarkdown,
+        occurredAt,
+      });
+      return false;
+    }
+    yield* updateRun({
+      ...run,
+      activeThreadId: null,
+      phaseExecution: null,
+      workspaceRevision,
+      cycles: run.cycles.map((entry) =>
+        entry.cycleNumber === run.cycles.at(-1)!.cycleNumber
+          ? { ...entry, workspaceRevision }
+          : entry,
+      ),
+      failure: {
+        reason: "review-blocked",
+        phase,
+        cycleNumber: run.cycles.at(-1)!.cycleNumber,
+        retryable: false,
+        detailMarkdown,
+        failedAt: occurredAt,
+      },
+      prerequisiteCheck: {
+        phase,
+        cycleNumber: run.cycles.at(-1)!.cycleNumber,
+        cwd,
+        previewUrl: run.previewTargets[0] ?? null,
+        command: config.command,
+        nextCheckAt: DateTime.formatIso(
+          DateTime.add(DateTime.makeUnsafe(occurredAt), {
+            milliseconds: APP_REVIEW_PREFLIGHT_RETRY_MS,
+          }),
+        ),
+      },
+      updatedAt: occurredAt,
+    });
+    return false;
+  });
+
   const assertStableRevision = Effect.fn("AppReviewWorkflowReactor.assertStableRevision")(
     function* (run: AppReviewWorkflowRun, cwd: string, occurredAt: string) {
       const current = yield* computeWorkspaceRevision(cwd);
@@ -2025,6 +2155,7 @@ const make = Effect.gen(function* () {
   const ensureE2eLaunch = Effect.fn("AppReviewWorkflowReactor.ensureE2eLaunch")(function* (
     run: AppReviewWorkflowRun,
     cycle: AppReviewWorkflowCycle,
+    preflightPassed = false,
   ) {
     if (cycle.e2eThreadId == null || cycle.e2eReviewId == null) return;
     const [tester, controller, target] = yield* Effect.all([
@@ -2033,6 +2164,7 @@ const make = Effect.gen(function* () {
       resolveTarget(run.targetThreadId),
     ]);
     if (controller === undefined || target === null) return;
+    if (!preflightPassed && !(yield* checkPrerequisites(run, target.cwd, "e2e"))) return;
     const e2eCommands = yield* e2eCommandsForCwd(target.cwd, run);
     if (e2eCommands.length === 0) {
       yield* failRun({
@@ -2840,6 +2972,7 @@ const make = Effect.gen(function* () {
   const ensureFixerLaunch = Effect.fn("AppReviewWorkflowReactor.ensureFixerLaunch")(function* (
     run: AppReviewWorkflowRun,
     cycle: AppReviewWorkflowCycle,
+    preflightPassed = false,
   ) {
     if (cycle.fixerThreadId === null) return;
     const existing = yield* resolveThread(cycle.fixerThreadId);
@@ -2867,6 +3000,10 @@ const make = Effect.gen(function* () {
     // run it either.
     const fixerScope = (yield* reviewSettingsForRun(run)).scope;
     const e2eCommands = fixerScope === "e2e" || fixerScope === "both" ? declaredE2eCommands : [];
+    if (e2eCommands.length > 0 && !preflightPassed) {
+      const resolved = yield* resolveTarget(run.targetThreadId);
+      if (resolved === null || !(yield* checkPrerequisites(run, resolved.cwd, "fixing"))) return;
+    }
     if (existing === undefined) {
       yield* orchestrationEngine.dispatch({
         type: "thread.create",
@@ -3226,9 +3363,13 @@ const make = Effect.gen(function* () {
 
   const ensureValidationRepairLaunch = Effect.fn(
     "AppReviewWorkflowReactor.ensureValidationRepairLaunch",
-  )(function* (run: AppReviewWorkflowRun, cycle: AppReviewWorkflowCycle) {
+  )(function* (run: AppReviewWorkflowRun, cycle: AppReviewWorkflowCycle, preflightPassed = false) {
     const repair = cycle.validationRepair;
     if (cycle.fixerThreadId === null || repair == null) return;
+    if (!preflightPassed && (yield* reviewSettingsForRun(run)).scope !== "browser") {
+      const target = yield* resolveTarget(run.targetThreadId);
+      if (target === null || !(yield* checkPrerequisites(run, target.cwd, "fixing"))) return;
+    }
     const key = `${run.id}:${cycle.cycleNumber}:${repair.attempt}:${repair.requestedAt}`;
     yield* orchestrationEngine.dispatch({
       type: "thread.turn.start",
@@ -3476,6 +3617,7 @@ const make = Effect.gen(function* () {
     run: AppReviewWorkflowRun,
     occurredAt: string,
   ) {
+    if (run.prerequisiteCheck != null) return;
     switch (nextAppReviewWorkflowAction(run)) {
       case "none":
         return;
@@ -3533,6 +3675,7 @@ const make = Effect.gen(function* () {
     // saying was wrong, so its verdict cannot stand.
     const reopened = {
       ...run,
+      prerequisiteCheck: null,
       status: "running" as const,
       outcome: null,
       failure: null,
@@ -4005,10 +4148,143 @@ const make = Effect.gen(function* () {
     return true;
   });
 
+  const recoverPrerequisites = Effect.fn("AppReviewWorkflowReactor.recoverPrerequisites")(
+    function* (run: AppReviewWorkflowRun, readModel: OrchestrationReadModel, occurredAt: string) {
+      if (!appReviewPrerequisiteRecoveryIsCurrent(run, readModel.implementationRuns)) return false;
+      const check = run.prerequisiteCheck!;
+      if (
+        Date.parse(occurredAt) < Date.parse(check.nextCheckAt) ||
+        isWorkflowThreadPaused(readModel.threads, run.controllerThreadId)
+      )
+        return true;
+      const target = yield* resolveTarget(run.targetThreadId);
+      const controller = yield* resolveThread(run.controllerThreadId);
+      if (
+        target === null ||
+        target.thread.deletedAt !== null ||
+        controller === undefined ||
+        controller.deletedAt !== null
+      )
+        return true;
+      if (target.cwd !== check.cwd || (run.previewTargets[0] ?? null) !== check.previewUrl) {
+        yield* failRun({
+          run: { ...run, prerequisiteCheck: null },
+          reason: "workspace-stale",
+          retryable: false,
+          detailMarkdown:
+            "The assigned test target changed while waiting. Rerun this phase against the intended worktree and preview target.",
+          occurredAt,
+        });
+        return true;
+      }
+      const cycle = run.cycles.at(-1)!;
+      const phaseThreadId = check.phase === "e2e" ? cycle.e2eThreadId : cycle.fixerThreadId;
+      const phaseThread = phaseThreadId == null ? undefined : yield* resolveThread(phaseThreadId);
+      if (
+        phaseThread?.deletedAt != null ||
+        phaseThread?.latestTurn?.state === "running" ||
+        phaseThread?.session?.status === "starting" ||
+        phaseThread?.session?.status === "running" ||
+        phaseThread?.session?.activeTurnId != null
+      )
+        return true;
+
+      // Persist the next attempt before running a probe so a restart cannot busy-loop it.
+      const claimed = {
+        ...run,
+        prerequisiteCheck: {
+          ...check,
+          nextCheckAt: DateTime.formatIso(
+            DateTime.add(DateTime.makeUnsafe(occurredAt), {
+              milliseconds: APP_REVIEW_PREFLIGHT_RETRY_MS,
+            }),
+          ),
+        },
+        updatedAt: occurredAt,
+      };
+      yield* updateRun(claimed);
+      const config = yield* projectFileLoader.loadStrict(target.cwd).pipe(
+        Effect.map((file) => Option.getOrUndefined(file)?.e2ePreflight),
+        Effect.orElseSucceed(() => undefined),
+      );
+      const stopChecking = (detail: string) =>
+        failRun({
+          run: { ...claimed, prerequisiteCheck: null },
+          reason: "review-blocked",
+          retryable: false,
+          detailMarkdown: `${detail}\n\nRerun this phase after correcting its configuration.`,
+          occurredAt,
+        });
+      if (config === undefined || config.command !== check.command) {
+        yield* stopChecking(
+          "The test readiness configuration changed or could not be loaded. Automatic continuation stopped.",
+        );
+        return true;
+      }
+      const result = yield* runAppReviewPreflight({
+        command: config.command,
+        cwd: target.cwd,
+        previewUrl: check.previewUrl,
+      });
+      const workspaceRevision =
+        result === "ready" ? yield* computeWorkspaceRevision(target.cwd) : null;
+      const latest = yield* projectionSnapshotQuery.getCommandReadModel();
+      const current = latest.appReviewWorkflowRuns?.find((entry) => entry.id === run.id);
+      const latestTarget = latest.threads.find((entry) => entry.id === run.targetThreadId);
+      const latestCwd =
+        latestTarget?.worktreePath ??
+        latest.projects.find((entry) => entry.id === latestTarget?.projectId)?.workspaceRoot;
+      if (
+        current === undefined ||
+        latestTarget?.deletedAt !== null ||
+        latestCwd !== check.cwd ||
+        !appReviewPrerequisiteRecoveryIsCurrent(current, latest.implementationRuns) ||
+        current.updatedAt !== claimed.updatedAt ||
+        current.prerequisiteCheck?.nextCheckAt !== claimed.prerequisiteCheck.nextCheckAt ||
+        isWorkflowThreadPaused(latest.threads, run.controllerThreadId)
+      )
+        return true;
+      if (result === "waiting") return true;
+      if (result === "error") {
+        yield* stopChecking(
+          "The test readiness command failed to run. Use exit 1 for unavailable prerequisites; other errors require intervention.",
+        );
+        return true;
+      }
+      if (workspaceRevision === null) return true;
+      if (workspaceRevision.fingerprint !== run.workspaceRevision.fingerprint) {
+        yield* stopChecking(
+          "The reviewed revision changed while waiting for test prerequisites. Automatic continuation stopped.",
+        );
+        return true;
+      }
+      const reopened = reopenFailedAppReviewPhase({
+        run: claimed,
+        phase: check.phase,
+        workspaceRevision,
+        occurredAt,
+        incrementRecoveryCount: false,
+        incrementReviewLaunchCount: false,
+      });
+      if (reopened === null) return true;
+      yield* updateRun(reopened);
+      const reopenedCycle = reopened.cycles.at(-1)!;
+      if (check.phase === "e2e") yield* ensureE2eLaunch(reopened, reopenedCycle, true);
+      else if (reopenedCycle.validationRepair != null)
+        yield* ensureValidationRepairLaunch(reopened, reopenedCycle, true);
+      else yield* ensureFixerLaunch(reopened, reopenedCycle, true);
+      return true;
+    },
+  );
+
   const reconcileRuns = Effect.fn("AppReviewWorkflowReactor.reconcileRuns")(function* () {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const occurredAt = yield* nowIso;
     for (const run of readModel.appReviewWorkflowRuns ?? []) {
+      if (run.prerequisiteCheck != null) {
+        yield* recoverPrerequisites(run, readModel, occurredAt);
+        continue;
+      }
       if (run.status === "failed") {
         if (yield* recoverFailedImplementationPhase({ run, readModel, occurredAt })) continue;
       }

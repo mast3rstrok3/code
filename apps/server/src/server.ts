@@ -256,7 +256,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(
     ImplementationWorkflowReactorLive.pipe(Layer.provideMerge(ProjectSetupScriptRunner.layer)),
   ),
-  Layer.provideMerge(AppReviewWorkflowReactorLive),
+  Layer.provideMerge(AppReviewWorkflowReactorLive.pipe(Layer.provide(ProcessRunner.layer))),
   Layer.provideMerge(PreviewLifecycleReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(ThreadSettlementReactor.layer),

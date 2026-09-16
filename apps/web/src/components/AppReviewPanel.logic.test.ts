@@ -62,6 +62,22 @@ describe("selectActiveAppReviewRecord", () => {
 });
 
 describe("App Review workflow panel logic", () => {
+  it("labels a stoppable review as waiting while its readiness check retries", () => {
+    const run = makeAppReviewWorkflowRun();
+    expect(
+      appReviewRunStatusLabel({
+        ...run,
+        prerequisiteCheck: {
+          phase: "e2e",
+          cycleNumber: 1,
+          cwd: "/assigned",
+          previewUrl: null,
+          command: "check",
+          nextCheckAt: run.updatedAt,
+        },
+      }),
+    ).toBe("Waiting for test prerequisites");
+  });
   it("accepts settled launches with a dynamic 1-10 cycle budget before preview resolution", () => {
     const valid = {
       brief: "Review checkout",

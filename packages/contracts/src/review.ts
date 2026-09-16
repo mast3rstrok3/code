@@ -260,6 +260,19 @@ export const AppReviewWorkflowRun = Schema.Struct({
   finalHeadSha: Schema.NullOr(TrimmedNonEmptyString),
   outcome: Schema.NullOr(AppReviewWorkflowOutcome),
   failure: Schema.NullOr(AppReviewWorkflowFailure),
+  /** A readiness wait that resumes its exact phase when the check passes. */
+  prerequisiteCheck: Schema.optionalKey(
+    Schema.NullOr(
+      Schema.Struct({
+        phase: Schema.Literals(["e2e", "fixing"]),
+        cycleNumber: PositiveInt,
+        cwd: TrimmedNonEmptyString,
+        previewUrl: Schema.NullOr(TrimmedNonEmptyString),
+        command: TrimmedNonEmptyString,
+        nextCheckAt: IsoDateTime,
+      }),
+    ),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   completedAt: Schema.NullOr(IsoDateTime),

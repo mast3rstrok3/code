@@ -420,6 +420,10 @@ function categoryForAppReviewFailure(
 }
 
 export function normalizeAppReviewPhaseExecution(run: AppReviewWorkflowRun): AppReviewWorkflowRun {
+  // Readiness waits have no provider lease. Startup recovery must preserve their blocker and deadline.
+  if (run.status === "running" && run.prerequisiteCheck != null) {
+    return run.phaseExecution === null ? run : { ...run, phaseExecution: null };
+  }
   if (run.activePhase === null) {
     if (run.phaseExecution === null || run.status === "running") return run;
     const state: WorkflowStageExecution["state"] = run.status === "failed" ? "halted" : "succeeded";

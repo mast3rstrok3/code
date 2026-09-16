@@ -111,6 +111,7 @@ export function selectHeadlineAppReviewRun(
 
 export function appReviewRunStatusLabel(run: AppReviewWorkflowRun): string {
   if (run.status !== "running") return run.outcome ?? run.status;
+  if (run.prerequisiteCheck != null) return "Waiting for test prerequisites";
   const cycle = run.cycles.at(-1)?.cycleNumber ?? Math.min(run.cyclesUsed + 1, run.cycleBudget);
   const phase =
     run.activePhase === "e2e"

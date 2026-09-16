@@ -108,6 +108,24 @@ export const T3ProjectFile = Schema.Struct({
       })
       .check(Schema.isMinLength(1)),
   ),
+  e2ePreflight: Schema.optionalKey(
+    Schema.Struct({
+      command: trimmedNonEmpty(
+        {
+          description:
+            "Read-only readiness command run in the reviewed worktree before E2E and repair validation. Exit 0 means ready; exit 1 or a 10-second timeout waits and retries after one minute. Other exits require intervention. Load the same managed configuration as the tests and check only the assigned environment. Output is discarded.",
+        },
+        T3_PROJECT_FILE_VALIDATION_COMMAND_MAX_LENGTH,
+      ),
+      blockedReason: trimmedNonEmpty(
+        {
+          description:
+            "Non-secret explanation naming the required test configuration, its owner, and the action needed to make the readiness command pass.",
+        },
+        2048,
+      ),
+    }),
+  ),
   defaultThreadEnvMode: Schema.optionalKey(
     ThreadEnvMode.annotate({
       description:

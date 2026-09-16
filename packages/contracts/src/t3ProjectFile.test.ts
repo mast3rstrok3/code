@@ -6,6 +6,24 @@ import { T3ProjectFile } from "./t3ProjectFile.ts";
 const decode = Schema.decodeUnknownSync(T3ProjectFile);
 
 describe("T3ProjectFile", () => {
+  it("requires an executable readiness check and a useful blocker explanation", () => {
+    const e2ePreflight = {
+      command: " node scripts/check-e2e.mjs ",
+      blockedReason: " Test DB operator must provide the managed connection. ",
+    };
+    expect(decode({ e2ePreflight }).e2ePreflight).toEqual({
+      command: "node scripts/check-e2e.mjs",
+      blockedReason: "Test DB operator must provide the managed connection.",
+    });
+    for (const invalid of [
+      { command: " " },
+      { ...e2ePreflight, blockedReason: " " },
+      { ...e2ePreflight, command: "x".repeat(513) },
+    ]) {
+      expect(() => decode({ e2ePreflight: invalid })).toThrow();
+    }
+    expect(decode({ e2eCommands: ["pnpm test:e2e"] }).e2ePreflight).toBeUndefined();
+  });
   it("decodes a full project file", () => {
     const decoded = decode({
       $schema: "https://t3.codes/schema/t3.json",

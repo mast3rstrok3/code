@@ -62,6 +62,19 @@ After all tickets reach a terminal result, one merge-gate thread merges usable b
 
 Each App Review cycle runs automated E2E tests, gap analysis, and repair in order. Ticket reviews select tests for their acceptance criteria; standalone and combined reviews run every configured `e2eCommands` entry from `t3.json`. Tests use `APP_REVIEW_PREVIEW_URL` to target the assigned App Stack and run fresh every cycle. Failed tests, repairable setup problems, and coverage gaps become repair tickets. A separate implementation thread fixes them before the next test cycle. Manual Browser App Review is available when you ask an agent to run it directly.
 
+For tests that require a database or other service, configure `e2ePreflight` in `t3.json`:
+
+```json
+{
+  "e2ePreflight": {
+    "command": "node scripts/check-e2e-readiness.mjs",
+    "blockedReason": "The test environment operator must provide a reachable test database connection."
+  }
+}
+```
+
+Supply a read-only readiness script that loads the same managed configuration as your tests and checks the services they actually use. T3 runs it in the reviewed worktree with `APP_REVIEW_PREVIEW_URL` set to the assigned target, before launching E2E tests or repair validation. Exit 0 allows the phase to start. Exit 1 or a 10-second timeout pauses it and retries only readiness once per minute, including after a server restart. A passing check resumes the same phase without spending another repair cycle. Other exit codes stop automatic checks. Keep credentials out of the command and blocker explanation; T3 discards command output. Changing the command or reviewed revision requires an explicit phase rerun. Stopping the workflow stops automatic checks. Projects without `e2ePreflight` retain agent-managed prerequisite checks.
+
 The control beside the composer's mode picker and the panel launch dialog hold the review settings. By default, a review drives the App Stack for its worktree. A **Review URL** points it somewhere else and is used as given. With that field empty, T3 Code resolves the matching App Stack before each review, then falls back to a full `http://` or `https://` target in the brief and the active Browser URL on that thread. Project Action preview URLs are not App Review targets because one project can contain worktrees with different app instances.
 
 Choose a budget of 1 to 10 complete cycles. **Settings → Workflows → App Review cycles** sets the standing default at 10, and older values above 10 are read as 10. **Only review** forces one cycle and stops after gap analysis, so you receive the automated test results and repair tickets without changing the worktree. The run ends as **exhausted**, and its repair phase cannot be restarted from the panel.

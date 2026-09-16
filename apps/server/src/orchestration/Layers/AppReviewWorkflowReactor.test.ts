@@ -1,4 +1,9 @@
 import { deferredTicketValidationCommands } from "../appReviewValidation.ts";
+import {
+  normalizeAppReviewPhaseExecution,
+  recoverWorkflowRunsAfterStartup,
+} from "../workflowStageExecutions.ts";
+import { createEmptyReadModel } from "../projector.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -6,12 +11,16 @@ import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { TestClock } from "effect/testing";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { ProcessRunner, type ProcessRunInput } from "../../processRunner.ts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   AppReviewId,
   EventId,
   AppReviewWorkflowCycleBudget,
   AppReviewWorkflowRunId,
+  AppReviewWorkflowRun as AppReviewWorkflowRunSchema,
   OrchestrationThread,
   ServerSettings,
   ThreadId,
@@ -56,6 +65,7 @@ import {
   buildAppReviewValidationRepairPrompt,
   APP_REVIEW_VALIDATION_MAX_REPAIRS,
   AppReviewWorkflowReactorLive,
+  appReviewPrerequisiteRecoveryIsCurrent,
   appReviewPhaseLaunchNeedsRetry,
   appReviewRepairPlanAction,
   appReviewPhaseModelStepWorkflowPromptId,
@@ -99,6 +109,7 @@ import {
 
 const now = "2026-01-01T00:00:00.000Z";
 const decodeThread = Schema.decodeUnknownSync(OrchestrationThread);
+const decodeReviewRun = Schema.decodeUnknownSync(AppReviewWorkflowRunSchema);
 const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 
 it("reconciles running App Reviews after projection lag", () => {
@@ -429,6 +440,7 @@ effectIt.effect(
       Layer.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          Layer.mock(ProcessRunner)({}),
           Layer.mock(OrchestrationEngineService)({
             dispatch: (command) =>
               Effect.sync(() => {
@@ -3286,6 +3298,7 @@ for (const verdict of ["passed", "failed", "rejected"] as const) {
       Layer.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          Layer.mock(ProcessRunner)({}),
           Layer.mock(OrchestrationEngineService)({
             dispatch: (command) =>
               Effect.sync(() => {
@@ -3375,3 +3388,396 @@ for (const verdict of ["passed", "failed", "rejected"] as const) {
     );
   });
 }
+
+for (const mode of ["e2e", "fixing", "validation"] as const) {
+  const phase = mode === "e2e" ? "e2e" : "fixing";
+  for (const outcome of [
+    "ready",
+    "waiting",
+    "error",
+    "paused",
+    "changed-command",
+    "changed-revision",
+    "changed-target",
+    "cancelled",
+    "cancelled-during-check",
+    "paused-during-check",
+  ] as const) {
+    effectIt.effect(
+      `gates ${mode} on readiness and handles ${outcome} without spending a cycle`,
+      () => {
+        let storedRun = reviewingRun();
+        storedRun = {
+          ...storedRun,
+          appReviewScope: "e2e",
+          activePhase: phase,
+          activeThreadId: ThreadId.make(phase === "e2e" ? "tester" : "fixer"),
+          cycles: storedRun.cycles.map((cycle) => ({
+            ...cycle,
+            appReviewScope: "e2e",
+            status: phase === "e2e" ? "e2e-testing" : "fixing",
+            e2eThreadId: ThreadId.make("tester"),
+            e2eReviewId: AppReviewId.make("e2e-review"),
+            e2eLaunchCount: 1,
+            fixingLaunchCount: 1,
+            fixerThreadId: phase === "fixing" ? ThreadId.make("fixer") : null,
+            repairTickets: [
+              {
+                key: "repair-1",
+                parentTicketKey: "integration",
+                title: "Repair",
+                bodyMarkdown: "Repair the test",
+                dependencyKeys: [],
+              },
+            ],
+            planId: "plan-1",
+            ...(mode === "validation"
+              ? {
+                  validationRepair: {
+                    attempt: 1,
+                    requestedAt: now,
+                    requiredCommands: ["project-tests"],
+                    result: { ...failedValidationResult, runId: storedRun.id, planId: "plan-1" },
+                    detailMarkdown: "Validate the completed repair.",
+                  },
+                }
+              : {}),
+          })),
+        };
+        const thread = (id: ThreadId) =>
+          decodeThread({
+            id,
+            projectId: "project",
+            title: id,
+            modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
+            runtimeMode: "full-access",
+            branch: "dev",
+            worktreePath: "/assigned/worktree",
+            createdAt: now,
+            updatedAt: now,
+            deletedAt: null,
+            messages: [],
+            activities: [],
+            latestTurn: null,
+            session: null,
+            checkpoints: [],
+          });
+        const target = thread(storedRun.targetThreadId);
+        const controller = thread(storedRun.controllerThreadId);
+        const reviewer = thread(ThreadId.make("thread-reviewer"));
+        let threads = [
+          target,
+          controller,
+          reviewer,
+          ...(mode === "validation" ? [thread(ThreadId.make("fixer"))] : []),
+          ...(phase === "fixing" ? [thread(ThreadId.make("tester"))] : []),
+        ];
+        const commands: OrchestrationCommand[] = [];
+        const probes: ProcessRunInput[] = [];
+        let probeExit = 1;
+        let preflightCommand = "node check.mjs";
+        let headSha = mode === "validation" ? "repaired-head" : "abc123";
+        const layer = AppReviewWorkflowReactorLive.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              NodeServices.layer,
+              Layer.mock(ProcessRunner)({
+                run: (input) =>
+                  Effect.sync(() => {
+                    probes.push(input);
+                    if (probes.length === 2 && outcome === "cancelled-during-check")
+                      storedRun = {
+                        ...storedRun,
+                        status: "failed",
+                        failure: { ...storedRun.failure!, reason: "unknown" },
+                      };
+                    if (probes.length === 2 && outcome === "paused-during-check")
+                      threads = threads.map((entry) =>
+                        entry.id === controller.id ? { ...entry, workflowPausedAt: now } : entry,
+                      );
+                    return {
+                      code: ChildProcessSpawner.ExitCode(probeExit),
+                      timedOut: false,
+                      stdout: "secret-connection",
+                      stderr: "secret-connection",
+                      stdoutTruncated: false,
+                      stderrTruncated: false,
+                      stdoutInvalidUtf8: false,
+                      stderrInvalidUtf8: false,
+                    };
+                  }),
+              }),
+              Layer.mock(OrchestrationEngineService)({
+                dispatch: (command) =>
+                  Effect.sync(() => {
+                    commands.push(command);
+                    if (command.type === "thread.app-review-workflow.update") {
+                      storedRun = normalizeAppReviewPhaseExecution(decodeReviewRun(command.run));
+                    }
+                    return { sequence: commands.length };
+                  }),
+              }),
+              Layer.mock(ProjectionSnapshotQuery)({
+                getCommandReadModel: () =>
+                  Effect.sync(() => ({
+                    snapshotSequence: commands.length,
+                    projects: [],
+                    threads,
+                    implementationRuns: [],
+                    appReviewWorkflowRuns: [storedRun],
+                    updatedAt: now,
+                  })),
+                getThreadDetailById: (id) =>
+                  Effect.sync(() =>
+                    Option.fromUndefinedOr(threads.find((entry) => entry.id === id)),
+                  ),
+              }),
+              Layer.mock(GitWorkflowService)({
+                resolveCommit: () => Effect.sync(() => ({ commitSha: headSha })),
+              }),
+              Layer.mock(ReviewService)({
+                getDiffPreview: ({ cwd }) =>
+                  Effect.succeed({
+                    cwd,
+                    generatedAt: DateTime.makeUnsafe(now),
+                    sources: (["working-tree", "branch-range"] as const).map((kind) => ({
+                      id: kind,
+                      kind,
+                      title: kind,
+                      baseRef: null,
+                      headRef: null,
+                      diff: "",
+                      diffHash: kind === "working-tree" ? "working" : "branch",
+                      truncated: false,
+                    })),
+                  }),
+              }),
+              Layer.mock(AppStackManager)({}),
+              Layer.mock(ServerSettingsService)({
+                getSettings: Effect.succeed(decodeServerSettings({})),
+              }),
+              Layer.mock(T3ProjectFileLoader)({
+                loadStrict: () =>
+                  Effect.sync(() =>
+                    Option.some({
+                      e2eCommands: ["pnpm e2e:review"],
+                      e2ePreflight: {
+                        command: preflightCommand,
+                        blockedReason: "The test operator must provide TEST_DATABASE_URL.",
+                      },
+                    }),
+                  ),
+              }),
+            ),
+          ),
+        );
+        return Effect.scoped(
+          Effect.gen(function* () {
+            yield* TestClock.setTime(Date.parse(now));
+            const reactor = yield* AppReviewWorkflowReactor;
+            yield* reactor.reconcile();
+            expect(probes).toHaveLength(1);
+            expect(storedRun.status).toBe("running");
+            expect(storedRun.prerequisiteCheck).toMatchObject({
+              phase,
+              cycleNumber: 1,
+              cwd: "/assigned/worktree",
+            });
+            expect(storedRun.failure?.detailMarkdown).toContain("TEST_DATABASE_URL");
+            for (const command of commands) {
+              if (command.type === "thread.app-review-workflow.update") {
+                expect(command.run.failure?.detailMarkdown).not.toContain("secret-connection");
+              }
+            }
+            expect(
+              commands.some(
+                (command) =>
+                  command.type === "thread.turn.start" ||
+                  command.type === "thread.app-review.launch",
+              ),
+            ).toBe(false);
+            // Repeated sweeps before the persisted deadline do not run the probe.
+            yield* reactor.reconcile();
+            expect(probes).toHaveLength(1);
+            probeExit = outcome === "waiting" ? 1 : outcome === "error" ? 2 : 0;
+            if (outcome === "paused")
+              threads = threads.map((entry) =>
+                entry.id === controller.id ? { ...entry, workflowPausedAt: now } : entry,
+              );
+            if (outcome === "changed-command") preflightCommand = "node replacement.mjs";
+            if (outcome === "changed-revision") headSha = "different-head";
+            if (outcome === "changed-target")
+              threads = threads.map((entry) =>
+                entry.id === target.id ? { ...entry, worktreePath: "/other/worktree" } : entry,
+              );
+            if (outcome === "cancelled")
+              storedRun = {
+                ...storedRun,
+                status: "failed",
+                failure: { ...storedRun.failure!, reason: "unknown" },
+              };
+            // Rebuild the reactor to exercise recovery from the serialized run after a restart.
+          }).pipe(Effect.provide(layer)),
+        ).pipe(
+          Effect.andThen(
+            Effect.scoped(
+              Effect.gen(function* () {
+                yield* TestClock.setTime(Date.parse(now) + 60_000);
+                const reactor = yield* AppReviewWorkflowReactor;
+                yield* reactor.reconcile();
+                const launches = commands.filter(
+                  (command) =>
+                    command.type === "thread.turn.start" ||
+                    command.type === "thread.app-review.launch",
+                );
+                expect(storedRun.cyclesUsed).toBe(1);
+                expect(storedRun.cycles[0]?.e2eLaunchCount).toBe(1);
+                expect(storedRun.cycles[0]?.fixingLaunchCount).toBe(1);
+                expect(storedRun.cycles[0]?.recoveryContinuationCount ?? 0).toBe(0);
+                if (outcome === "ready") {
+                  expect(storedRun.status).toBe("running");
+                  expect(storedRun.activePhase).toBe(phase);
+                  expect(storedRun.prerequisiteCheck).toBeNull();
+                  expect(launches).toHaveLength(1);
+                  expect(launches[0]).toMatchObject(
+                    phase === "e2e" ? { reviewThreadId: "tester" } : { threadId: "fixer" },
+                  );
+                  expect(probes).toHaveLength(2);
+                } else {
+                  expect(launches).toHaveLength(0);
+                  expect(storedRun.status).toBe(
+                    [
+                      "error",
+                      "changed-command",
+                      "changed-revision",
+                      "changed-target",
+                      "cancelled",
+                      "cancelled-during-check",
+                    ].includes(outcome)
+                      ? "failed"
+                      : "running",
+                  );
+                  if (outcome === "waiting") {
+                    expect(probes).toHaveLength(2);
+                    expect(storedRun.prerequisiteCheck?.nextCheckAt).toBe(
+                      "2026-01-01T00:02:00.000Z",
+                    );
+                    yield* reactor.reconcile();
+                    expect(probes).toHaveLength(2);
+                  }
+                  if (["error", "changed-command", "changed-revision"].includes(outcome))
+                    expect(storedRun.prerequisiteCheck).toBeNull();
+                  if (["paused", "changed-target", "cancelled"].includes(outcome))
+                    expect(probes).toHaveLength(1);
+                }
+              }).pipe(Effect.provide(layer)),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+for (const ticketId of [undefined, "TICKET-1"]) {
+  it(`recovers prerequisites only for the current ${ticketId ?? "final"} review owner`, () => {
+    const base = failedImplementationReview(ticketId);
+    const failed: AppReviewWorkflowRun = {
+      ...base,
+      status: "running",
+      activePhase: "fixing",
+      failure: { ...base.failure!, reason: "review-blocked", phase: "fixing" },
+      prerequisiteCheck: {
+        phase: "fixing",
+        cycleNumber: 1,
+        cwd: "/assigned/worktree",
+        previewUrl: base.previewTargets[0]!,
+        command: "node check.mjs",
+        nextCheckAt: now,
+      },
+    };
+    const parent = {
+      id: "implementation-run-1",
+      status: "needs-human-attention",
+      automationHalt: {
+        stage: "app-review",
+        category: "review-blocked",
+        ticketId,
+        detail: "Waiting for DB",
+        haltedAt: now,
+      },
+      appReviewWorkflowRunIds: [failed.id],
+      ticketStates: [
+        { ticketId: "TICKET-1", status: "app-reviewing", appReviewWorkflowRunId: failed.id },
+      ],
+    } as unknown as OrchestrationImplementationRun;
+    expect(appReviewPrerequisiteRecoveryIsCurrent(failed, [parent])).toBe(true);
+    expect(appReviewPrerequisiteRecoveryIsCurrent(failed, [])).toBe(false);
+    expect(appReviewPrerequisiteRecoveryIsCurrent({ ...failed, status: "passed" }, [parent])).toBe(
+      false,
+    );
+    expect(
+      appReviewPrerequisiteRecoveryIsCurrent(
+        { ...failed, prerequisiteCheck: { ...failed.prerequisiteCheck!, cycleNumber: 2 } },
+        [parent],
+      ),
+    ).toBe(false);
+    expect(
+      appReviewPrerequisiteRecoveryIsCurrent(failed, [{ ...parent, status: "canceled" }]),
+    ).toBe(false);
+    expect(
+      appReviewPrerequisiteRecoveryIsCurrent(failed, [
+        { ...parent, automationHalt: { ...parent.automationHalt!, stage: "code-review" } },
+      ]),
+    ).toBe(false);
+    expect(
+      appReviewPrerequisiteRecoveryIsCurrent(failed, [
+        {
+          ...parent,
+          appReviewWorkflowRunIds: [AppReviewWorkflowRunId.make("replacement")],
+          ticketStates: parent.ticketStates.map((state) => ({
+            ...state,
+            appReviewWorkflowRunId: AppReviewWorkflowRunId.make("replacement"),
+          })),
+        },
+      ]),
+    ).toBe(false);
+  });
+}
+
+it("keeps readiness waits out of provider crash recovery", () => {
+  const base = reviewingRun();
+  const waiting: AppReviewWorkflowRun = {
+    ...base,
+    activePhase: "e2e",
+    activeThreadId: null,
+    failure: {
+      reason: "review-blocked",
+      phase: "e2e",
+      cycleNumber: 1,
+      detailMarkdown: "TEST_DATABASE_URL is missing",
+      failedAt: now,
+    },
+    prerequisiteCheck: {
+      phase: "e2e",
+      cycleNumber: 1,
+      cwd: "/assigned",
+      previewUrl: null,
+      command: "node check.mjs",
+      nextCheckAt: "2026-01-01T00:01:00.000Z",
+    },
+  };
+  const withOldLease = {
+    ...waiting,
+    phaseExecution: normalizeAppReviewPhaseExecution(base).phaseExecution,
+  };
+  expect(normalizeAppReviewPhaseExecution(withOldLease).phaseExecution).toBeNull();
+  for (const cause of ["planned-restart", "server-crash"] as const) {
+    const recovered = recoverWorkflowRunsAfterStartup({
+      readModel: { ...createEmptyReadModel(now), appReviewWorkflowRuns: [withOldLease] },
+      cause,
+      now: "2026-01-01T00:00:30.000Z",
+    });
+    expect(recovered.appReviewRuns[0]).toEqual(waiting);
+  }
+});

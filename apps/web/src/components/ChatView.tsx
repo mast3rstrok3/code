@@ -7171,8 +7171,14 @@ export default function ChatView(props: ChatViewProps) {
       variant: "info",
       priority: "urgent",
       icon: <GitBranchIcon />,
-      title: `App Review owns this worktree · ${activeWorktreeAppReviewRun.activePhase ?? "refreshing preview"}`,
-      description: `Cycle ${Math.max(1, activeWorktreeAppReviewRun.cyclesUsed)} of ${activeWorktreeAppReviewRun.cycleBudget}. The composer unlocks when the run finishes.`,
+      title:
+        activeWorktreeAppReviewRun.prerequisiteCheck != null
+          ? "App Review is waiting for test prerequisites"
+          : `App Review owns this worktree · ${activeWorktreeAppReviewRun.activePhase ?? "refreshing preview"}`,
+      description:
+        activeWorktreeAppReviewRun.prerequisiteCheck != null
+          ? activeWorktreeAppReviewRun.failure?.detailMarkdown
+          : `Cycle ${Math.max(1, activeWorktreeAppReviewRun.cyclesUsed)} of ${activeWorktreeAppReviewRun.cycleBudget}. The composer unlocks when the run finishes.`,
       actions: (
         <Button
           size="xs"
