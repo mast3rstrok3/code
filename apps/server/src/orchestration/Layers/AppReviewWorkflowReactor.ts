@@ -3853,12 +3853,15 @@ const make = Effect.gen(function* () {
     event: AppReviewWorkflowEvent,
   ) {
     if (event.type === "thread.app-review-workflow-cancel-requested") {
-      const activeThreadId = event.payload.run.activeThreadId;
+      const activeThreadId = event.payload.interruptedThreadId ?? event.payload.run.activeThreadId;
       if (activeThreadId !== null && activeThreadId !== undefined) {
         yield* orchestrationEngine.dispatch({
           type: "thread.turn.interrupt",
           commandId: yield* serverCommandId("app-review-workflow-cancel-interrupt"),
           threadId: activeThreadId,
+          ...(event.payload.interruptedTurnId === undefined
+            ? {}
+            : { turnId: event.payload.interruptedTurnId }),
           createdAt: event.occurredAt,
         });
       }

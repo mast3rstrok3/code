@@ -3997,6 +3997,8 @@ export const ThreadAppReviewWorkflowUpdatedPayload = Schema.Struct({
 export const ThreadAppReviewWorkflowCancelRequestedPayload = Schema.Struct({
   sourceThreadId: ThreadId,
   run: AppReviewWorkflowRun,
+  interruptedThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
+  interruptedTurnId: Schema.optionalKey(TurnId),
   reason: Schema.optional(Schema.String),
 });
 

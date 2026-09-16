@@ -7,6 +7,8 @@ import { createEmptyReadModel } from "../projector.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as PubSub from "effect/PubSub";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -22,6 +24,7 @@ import {
   AppReviewWorkflowRunId,
   AppReviewWorkflowRun as AppReviewWorkflowRunSchema,
   OrchestrationThread,
+  OrchestrationEvent,
   ServerSettings,
   ThreadId,
   TurnId,
@@ -109,6 +112,7 @@ import {
 } from "./AppReviewWorkflowReactor.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
+const decodeEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeThread = Schema.decodeUnknownSync(OrchestrationThread);
 const decodeReviewRun = Schema.decodeUnknownSync(AppReviewWorkflowRunSchema);
 const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
@@ -3878,3 +3882,72 @@ it("keeps readiness waits out of provider crash recovery", () => {
     expect(recovered.appReviewRuns[0]).toEqual(waiting);
   }
 });
+
+effectIt.effect(
+  "interrupts the captured turn when cancellation has already cleared the active phase",
+  () =>
+    Effect.gen(function* () {
+      const interrupted = yield* Deferred.make<OrchestrationCommand>();
+      const events = yield* PubSub.unbounded<typeof OrchestrationEvent.Type>();
+      const original = validationFixingRun();
+      const event = yield* decodeEvent({
+        sequence: 1,
+        eventId: "cancel-event",
+        aggregateKind: "thread",
+        aggregateId: original.controllerThreadId,
+        occurredAt: now,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.app-review-workflow-cancel-requested",
+        payload: {
+          sourceThreadId: original.targetThreadId,
+          run: {
+            ...original,
+            status: "failed",
+            outcome: "failed",
+            activeThreadId: null,
+            activePhase: null,
+          },
+          interruptedThreadId: "fixer",
+          interruptedTurnId: "turn-to-stop",
+        },
+      });
+      const layer = AppReviewWorkflowReactorLive.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            Layer.mock(ProcessRunner)({}),
+            Layer.mock(OrchestrationEngineService)({
+              subscribeDomainEvents: PubSub.subscribe(events),
+              dispatch: (command) =>
+                Deferred.succeed(interrupted, command).pipe(Effect.as({ sequence: 2 })),
+            }),
+            Layer.mock(ProjectionSnapshotQuery)({
+              getCommandReadModel: () => Effect.succeed(createEmptyReadModel(now)),
+            }),
+            Layer.mock(GitWorkflowService)({}),
+            Layer.mock(AppStackManager)({}),
+            Layer.mock(ReviewService)({}),
+            Layer.mock(ServerSettingsService)({}),
+            Layer.mock(T3ProjectFileLoader)({}),
+          ),
+        ),
+      );
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const reactor = yield* AppReviewWorkflowReactor;
+          yield* reactor.start();
+          yield* PubSub.publish(events, event);
+          const command = yield* Deferred.await(interrupted);
+          expect(command).toMatchObject({
+            type: "thread.turn.interrupt",
+            threadId: "fixer",
+            turnId: "turn-to-stop",
+          });
+          yield* reactor.drain;
+        }).pipe(Effect.provide(layer)),
+      );
+    }),
+);

@@ -6,6 +6,8 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
+  ThreadAppReviewWorkflowCancelRequestedPayload,
   type AppReviewWorkflowCycle,
   type AppReviewWorkflowPhase,
   type AppReviewWorkflowRun,
@@ -14,8 +16,13 @@ import {
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import { decideOrchestrationCommand } from "./decider.ts";
+
+const cancellationJson = Schema.fromJsonString(ThreadAppReviewWorkflowCancelRequestedPayload);
+const encodeCancellation = Schema.encodeEffect(cancellationJson);
+const decodeCancellation = Schema.decodeUnknownEffect(cancellationJson);
 
 const NOW = "2026-01-01T00:00:00.000Z";
 const RUN_ID = AppReviewWorkflowRunId.make("app-review-run-1");
@@ -472,3 +479,39 @@ it.layer(NodeServices.layer)("App Review phase re-run decider", (it) => {
     }),
   );
 });
+
+it.effect("preserves the active turn in a cancellation event after clearing the run", () =>
+  Effect.gen(function* () {
+    const readModel = makeReadModel({
+      cycles: [cycle({})],
+      activeThreadId: PLANNER,
+      activeSession: "running",
+    });
+    const turnId = TurnId.make("planning-turn-to-interrupt");
+    const result = yield* decideOrchestrationCommand({
+      readModel: {
+        ...readModel,
+        threads: readModel.threads.map((entry) =>
+          entry.id === PLANNER
+            ? { ...entry, session: { ...entry.session!, activeTurnId: turnId } }
+            : entry,
+        ),
+      },
+      command: {
+        type: "thread.app-review-workflow.cancel",
+        commandId: CommandId.make("cancel-active-review"),
+        threadId: ROOT,
+        runId: RUN_ID,
+        createdAt: NOW,
+      },
+    });
+    const event = Array.isArray(result) ? result[0] : result;
+    expect(event?.type).toBe("thread.app-review-workflow-cancel-requested");
+    if (event?.type !== "thread.app-review-workflow-cancel-requested") return;
+    const payload = yield* decodeCancellation(yield* encodeCancellation(event.payload));
+    expect(payload.run.status).toBe("failed");
+    expect(payload.run.activeThreadId).toBeNull();
+    expect(payload.interruptedThreadId).toBe(PLANNER);
+    expect(payload.interruptedTurnId).toBe(turnId);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);

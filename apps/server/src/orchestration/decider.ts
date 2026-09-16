@@ -4890,6 +4890,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `App Review Workflow '${command.runId}' is not active.`,
         });
       }
+      const interruptedTurnId = readModel.threads.find(
+        (entry) => entry.id === existing.activeThreadId,
+      )?.session?.activeTurnId;
       const run: AppReviewWorkflowRun = {
         ...existing,
         status: "failed",
@@ -4921,6 +4924,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           sourceThreadId: existing.targetThreadId,
           run,
+          interruptedThreadId: existing.activeThreadId,
+          ...(interruptedTurnId == null ? {} : { interruptedTurnId }),
           ...(command.reason === undefined ? {} : { reason: command.reason }),
         },
       };
