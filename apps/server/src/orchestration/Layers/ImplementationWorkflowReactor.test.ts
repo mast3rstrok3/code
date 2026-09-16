@@ -5847,6 +5847,126 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  for (const corrected of [true, false]) {
+    it.effect(
+      `requests a corrected worker report and ${corrected ? "accepts the correction" : "halts with the parse error after the retry"}`,
+      () =>
+        withSystem((system) =>
+          Effect.gen(function* () {
+            const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+            const state = run.ticketStates[0]!;
+            const threadId = state.workerThreadId!;
+            for (const attempt of [1, 2]) {
+              const createdAt = DateTime.formatIso(yield* DateTime.now);
+              const turnId = TurnId.make(`worker-report-turn-${attempt}`);
+              const messageId = MessageId.make(`worker-report-message-${attempt}`);
+              const valid = corrected && attempt === 2;
+              yield* system.engine.dispatch({
+                type: "thread.session.set",
+                commandId: commandId(`worker-report-running-${attempt}`),
+                threadId,
+                session: {
+                  threadId,
+                  status: "running",
+                  providerName: "codex",
+                  runtimeMode: "full-access",
+                  activeTurnId: turnId,
+                  lastError: null,
+                  updatedAt: createdAt,
+                },
+                createdAt,
+              });
+              yield* system.engine.dispatch({
+                type: "thread.message.assistant.delta",
+                commandId: commandId(`worker-report-text-${attempt}`),
+                threadId,
+                turnId,
+                messageId,
+                delta: `\`\`\`json\n${yield* encodeJson({
+                  type: "implementation-worker-result",
+                  ticketId: state.ticketId,
+                  workerThreadId: threadId,
+                  branch: state.branch,
+                  worktreePath: state.worktreePath,
+                  status: "succeeded",
+                  commitSha: "worker-commit",
+                  validations: valid
+                    ? requiredValidations()
+                    : [{ command: "pnpm test", status: "failed", completedAt: null }],
+                  notesMarkdown:
+                    "The initial failed attempt has no retained timestamp. Later verification passed.",
+                  reportedAt: createdAt,
+                })}\n\`\`\``,
+                createdAt,
+              });
+              yield* system.engine.dispatch({
+                type: "thread.message.assistant.complete",
+                commandId: commandId(`worker-report-complete-${attempt}`),
+                threadId,
+                turnId,
+                messageId,
+                createdAt,
+              });
+              yield* system.engine.dispatch({
+                type: "thread.session.set",
+                commandId: commandId(`worker-report-ready-${attempt}`),
+                threadId,
+                session: {
+                  threadId,
+                  status: "ready",
+                  providerName: "codex",
+                  runtimeMode: "full-access",
+                  activeTurnId: null,
+                  lastError: null,
+                  updatedAt: createdAt,
+                },
+                createdAt,
+              });
+              yield* system.reactor.drain;
+              yield* TestClock.adjust(Duration.minutes(11));
+              yield* system.reactor.recoverIncompleteStages();
+              yield* system.reactor.drain;
+              const snapshot = yield* system.query.getSnapshot();
+              const current = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
+              const worker = snapshot.threads.find((thread) => thread.id === threadId)!;
+              expect(
+                snapshot.threads.filter(
+                  (thread) => thread.workflowRole === "implementation-worker",
+                ),
+              ).toHaveLength(1);
+              if (attempt === 1) {
+                expect(current.ticketStates[0]?.workerResult).toBeNull();
+                expect(current.ticketStates[0]?.attemptCount).toBe(2);
+                const prompt = worker.messages.at(-1)?.text;
+                expect(prompt).toContain(
+                  "The workflow rejected the report: Directive field 'completedAt'",
+                );
+                expect(prompt).toContain("Do not restart TDD or rerun passing checks");
+                expect(prompt).not.toContain("Run one focused failing test before implementation");
+              } else if (corrected) {
+                expect(current.automationHalt).toBeNull();
+                expect(current.ticketStates[0]?.workerResult?.commitSha).toBe("worker-commit");
+                expect(current.ticketStates[0]?.workerResult?.validations).toEqual(
+                  requiredValidations(),
+                );
+              } else {
+                expect(current.automationHalt?.category).toBe("retry-exhausted");
+                expect(current.automationHalt?.detail).toContain("Directive field 'completedAt'");
+                const messageCount = worker.messages.length;
+                yield* system.reactor.recoverIncompleteStages();
+                yield* system.reactor.drain;
+                expect(
+                  (yield* system.query.getSnapshot()).threads.find(
+                    (thread) => thread.id === threadId,
+                  )?.messages,
+                ).toHaveLength(messageCount);
+              }
+            }
+          }),
+        ),
+    );
+  }
+
   it.effect(
     "recovers a blocked worker report during an unrelated halt without restarting agents",
     () =>

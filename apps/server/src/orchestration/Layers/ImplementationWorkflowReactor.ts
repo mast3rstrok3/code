@@ -1107,6 +1107,20 @@ export function deferredTicketAppReviewInstructions(
   ].join("\n\n");
 }
 
+const WORKER_RESULT_REJECTED_PREFIX = "The completed worker report was rejected:";
+
+function workerResultProblem(thread: OrchestrationThread | null): string | null {
+  if (thread?.latestTurn?.state !== "completed") return null;
+  const message = thread.messages.findLast(
+    (candidate) =>
+      candidate.role === "assistant" &&
+      !candidate.streaming &&
+      candidate.turnId === thread.latestTurn?.turnId,
+  );
+  const parsed = parseWorkflowDirectiveFromMarkdown(message?.text ?? "");
+  return parsed.kind === "error" ? parsed.message : null;
+}
+
 function buildWorkerPrompt(input: {
   readonly run: OrchestrationImplementationRun;
   readonly ticketId: string;
@@ -1116,7 +1130,23 @@ function buildWorkerPrompt(input: {
   readonly integration: BranchIntegration;
   readonly inheritsPartialChanges: boolean;
   readonly continuationMarkdown: string | null;
+  readonly resultProblem: string | null;
 }): string {
+  if (input.resultProblem !== null) {
+    return [
+      WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
+      `Correct your previous implementation-worker-result for ticket ${input.ticketId}.`,
+      `The workflow rejected the report: ${input.resultProblem}`,
+      "This continuation repairs the completion report. Preserve completed commits and passing validation evidence. Do not restart TDD or rerun passing checks for unchanged code.",
+      "Every validation entry requires a non-empty completedAt timestamp. Recover the actual time from retained evidence. If an old failed attempt has no recoverable timestamp, preserve its failure and the missing timestamp in notesMarkdown instead of inventing a time or putting an invalid entry in validations. Keep all later verification evidence and supersedesCommand links. Missing timestamps do not resolve failures: include later passing verification that covers them, or report blocked.",
+      "Check whether HEAD or the worktree changed before reusing evidence. Resolve outstanding dependency merges or incomplete work if present, and rerun only checks affected by those changes or missing required evidence. Report blocked or failed if the work is incomplete.",
+      "Finish with exactly one complete fenced JSON directive of type implementation-worker-result, including status, commitSha, validations, notesMarkdown, and reportedAt. Use these fixed identifiers:",
+      `- ticketId: ${input.ticketId}`,
+      `- workerThreadId: ${input.workerThreadId}`,
+      `- branch: ${input.branch}`,
+      `- worktreePath: ${input.worktreePath}`,
+    ].join("\n\n");
+  }
   const integrationLines = [
     `- base ref: ${input.integration.baseRefName}`,
     `- base ticket: ${input.integration.baseTicketId ?? "orchestrator"}`,
@@ -2835,6 +2865,24 @@ const make = Effect.gen(function* () {
       });
     }
 
+    const resultProblem = isContinuation
+      ? workerResultProblem(
+          Option.getOrNull(yield* projectionSnapshotQuery.getThreadDetailById(workerThreadId)),
+        )
+      : null;
+    const workerPrompt = buildWorkerPrompt({
+      run: input.run,
+      ticketId: input.ticketId,
+      workerThreadId,
+      branch: plannedWorker.branch,
+      worktreePath: plannedWorker.worktreePath,
+      integration,
+      inheritsPartialChanges,
+      resultProblem,
+      continuationMarkdown:
+        existing.warningMarkdown ??
+        (isContinuation ? "Continue the ticket from its existing durable state." : null),
+    });
     yield* orchestrationEngine.dispatch({
       type: "thread.turn.start",
       commandId: yield* serverCommandId("implementation-worker-turn"),
@@ -2842,21 +2890,13 @@ const make = Effect.gen(function* () {
       message: {
         messageId: yield* serverMessageId("implementation-worker"),
         role: "user",
-        text: appendWorkflowSkillCommandSection(
-          buildWorkerPrompt({
-            run: input.run,
-            ticketId: input.ticketId,
-            workerThreadId,
-            branch: plannedWorker.branch,
-            worktreePath: plannedWorker.worktreePath,
-            integration,
-            inheritsPartialChanges,
-            continuationMarkdown:
-              existing.warningMarkdown ??
-              (isContinuation ? "Continue the ticket from its existing durable state." : null),
-          }),
-          WORKFLOW_PROMPT_IDS.implementationTddCodex,
-        ),
+        text:
+          resultProblem === null
+            ? appendWorkflowSkillCommandSection(
+                workerPrompt,
+                WORKFLOW_PROMPT_IDS.implementationTddCodex,
+              )
+            : workerPrompt,
         attachments: [],
       },
       workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
@@ -2957,7 +2997,12 @@ const make = Effect.gen(function* () {
             sourceThreadId: input.sourceThreadId,
             run: workingRun,
             ticketId: exhaustedTicket.ticketId,
-            reasonMarkdown: `Ticket '${exhaustedTicket.ticketId}' exhausted its implementation launch budget.`,
+            reasonMarkdown: [
+              `Ticket '${exhaustedTicket.ticketId}' exhausted its implementation launch budget.`,
+              exhaustedTicket.warningMarkdown,
+            ]
+              .filter(Boolean)
+              .join("\n\n"),
             updatedAt: input.createdAt,
             haltCategory: "retry-exhausted",
             haltStage: "implementation",
@@ -10327,6 +10372,7 @@ const make = Effect.gen(function* () {
         input.recoverPersistedLaunchFallout &&
         halt !== null &&
         halt.ticketId !== undefined &&
+        !halt.detail.includes(WORKER_RESULT_REJECTED_PREFIX) &&
         ((halt.category === "retry-exhausted" &&
           (halt.stage === "implementation" || halt.stage === "app-review")) ||
           halt.detail.includes("moved from reported commit"));
@@ -10646,6 +10692,7 @@ const make = Effect.gen(function* () {
       // Completed workers still need their result recorded when another ticket halts automation.
       // Read the current turn only, so a prior attempt cannot overwrite a newer assignment.
       let recoveredWorker = false;
+      const workerResultProblems = new Map<string, string>();
       for (const state of run.ticketStates) {
         if (state.status !== "running" || state.workerResult !== null || !state.workerThreadId)
           continue;
@@ -10672,6 +10719,9 @@ const make = Effect.gen(function* () {
         );
         if (!message) continue;
         const parsed = parseWorkflowDirectiveFromMarkdown(message.text);
+        if (parsed.kind === "error") {
+          workerResultProblems.set(state.ticketId, parsed.message);
+        }
         if (parsed.kind !== "parsed" || parsed.directive.type !== "implementation-worker-result")
           continue;
         if (
@@ -11147,8 +11197,9 @@ const make = Effect.gen(function* () {
                     ...state,
                     status: "ready" as const,
                     workerResult: null,
-                    warningMarkdown:
-                      "Recovery continued the existing Implementation thread after its provider session stopped.",
+                    warningMarkdown: workerResultProblems.has(state.ticketId)
+                      ? `${WORKER_RESULT_REJECTED_PREFIX} ${workerResultProblems.get(state.ticketId)}`
+                      : "Recovery continued the existing Implementation thread after its provider session stopped.",
                     updatedAt: createdAt,
                   }
                 : state,
