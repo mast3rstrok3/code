@@ -68,6 +68,7 @@ import {
   currentWorkflowValidations,
   hasPostRepairVerification,
   WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
+  WORKFLOW_PARALLEL_VALIDATION_INSTRUCTION,
 } from "../workflowValidation.ts";
 import { AppStackManager } from "../../appStack/AppStackManager.ts";
 import { normalizeWorkflowWorktreePath } from "../../appStack/workflowOwnership.ts";
@@ -1244,6 +1245,7 @@ function buildMergeGatePrompt(input: {
           "Do not run the configured complete validation commands at this stage:",
           ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
           "The sole complete gate runs after Code Review.",
+          "Repair integration failures in this orchestrator worktree, including stale test doubles and missing test setup. Preserve the failing evidence, make the focused repair, rerun affected checks, and commit it before reporting passed. These repairs will receive App Review and Code Review afterward.",
         ];
   const continuationInstructions =
     input.run.retryableFailure?.stage === "merge-gate"
@@ -1261,6 +1263,7 @@ function buildMergeGatePrompt(input: {
     "Use the repository's existing focused validation setup. Do not start a competing development server or replace dependency paths in the shared worktree: its workflow-owned AppStack was created during workspace bootstrap and is reused here. If validation cannot run with the prepared workspace, report the setup failure explicitly.",
     "",
     ...validationInstructions,
+    ...(input.kind === "final" ? [WORKFLOW_PARALLEL_VALIDATION_INSTRUCTION] : []),
     ...continuationInstructions,
     "",
     "Do not ask the user questions. Finish with exactly one fenced JSON directive of type implementation-merge-gate-result for this runId.",

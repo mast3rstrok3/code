@@ -11060,6 +11060,14 @@ describe("ImplementationWorkflowReactor", () => {
         let snapshot = yield* system.query.getSnapshot();
         const validating = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         expect(validating?.activeValidationHeadSha).toBe("def456");
+        const prompt = snapshot.threads
+          .find((thread) => thread.id === validating?.activeValidatorThreadId)
+          ?.messages.at(-1)?.text;
+        expect(prompt).toContain("Repair integration failures in this orchestrator worktree");
+        expect(prompt).toContain("Every final gate is read-only");
+        expect(prompt).not.toContain(
+          "every final gate skip this document and perform validation only",
+        );
 
         // The validator commits its repair, which moves HEAD past the sha the gate
         // was handed.

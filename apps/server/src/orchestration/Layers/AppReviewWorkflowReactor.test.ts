@@ -784,6 +784,8 @@ it("tells a retried App Review fixer to continue inherited work", () => {
   expect(prompt).toContain("A previous fixer worked in this same worktree");
   expect(prompt).toContain("Inspect Git status, the current diff, and recent commits");
   expect(prompt).toContain("finish every ticket in this durable phase thread");
+  expect(prompt).toContain("repository's supported test-runner workers");
+  expect(prompt).toContain("test accounts and locks");
 });
 
 it("asks a completed fixer only for its missing result", () => {
@@ -2204,6 +2206,11 @@ it("gives the E2E thread every project command with a stable check id", () => {
   expect(prompt).toContain("APP_REVIEW_PREVIEW_URL");
   expect(prompt).toContain("original brief is the acceptance boundary");
   expect(prompt).toContain("unrelated or pre-existing failures");
+  expect(prompt).not.toContain("Run every command below in order");
+  expect(prompt).toContain("at most two E2E workers");
+  expect(prompt).toContain("Run suites sharing mutable state serially");
+  expect(prompt).toContain("same unchanged source revision");
+  expect(prompt).toContain("Collect every worker's exit status");
 });
 
 it("says nothing about e2e commands when the project declares none", () => {

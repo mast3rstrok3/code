@@ -49,6 +49,7 @@ import {
   currentWorkflowValidations,
   hasPostRepairVerification,
   WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
+  WORKFLOW_PARALLEL_VALIDATION_INSTRUCTION,
 } from "../workflowValidation.ts";
 import { isTicketAppReview } from "../appReviewValidation.ts";
 import { APP_REVIEW_PREFLIGHT_RETRY_MS, runAppReviewPreflight } from "../appReviewPreflight.ts";
@@ -1386,6 +1387,7 @@ export function buildE2eReviewPrompt(input: {
     [
       `Run the end-to-end test phase for App Review cycle ${input.cycle.cycleNumber} of ${input.run.cycleBudget}.`,
       "Run automated acceptance tests. Actionable failures enter gap analysis and implementation, followed by a fresh E2E cycle. Manual browser review is a separate user-requested task; this workflow does not require its screenshots, recording, or fixture handoff.",
+      WORKFLOW_PARALLEL_VALIDATION_INSTRUCTION,
       "",
       "The original brief is the acceptance boundary:",
       input.run.briefMarkdown,
@@ -1405,7 +1407,7 @@ export function buildE2eReviewPrompt(input: {
             ...input.e2eCommands.map((command) => `- ${command}`),
           ]
         : [
-            "Run every command below in order:",
+            "Run every command below, scheduling independent suites with isolated workers as described above. The ids identify results, not execution order:",
             ...input.e2eCommands.map((command, index) => `- e2e-${index + 1}: ${command}`),
             "Record each command as one check with the exact id shown.",
           ]),
@@ -1517,6 +1519,7 @@ export function buildAppReviewFixPrompt(input: {
       "",
       "For product defects, write the test each ticket names, watch it fail, then repair. For coverage gaps, add the missing executable test or assertion and run it; it may pass immediately when the product already works. Repair any defects it exposes. Missing test code is repair work, not an external prerequisite. Address every actionable finding together, preserve unrelated work, and run focused validation. Do not ask the user questions.",
       APP_REVIEW_FIXER_IMPLEMENTATION_ONLY_INSTRUCTION,
+      WORKFLOW_PARALLEL_VALIDATION_INSTRUCTION,
       "Before declaring a test prerequisite unavailable, inspect this worktree's supported test setup and assigned App Stack. Use an existing authorized test service when available, verify its identity and required permissions, and pass its configuration only to the test processes. A missing environment variable alone does not establish that the service is unavailable. Never use another worktree's database, expose credentials, or provision services without authorization. Record reusable setup instructions without secret values so the next reviewer can recover the same environment.",
       ...(isTicketAppReview(input.run)
         ? [

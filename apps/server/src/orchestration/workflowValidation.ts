@@ -1,5 +1,12 @@
 import type { AppReviewWorkflowFixValidation } from "@t3tools/contracts";
 
+export const WORKFLOW_PARALLEL_VALIDATION_INSTRUCTION = [
+  "Run independent application E2E suites concurrently using the repository's supported test-runner workers. Start with at most two E2E workers, within the runner's documented limits. This thread keeps ownership of the review and aggregates their results.",
+  "Before launching workers, verify isolation of mutable fixtures, database or schema namespaces, test accounts and locks, and report/output paths. Keep every worker on the assigned worktree's authorized test target and the same unchanged source revision. Run suites sharing mutable state serially unless the runner guarantees isolation; record the concrete isolation constraint when parallel execution is unavailable.",
+  "Complete shared setup and builds first. Read-only lint, type checks, and isolated unit tests may run alongside E2E. Keep edits, migrations, deployments, and shared cleanup out of that interval. Assign each command or shard once per attempt; overlapping full-suite and focused selections must not run concurrently against shared fixtures.",
+  "Wait for worker completion through the runner's completion mechanism. Inspect logs on failure or lack of progress instead of repeatedly launching tail commands. Collect every worker's exit status, timestamps, and evidence under the original command/check id; report success only when all required workers and checks passed.",
+].join("\n\n");
+
 export const WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION =
   'In validations, label pre-fix bug reproduction runs with purpose "reproduction" and post-fix checks with purpose "verification". Preserve their actual statuses and completedAt timestamps. Verification must cover every reproduced bug after the repair; a broader passing test command may cover several reproduction runs. Only bug reproduction belongs in reproduction: setup failures and failing post-fix checks remain verification failures. Unlabelled entries count as verification. When correcting a failed verification command, such as adding a missing environment variable or fixing unsupported flags, set supersedesCommand on the later passing verification to the exact earlier command. Use this only when the retry covers the same checks without weakening assertions or skipping tests, and explain the correction in outputMarkdown. Keep both attempts in validations. A newer passing retry supersedes that earlier failure; unrelated passing checks do not.';
 
