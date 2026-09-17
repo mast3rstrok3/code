@@ -1,4 +1,8 @@
-import { deferredTicketValidationCommands } from "../appReviewValidation.ts";
+import {
+  deferredTicketValidationCommands,
+  finalAppReviewValidationCommands,
+  reusableAppReviewFixValidations,
+} from "../appReviewValidation.ts";
 import {
   normalizeAppReviewPhaseExecution,
   recoverWorkflowRunsAfterStartup,
@@ -2941,7 +2945,7 @@ describe("current validation results", () => {
     ).toContain("ticket-test: failed");
   });
 
-  it("defers unrelated project failures only at the ticket gate", () => {
+  it("defers unrelated project failures when focused acceptance is required", () => {
     const input = {
       completeValidationCommands: [],
       validations: failedValidationResult.validations,
@@ -3958,3 +3962,151 @@ effectIt.effect(
       );
     }),
 );
+
+describe("combined acceptance and validation reuse", () => {
+  function embeddedRun(): AppReviewWorkflowRun {
+    const base = run({
+      caller: {
+        type: "implementation",
+        implementationRunId: "implementation-1",
+        orchestratorThreadId: ThreadId.make("orchestrator"),
+      },
+    });
+    return {
+      ...base,
+      cycles: [
+        {
+          ...carryCycle(1, AppReviewId.make("review-1")),
+          fixWorkspaceRevision: base.workspaceRevision,
+          fixPreviewTargets: base.previewTargets,
+          deferredValidationCommands: ["all-e2e", "all-e2e"],
+          fixResult: { ...failedValidationResult, commitSha: base.workspaceRevision.headSha },
+        },
+        { ...carryCycle(2, AppReviewId.make("review-2")), status: "reviewing" },
+      ],
+    };
+  }
+
+  it("keeps full runners and unrelated failures for the final gate", () => {
+    const active = embeddedRun();
+    expect(finalAppReviewValidationCommands(active)).toEqual(["all-e2e", "project-tests"]);
+    expect(finalAppReviewValidationCommands({ ...active, caller: run().caller })).toEqual([]);
+    expect(e2eCheckIdsForCommands(["all-e2e"], active)).toEqual(["e2e-feature"]);
+    const prompt = buildE2eReviewPrompt({
+      run: active,
+      cycle: active.cycles[1]!,
+      e2eCommands: ["all-e2e"],
+      priorFindingIds: ["authz-gap"],
+    });
+    expect(prompt).toContain("cross-ticket interactions");
+    expect(prompt).toContain("final regression gate after Code Review");
+    expect(prompt).toContain("authz-gap");
+  });
+
+  it("allows only post-repair evidence on the same source and target", () => {
+    const active = embeddedRun();
+    expect(reusableAppReviewFixValidations(active).map((v) => v.command)).toEqual([
+      "writing-tests",
+    ]);
+    expect(
+      reusableAppReviewFixValidations({
+        ...active,
+        workspaceRevision: { ...active.workspaceRevision, fingerprint: "changed" },
+      }),
+    ).toEqual([]);
+    expect(
+      reusableAppReviewFixValidations({ ...active, previewTargets: ["https://another-target"] }),
+    ).toEqual([]);
+    expect(reusableAppReviewFixValidations({ ...active, caller: run().caller })).toEqual([]);
+    expect(
+      reusableAppReviewFixValidations({
+        ...active,
+        cycles: active.cycles.map((cycle) => {
+          const { fixWorkspaceRevision, ...legacy } = cycle;
+          void fixWorkspaceRevision;
+          return legacy;
+        }),
+      }),
+    ).toEqual([]);
+  });
+
+  it("rejects evidence superseded by a failed repair or an ambiguous result", () => {
+    const active = embeddedRun();
+    for (const completedAt of [now, "2026-01-01T00:05:00.000Z"]) {
+      const changed = {
+        ...active,
+        cycles: [
+          active.cycles[0]!,
+          {
+            ...active.cycles[1]!,
+            fixResult: {
+              ...failedValidationResult,
+              status: "failed" as const,
+              validations: [
+                {
+                  ...failedValidationResult.validations[0]!,
+                  status: "failed" as const,
+                  completedAt,
+                },
+              ],
+            },
+          },
+        ],
+      };
+      expect(reusableAppReviewFixValidations(changed)).toEqual([]);
+    }
+  });
+
+  it("requires recorded provenance and environment verification to pass reused checks", () => {
+    const active = embeddedRun();
+    const passed = {
+      ...carryReview({
+        id: "review-2",
+        verdict: "passed",
+        checks: [
+          {
+            id: "e2e-feature",
+            label: "Acceptance",
+            status: "passed",
+            notes: "All requirements covered",
+            reusedValidation: {
+              cycleNumber: 1,
+              command: "writing-tests",
+              environmentEvidence:
+                "Deployment abc123, isolated fixture snapshot fixture-1 unchanged",
+            },
+          },
+        ],
+      }),
+      appReviewScope: "e2e" as const,
+    };
+    expect(
+      terminalReviewPassFailure({
+        run: active,
+        review: passed,
+        priorReviews: [],
+        e2eCheckIds: ["e2e-feature"],
+      }),
+    ).toBeNull();
+    expect(
+      terminalReviewPassFailure({
+        run: { ...active, previewTargets: ["https://changed"] },
+        review: passed,
+        priorReviews: [],
+      }),
+    ).toContain("invalid or stale");
+    const unsupported = {
+      ...passed,
+      document: {
+        ...passed.document,
+        checks: passed.document.checks.map((check) => ({
+          ...check,
+          reusedValidation: { cycleNumber: 1, command: "writing-tests", environmentEvidence: " " },
+        })),
+      },
+    };
+    expect(
+      terminalReviewPassFailure({ run: active, review: unsupported, priorReviews: [] }),
+    ).toContain("invalid or stale");
+  });
+});

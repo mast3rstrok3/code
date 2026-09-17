@@ -51,7 +51,11 @@ import {
   WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
   WORKFLOW_PARALLEL_VALIDATION_INSTRUCTION,
 } from "../workflowValidation.ts";
-import { isTicketAppReview } from "../appReviewValidation.ts";
+import {
+  isTicketAppReview,
+  isImplementationAppReview,
+  reusableAppReviewFixValidations,
+} from "../appReviewValidation.ts";
 import { APP_REVIEW_PREFLIGHT_RETRY_MS, runAppReviewPreflight } from "../appReviewPreflight.ts";
 
 import { AppStackManager } from "../../appStack/AppStackManager.ts";
@@ -912,7 +916,7 @@ export function claimAppReviewValidationRepair(input: {
         .filter(
           (validation) =>
             validation.status !== "passed" &&
-            (!isTicketAppReview(input.run) ||
+            (!isImplementationAppReview(input.run) ||
               (validation.scope !== "project" &&
                 !input.projectValidationCommands?.includes(validation.command.trim()))),
         )
@@ -962,7 +966,7 @@ export function appReviewValidationRepairCommands(
   projectCommands: ReadonlyArray<string> = [],
 ): ReadonlyArray<string> {
   const required = cycle.validationRepair?.requiredCommands ?? [];
-  if (!isTicketAppReview(run)) return required;
+  if (!isImplementationAppReview(run)) return required;
   const project = new Set([
     ...projectCommands.map((command) => command.trim()),
     ...(cycle.validationRepair?.result.validations ?? [])
@@ -1286,6 +1290,14 @@ export function e2eCheckIdsForCommands(
   ) {
     return ["e2e-ticket"];
   }
+  if (
+    run !== undefined &&
+    isImplementationAppReview(run) &&
+    !isTicketAppReview(run) &&
+    (review === undefined || review.document.checks.some((check) => check.id === "e2e-feature"))
+  ) {
+    return ["e2e-feature"];
+  }
   return commands.map((_, index) => `e2e-${index + 1}`);
 }
 
@@ -1316,6 +1328,20 @@ export function terminalReviewPassFailure(input: {
     return `${sectionLabel} reported a pass with incomplete checks: ${incompleteChecks
       .map((check) => `${check.id}=${check.status}`)
       .join(", ")}.`;
+  }
+  const reusable = reusableAppReviewFixValidations(input.run);
+  for (const check of checks) {
+    const evidence = check.reusedValidation;
+    if (evidence === undefined) continue;
+    if (
+      !evidence.environmentEvidence.trim() ||
+      !reusable.some(
+        (validation) =>
+          validation.cycleNumber === evidence.cycleNumber &&
+          validation.command === evidence.command,
+      )
+    )
+      return `${sectionLabel} reused invalid or stale validation evidence for ${check.id}.`;
   }
   const checksById = new Map(checks.map((check) => [check.id, check]));
   const requiredE2eChecks = [
@@ -1406,11 +1432,18 @@ export function buildE2eReviewPrompt(input: {
             "Configured project runners, for reference when selecting tests:",
             ...input.e2eCommands.map((command) => `- ${command}`),
           ]
-        : [
-            "Run every command below, scheduling independent suites with isolated workers as described above. The ids identify results, not execution order:",
-            ...input.e2eCommands.map((command, index) => `- e2e-${index + 1}: ${command}`),
-            "Record each command as one check with the exact id shown.",
-          ]),
+        : isImplementationAppReview(input.run)
+          ? [
+              "Review the integrated feature against the original brief, Spec acceptance criteria, cross-ticket interactions, and prior actionable findings. Select focused E2E journeys that cover those requirements, including authorization and shared contracts affected by the merged changes.",
+              "Record the selected commands, requirement-to-test coverage, and results in check e2e-feature. Missing executable acceptance coverage is a coverage-gap, never a pass. Keep unrelated project failures visible in notes for the final gate.",
+              "The configured application-wide runners below are references for supported test selection. Their complete commands belong to the final regression gate after Code Review. Do not execute the full command list here, even if an older repair ticket requests it:",
+              ...input.e2eCommands.map((command) => `- ${command}`),
+            ]
+          : [
+              "Run every command below, scheduling independent suites with isolated workers as described above. The ids identify results, not execution order:",
+              ...input.e2eCommands.map((command, index) => `- e2e-${index + 1}: ${command}`),
+              "Record each command as one check with the exact id shown.",
+            ]),
       ...buildPlatformTestInstructions(input.run),
       "Set blockerKind on every blocked check, including the aggregate e2e-ticket check. Use external-prerequisite if a check combines missing coverage with an external prerequisite.",
       "Summarize test results in notes. When command output publishes an inspectable web replay URL, copy it into that check's replayUrl field so a human can open it from the App Review panel.",
@@ -1424,7 +1457,17 @@ export function buildE2eReviewPrompt(input: {
           ]),
       "",
       "Call app_review_get first, check prerequisites, then run the available commands. Do not call preview_* tools, start a recording, inspect the UI manually, edit files, or fix failures. Finish by writing the complete E2E App Review document and a passed or failed status with app_review_update. Use failed status when acceptance is blocked.",
-      "A passed verdict requires a non-empty check matrix in which every check passed. Run every command fresh in every cycle and never carry an E2E check forward.",
+      "A passed verdict requires a non-empty check matrix in which every required check passed. Previously failed acceptance must have passing post-repair verification.",
+      ...(isImplementationAppReview(input.run)
+        ? [
+            "The recorded focused validations below are eligible for reuse only after you independently verify that the assigned deployment, test configuration, fixture identities and test selection still match. A matching URL alone is insufficient. If that cannot be established, rerun the affected check. Source revision and preview-target changes invalidate reuse automatically.",
+            "For each check supported by reused evidence, set reusedValidation to {cycleNumber, command, environmentEvidence}. Use the exact recorded command and cycle number. In environmentEvidence and notes, record the concrete deployment and fixture checks, original completion time, result and evidence location. Verify requirement coverage; a passing unrelated command does not satisfy acceptance. Do not set carriedFromCycle for this evidence.",
+            ...reusableAppReviewFixValidations(input.run).map(
+              (validation) =>
+                `- cycle ${validation.cycleNumber}: ${validation.command} | completed ${validation.completedAt}\n${validation.outputMarkdown}`,
+            ),
+          ]
+        : ["Run every assigned command fresh in this standalone review."]),
     ].join("\n"),
     WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex,
   );
@@ -1521,12 +1564,17 @@ export function buildAppReviewFixPrompt(input: {
       APP_REVIEW_FIXER_IMPLEMENTATION_ONLY_INSTRUCTION,
       WORKFLOW_PARALLEL_VALIDATION_INSTRUCTION,
       "Before declaring a test prerequisite unavailable, inspect this worktree's supported test setup and assigned App Stack. Use an existing authorized test service when available, verify its identity and required permissions, and pass its configuration only to the test processes. A missing environment variable alone does not establish that the service is unavailable. Never use another worktree's database, expose credentials, or provision services without authorization. Record reusable setup instructions without secret values so the next reviewer can recover the same environment.",
+      ...(isImplementationAppReview(input.run)
+        ? [
+            "Run only focused acceptance and regression checks for the assigned repairs. Complete project commands belong to the final gate after Code Review, including commands requested by older repair tickets. Preserve broader failures as scope project; the parent workflow retains them for that gate.",
+          ]
+        : []),
       ...(isTicketAppReview(input.run)
         ? [
             "Run focused tests for this ticket and its repairs. Do not run full project suites or repair unrelated project failures here. Record unrelated failures with scope project; the parent workflow collects those commands for validation and a shared repair on the integrated branch. Set the overall repair status from ticket acceptance and repair checks; unrelated project failures do not make the ticket blocked. Existing dependency merges carry committed repairs to dependent tickets.",
           ]
         : []),
-      ...(input.e2eCommands.length === 0 || isTicketAppReview(input.run)
+      ...(input.e2eCommands.length === 0 || isImplementationAppReview(input.run)
         ? []
         : [
             `Before reporting succeeded, run the project's end-to-end test commands${
@@ -1648,7 +1696,9 @@ export function buildAppReviewValidationRepairPrompt(input: {
     `Validation repair ${repair.attempt} of ${APP_REVIEW_VALIDATION_MAX_REPAIRS}.`,
     isTicketAppReview(input.run)
       ? "Continue the ticket repair in this worktree, preserving completed repairs and commits. Fix acceptance failures for this ticket. Record unrelated project failures for the parent workflow to repair on the integrated branch."
-      : "Your previous repair did not pass validation. Continue in this thread and worktree, preserving completed repairs and commits. Fix every reported test failure, including project-wide failures outside the original tickets. Those failures are now part of this repair assignment.",
+      : isImplementationAppReview(input.run)
+        ? "Continue the feature repair in this worktree. Fix feature acceptance failures and cross-ticket integration defects. Preserve broader project failures for the final gate after Code Review; they do not require another full-suite run in this fixer."
+        : "Your previous repair did not pass validation. Continue in this thread and worktree, preserving completed repairs and commits. Fix every reported test failure, including project-wide failures outside the original tickets. Those failures are now part of this repair assignment.",
     ...(repair.result.status === "blocked"
       ? [
           "This is an explicit retry of a blocked repair. First resolve its recorded prerequisite using the assigned environment and existing authorization. Preserve the completed repair and validate the commands that were blocked. If the prerequisite still requires an unavailable permission or operator action, report blocked with the attempted recovery and its result. Do not start a separate workflow.",
@@ -2403,6 +2453,7 @@ const make = Effect.gen(function* () {
       fixerThreadId: null,
       fixResult: null,
       workspaceRevision: run.workspaceRevision,
+      deferredValidationCommands: isImplementationAppReview(run) ? e2eCommands : [],
       startedAt: occurredAt,
       completedAt: null,
     };
@@ -2864,11 +2915,19 @@ const make = Effect.gen(function* () {
     if (stableRun === null) return;
     const e2eVerdict =
       review.status === "passed" && review.document.verdict === "passed" ? "passed" : "failed";
+    const e2eCommands = yield* e2eCommandsForCwd(target.cwd, run);
     const completedE2eRun: AppReviewWorkflowRun = {
       ...stableRun,
       cycles: stableRun.cycles.map((entry) =>
         entry.cycleNumber === cycle.cycleNumber
-          ? { ...entry, appReviewScope: "e2e", e2eVerdict }
+          ? {
+              ...entry,
+              appReviewScope: "e2e",
+              e2eVerdict,
+              deferredValidationCommands: isImplementationAppReview(run)
+                ? [...new Set([...(entry.deferredValidationCommands ?? []), ...e2eCommands])]
+                : [],
+            }
           : entry,
       ),
       updatedAt: occurredAt,
@@ -2883,7 +2942,6 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    const e2eCommands = yield* e2eCommandsForCwd(target.cwd, run);
     const passFailure = terminalReviewPassFailure({
       run: completedE2eRun,
       review,
@@ -3536,7 +3594,7 @@ const make = Effect.gen(function* () {
       completeValidationCommands,
       projectValidationCommands,
       validations: result.validations,
-      deferProjectFailures: isTicketAppReview(run),
+      deferProjectFailures: isImplementationAppReview(run),
     });
     const missingCommands = appReviewValidationRepairMissingCommands(
       cycle,
@@ -3637,7 +3695,17 @@ const make = Effect.gen(function* () {
           ? {
               ...entry,
               status: "completed",
-              fixResult: isTicketAppReview(run)
+              fixWorkspaceRevision: revision,
+              fixPreviewTargets: [...run.previewTargets],
+              deferredValidationCommands: isImplementationAppReview(run)
+                ? [
+                    ...new Set([
+                      ...(entry.deferredValidationCommands ?? []),
+                      ...projectValidationCommands,
+                    ]),
+                  ]
+                : [],
+              fixResult: isImplementationAppReview(run)
                 ? {
                     ...result,
                     validations: result.validations.map((validation) =>
@@ -3785,7 +3853,7 @@ const make = Effect.gen(function* () {
             completeValidationCommands: [],
             projectValidationCommands: yield* e2eCommandsForCwd(target.cwd, run),
             validations: previousResult.validations,
-            deferProjectFailures: isTicketAppReview(run),
+            deferProjectFailures: isImplementationAppReview(run),
           });
     const fixingRun: AppReviewWorkflowRun = {
       ...reopened,

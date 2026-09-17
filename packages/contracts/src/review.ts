@@ -216,6 +216,11 @@ export const AppReviewWorkflowCycle = Schema.Struct({
    */
   failure: Schema.optionalKey(Schema.NullOr(AppReviewWorkflowFailure)),
   workspaceRevision: AppReviewWorkflowWorkspaceRevision,
+  /** Configured regression commands reserved for the implementation's final gate. */
+  deferredValidationCommands: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+  /** Provenance captured when a committed repair result is accepted. */
+  fixWorkspaceRevision: Schema.optionalKey(AppReviewWorkflowWorkspaceRevision),
+  fixPreviewTargets: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   startedAt: IsoDateTime,
   completedAt: Schema.NullOr(IsoDateTime),
 });
@@ -310,9 +315,8 @@ export type AppReviewVerdict = typeof AppReviewVerdict.Type;
  *
  * `carriedFromCycle` names the earlier cycle of the same run whose browser pass
  * still stands, and is set only when this cycle did not exercise the check
- * again. E2E checks always run fresh and never carry. A repair usually cannot
- * reach most of what already passed in the browser, so carrying those checks
- * keeps that section complete without driving the whole flow twice.
+ * again. E2E checks use `reusedValidation` for verified post-repair evidence,
+ * rather than carrying a browser verdict.
  */
 export const AppReviewCheck = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -325,6 +329,14 @@ export const AppReviewCheck = Schema.Struct({
   replayUrl: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isPattern(/^https?:\/\//i))),
   replayMimeType: Schema.optionalKey(TrimmedNonEmptyString),
   carriedFromCycle: Schema.optionalKey(PositiveInt),
+  /** Reuse a recorded post-repair validation after checking the current test environment. */
+  reusedValidation: Schema.optionalKey(
+    Schema.Struct({
+      cycleNumber: PositiveInt,
+      command: TrimmedNonEmptyString,
+      environmentEvidence: TrimmedNonEmptyString,
+    }),
+  ),
 });
 export type AppReviewCheck = typeof AppReviewCheck.Type;
 

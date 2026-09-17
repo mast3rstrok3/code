@@ -2574,6 +2574,13 @@ describe("ImplementationWorkflowReactor", () => {
               run: {
                 ...nestedRun,
                 status: outcome,
+                cycles: [
+                  {
+                    ...failedReviewRecoveryState(nestedRun, now, "acceptance").cycle,
+                    status: "completed",
+                    deferredValidationCommands: ["all-e2e", "all-e2e"],
+                  },
+                ],
                 cyclesUsed: outcome === "passed" ? 1 : nestedRun.cycleBudget,
                 activePhase: null,
                 activeThreadId: null,
@@ -2592,6 +2599,9 @@ describe("ImplementationWorkflowReactor", () => {
             );
             expect(updated?.latestAppReviewWorkflowOutcome).toBe(outcome);
             expect(
+              updated?.launchSummary.validationCommands.filter((command) => command === "all-e2e"),
+            ).toEqual(["all-e2e"]);
+            expect(
               snapshot.threads.some(
                 (thread) => thread.workflowRole === "implementation-code-reviewer",
               ),
@@ -2602,6 +2612,26 @@ describe("ImplementationWorkflowReactor", () => {
               expect(updated?.automationHalt).toBeNull();
             } else {
               expect(updated?.status).toBe("code-reviewing");
+              const reviewer = snapshot.threads.find(
+                (thread) => thread.id === updated?.activeCodeReviewThreadId,
+              );
+              if (!reviewer) throw new Error("Final reviewer missing");
+              yield* appendCodeReviewResult(system, {
+                run,
+                threadId: reviewer.id,
+                status: "clean",
+                tag: "focused-final-review",
+                validations: [],
+              });
+              const gated = (yield* system.query.getSnapshot()).implementationRuns.find(
+                (candidate) => candidate.id === run.id,
+              );
+              expect(gated?.activeValidationKind).toBe("final");
+              const validator = (yield* system.query.getSnapshot()).threads.find(
+                (thread) => thread.id === gated?.activeValidatorThreadId,
+              );
+              expect(validator?.messages.at(-1)?.text).toContain("- all-e2e");
+              expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
             }
           }),
         ),
@@ -8356,7 +8386,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("keeps complete validation in Final Code Review when App Review is disabled", () =>
+  it.effect("runs one final gate after a clean review without repeating the review", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -8380,14 +8410,15 @@ describe("ImplementationWorkflowReactor", () => {
             threadId: reviewer.id,
             status: "clean",
             tag: "app-review-disabled",
+            validations: [],
           });
 
           snapshot = yield* system.query.getSnapshot();
           const publishingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
           expect(publishingRun?.automationHalt).toBeNull();
           expect(publishingRun?.retryableFailure).toBeNull();
-          expect(publishingRun?.status).toBe("babysitting-change-request");
-          expect(publishingRun?.activeValidationKind).toBeNull();
+          expect(publishingRun?.status).toBe("validating");
+          expect(publishingRun?.activeValidationKind).toBe("final");
           expect(publishingRun?.codeReviewedHeadSha).toBe("def456");
           expect(publishingRun?.codeReviewAttemptCount).toBe(1);
           expect(publishingRun?.qaAttemptCount).toBe(0);
@@ -8398,7 +8429,7 @@ describe("ImplementationWorkflowReactor", () => {
           ).toHaveLength(reviewerCount);
           expect(
             snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
-          ).toHaveLength(1);
+          ).toHaveLength(2);
 
           yield* passFinalGate(system, run);
           snapshot = yield* system.query.getSnapshot();
@@ -8680,9 +8711,13 @@ describe("ImplementationWorkflowReactor", () => {
             threadId: reviewer.id,
             status: "findings",
             tag: `findings-cycle-${cycle}`,
-            ...(cycle === 5 ? { validations: completeValidations() } : {}),
           });
         }
+        const beforeGate = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        );
+        expect(beforeGate?.activeValidationKind).toBe("final");
+        expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
         yield* passFinalGate(system, run);
 
         const snapshot = yield* system.query.getSnapshot();
@@ -8700,7 +8735,7 @@ describe("ImplementationWorkflowReactor", () => {
         ).toHaveLength(5);
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
-        ).toHaveLength(1);
+        ).toHaveLength(2);
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
         ).toHaveLength(0);

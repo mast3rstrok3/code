@@ -1,7 +1,10 @@
 import { appStackServiceBlocksReadiness } from "@t3tools/shared/appStack";
 import { nativeVerificationEvidenceMarkdown } from "../nativeVerification.ts";
 import { parseWorkflowDirectiveFromMarkdown } from "../workflowDirectives.ts";
-import { deferredTicketValidationCommands } from "../appReviewValidation.ts";
+import {
+  deferredTicketValidationCommands,
+  finalAppReviewValidationCommands,
+} from "../appReviewValidation.ts";
 import {
   type AppStackAutoCreateResult,
   applyImplementationSkip,
@@ -1360,7 +1363,7 @@ function buildFixPrompt(input: {
       ? `Retrieve App Review ${input.reviewId} with workflow_app_review_get before applying its findings. Review against the proposed-plan context below; do not load a missing Spec or tickets.\n\n${input.artifactMarkdown ?? "Proposed-plan context unavailable."}`
       : `Retrieve App Review ${input.reviewId} with workflow_app_review_get before applying its findings. Use workflow_tickets_list and workflow_ticket_get for the linked tickets.`,
     "",
-    "Do not run launch-level complete validation commands or full test suites. A documented sub-minute fast check is allowed. Final Code Review owns complete validation on the new HEAD.",
+    "Do not run launch-level complete validation commands or full test suites. A documented sub-minute fast check is allowed. The final gate owns complete validation on the reviewed HEAD.",
     "",
     "Finish with exactly one fenced JSON directive of type implementation-fix-result for this runId.",
   ].join("\n");
@@ -1381,7 +1384,7 @@ function buildAppStackFixPrompt(input: {
     "Programmatic AppStack diagnostics:",
     input.diagnosticsMarkdown,
     "",
-    "Run focused validation or a documented sub-minute fast check. Do not run launch-level complete validation commands or full test suites; Final Code Review owns complete validation on the new HEAD.",
+    "Run focused validation or a documented sub-minute fast check. Do not run launch-level complete validation commands or full test suites. The final gate owns complete validation on the reviewed HEAD.",
     "",
     "Commit all completed changes and leave the orchestrator worktree clean. Finish with exactly one fenced JSON directive of type implementation-fix-result for this runId.",
   ].join("\n");
@@ -1399,13 +1402,8 @@ function buildCodeReviewPrompt(input: {
   const isFinalReview = isFinalCodeReviewPass(input.run);
   const finalValidationLines = isFinalReview
     ? [
-        "Complete validation belongs to this reviewer thread:",
-        `- A clean result must run every configured command exactly once:`,
-        ...input.run.launchSummary.validationCommands.map((command) => `  - ${command}`),
-        `- If native mobile files changed, also run ${NATIVE_MOBILE_VALIDATION_COMMAND}.`,
-        input.cycleNumber >= input.cycleBudget
-          ? "- This is the final cycle. Run complete validation after applying any fixes, even when findings remain."
-          : "- A findings result before the final cycle runs focused validation only. The next fresh reviewer repeats the complete combined review.",
+        "Run focused validation for any repairs. A clean review may report an empty validations list. The final gate runs the complete regression commands after Code Review finishes:",
+        ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
       ]
     : ["Run focused validation and report it in validations."];
   return [
@@ -1456,7 +1454,7 @@ function buildCodeReviewFixPrompt(input: {
     "Latest code review report:",
     input.reportMarkdown,
     "",
-    "Run focused validation or a documented sub-minute fast check. Do not run launch-level complete validation commands or full test suites; Final Code Review owns complete validation on the new HEAD.",
+    "Run focused validation or a documented sub-minute fast check. Do not run launch-level complete validation commands or full test suites. The final gate owns complete validation on the reviewed HEAD.",
     "",
     "Finish with exactly one fenced JSON directive of type implementation-fix-result for this runId.",
   ].join("\n");
@@ -1478,7 +1476,7 @@ function buildMergeGateFixPrompt(input: {
     "",
     "Run the cheapest deterministic checks named by the failure first, including capability-evidence or review-documentation audits when applicable. Resolve the complete reported failure set in one repair instead of waiting for the next full gate to reveal the same items again.",
     "",
-    "Run focused validation or a documented sub-minute fast check. Do not run launch-level complete validation commands or full test suites; Final Code Review owns complete validation on the new HEAD.",
+    "Run focused validation or a documented sub-minute fast check. Do not run launch-level complete validation commands or full test suites. The final gate owns complete validation on the reviewed HEAD.",
     "",
     "Finish with exactly one fenced JSON directive of type implementation-fix-result for this runId.",
   ].join("\n");
@@ -8190,10 +8188,15 @@ const make = Effect.gen(function* () {
           "Final Code Review did not report validation evidence.",
           updatedAt,
         );
-        const completeValidationRequired = directive.status === "clean" || atCeiling;
+        const completeValidationRequired =
+          (directive.status === "clean" || atCeiling) &&
+          directive.validations.length > 0 &&
+          !focusedValidationPassed;
         const validationPassed = completeValidationRequired
           ? completeValidationPassed
-          : directive.status === "blocked" || focusedValidationPassed;
+          : directive.status === "blocked" ||
+            directive.validations.length === 0 ||
+            focusedValidationPassed;
         const validationFailureMarkdown = completeValidationRequired
           ? "The complete validation did not pass exactly once for every configured command."
           : "The findings cycle did not report passing focused validation.";
@@ -8227,6 +8230,7 @@ const make = Effect.gen(function* () {
           updatedAt,
         };
 
+        // Accept complete evidence from reviewers launched before validation moved to the gate.
         if (directive.status === "clean" && completeValidationPassed) {
           yield* fileChangeRequest({
             sourceThreadId,
@@ -8237,6 +8241,30 @@ const make = Effect.gen(function* () {
         }
 
         if (directive.status === "clean") {
+          if (directive.validations.length === 0 || focusedValidationPassed) {
+            yield* startMergeGate({
+              sourceThreadId,
+              run: {
+                ...reviewedRun,
+                finalValidation: null,
+                finalValidationResults: [],
+                validatedHeadSha: null,
+              },
+              integration: {
+                baseTicketId: null,
+                baseRefName: run.orchestratorBranch,
+                mergedTicketIds: [],
+                conflictedTicketId: null,
+                conflictedRefName: null,
+                conflictedFiles: [],
+                remainingTicketIds: [],
+                remainingRefNames: [],
+              },
+              kind: "final",
+              createdAt: updatedAt,
+            });
+            return;
+          }
           yield* blockRun({
             sourceThreadId,
             run: { ...reviewedRun, validatedHeadSha: null },
@@ -8300,7 +8328,31 @@ const make = Effect.gen(function* () {
           },
           createdAt: updatedAt,
         });
-        yield* fileChangeRequest({ sourceThreadId, run: exhaustedRun, createdAt: updatedAt });
+        if (focusedValidationPassed || directive.validations.length === 0) {
+          yield* startMergeGate({
+            sourceThreadId,
+            run: {
+              ...exhaustedRun,
+              finalValidation: null,
+              finalValidationResults: [],
+              validatedHeadSha: null,
+            },
+            integration: {
+              baseTicketId: null,
+              baseRefName: run.orchestratorBranch,
+              mergedTicketIds: [],
+              conflictedTicketId: null,
+              conflictedRefName: null,
+              conflictedFiles: [],
+              remainingTicketIds: [],
+              remainingRefNames: [],
+            },
+            kind: "final",
+            createdAt: updatedAt,
+          });
+        } else {
+          yield* fileChangeRequest({ sourceThreadId, run: exhaustedRun, createdAt: updatedAt });
+        }
         return;
       }
       const validationsValid = focusedRepairValidationsPassed({
@@ -9699,6 +9751,15 @@ const make = Effect.gen(function* () {
       : [...run.appReviewWorkflowRunIds, nestedRun.id];
     const linkedRun: OrchestrationImplementationRun = {
       ...run,
+      launchSummary: {
+        ...run.launchSummary,
+        validationCommands: [
+          ...new Set([
+            ...run.launchSummary.validationCommands,
+            ...finalAppReviewValidationCommands(nestedRun),
+          ]),
+        ],
+      },
       appReviewWorkflowRunIds: runIds,
       latestAppReviewWorkflowOutcome: nestedRun.outcome,
       updatedAt: event.occurredAt,
