@@ -533,7 +533,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /After each behavioral slice, run the relevant focused test/);
     NodeAssert.match(rendered, /affected-file formatting, linting, typing/);
     NodeAssert.match(rendered, /sub-minute fast check/);
-    NodeAssert.match(rendered, /Final Code Review owns complete validation/);
+    NodeAssert.match(rendered, /The Final regression tests step owns complete validation/);
     NodeAssert.doesNotMatch(rendered, /canonical log line/);
 
     const mockingDoc = tdd.associatedDocs?.find((doc) => doc.id === "tdd-mocking");
@@ -613,8 +613,11 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /app-dev-stack\.md/);
     NodeAssert.match(rendered, /never run launch-level complete validation commands/);
     NodeAssert.match(rendered, /sub-minute fast checks/);
-    NodeAssert.match(rendered, /Final Code Review cycle that ends the stage runs each launch/);
-    NodeAssert.match(rendered, /Final Code Review owns complete repository validation/);
+    NodeAssert.match(rendered, /Final regression tests runs each required E2E and launch/);
+    NodeAssert.match(
+      rendered,
+      /Final regression tests step runs complete repository validation after Final Code Review/,
+    );
     NodeAssert.match(rendered, /When Planning supplied tickets, use them as-is/);
     NodeAssert.match(rendered, /derive one or more tracer-bullet tickets from the user's prompt/);
     NodeAssert.match(rendered, /fresh prompt-originated Implementation thread/);
@@ -623,7 +626,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /up to five Code Review cycles/);
     NodeAssert.match(rendered, /use one merge-gate thread/);
     NodeAssert.match(rendered, /fresh review-and-fix thread per cycle/);
-    NodeAssert.match(rendered, /Do not create a separate final-validation thread/);
+    NodeAssert.match(rendered, /separate Final regression tests step in its own validation thread/);
     NodeAssert.match(
       rendered,
       /Pull-request creation and pull-request babysitting are separate workflow stages/,

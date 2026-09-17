@@ -102,6 +102,15 @@ describe("resolveWorkflowCurrentPath", () => {
       entries: [],
     },
     {
+      id: "final-regression",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      label: "Implementation phase · Final regression tests",
+      skillId: "implementation.merge-gate.codex",
+      repeatsAsCycles: false,
+      usesRootThread: false,
+      entries: [],
+    },
+    {
       id: "publication",
       createdAt: "2026-01-01T00:00:00.000Z",
       label: "Implementation phase · Create pull request",
@@ -266,7 +275,7 @@ describe("resolveWorkflowCurrentPath", () => {
     expect(path.subtitle).toContain("Cycle 2");
   });
 
-  it("keeps final validation under the final Code Review step", () => {
+  it("gives final regression tests its own current step", () => {
     const path = resolve(
       implementationRun([], {
         status: "validating",
@@ -274,8 +283,8 @@ describe("resolveWorkflowCurrentPath", () => {
         activeValidatorThreadId: ThreadId.make("validator-thread"),
       }),
     );
-    expect(path.stepId).toBe("final-review");
-    expect(path.subtitle).toContain("Final validation");
+    expect(path.stepId).toBe("final-regression");
+    expect(path.subtitle).toContain("Final regression tests");
     expect(path.threadId).toBe("validator-thread");
   });
 
@@ -1016,6 +1025,7 @@ describe("buildWorkflowViewModel", () => {
       "Merge ticket branches",
       "Final App Review",
       "Final Code Review",
+      "Final regression tests",
       "Create pull request",
       "Babysit pull request",
     ]);
@@ -1030,12 +1040,10 @@ describe("buildWorkflowViewModel", () => {
       "env:gap-analysis",
       "env:repair",
     ]);
-    expect(steps[8]?.entries.map((entry) => entry.id)).toEqual([
-      "env:code-review",
-      "env:final-validation",
-    ]);
-    expect(steps[9]?.entries).toEqual([]);
-    expect(steps[10]?.entries.map((entry) => entry.id)).toEqual(["env:pr-babysitter"]);
+    expect(steps[8]?.entries.map((entry) => entry.id)).toEqual(["env:code-review"]);
+    expect(steps[9]?.entries.map((entry) => entry.id)).toEqual(["env:final-validation"]);
+    expect(steps[10]?.entries).toEqual([]);
+    expect(steps[11]?.entries.map((entry) => entry.id)).toEqual(["env:pr-babysitter"]);
   });
 
   it("keeps the run coordinator off the final code review step", () => {
@@ -1081,7 +1089,7 @@ describe("buildWorkflowViewModel", () => {
       "env:worker",
     ]);
     expect(byLabel("Final Code Review")?.entries.map((entry) => entry.id)).toEqual([]);
-    expect(steps).toHaveLength(11);
+    expect(steps).toHaveLength(12);
 
     // The panel reads a step's status from the threads it owns other than the
     // workflow root, and the final step owns none until the review starts.
@@ -1147,6 +1155,7 @@ describe("buildWorkflowViewModel", () => {
       "Implementation phase · Merge ticket branches",
       "Implementation phase · App Review",
       "Implementation phase · Final Code Review",
+      "Implementation phase · Final regression tests",
       "Implementation phase · Create pull request",
       "Implementation phase · Babysit pull request",
     ].map(step);
@@ -1160,6 +1169,11 @@ describe("buildWorkflowViewModel", () => {
     );
     expect(matched("worker-execution")).toBe("Implementation phase · Execute ticket waves");
     expect(matched("merge-gate")).toBe("Implementation phase · Merge ticket branches");
+    expect(
+      guidedSteps.find((candidate) =>
+        workflowStepMatchesImplementationFailure(candidate, "merge-gate", "final"),
+      )?.label,
+    ).toBe("Implementation phase · Final regression tests");
     expect(matched("integration")).toBe("Implementation phase · Merge ticket branches");
     expect(matched("app-review")).toBe("Implementation phase · App Review");
     expect(matched("code-review")).toBe("Implementation phase · Final Code Review");

@@ -119,7 +119,7 @@ import {
   workflowWatchdogFindingsTotal,
 } from "../../observability/Metrics.ts";
 
-// Code Review owns its fixes and final validation.
+// Code Review owns its fixes; the final gate owns complete validation.
 
 type ImplementationWorkflowEvent = Extract<
   OrchestrationEvent,
@@ -601,7 +601,15 @@ export function isRecoverableInterruptedWorktreeHalt(
 function automationHaltMatchesRunRerun(input: {
   readonly halt: NonNullable<OrchestrationImplementationRun["automationHalt"]>;
   readonly stage: OrchestrationImplementationRerunRunStage;
+  readonly validationKind?: "integration" | "final" | null;
 }): boolean {
+  if (
+    input.stage === "merge-gate" &&
+    input.validationKind === "final" &&
+    input.halt.ticketId === undefined &&
+    input.halt.stage === "final-code-review"
+  )
+    return true;
   return implementationRerunTargetMatchesHalt(input.halt, {
     kind: "run",
     stage: input.stage,
@@ -893,7 +901,11 @@ function clearRunStageForRerun(input: {
     retryableFailure: null,
     automationHalt:
       input.run.automationHalt !== null &&
-      automationHaltMatchesRunRerun({ halt: input.run.automationHalt, stage: input.stage })
+      automationHaltMatchesRunRerun({
+        halt: input.run.automationHalt,
+        stage: input.stage,
+        validationKind: input.run.activeValidationKind,
+      })
         ? null
         : input.run.automationHalt,
     updatedAt: input.updatedAt,
@@ -908,6 +920,7 @@ function clearRunStageForRerun(input: {
         ...base,
         status: "integrating" as const,
         integrationHeadSha: null,
+        activeValidationKind: null,
         mergeGateAttemptCount: 0,
       };
     case "merge-gate":
@@ -916,7 +929,9 @@ function clearRunStageForRerun(input: {
         status: "validating" as const,
         activeValidatorThreadId: null,
         activeValidationHeadSha: null,
-        activeValidationKind: null,
+        activeValidationKind:
+          input.run.activeValidationKind ??
+          (input.run.codeReviewedHeadSha !== null ? ("final" as const) : ("integration" as const)),
         validatedHeadSha: null,
         finalValidation: null,
         mergeGateAttemptCount: 0,
@@ -9188,7 +9203,11 @@ const make = Effect.gen(function* () {
               ticketId: target.ticketId,
               stage: target.stage,
             })
-          : !automationHaltMatchesRunRerun({ halt: run.automationHalt, stage: target.stage }))
+          : !automationHaltMatchesRunRerun({
+              halt: run.automationHalt,
+              stage: target.stage,
+              validationKind: run.activeValidationKind,
+            }))
       ) {
         return;
       }
@@ -9236,7 +9255,7 @@ const make = Effect.gen(function* () {
                 remainingTicketIds: [],
                 remainingRefNames: [],
               },
-              kind: "integration",
+              kind: rerunRun.activeValidationKind ?? "integration",
               createdAt,
             });
             return;

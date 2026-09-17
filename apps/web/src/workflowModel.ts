@@ -154,6 +154,7 @@ export function buildTicketWaves(
 export function workflowStepMatchesImplementationFailure<TThread extends WorkflowModelThread>(
   step: WorkflowTimelineStep<TThread>,
   stage: OrchestrationImplementationRetryableFailure["stage"],
+  validationKind?: "integration" | "final" | null,
 ): boolean {
   const label = step.label?.toLowerCase() ?? "";
   switch (stage) {
@@ -171,9 +172,13 @@ export function workflowStepMatchesImplementationFailure<TThread extends Workflo
     case "worker-setup":
     case "worker-execution":
       return label.includes("tdd") || label.includes("build") || label.includes("ticket wave");
-    case "integration":
     case "merge-gate":
+      if (validationKind === "final") return label.includes("final regression tests");
       return label.includes("integrat") || label.includes("merge");
+    case "integration":
+      return validationKind === "final"
+        ? label.includes("final regression tests")
+        : label.includes("integrat") || label.includes("merge");
     case "app-dev-stack":
       return label.includes("appdevstack") || label === "planning";
     case "app-review":
@@ -207,6 +212,7 @@ export function workflowStepCanRetryImplementationFailure<TThread extends Workfl
   run: {
     readonly status: OrchestrationImplementationRunStatus;
     readonly retryableFailure?: OrchestrationImplementationRetryableFailure | null | undefined;
+    readonly activeValidationKind?: "integration" | "final" | null;
   },
 ): boolean {
   const failure = run.retryableFailure;
@@ -214,7 +220,7 @@ export function workflowStepCanRetryImplementationFailure<TThread extends Workfl
     run.status === "needs-human-attention" &&
     failure != null &&
     failure.attemptCount < failure.maxAttempts &&
-    workflowStepMatchesImplementationFailure(step, failure.stage)
+    workflowStepMatchesImplementationFailure(step, failure.stage, run.activeValidationKind)
   );
 }
 
@@ -270,6 +276,7 @@ export function implementationTicketStageDetails(
  */
 export function implementationRunCurrentStage(run: {
   readonly status: OrchestrationImplementationRunStatus;
+  readonly activeValidationKind?: "integration" | "final" | null;
   readonly retryableFailure?: OrchestrationImplementationRetryableFailure | null | undefined;
   readonly automationHalt?: OrchestrationImplementationAutomationHalt | null | undefined;
 }): OrchestrationImplementationRetryableFailure["stage"] | null {
@@ -280,8 +287,9 @@ export function implementationRunCurrentStage(run: {
         case "app-review":
           return "app-review";
         case "code-review":
-        case "final-code-review":
           return "code-review";
+        case "final-code-review":
+          return run.activeValidationKind === "final" ? "merge-gate" : "code-review";
         case "integration":
           return "integration";
         case "implementation":
@@ -484,15 +492,19 @@ function entryMatchesDefinedStep<TThread extends WorkflowModelThread>(
       entry.row.thread.workflowContext?.ticketScope?.length !== 1
     );
   }
+  if (label.includes("final regression tests")) {
+    return (
+      role === "implementation-validator" &&
+      entry.row.thread.title?.toLowerCase().includes("final validation") === true
+    );
+  }
   if (label.includes("final code review")) {
     // Deliberately not the run's coordinator: it exists from the first ticket
     // wave onward and reads as settled whenever it is idle, which called the
     // final review done before it had started.
     return (
-      (role === "implementation-code-reviewer" &&
-        entry.row.thread.workflowContext?.ticketScope?.length !== 1) ||
-      (role === "implementation-validator" &&
-        entry.row.thread.title?.toLowerCase().includes("final validation") === true)
+      role === "implementation-code-reviewer" &&
+      entry.row.thread.workflowContext?.ticketScope?.length !== 1
     );
   }
   if (step.skillId !== undefined && entrySkillIds(entry).has(step.skillId)) return true;
@@ -808,10 +820,10 @@ export function resolveWorkflowCurrentPath<TThread extends WorkflowModelThread>(
     }
 
     const stage = implementationRunCurrentStage(run);
-    const finalValidation = run.status === "validating" && run.activeValidationKind === "final";
+    const finalValidation =
+      (stage === "merge-gate" || stage === "integration") && run.activeValidationKind === "final";
     const step = finalValidation
-      ? (currentPathStep(input.steps, (label) => label.includes("final code review")) ??
-        currentPathStep(input.steps, (label) => label.includes("code review")))
+      ? currentPathStep(input.steps, (label) => label.includes("final regression tests"))
       : stage === "app-review"
         ? currentPathStep(input.steps, (label) => label.includes("app review"))
         : stage === "code-review"
@@ -866,7 +878,7 @@ export function resolveWorkflowCurrentPath<TThread extends WorkflowModelThread>(
     const segments = [
       input.workflowLabel,
       finalValidation
-        ? "Final validation"
+        ? "Final regression tests"
         : (step?.label ?? stage?.replaceAll("-", " ") ?? "Complete"),
       cycleNumber === null ? null : `Cycle ${cycleNumber}`,
       appReviewPhaseLabel,
@@ -874,7 +886,7 @@ export function resolveWorkflowCurrentPath<TThread extends WorkflowModelThread>(
     return {
       groupId: input.groupId,
       status,
-      phase: finalCodeReview || finalValidation ? "Code Review" : "Implementation",
+      phase: finalCodeReview ? "Code Review" : "Implementation",
       stepId: step?.id ?? null,
       stepLabel: step?.label ?? "Workflow",
       waveIndex: null,

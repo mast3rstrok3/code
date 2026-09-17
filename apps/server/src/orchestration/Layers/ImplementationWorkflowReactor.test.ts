@@ -11123,57 +11123,73 @@ describe("ImplementationWorkflowReactor", () => {
    * The ceiling asks a human to read a gate that keeps failing. Once they have and
    * they start it again, a spent count that nothing lowers makes the halt permanent.
    */
-  it.effect("gives the Merge Gate its budget back when the run starts it again", () =>
-    withSystem((system) =>
-      Effect.gen(function* () {
-        const { run } = yield* launchRun(system);
-        yield* system.engine.dispatch({
-          type: "thread.implementation-run.update",
-          commandId: commandId("merge-gate-budget-spent-before-rerun"),
-          threadId: sourceThreadId,
-          run: {
-            ...run,
-            status: "validating",
-            orchestratorBranch: "main",
-            orchestratorWorktreePath: "/tmp/implementation-reactor-review",
-            integrationHeadSha: "def456",
-            activeValidationKind: "integration",
-            activeValidationHeadSha: null,
-            activeValidatorThreadId: null,
-            validatedHeadSha: null,
-            mergeGateAttemptCount: IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS,
-            updatedAt: now,
-          },
-          createdAt: now,
-        });
-        yield* system.reactor.recoverIncompleteStages();
-        yield* system.reactor.drain;
+  for (const gateKind of ["integration", "final"] as const) {
+    it.effect(`restarts ${gateKind} validation with its own gate and renewed budget`, () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.update",
+            commandId: commandId("merge-gate-budget-spent-before-rerun"),
+            threadId: sourceThreadId,
+            run: {
+              ...run,
+              status: "validating",
+              orchestratorBranch: "main",
+              orchestratorWorktreePath: "/tmp/implementation-reactor-review",
+              integrationHeadSha: "def456",
+              activeValidationKind: gateKind,
+              codeReviewedHeadSha: gateKind === "final" ? "def456" : null,
+              activeValidationHeadSha: null,
+              activeValidatorThreadId: null,
+              validatedHeadSha: null,
+              mergeGateAttemptCount: IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS,
+              updatedAt: now,
+            },
+            createdAt: now,
+          });
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
 
-        let snapshot = yield* system.query.getSnapshot();
-        expect(snapshot.implementationRuns.find((entry) => entry.id === run.id)?.status).toBe(
-          "needs-human-attention",
-        );
+          let snapshot = yield* system.query.getSnapshot();
+          expect(snapshot.implementationRuns.find((entry) => entry.id === run.id)?.status).toBe(
+            "needs-human-attention",
+          );
 
-        yield* system.engine.dispatch({
-          type: "thread.implementation-run.rerun",
-          commandId: commandId("rerun-merge-gate-after-ceiling"),
-          threadId: sourceThreadId,
-          runId: run.id,
-          target: { kind: "run", stage: "merge-gate" },
-          createdAt: "2026-01-01T00:00:05.000Z",
-        });
-        yield* system.reactor.drain;
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.rerun",
+            commandId: commandId("rerun-merge-gate-after-ceiling"),
+            threadId: sourceThreadId,
+            runId: run.id,
+            target: { kind: "run", stage: "merge-gate" },
+            createdAt: "2026-01-01T00:00:05.000Z",
+          });
+          yield* system.reactor.drain;
 
-        snapshot = yield* system.query.getSnapshot();
-        const restarted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-        expect(restarted?.status).toBe("validating");
-        expect(restarted?.automationHalt).toBeNull();
-        // Cleared, then claimed by the gate this re-run started.
-        expect(restarted?.mergeGateAttemptCount).toBe(1);
-        expect(restarted?.activeValidatorThreadId).not.toBeNull();
-      }),
-    ),
-  );
+          snapshot = yield* system.query.getSnapshot();
+          const restarted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(restarted?.retryableFailure).toBeNull();
+          expect(restarted?.automationHalt).toBeNull();
+          expect(restarted?.status).toBe("validating");
+          expect(restarted?.automationHalt).toBeNull();
+          // Cleared, then claimed by the gate this re-run started.
+          expect(restarted?.mergeGateAttemptCount).toBe(1);
+          expect(restarted?.activeValidatorThreadId).not.toBeNull();
+          expect(restarted?.activeValidationKind).toBe(gateKind);
+          const validator = snapshot.threads.find(
+            (thread) => thread.id === restarted?.activeValidatorThreadId,
+          );
+          expect(validator?.title).toBe(
+            gateKind === "final" ? "Implementation final validation" : "Implementation merge gate",
+          );
+          if (gateKind === "final")
+            expect(validator?.messages.at(-1)?.text).toContain(
+              "Code Review accepted the current HEAD",
+            );
+        }),
+      ),
+    );
+  }
 
   it.effect("halts a run that has started its Merge Gate too many times", () =>
     withSystem((system) =>

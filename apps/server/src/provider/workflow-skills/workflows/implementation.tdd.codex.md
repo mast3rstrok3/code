@@ -9,7 +9,7 @@ When this prompt is run by an automatic implementation-worker thread, do not ask
 - Run one focused failing test before implementation.
 - After each behavioral slice, run the relevant focused test.
 - At completion, run only affected-file formatting, linting, typing, and focused tests.
-- Do not run launch-level complete validation commands or full test suites. A documented sub-minute fast check such as `pnpm check` is allowed. Final Code Review owns complete validation.
+- Do not run launch-level complete validation commands or full test suites. A documented sub-minute fast check such as `pnpm check` is allowed. The Final regression tests step owns complete validation.
 - Do not rerun an unchanged passing command unless a code change could affect its result.
 
 ```json
@@ -36,7 +36,7 @@ When this prompt is run by an automatic implementation-worker thread, do not ask
 
 ## Orchestrated QA Repair Result
 
-When the launch message identifies an AppStack or Browser App Review failure, this is a QA repair thread rather than a planning-ticket worker. Load `app-dev-stack.md` before changing dependency or runtime setup. The programmatic diagnostics, original Spec/tickets or proposed plan, and the failed review are the pre-agreed seams. Do not ask the user to confirm them. Work red then green in the orchestrator worktree, run focused validation or a documented sub-minute fast check, commit the repair, leave the worktree clean, and finish with exactly one fenced JSON block using this shape. Final Code Review owns complete validation on the new HEAD; do not run launch-level complete validation commands here.
+When the launch message identifies an AppStack or Browser App Review failure, this is a QA repair thread rather than a planning-ticket worker. Load `app-dev-stack.md` before changing dependency or runtime setup. The programmatic diagnostics, original Spec/tickets or proposed plan, and the failed review are the pre-agreed seams. Do not ask the user to confirm them. Work red then green in the orchestrator worktree, run focused validation or a documented sub-minute fast check, commit the repair, leave the worktree clean, and finish with exactly one fenced JSON block using this shape. The Final regression tests step owns complete validation on the reviewed HEAD; do not run launch-level complete validation commands here.
 
 ```json
 {

@@ -707,10 +707,13 @@ function resolveStepRestart(input: {
  */
 function rerunRunStageForStep(
   step: WorkflowTimelineStep<EnvironmentThreadShell>,
+  run?: OrchestrationImplementationRun | null,
 ): RerunRunStage | null {
   const label = workflowStepLabel(step).toLowerCase();
   // Integration re-merges the terminal branches and then re-enters the merge
   // gate, which is the whole of what this step does.
+  if (label.includes("final regression tests"))
+    return run?.codeReviewedHeadSha != null ? "merge-gate" : null;
   if (label.includes("merge ticket branches")) return "integration";
   if (label.includes("app review")) return "app-review";
   if (label.includes("code review")) return "code-review";
@@ -2471,7 +2474,13 @@ function WorkflowGroupCard(props: {
   const resumeStep =
     resumeStage === null
       ? null
-      : (steps.find((step) => workflowStepMatchesImplementationFailure(step, resumeStage)) ?? null);
+      : (steps.find((step) =>
+          workflowStepMatchesImplementationFailure(
+            step,
+            resumeStage,
+            linkedImplementationRun?.activeValidationKind,
+          ),
+        ) ?? null);
   const timeRange = resolveWorkflowGroupTimeRange(group, props.groups);
   const showsAppReviews =
     group.preset === "app-review" ||
@@ -2522,12 +2531,22 @@ function WorkflowGroupCard(props: {
       const progress =
         planningProgress !== null
           ? (planningProgress.toLowerCase() as "completed" | "current" | "upcoming")
-          : publicationProgress !== null
-            ? publicationProgress
-            : currentImplementationStage !== null &&
-                workflowStepMatchesImplementationFailure(step, currentImplementationStage)
-              ? ("current" as const)
-              : null;
+          : workflowStepLabel(step).toLowerCase().includes("final regression tests") &&
+              linkedImplementationRun?.finalValidation?.status === "passed" &&
+              linkedImplementationRun.validatedHeadSha !== null &&
+              linkedImplementationRun.validatedHeadSha ===
+                linkedImplementationRun.codeReviewedHeadSha
+            ? ("completed" as const)
+            : publicationProgress !== null
+              ? publicationProgress
+              : currentImplementationStage !== null &&
+                  workflowStepMatchesImplementationFailure(
+                    step,
+                    currentImplementationStage,
+                    linkedImplementationRun?.activeValidationKind,
+                  )
+                ? ("current" as const)
+                : null;
       const stepThreads = collectStepThreads(step, props.workflowRoot.id);
       return [
         step.id,
@@ -2542,7 +2561,11 @@ function WorkflowGroupCard(props: {
           blocked:
             linkedImplementationRun?.status === "needs-human-attention" &&
             currentImplementationStage !== null &&
-            workflowStepMatchesImplementationFailure(step, currentImplementationStage),
+            workflowStepMatchesImplementationFailure(
+              step,
+              currentImplementationStage,
+              linkedImplementationRun?.activeValidationKind,
+            ),
           // A run-wide pause reads as paused only on the step it stopped at.
           // Marking every step paused would bury the one a resume re-enters.
           paused:
@@ -2827,14 +2850,17 @@ function WorkflowGroupCard(props: {
                               resumeStep === null ? null : workflowStepTitle(resumeStep),
                             onRestartPlanningStage: props.onRestartPlanningStage,
                             onRetryImplementationRun: props.onRetryImplementationRun,
-                            rerunRunStage: rerunRunStageForStep(step),
+                            rerunRunStage: rerunRunStageForStep(step, linkedImplementationRun),
                             onRerunImplementationStage: props.onRerunImplementationStage,
                             onResumeWorkflow: props.onResumeWorkflow,
                             implementationRunId: linkedImplementationRun?.id ?? null,
                           });
                           // Only a step that owns a run-wide stage has something
                           // to clear; the rest are phases of a thread's own work.
-                          const stepClearStage = rerunRunStageForStep(step);
+                          const stepClearStage = rerunRunStageForStep(
+                            step,
+                            linkedImplementationRun,
+                          );
                           const stepSkipStage = skipRunStageForStep(step);
                           const stepClearRunId = linkedImplementationRun?.id ?? null;
                           const onClearStep =
@@ -3016,6 +3042,30 @@ function WorkflowGroupCard(props: {
                                   </div>
                                 ) : null}
                               </header>
+                              {stepOpen &&
+                              workflowStepLabel(step)
+                                .toLowerCase()
+                                .includes("final regression tests") &&
+                              linkedImplementationRun != null &&
+                              linkedImplementationRun.finalValidationResults.length > 0 ? (
+                                <div className="space-y-1 px-2 pb-2 text-xs">
+                                  {linkedImplementationRun.finalValidationResults.map((result) => (
+                                    <details
+                                      key={`${result.command}:${result.completedAt}:${result.status}`}
+                                      className="rounded-md border border-border p-2"
+                                    >
+                                      <summary className="cursor-pointer break-words">
+                                        <span className="font-medium">{result.status}</span>
+                                        {" · "}
+                                        <code>{result.command}</code>
+                                      </summary>
+                                      <div className="mt-2 whitespace-pre-wrap break-words text-muted-foreground">
+                                        {result.outputMarkdown}
+                                      </div>
+                                    </details>
+                                  ))}
+                                </div>
+                              ) : null}
                               {stepOpen &&
                               isTicketExecutionStep &&
                               linkedImplementationRun &&

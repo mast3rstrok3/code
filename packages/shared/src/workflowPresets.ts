@@ -90,6 +90,13 @@ const QUICK_PLAN_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
   },
 ];
 
+const FINAL_REGRESSION_STEP: WorkflowPresetHelpStep = {
+  label: "Final regression tests",
+  skillId: "implementation.merge-gate.codex",
+  threadBoundary: "new child thread",
+  note: "runs the full required E2E suites and project checks on the reviewed commit; independent suites run in parallel when isolated",
+};
+
 const PLAN_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
   ...QUICK_PLAN_HELP_STEPS,
   {
@@ -105,6 +112,7 @@ const PLAN_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
     threadBoundary: "new review thread",
     note: "one review-and-fix thread per cycle; stops clean or repeats up to five cycles",
   },
+  FINAL_REGRESSION_STEP,
   { label: "Create pull request", note: "publishes the reviewed branch" },
   {
     label: "Babysit pull request",
@@ -389,8 +397,9 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Final Code Review",
         skillId: "implementation.code-review.codex",
         threadBoundary: "new review thread",
-        note: "one thread per cycle; stops clean or repeats up to five cycles and owns final validation",
+        note: "one thread per cycle; stops clean or repeats up to five cycles; validates repairs with focused tests",
       },
+      FINAL_REGRESSION_STEP,
       {
         label: "Create pull request",
         note: "publishes the reviewed and validated branch",
@@ -479,8 +488,9 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Final Code Review",
         skillId: "implementation.code-review.codex",
         threadBoundary: "new review thread",
-        note: "automatic; one thread per cycle, up to five cycles, with complete validation in the ending cycle",
+        note: "automatic; one thread per cycle, up to five cycles, with focused tests for repairs",
       },
+      FINAL_REGRESSION_STEP,
       {
         label: "Create pull request",
         note: "automatic; publishes the reviewed and validated branch",

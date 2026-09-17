@@ -90,8 +90,11 @@ export function workflowProgressLabel(input: {
       case "running":
         return "Implementation · TDD";
       case "integrating":
-      case "validating":
         return "Implementation · Merge gate";
+      case "validating":
+        return run.activeValidationKind === "final"
+          ? "Implementation · Final regression tests"
+          : "Implementation · Merge gate";
       case "qa-reviewing":
         return "Implementation · App Review";
       case "fixing":
