@@ -1,11 +1,16 @@
 import { it, expect } from "@effect/vitest";
-import { AppReviewWorkflowRunId } from "@t3tools/contracts";
+import { AppReviewWorkflowRunId, type AppReviewWorkflowCycle } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { ProcessRunner, type ProcessRunInput } from "../processRunner.ts";
-import { appReviewTestCommands, runAppReviewTest } from "./appReviewTestRunner.ts";
+import {
+  appReviewRetryCommandsFailure,
+  appReviewTestCommands,
+  completedAppReviewTests,
+  runAppReviewTest,
+} from "./appReviewTestRunner.ts";
 
 const completedAt = "2026-09-18T07:00:00.000Z";
 const selections = ["calendar", "lists", "chat"].map((command) => ({
@@ -45,10 +50,7 @@ it("uses a repair's failed-test selector and never reopens a passed suite", () =
               status: "succeeded",
               validations: [],
               notesMarkdown: "Fixed search",
-              retryCommands: [
-                { command: "lists", retryCommand: "lists --grep search" },
-                { command: "calendar", retryCommand: "calendar --grep booking" },
-              ],
+              retryCommands: [{ command: "lists", retryCommand: "lists --grep search" }],
             },
           },
         ],
@@ -97,6 +99,98 @@ it("keeps passed suites and retries only failed or unfinished suites", () => {
       ["all-apps"],
     ),
   ).toEqual(selections.slice(1));
+});
+
+const failedSelection = {
+  id: "retry",
+  commands: [{ command: "lists", retryCommand: "lists --grep search" }],
+  results: [
+    {
+      command: "lists",
+      executedCommand: "lists --grep search",
+      status: "failed",
+      outputMarkdown: "Search fails",
+      completedAt,
+    },
+  ],
+} satisfies NonNullable<AppReviewWorkflowCycle["e2eExecution"]>;
+
+it("keeps the last failed selection when a repair cannot narrow it", () => {
+  expect(
+    appReviewTestCommands({ cycles: [{ e2eExecution: failedSelection, fixResult: null }] }, [
+      "all-apps",
+    ]),
+  ).toEqual(failedSelection.commands);
+});
+
+it("does not reopen suites from earlier cycles", () => {
+  expect(
+    appReviewTestCommands(
+      {
+        cycles: [
+          { e2eExecution: { ...failedSelection, commands: selections }, fixResult: null },
+          { e2eExecution: failedSelection, fixResult: null },
+        ],
+      },
+      ["calendar", "lists", "chat"],
+    ),
+  ).toEqual(failedSelection.commands);
+});
+
+it.each([
+  { command: "unknown", retryCommand: "unknown --grep test" },
+  { command: "calendar", retryCommand: "calendar --grep booking" },
+])("rejects retry mappings for suites that did not fail: $command", (mapping) => {
+  const cycle = {
+    e2eExecution: {
+      ...failedSelection,
+      commands: [...failedSelection.commands, selections[0]!],
+      results: [
+        ...failedSelection.results,
+        {
+          ...failedSelection.results[0]!,
+          command: "calendar",
+          executedCommand: "calendar",
+          status: "passed" as const,
+        },
+      ],
+    },
+  };
+  expect(appReviewRetryCommandsFailure(cycle, { retryCommands: [mapping] })).toContain(
+    "does not match a failed command",
+  );
+});
+
+it("rejects duplicate retry mappings and accepts a single failed-suite mapping", () => {
+  const mapping = { command: "lists", retryCommand: "lists --grep search" };
+  expect(
+    appReviewRetryCommandsFailure(
+      { e2eExecution: failedSelection },
+      { retryCommands: [mapping, mapping] },
+    ),
+  ).toContain("Duplicate retry mapping");
+  expect(
+    appReviewRetryCommandsFailure({ e2eExecution: failedSelection }, { retryCommands: [mapping] }),
+  ).toBeNull();
+  expect(appReviewRetryCommandsFailure({ e2eExecution: failedSelection }, {})).toBeNull();
+});
+
+it("matches actual executions and ignores duplicate or unrelated results", () => {
+  const result = failedSelection.results[0]!;
+  const execution = {
+    ...failedSelection,
+    commands: [...failedSelection.commands, selections[0]!],
+    results: [
+      { ...result, command: "unrelated", executedCommand: "unrelated", status: "passed" as const },
+      { ...result, executedCommand: "old-selection", status: "passed" as const },
+      result,
+      result,
+    ],
+  };
+  expect(completedAppReviewTests(execution)).toEqual([result]);
+  expect(
+    appReviewTestCommands({ cycles: [{ e2eExecution: execution, fixResult: null }] }, []),
+  ).toEqual(execution.commands);
 });
 
 for (const [code, timedOut, status] of [

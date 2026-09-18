@@ -96,6 +96,7 @@ import {
   rerunPlanningPhaseInCycle,
   rerunFixingPhaseInCycle,
   priorCycleChecks,
+  programmaticReviewRecord,
   findAppReviewParentTicket,
   isSupersededAppReviewPhaseThread,
   isAppReviewWorkflowActivityKind,
@@ -772,7 +773,7 @@ it("keeps App Review fixers in the implementation-only phase", () => {
     "Do not call preview_* or app_review_* tools",
   );
   expect(APP_REVIEW_FIXER_IMPLEMENTATION_ONLY_INSTRUCTION).toContain(
-    "starts a fresh reviewer after it receives your app-review-fix-result directive",
+    "owns verification after it receives your app-review-fix-result directive",
   );
 });
 
@@ -4112,7 +4113,7 @@ describe("combined acceptance and validation reuse", () => {
 });
 
 for (const testExit of [0, 1] as const)
-  for (const recovered of [false, true])
+  for (const recovered of ["none", "passed", "stale"] as const)
     for (const exhausted of [false, true]) {
       effectIt.effect(
         `runs programmatic E2E and routes exit ${testExit}, recovered ${recovered}, exhausted ${exhausted}, without a tester agent`,
@@ -4136,22 +4137,24 @@ for (const testExit of [0, 1] as const)
                   e2eExecution: {
                     id: "execution-1",
                     commands: [
-                      ...(recovered
+                      ...(recovered !== "none"
                         ? [{ command: "passed-suite", retryCommand: "passed-suite" }]
                         : []),
                       { command: "suite", retryCommand: "suite --filter booking" },
                     ],
-                    results: recovered
-                      ? [
-                          {
-                            command: "passed-suite",
-                            executedCommand: "passed-suite",
-                            status: "passed",
-                            outputMarkdown: "",
-                            completedAt: now,
-                          },
-                        ]
-                      : [],
+                    results:
+                      recovered !== "none"
+                        ? [
+                            {
+                              command: "passed-suite",
+                              executedCommand:
+                                recovered === "stale" ? "old-selection" : "passed-suite",
+                              status: "passed",
+                              outputMarkdown: "",
+                              completedAt: now,
+                            },
+                          ]
+                        : [],
                   },
                 },
               ],
@@ -4268,6 +4271,7 @@ for (const testExit of [0, 1] as const)
                 yield* Deferred.await(finished);
                 yield* reactor.reconcile();
                 expect(processes.map((entry) => entry.args.at(-1))).toEqual([
+                  ...(recovered === "stale" ? ["passed-suite"] : []),
                   "suite --filter booking",
                 ]);
                 expect(
@@ -4292,3 +4296,376 @@ for (const testExit of [0, 1] as const)
           }),
       );
     }
+
+it("preserves programmatic check identities across completion order and narrowed cycles", () => {
+  const results = ["calendar", "lists"].map((command) => ({
+    command,
+    executedCommand: command,
+    status: "passed" as const,
+    outputMarkdown: "ok",
+    completedAt: now,
+  }));
+  const first = {
+    ...carryCycle(1, AppReviewId.make("first")),
+    e2eExecution: {
+      id: "first",
+      commands: results.map(({ command }) => ({ command, retryCommand: command })),
+      results: results.toReversed(),
+    },
+  };
+  const second = {
+    ...carryCycle(2, AppReviewId.make("second")),
+    e2eExecution: {
+      id: "second",
+      commands: [{ command: "lists", retryCommand: "lists --grep search" }],
+      results: [{ ...results[1]!, executedCommand: "lists --grep search" }],
+    },
+  };
+  const current = run({ cycles: [first, second] });
+  expect(
+    programmaticReviewRecord(current, first).document.checks.map(({ id, label }) => ({
+      id,
+      label,
+    })),
+  ).toEqual([
+    { id: "e2e-1", label: "calendar" },
+    { id: "e2e-2", label: "lists" },
+  ]);
+  expect(programmaticReviewRecord(current, second).document.checks).toMatchObject([
+    { id: "e2e-2", label: "lists", notes: "Executed: lists --grep search\nok" },
+  ]);
+  for (const execution of [
+    { ...second.e2eExecution, results: [] },
+    { ...second.e2eExecution, commands: [], results: [] },
+    { ...second.e2eExecution, results: [results[1]!] },
+  ]) {
+    expect(programmaticReviewRecord(current, { ...second, e2eExecution: execution }).status).toBe(
+      "failed",
+    );
+  }
+});
+
+for (const scenario of [
+  "repair",
+  "invalid-retry",
+  "blocked",
+  "ticket",
+  "combined",
+  "empty",
+] as const) {
+  effectIt.effect(`executes the programmatic review handoffs: ${scenario}`, () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse(now));
+      const initial = run();
+      const embedded = scenario === "ticket" || scenario === "combined";
+      let storedRun = run({
+        previewTargetsPinned: true,
+        ...(scenario === "empty"
+          ? {
+              activePhase: "e2e" as const,
+              cyclesUsed: 1,
+              cycles: [
+                {
+                  ...carryCycle(1, AppReviewId.make("empty")),
+                  status: "e2e-testing" as const,
+                  e2eExecution: { id: "empty", commands: [], results: [] },
+                },
+              ],
+            }
+          : {}),
+        cycleBudget: AppReviewWorkflowCycleBudget.make(5),
+        ...(embedded
+          ? {
+              caller: {
+                type: "implementation" as const,
+                implementationRunId: "implementation-1",
+                orchestratorThreadId: initial.targetThreadId,
+                ...(scenario === "ticket" ? { ticketId: "ticket-1" } : {}),
+              },
+              e2eCommands: ["suite-b --grep ticket"],
+            }
+          : {}),
+      });
+      const thread = (id: ThreadId) =>
+        decodeThread({
+          id,
+          projectId: "project",
+          title: "Review",
+          branch: "dev",
+          worktreePath: "/assigned/worktree",
+          modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
+          runtimeMode: "full-access",
+          createdAt: now,
+          updatedAt: now,
+          deletedAt: null,
+          messages: [],
+          activities: [],
+          checkpoints: [],
+          latestTurn: null,
+          session: null,
+        });
+      const threads = [thread(storedRun.targetThreadId), thread(storedRun.controllerThreadId)];
+      const commands: OrchestrationCommand[] = [];
+      const executions: string[] = [];
+      let settled = yield* Deferred.make<void>();
+      const completePhase = (payload: Record<string, unknown>) => {
+        const index = threads.findIndex((entry) => entry.id === storedRun.activeThreadId);
+        const current = threads[index]!;
+        const turnId = current.latestTurn!.turnId;
+        threads[index] = decodeThread({
+          ...current,
+          latestTurn: { ...current.latestTurn, state: "completed", completedAt: now },
+          checkpoints: [
+            {
+              turnId,
+              checkpointTurnCount: 1,
+              checkpointRef: `refs/t3/checkpoints/${turnId}`,
+              status: "ready",
+              files: [],
+              assistantMessageId: null,
+              completedAt: now,
+            },
+          ],
+          activities: [
+            {
+              id: `result-${turnId}`,
+              kind: payload.type,
+              tone: "info",
+              summary: "Phase result",
+              payload,
+              createdAt: now,
+              turnId,
+            },
+          ],
+        });
+      };
+      const layer = AppReviewWorkflowReactorLive.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            Layer.mock(ProcessRunner)({
+              run: (input) =>
+                Effect.sync(() => {
+                  const command = input.args.at(-1)!;
+                  const cycle = storedRun.cycles.at(-1)!;
+                  expect(
+                    cycle.e2eExecution?.commands.some(
+                      (selection) => selection.retryCommand === command,
+                    ),
+                  ).toBe(true);
+                  executions.push(command);
+                  return {
+                    code: ChildProcessSpawner.ExitCode(
+                      !embedded && command.startsWith("suite-b") && cycle.cycleNumber < 3 ? 1 : 0,
+                    ),
+                    timedOut: false,
+                    stdout: "booking result",
+                    stderr: "",
+                    stdoutTruncated: false,
+                    stderrTruncated: false,
+                    stdoutInvalidUtf8: false,
+                    stderrInvalidUtf8: false,
+                  };
+                }),
+            }),
+            Layer.mock(OrchestrationEngineService)({
+              dispatch: (command) =>
+                Effect.gen(function* () {
+                  commands.push(command);
+                  if (command.type === "thread.app-review-workflow.update") {
+                    storedRun = command.run;
+                    if (storedRun.status !== "running") yield* Deferred.succeed(settled, undefined);
+                  } else if (command.type === "thread.create") {
+                    expect(threads.some((entry) => entry.id === command.threadId)).toBe(false);
+                    threads.push(
+                      decodeThread({
+                        ...thread(command.threadId),
+                        ...command,
+                        id: command.threadId,
+                      }),
+                    );
+                  } else if (command.type === "thread.turn.start") {
+                    const index = threads.findIndex((entry) => entry.id === command.threadId);
+                    threads[index] = decodeThread({
+                      ...threads[index],
+                      latestTurn: {
+                        turnId: `turn-${commands.length}`,
+                        state: "running",
+                        requestedAt: command.createdAt,
+                        startedAt: command.createdAt,
+                        completedAt: null,
+                        assistantMessageId: null,
+                      },
+                    });
+                    if (storedRun.activePhase === "planning")
+                      yield* Deferred.succeed(settled, undefined);
+                  }
+                  return { sequence: commands.length };
+                }),
+            }),
+            Layer.mock(ProjectionSnapshotQuery)({
+              getCommandReadModel: () =>
+                Effect.sync(() => ({
+                  snapshotSequence: commands.length,
+                  projects: [],
+                  threads,
+                  implementationRuns: [],
+                  appReviewWorkflowRuns: [storedRun],
+                  updatedAt: now,
+                })),
+              getThreadDetailById: (id) =>
+                Effect.sync(() => Option.fromUndefinedOr(threads.find((entry) => entry.id === id))),
+            }),
+            Layer.mock(GitWorkflowService)({
+              resolveCommit: () => Effect.succeed({ commitSha: "abc123" }),
+              localStatus: () =>
+                Effect.succeed({
+                  isRepo: true,
+                  hasWorkingTreeChanges: false,
+                  refName: "dev",
+                  hasPrimaryRemote: true,
+                  isDefaultRef: true,
+                  workingTree: { files: [], insertions: 0, deletions: 0 },
+                }),
+            }),
+            Layer.mock(ReviewService)({
+              getDiffPreview: ({ cwd }) =>
+                Effect.succeed({
+                  cwd,
+                  generatedAt: DateTime.makeUnsafe(now),
+                  sources: (["working-tree", "branch-range"] as const).map((kind) => ({
+                    id: kind,
+                    kind,
+                    title: kind,
+                    baseRef: null,
+                    headRef: null,
+                    diff: "",
+                    diffHash: kind === "working-tree" ? "working" : "branch",
+                    truncated: false,
+                  })),
+                }),
+            }),
+            Layer.mock(AppStackManager)({}),
+            Layer.mock(ServerSettingsService)({
+              getSettings: Effect.succeed(decodeServerSettings({})),
+            }),
+            Layer.mock(T3ProjectFileLoader)({
+              loadStrict: () =>
+                Effect.succeed(Option.some({ e2eCommands: ["suite-a", "suite-b"] })),
+            }),
+          ),
+        ),
+      );
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const reactor = yield* AppReviewWorkflowReactor;
+          yield* reactor.reconcile();
+          yield* Deferred.await(settled);
+          yield* reactor.drain;
+          if (scenario === "empty") {
+            expect(storedRun.status).toBe("failed");
+            expect(storedRun.failure?.reason).toBe("automation-unavailable");
+            expect(executions).toEqual([]);
+            return;
+          }
+          if (embedded) {
+            expect(executions).toEqual(
+              scenario === "ticket" ? ["suite-b --grep ticket"] : ["suite-a", "suite-b"],
+            );
+            expect(storedRun.status).toBe("passed");
+            expect(commands.some((command) => command.type === "thread.create")).toBe(false);
+            return;
+          }
+          const phaseThreads = new Set<string>();
+          for (const cycleNumber of [1, 2]) {
+            expect(storedRun.activePhase).toBe("planning");
+            const planner = storedRun.activeThreadId!;
+            expect(phaseThreads.has(planner)).toBe(false);
+            phaseThreads.add(planner);
+            const turnCount = commands.filter(
+              (command) => command.type === "thread.turn.start",
+            ).length;
+            yield* reactor.reconcile();
+            expect(commands.filter((command) => command.type === "thread.turn.start")).toHaveLength(
+              turnCount,
+            );
+            completePhase({
+              type: "app-review-repair-tickets",
+              runId: storedRun.id,
+              cycleNumber,
+              tickets: [
+                {
+                  key: `INTEGRATION-1.${cycleNumber}`,
+                  parentTicketKey: "INTEGRATION-1",
+                  title: "Repair booking",
+                  bodyMarkdown: "Fix booking and verify suite-b --grep booking.",
+                  dependencyKeys: [],
+                },
+              ],
+            });
+            yield* reactor.reconcile();
+            expect(storedRun.activePhase).toBe("fixing");
+            const fixer = storedRun.activeThreadId!;
+            expect(phaseThreads.has(fixer)).toBe(false);
+            phaseThreads.add(fixer);
+            expect(storedRun.cycles.at(-1)?.repairTickets).toHaveLength(1);
+            expect(storedRun.cycles.at(-1)?.plannerThreadId).toBe(planner);
+            settled = yield* Deferred.make<void>();
+            completePhase({
+              type: "app-review-fix-result",
+              runId: storedRun.id,
+              planId: storedRun.cycles.at(-1)!.planId,
+              status: scenario === "blocked" ? "blocked" : "succeeded",
+              validations: [
+                {
+                  command: "unit-tests booking",
+                  purpose: "verification",
+                  scope: "focused",
+                  status: "passed",
+                  outputMarkdown: "ok",
+                  completedAt: now,
+                },
+              ],
+              notesMarkdown: scenario === "blocked" ? "Needs operator setup." : "Fixed booking.",
+              ...(cycleNumber === 1
+                ? {
+                    retryCommands: [
+                      {
+                        command: scenario === "invalid-retry" ? "unrelated" : "suite-b",
+                        retryCommand: "suite-b --grep booking",
+                      },
+                    ],
+                  }
+                : {}),
+            });
+            yield* reactor.reconcile();
+            yield* Deferred.await(settled);
+            yield* reactor.drain;
+            if (scenario !== "repair") {
+              expect(storedRun.status).toBe("failed");
+              expect(storedRun.failure?.reason).toBe(
+                scenario === "blocked" ? "review-blocked" : "fixer-failed",
+              );
+              expect(executions).toEqual(["suite-a", "suite-b"]);
+              return;
+            }
+            expect(storedRun.cyclesUsed).toBe(cycleNumber + 1);
+          }
+          expect(storedRun.id).toBe(initial.id);
+          expect(storedRun.status).toBe("passed");
+          expect(executions).toEqual([
+            "suite-a",
+            "suite-b",
+            "suite-b --grep booking",
+            "suite-b --grep booking",
+          ]);
+          expect(storedRun.cycles[0]?.e2eExecution?.results[0]?.command).toBe("suite-a");
+          expect(phaseThreads.size).toBe(4);
+          expect(commands.some((command) => command.type === "thread.app-review.launch")).toBe(
+            false,
+          );
+        }).pipe(Effect.provide(layer)),
+      );
+    }),
+  );
+}

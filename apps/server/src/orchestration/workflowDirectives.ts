@@ -1050,6 +1050,12 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
           }))
       )
         return "retryCommands must contain non-empty command and retryCommand strings.";
+      if (Array.isArray(retryCommands)) {
+        const commands = retryCommands.map((value) => asRecord(value)!["command"]);
+        if (new Set(commands).size !== commands.length) {
+          return "retryCommands must contain at most one mapping per original command.";
+        }
+      }
       return {
         type: "app-review-fix-result",
         ...(retryCommands === undefined

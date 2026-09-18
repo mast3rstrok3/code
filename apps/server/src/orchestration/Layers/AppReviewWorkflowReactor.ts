@@ -43,7 +43,12 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
-import { appReviewTestCommands, runAppReviewTest } from "../appReviewTestRunner.ts";
+import {
+  appReviewRetryCommandsFailure,
+  appReviewTestCommands,
+  completedAppReviewTests,
+  runAppReviewTest,
+} from "../appReviewTestRunner.ts";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
@@ -134,7 +139,7 @@ const APP_REVIEW_PROVIDER_PROGRESS_ACTIVITY_KINDS = new Set<string>([
 const APP_REVIEW_IMPLEMENT_SKILL_ID = "matt-pocock.implement";
 const APP_REVIEW_TO_TICKETS_SKILL_ID = "matt-pocock.to-tickets";
 export const APP_REVIEW_FIXER_IMPLEMENTATION_ONLY_INSTRUCTION =
-  "This is an implementation-only phase. Do not call preview_* or app_review_* tools, collect browser evidence, or update the review verdict. The workflow starts a fresh reviewer after it receives your app-review-fix-result directive, so unavailable review tools must not block this repair.";
+  "This is an implementation-only phase. Do not call preview_* or app_review_* tools, collect browser evidence, or update the review verdict. The workflow owns verification after it receives your app-review-fix-result directive, so unavailable review tools must not block this repair.";
 
 export function isAppReviewWorkflowActivityKind(kind: string): boolean {
   return APP_REVIEW_WORKFLOW_ACTIVITY_KINDS.has(kind);
@@ -1604,8 +1609,8 @@ export function buildAppReviewFixPrompt(input: {
       "",
       ...(input.cycle.e2eExecution
         ? [
-            "The workflow runs E2E commands programmatically after your committed repair. Use small unit or integration checks for development. Return retryCommands as [{command, retryCommand}] selecting every failed test in each failed suite; command must match the original suite below. Use supported selectors, retain all prior failures, and explain coverage in notesMarkdown. Omit a mapping only when the runner cannot narrow the failed suite. Do not launch or watch the full E2E suites in this turn.",
-            ...input.cycle.e2eExecution.results
+            "The workflow runs E2E commands programmatically in the next cycle of this same run after accepting your repair. Use small unit or integration checks for development. Return retryCommands as [{command, retryCommand}] selecting every failed test in each failed suite; command must exactly match a failed original suite below, with at most one mapping per suite. Use supported selectors, retain all failures in the last selection, and explain coverage in notesMarkdown. Omit a mapping when the runner cannot narrow it; the workflow reruns that suite's last selection. Passing suites stay closed. Do not launch or watch the full E2E suites in this turn.",
+            ...completedAppReviewTests(input.cycle.e2eExecution)
               .filter((result) => result.status === "failed")
               .map(
                 (result) =>
@@ -1673,6 +1678,11 @@ export function buildAppReviewFixResultContinuationPrompt(input: {
       input.run.caller.type === "implementation"
         ? "A succeeded result requires a clean worktree and a commit SHA that matches HEAD."
         : "A standalone repair may report succeeded without a commit SHA.",
+      ...(input.cycle.e2eExecution
+        ? [
+            "Preserve the repair's retryCommands in your result. Each mapping must name a failed original suite exactly once and select every failure from its last execution. An omitted mapping reruns the previous selection. The server executes those tests in the next cycle.",
+          ]
+        : []),
       "Finish with exactly one fenced JSON block and no text after it:",
       "Validation status is passed, failed, or blocked. Use blocked for checks you could not run and preserve the reason in outputMarkdown and notesMarkdown.",
       WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
@@ -2285,8 +2295,9 @@ const make = Effect.gen(function* () {
       if (!preflightPassed && !(yield* checkPrerequisites(run, target.cwd, "e2e"))) return;
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       if (isWorkflowThreadPaused(readModel.threads, run.controllerThreadId)) return;
+      const completed = completedAppReviewTests(execution);
       const remaining = execution.commands.filter(
-        (selection) => !execution.results.some((result) => result.command === selection.command),
+        (selection) => !completed.some((result) => result.command === selection.command),
       );
       if (remaining.length === 0) return;
       const config = yield* projectFileLoader.loadStrict(target.cwd);
@@ -2510,6 +2521,21 @@ const make = Effect.gen(function* () {
       });
       return;
     }
+    const previousCycle = run.cycles.at(-1);
+    const retryFailure =
+      !forceFullTests && previousCycle?.fixResult
+        ? appReviewRetryCommandsFailure(previousCycle, previousCycle.fixResult)
+        : null;
+    if (retryFailure !== null) {
+      yield* failRun({
+        run,
+        reason: "fixer-failed",
+        retryable: false,
+        detailMarkdown: retryFailure,
+        occurredAt,
+      });
+      return;
+    }
     const cycleNumber = run.cyclesUsed + 1;
     const e2eThreadId = null;
     const cycle: AppReviewWorkflowCycle = {
@@ -2523,7 +2549,7 @@ const make = Effect.gen(function* () {
             e2eExecution: {
               id: yield* crypto.randomUUIDv4,
               commands: forceFullTests
-                ? e2eCommands.map((command) => ({ command, retryCommand: command }))
+                ? appReviewTestCommands({ cycles: [] }, e2eCommands)
                 : appReviewTestCommands(run, e2eCommands),
               results: [],
             },
@@ -2564,45 +2590,12 @@ const make = Effect.gen(function* () {
     else yield* ensureReviewLaunch(reviewingRun, cycle);
   });
 
-  const programmaticReviewRecord = (
-    controllerThreadId: ThreadId,
-    cycle: AppReviewWorkflowCycle,
-  ): AppReviewRecord => {
-    const results = cycle.e2eExecution?.results ?? [];
-    const failed = results.some((result) => result.status === "failed");
-    const verdict = failed ? ("failed" as const) : ("passed" as const);
-    return {
-      id: cycle.e2eReviewId ?? cycle.reviewId,
-      sourceThreadId: controllerThreadId,
-      reviewThreadId: controllerThreadId,
-      appReviewScope: "e2e",
-      sourceTurnId: null,
-      status: verdict,
-      evidence: EMPTY_APP_REVIEW_EVIDENCE,
-      document: {
-        verdict,
-        summary: results.map((result) => `${result.command}: ${result.status}`).join("\n"),
-        checks: results.map((result, index) => ({
-          id: `e2e-${index + 1}`,
-          label: result.command,
-          status: result.status,
-          notes: result.outputMarkdown,
-          evidenceIds: [],
-        })),
-        findings: [],
-        questions: [],
-        nextSteps: [],
-      },
-      createdAt: cycle.startedAt,
-      updatedAt: results.at(-1)?.completedAt ?? cycle.startedAt,
-    };
-  };
-
   const reviewRecordForCycle = (
+    run: AppReviewWorkflowRun,
     controller: OrchestrationThread,
     cycle: AppReviewWorkflowCycle,
   ): AppReviewRecord | null =>
-    (cycle.e2eExecution ? programmaticReviewRecord(controller.id, cycle) : null) ??
+    (cycle.e2eExecution ? programmaticReviewRecord(run, cycle) : null) ??
     controller.appReviews.find((review) => review.id === cycle.reviewId) ??
     (cycle.e2eReviewId == null
       ? null
@@ -2785,7 +2778,8 @@ const make = Effect.gen(function* () {
       }
       case "planning": {
         const controller = yield* resolveThread(run.controllerThreadId);
-        const review = controller === undefined ? null : reviewRecordForCycle(controller, cycle);
+        const review =
+          controller === undefined ? null : reviewRecordForCycle(run, controller, cycle);
         if (review === null || cycle.actionableFindingsMarkdown === null) {
           yield* failRun({
             run: retryBase,
@@ -2941,7 +2935,10 @@ const make = Effect.gen(function* () {
           [
             `Run gap analysis and create repair tickets for App Review cycle ${cycle.cycleNumber}.`,
             "",
-            "The review that produced these findings ran in a separate thread; the brief and the complete actionable findings below are the whole input. Do not edit files, browse the app, or ask questions. Apply the To Tickets vertical-slice discipline to every actionable finding.",
+            cycle.e2eExecution
+              ? "The server ran the E2E commands programmatically. The brief and command results below are the input for this planning thread. Write repair tickets here; a separate fixer thread implements them, then the server retests the affected selections in the next cycle."
+              : "The review that produced these findings ran in a separate thread; the brief and the complete actionable findings below are the whole input.",
+            "Do not edit files, browse the app, or ask questions. Apply the To Tickets vertical-slice discipline to every actionable finding.",
             "Every ticket must name the automated test that verifies its gap. Product defects require a failing reproduction before the repair and a passing test after it. Coverage gaps require adding and running the missing test or assertion, which may pass immediately if the product already works. Create repair tickets for coverage gaps even when no product defect was established.",
             "Plan all independent code, coverage, and test-setup repairs even when external prerequisites remain. Each repair ticket must belong to the reviewed product and be implementable in its authorized worktree. Classify workflow-service and MCP defects outside that worktree as external prerequisites, even when the reviewer listed them as actionable findings. Keep those defects, real credentials, billing, approvals, and operator actions in the plan summary with their owner and recovery action; do not create product repair tickets for them or treat them as completed.",
             "This App Review adapter owns persistence. Do not emit planning-tickets-artifact, create external issues, or modify the parent planning-ticket set; emit only app-review-repair-tickets below.",
@@ -2997,7 +2994,18 @@ const make = Effect.gen(function* () {
     const cycle = run.cycles.at(-1);
     if (run.activePhase === "e2e" && cycle?.e2eExecution) {
       const execution = cycle.e2eExecution;
-      if (execution.results.length < execution.commands.length) {
+      if (execution.commands.length === 0) {
+        yield* failRun({
+          run,
+          reason: "automation-unavailable",
+          retryable: false,
+          detailMarkdown: "The E2E cycle has no selected commands and cannot verify a repair.",
+          occurredAt,
+        });
+        return;
+      }
+      const results = completedAppReviewTests(execution);
+      if (results.length < execution.commands.length) {
         yield* ensureProgrammaticE2e(run, cycle);
         return;
       }
@@ -3006,7 +3014,7 @@ const make = Effect.gen(function* () {
       if (target === null) return;
       const stable = yield* assertStableRevision(run, target.cwd, occurredAt);
       if (stable === null) return;
-      const failed = execution.results.filter((result) => result.status === "failed");
+      const failed = results.filter((result) => result.status === "failed");
       const verdict = failed.length ? ("failed" as const) : ("passed" as const);
       const completed = {
         ...stable,
@@ -3023,7 +3031,7 @@ Executed: ${result.executedCommand}
 ${result.outputMarkdown}`,
         )
         .join("\n\n");
-      const review = programmaticReviewRecord(run.controllerThreadId, cycle);
+      const review = programmaticReviewRecord(run, cycle);
       if (!failed.length) yield* finishPassed(completed, review, occurredAt);
       else if (run.cyclesUsed >= run.cycleBudget) {
         yield* finishExhausted(
@@ -3449,7 +3457,7 @@ ${result.outputMarkdown}`,
     if (planner === undefined) return;
     if (appReviewPhaseLaunchNeedsRetry(run, cycle, planner)) {
       const controller = yield* resolveThread(run.controllerThreadId);
-      const review = controller === undefined ? null : reviewRecordForCycle(controller, cycle);
+      const review = controller === undefined ? null : reviewRecordForCycle(run, controller, cycle);
       if (review === null || cycle.actionableFindingsMarkdown === null) return;
       yield* startPlanning({
         run,
@@ -3776,6 +3784,17 @@ ${result.outputMarkdown}`,
       return;
     }
     const caller = run.caller;
+    const retryFailure = appReviewRetryCommandsFailure(cycle, result);
+    if (retryFailure !== null) {
+      yield* failRun({
+        run: reportedRun,
+        reason: "fixer-failed",
+        retryable: false,
+        detailMarkdown: retryFailure,
+        occurredAt,
+      });
+      return;
+    }
     const target = yield* resolveTarget(run.targetThreadId);
     if (target === null) return;
     const completeValidationCommands =
@@ -4015,7 +4034,7 @@ ${result.outputMarkdown}`,
 
     if (phase === "planning") {
       const controller = yield* resolveThread(run.controllerThreadId);
-      const review = controller === undefined ? null : reviewRecordForCycle(controller, cycle);
+      const review = controller === undefined ? null : reviewRecordForCycle(run, controller, cycle);
       if (review === null || cycle.actionableFindingsMarkdown === null) return;
       const planningRun: AppReviewWorkflowRun = {
         ...reopened,
@@ -4414,7 +4433,7 @@ ${result.outputMarkdown}`,
     }
     const planningReview =
       claim.phase === "planning" && controller !== undefined
-        ? reviewRecordForCycle(controller, cycle)
+        ? reviewRecordForCycle(input.run, controller, cycle)
         : null;
     if (
       claim.phase === "planning" &&
@@ -4672,7 +4691,14 @@ ${result.outputMarkdown}`,
       run.activePhase !== "e2e" ||
       cycle?.e2eExecution?.id !== item.executionId ||
       isWorkflowThreadPaused(readModel.threads, run.controllerThreadId) ||
-      cycle.e2eExecution.results.some((result) => result.command === item.result.command)
+      !cycle.e2eExecution.commands.some(
+        (selection) =>
+          selection.command === item.result.command &&
+          selection.retryCommand === item.result.executedCommand,
+      ) ||
+      completedAppReviewTests(cycle.e2eExecution).some(
+        (result) => result.command === item.result.command,
+      )
     )
       return;
     const updated = {
@@ -4796,6 +4822,53 @@ ${result.outputMarkdown}`,
     reconcile,
   } satisfies AppReviewWorkflowReactorShape;
 });
+
+export const programmaticReviewRecord = (
+  run: AppReviewWorkflowRun,
+  cycle: AppReviewWorkflowCycle,
+): AppReviewRecord => {
+  const results = cycle.e2eExecution ? completedAppReviewTests(cycle.e2eExecution) : [];
+  const commands = [
+    ...new Set(
+      run.cycles.flatMap((entry) =>
+        (entry.e2eExecution?.commands ?? []).map((selection) => selection.command),
+      ),
+    ),
+  ];
+  const failed =
+    results.length === 0 ||
+    results.length !== cycle.e2eExecution?.commands.length ||
+    results.some((result) => result.status === "failed");
+  const verdict = failed ? ("failed" as const) : ("passed" as const);
+  return {
+    id: cycle.e2eReviewId ?? cycle.reviewId,
+    sourceThreadId: run.controllerThreadId,
+    reviewThreadId: run.controllerThreadId,
+    appReviewScope: "e2e",
+    sourceTurnId: null,
+    status: verdict,
+    evidence: EMPTY_APP_REVIEW_EVIDENCE,
+    document: {
+      verdict,
+      summary: results.map((result) => `${result.command}: ${result.status}`).join("\n"),
+      checks: results.map((result) => ({
+        id: `e2e-${commands.indexOf(result.command) + 1}`,
+        label: result.command,
+        status: result.status,
+        notes: `Executed: ${result.executedCommand}\n${result.outputMarkdown}`,
+        evidenceIds: [],
+      })),
+      findings: [],
+      questions: [],
+      nextSteps: [],
+    },
+    createdAt: cycle.startedAt,
+    updatedAt: results.reduce(
+      (latest, result) => (result.completedAt > latest ? result.completedAt : latest),
+      cycle.startedAt,
+    ),
+  };
+};
 
 export const AppReviewWorkflowReactorLive = Layer.effect(AppReviewWorkflowReactor, make);
 

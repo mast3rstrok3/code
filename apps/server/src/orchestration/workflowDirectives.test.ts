@@ -212,6 +212,31 @@ describe("workflowDirectives", () => {
     NodeAssert.match(result.directive.notesMarkdown, /Cortex origin is unavailable/);
   });
 
+  it.each([false, true])("validates retry mapping uniqueness, duplicate: %s", (duplicate) => {
+    const mapping = { command: "suite", retryCommand: "suite --grep booking" };
+    const result = parseWorkflowDirectiveFromMarkdown(
+      "```json\n" +
+        JSON.stringify({
+          type: "app-review-fix-result",
+          runId: "review-1",
+          planId: "plan-1",
+          status: "succeeded",
+          validations: [],
+          notesMarkdown: "Fixed booking.",
+          retryCommands: duplicate ? [mapping, mapping] : [mapping],
+        }) +
+        "\n```",
+    );
+    if (duplicate) {
+      NodeAssert.notEqual(result.kind, "parsed");
+    } else {
+      NodeAssert.equal(result.kind, "parsed");
+      if (result.kind === "parsed" && result.directive.type === "app-review-fix-result") {
+        NodeAssert.deepEqual(result.directive.retryCommands, [mapping]);
+      }
+    }
+  });
+
   it.each(["focused", "project"])(
     "preserves the %s validation scope in repair reports",
     (scope) => {
