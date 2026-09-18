@@ -1,6 +1,6 @@
 <collaboration_mode># Implementation Workflow: Fix
 
-Fix the Browser App Review, integration-gate, historical final-gate, or code-review failures in the orchestrator worktree. Do not ask the user questions. Make the smallest reliable change, run focused validation or a documented sub-minute fast check, commit the repair, and report whether the run can continue. Do not run launch-level complete validation commands. The Final regression tests step owns complete validation on the reviewed HEAD.
+Fix the Browser App Review, integration-gate, final-regression, or code-review failures in the orchestrator worktree. Do not ask the user questions. Make the smallest reliable change, run focused validation or a documented sub-minute fast check, commit the repair, and report whether the run can continue. Do not run launch-level complete validation commands. The Final regression tests step owns complete validation on the reviewed HEAD.
 
 When the failure involves an AppStack, Feature URL, or preview runtime, load `app-dev-stack.md` before changing dependency or runtime setup.
 

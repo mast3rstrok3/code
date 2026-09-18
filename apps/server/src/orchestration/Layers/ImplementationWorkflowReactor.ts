@@ -1,3 +1,9 @@
+import {
+  regressionCommands,
+  regressionPassed,
+  recordRegressionCycle,
+  invalidateRegressionChecks,
+} from "../finalRegression.ts";
 import { appStackServiceBlocksReadiness } from "@t3tools/shared/appStack";
 import { nativeVerificationEvidenceMarkdown } from "../nativeVerification.ts";
 import { parseWorkflowDirectiveFromMarkdown } from "../workflowDirectives.ts";
@@ -19,7 +25,7 @@ import {
   GitCommandError,
   AppReviewWorkflowCycleBudget,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
-  IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
+  FINAL_REGRESSION_MAX_CYCLES,
   IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS,
   IMPLEMENTATION_STAGE_MAX_LAUNCHES,
   MessageId,
@@ -254,6 +260,8 @@ type CodeReviewDirective = {
   readonly commitSha?: string;
   readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
   readonly reportMarkdown: string;
+  readonly invalidatedValidationCommands?: ReadonlyArray<string>;
+  readonly validationImpactMarkdown?: string;
 };
 
 type FastBuildDirective = {
@@ -550,6 +558,7 @@ function structuralGitFailure(detail: string): boolean {
 
 function isFinalCodeReviewPass(run: OrchestrationImplementationRun): boolean {
   return (
+    Boolean(run.finalRegression?.reviewBaseSha) ||
     isRunStageSkipped(run.skips, "app-review") ||
     run.appReviewedHeadSha !== null ||
     run.qaExhaustedAt !== null ||
@@ -893,8 +902,9 @@ function clearRunStageForRerun(input: {
         }
       : execution,
   );
+  const { finalRegression: _priorRegression, ...runWithoutRegression } = input.run;
   const base = {
-    ...input.run,
+    ...runWithoutRegression,
     stageExecutions: claimedExecutions,
     reviewGateExhaustedAt: null,
     reviewGateExhaustionReason: null,
@@ -1250,11 +1260,15 @@ function buildMergeGatePrompt(input: {
   const validationInstructions =
     input.kind === "final"
       ? [
-          "This is the sole complete repository gate. Code Review has finished for this HEAD. The command list includes unresolved project checks collected from ticket reviews. Run each command once on this integrated commit. Report failures for the shared repair phase; do not send them back to individual ticket workers:",
-          ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
-          "",
-          "If native mobile files changed, also run:",
-          "- vp run lint:mobile",
+          "Code Review has finished for this HEAD. Run each pending command once on this integrated commit. The first cycle covers the complete gate; later cycles cover failures and checks invalidated by repairs. Report failures for the shared repair phase:",
+          ...(input.run.finalRegression
+            ? regressionCommands(input.run.finalRegression)
+            : input.run.launchSummary.validationCommands
+          ).map((command) => `- ${command}`),
+          input.run.finalRegression
+            ? `Final regression cycle ${input.run.finalRegression.cycles.length + 1} of ${FINAL_REGRESSION_MAX_CYCLES}. Run only the selections above. Previously passed checks are retained after repair impact review.`
+            : "If native mobile files changed, also run vp run lint:mobile.",
+          "For each failed command, include retryCommand when the runner supports a selection covering every failed test. Record exact failed test IDs and selection coverage in outputMarkdown. If a run was interrupted, setup failed, or failure coverage is incomplete, omit retryCommand so the entire failed command is rerun. Never omit failures or weaken assertions.",
           "",
           "Never repeat a successful complete gate on an unchanged commit.",
         ]
@@ -1413,11 +1427,14 @@ function buildCodeReviewPrompt(input: {
   readonly cycleBudget: number;
 }): string {
   const changeRequest = input.run.changeRequest;
-  const reviewBaseSha = input.reviewBaseSha ?? input.run.pinnedCommit;
+  const reviewBaseSha =
+    input.run.finalRegression?.reviewBaseSha ?? input.reviewBaseSha ?? input.run.pinnedCommit;
   const isFinalReview = isFinalCodeReviewPass(input.run);
   const finalValidationLines = isFinalReview
     ? [
-        "Run focused validation for any repairs. A clean review may report an empty validations list. The final gate runs the complete regression commands after Code Review finishes:",
+        input.run.finalRegression?.reviewBaseSha
+          ? "Run focused validation for any additional repairs. A clean review may report an empty validations list. The regression gate runs pending selections after this review."
+          : "Run focused validation for any repairs. A clean review may report an empty validations list. The final gate runs the complete regression commands after Code Review finishes:",
         ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
       ]
     : ["Run focused validation and report it in validations."];
@@ -1425,12 +1442,23 @@ function buildCodeReviewPrompt(input: {
     WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
     `Perform ${isFinalReview ? "Final Code Review" : "historical combined Code Review"} for run ${input.run.id}. Cycle ${input.cycleNumber} of ${input.cycleBudget}.`,
     "",
-    isFinalReview
-      ? "Review the complete combined HEAD after App Review, including App Review repairs and unresolved warnings. A clean result ends Code Review early. Findings may advance the workflow to another bounded cycle."
-      : "Review the complete integrated ticket set along the Standards and Spec axes described in your workflow instructions.",
+    input.run.finalRegression?.reviewBaseSha
+      ? "Review the final regression repairs against the same Standards and Spec axes. A clean result ends repair review early."
+      : isFinalReview
+        ? "Review the complete combined HEAD after App Review, including App Review repairs and unresolved warnings. A clean result ends Code Review early. Findings may advance the workflow to another bounded cycle."
+        : "Review the complete integrated ticket set along the Standards and Spec axes described in your workflow instructions.",
+    ...(input.run.finalRegression?.reviewBaseSha
+      ? [
+          "This is the code review of final regression repairs. Review only the repair diff from the review base and affected contracts; do not repeat the complete feature review.",
+          "Return invalidatedValidationCommands, an array of original command names below whose previously passed checks or failure-only selections are no longer trustworthy after these repairs. Return [] when all retained evidence remains valid. Include validationImpactMarkdown explaining affected code, configuration, fixtures, deployment and why remaining checks can be retained. If uncertain, invalidate the affected full command. Do not run regression commands in this review.",
+          JSON.stringify(input.run.finalRegression.checks),
+        ]
+      : []),
     "Apply required fixes yourself and commit them. Do not ask the user questions.",
     "",
-    "App Review passed at this commit.",
+    input.run.finalRegression?.reviewBaseSha
+      ? "App Review finished before these regression repairs."
+      : "App Review passed at this commit.",
     "",
     "Review scope:",
     `- worktree: ${input.run.orchestratorWorktreePath}`,
@@ -1443,7 +1471,9 @@ function buildCodeReviewPrompt(input: {
     input.run.artifactSource === "proposed-plan"
       ? `Review against the locked product intent and proposed plan below; do not attempt to load a missing Spec or planning tickets.\n\n${input.artifactMarkdown ?? "Proposed-plan context unavailable."}`
       : "Retrieve the canonical Spec with workflow_spec_get and the run tickets with workflow_tickets_list/workflow_ticket_get. Artifact bodies are intentionally not embedded in this prompt.",
-    "Compare the actual diff with each ticket's plannedFileChanges. Report planned changes missing from the diff, unexplained changed files, and create/update/delete action mismatches. File-plan drift is review evidence rather than an automatic failure when supporting changes are justified and the implementation is correct.",
+    input.run.finalRegression?.reviewBaseSha
+      ? "Check that the repair diff preserves the intended ticket behavior and changes only what the failures require."
+      : "Compare the actual diff with each ticket's plannedFileChanges. Report planned changes missing from the diff, unexplained changed files, and create/update/delete action mismatches. File-plan drift is review evidence rather than an automatic failure when supporting changes are justified and the implementation is correct.",
     "",
     'Use status "clean" only when neither axis has findings that require code changes, "findings" when code changes were required, and "blocked" when the review cannot be performed. Put the full two-axis report in reportMarkdown.',
     "",
@@ -4453,16 +4483,49 @@ const make = Effect.gen(function* () {
       if (input.run.automationHalt !== null) return;
       // Every start claims another attempt. Without a reader the claim was free,
       // so a gate that kept failing kept being relaunched with nothing counting.
-      if (input.run.mergeGateAttemptCount >= IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS) {
+      if (
+        input.kind === "integration" &&
+        input.run.mergeGateAttemptCount >= IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS
+      ) {
         yield* blockRun({
           sourceThreadId: input.sourceThreadId,
           run: input.run,
           retryableStage: "merge-gate",
-          reasonMarkdown: `This run started its ${input.kind === "final" ? "final validation" : "Merge Gate"} ${String(input.run.mergeGateAttemptCount)} times without settling it. Automation stops here so the repeated failure gets read rather than retried again.`,
+          reasonMarkdown: `This run started its Merge Gate ${String(input.run.mergeGateAttemptCount)} times without settling it. Automation stops here so the repeated failure gets read rather than retried again.`,
           updatedAt: input.createdAt,
           haltCategory: "retry-exhausted",
-          haltStage: input.kind === "final" ? "final-code-review" : "integration",
+          haltStage: "integration",
           humanBlocked: true,
+        });
+        return;
+      }
+      if (
+        input.kind === "final" &&
+        (input.run.finalRegression?.cycles.length ?? 0) >= FINAL_REGRESSION_MAX_CYCLES
+      ) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          reasonMarkdown:
+            "Final regression tests still fail after 5 cycles. Review the retained failures before starting another execution.",
+          updatedAt: input.createdAt,
+          haltCategory: "validation-failed",
+          haltStage: "final-code-review",
+        });
+        return;
+      }
+      if (
+        input.kind === "final" &&
+        (input.run.finalRegression?.launchCount ?? 0) >= IMPLEMENTATION_STAGE_MAX_LAUNCHES
+      ) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          reasonMarkdown:
+            "Final regression validator repeatedly stopped without a result. Check the validator failure before restarting this step.",
+          updatedAt: input.createdAt,
+          haltCategory: "retry-exhausted",
+          haltStage: "final-code-review",
         });
         return;
       }
@@ -4538,9 +4601,51 @@ const make = Effect.gen(function* () {
         });
         return;
       }
+      const finalCommands =
+        input.kind === "final"
+          ? completeValidationCommandsForFiles(
+              input.run,
+              yield* gitWorkflow.listChangedFiles({
+                cwd: input.run.orchestratorWorktreePath,
+                baseRef: input.run.pinnedCommit,
+                headRef: validationHead.commitSha,
+              }),
+            )
+          : [];
+      const finalRegression =
+        input.kind === "final"
+          ? input.run.finalRegression
+            ? {
+                ...input.run.finalRegression,
+                checks: [
+                  ...input.run.finalRegression.checks,
+                  ...finalCommands
+                    .filter(
+                      (command) =>
+                        !input.run.finalRegression!.checks.some(
+                          (check) => check.command === command,
+                        ),
+                    )
+                    .map((command) => ({ command, result: null })),
+                ],
+              }
+            : {
+                checks: finalCommands.map((command) => ({ command, result: null })),
+                cycles: [],
+                reviewBaseSha: null,
+              }
+          : undefined;
       const validatingRun: OrchestrationImplementationRun = {
         ...input.run,
         status: "validating",
+        ...(finalRegression
+          ? {
+              finalRegression: {
+                ...finalRegression,
+                launchCount: (input.run.finalRegression?.launchCount ?? 0) + 1,
+              },
+            }
+          : {}),
         activeValidationHeadSha: validationHead.commitSha,
         activeValidationKind: input.kind,
         activeValidatorThreadId: validatorThreadId,
@@ -4603,7 +4708,7 @@ const make = Effect.gen(function* () {
           role: "user",
           text: appendWorkflowSkillCommandSection(
             buildMergeGatePrompt({
-              run: input.run,
+              run: validatingRun,
               integration: input.integration,
               kind: input.kind,
             }),
@@ -5542,6 +5647,7 @@ const make = Effect.gen(function* () {
       // clean commit, so the reviewer never starts from unvalidated work.
       if (
         input.skipAppReviewRequirement !== true &&
+        !input.run.finalRegression?.reviewBaseSha &&
         !isRunStageSkipped(input.run.skips, "app-review") &&
         input.run.qaExhaustedAt === null &&
         input.run.appReviewExhaustedAt === null
@@ -5561,6 +5667,7 @@ const make = Effect.gen(function* () {
         }
       } else if (
         input.skipAppReviewRequirement !== true &&
+        !input.run.finalRegression?.reviewBaseSha &&
         !isRunStageSkipped(input.run.skips, "app-review")
       ) {
         const reviewStatus = yield* gitWorkflow.localStatus({
@@ -5640,9 +5747,11 @@ const make = Effect.gen(function* () {
           ownerUserId: orchestratorThread.ownerUserId,
           parentThreadId: input.run.orchestratorThreadId,
           workflowRole: "implementation-code-reviewer",
-          title: finalPass
-            ? `Final Code Review · Cycle ${input.run.finalCodeReviewPassCount + 1} of ${cycleBudget}`
-            : "Implementation code review",
+          title: input.run.finalRegression?.reviewBaseSha
+            ? "Final regression repair code review"
+            : finalPass
+              ? `Final Code Review · Cycle ${input.run.finalCodeReviewPassCount + 1} of ${cycleBudget}`
+              : "Implementation code review",
           modelSelection: yield* modelForStep({
             workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
             orchestratorThread,
@@ -6034,11 +6143,16 @@ const make = Effect.gen(function* () {
       headRef: expectedHeadSha,
     });
     if (
-      input.run.codeReviewExhaustedAt === null &&
-      !completeValidationsPassedExactlyOnce({
-        requiredCommands: completeValidationCommandsForFiles(input.run, changedFiles),
-        validations: input.run.finalValidationResults,
-      })
+      input.run.finalRegression !== undefined
+        ? !regressionPassed(
+            input.run.finalRegression,
+            completeValidationCommandsForFiles(input.run, changedFiles),
+          )
+        : input.run.codeReviewExhaustedAt === null &&
+          !completeValidationsPassedExactlyOnce({
+            requiredCommands: completeValidationCommandsForFiles(input.run, changedFiles),
+            validations: input.run.finalValidationResults,
+          })
     ) {
       yield* blockRun({
         sourceThreadId: input.sourceThreadId,
@@ -7069,18 +7183,24 @@ const make = Effect.gen(function* () {
       });
       const requiredCommands = completeValidationCommandsForFiles(run, changedFiles);
       const gateKind = run.activeValidationKind ?? "integration";
-      const finalValidation = validationSummary(
-        directive.validations,
-        gateKind === "final" ? "final validation" : "integration gate",
-        directive.summaryMarkdown,
-        updatedAt,
-      );
+      const regression =
+        gateKind === "final"
+          ? recordRegressionCycle({
+              state: run.finalRegression ?? {
+                checks: requiredCommands.map((command) => ({ command, result: null })),
+                cycles: [],
+                reviewBaseSha: null,
+              },
+              validations: directive.validations,
+              headSha: head.commitSha,
+              completedAt: updatedAt,
+            })
+          : undefined;
+      const regressionResults =
+        regression?.checks.flatMap((check) => (check.result ? [check.result] : [])) ?? [];
       const validationsPassed =
         gateKind === "final"
-          ? completeValidationsPassedExactlyOnce({
-              requiredCommands,
-              validations: directive.validations,
-            })
+          ? regression !== undefined && regressionPassed(regression, requiredCommands)
           : focusedRepairValidationsPassed({
               finalCommands: requiredCommands,
               validations: directive.validations,
@@ -7114,6 +7234,12 @@ const make = Effect.gen(function* () {
         integrated &&
         validationsPassed;
 
+      const regressionSummary = {
+        command: "final regression tests",
+        status: passed ? ("passed" as const) : ("failed" as const),
+        outputMarkdown: directive.summaryMarkdown,
+        completedAt: updatedAt,
+      };
       const failureDetail = [
         directive.summaryMarkdown,
         "",
@@ -7138,7 +7264,11 @@ const make = Effect.gen(function* () {
             : ["- The integrated HEAD did not match the commit verified from ticket branches."]),
         ...(validationsPassed
           ? []
-          : ["- The reported focused validations did not satisfy the integration-gate policy."]),
+          : [
+              gateKind === "final"
+                ? "- Pending regression checks lack passing results."
+                : "- The reported focused validations did not satisfy the integration-gate policy.",
+            ]),
       ].join("\n");
 
       yield* appendActivity({
@@ -7155,8 +7285,9 @@ const make = Effect.gen(function* () {
           ...run,
           ...(gateKind === "final"
             ? {
-                finalValidation,
-                finalValidationResults: [...directive.validations],
+                finalValidation: regressionSummary,
+                finalValidationResults: regressionResults,
+                ...(regression ? { finalRegression: regression } : {}),
               }
             : {}),
           activeValidatorThreadId: null,
@@ -7165,33 +7296,52 @@ const make = Effect.gen(function* () {
           updatedAt,
         };
         if (gateKind === "final") {
-          const exhaustionReason = reviewGateExhaustionReason(failedRun);
-          yield* appendActivity({
-            threadId: run.orchestratorThreadId,
-            tone: "error",
-            kind: "implementation-review-gate-exhausted",
-            summary: "Final validation failed after the final Code Review",
-            payload: {
-              runId: run.id,
-              cycles: run.codeReviewAttemptCount,
-              maxCycles: IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
-              reasonMarkdown: exhaustionReason,
-            },
-            createdAt: updatedAt,
-          });
-          yield* blockRun({
-            sourceThreadId,
-            run: {
+          const structurallyValid =
+            run.activeValidationHeadSha === head.commitSha &&
+            status.isRepo &&
+            status.refName === run.orchestratorBranch &&
+            !status.hasWorkingTreeChanges &&
+            integrated;
+          if (
+            structurallyValid &&
+            regression !== undefined &&
+            regression.cycles.length < FINAL_REGRESSION_MAX_CYCLES
+          ) {
+            const repairRun = {
               ...failedRun,
-              activeValidationKind: null,
-              reviewGateExhaustedAt: updatedAt,
-              reviewGateExhaustionReason: exhaustionReason,
-            },
-            reasonMarkdown: exhaustionReason,
-            updatedAt,
-            haltCategory: "validation-failed",
-            haltStage: "final-code-review",
-          });
+              finalRegression: { ...regression, reviewBaseSha: head.commitSha },
+            };
+            yield* startFixer({
+              sourceThreadId,
+              run: repairRun,
+              status: "fixing",
+              origin: "merge-gate",
+              title: `Final regression repair ${regression.cycles.length} of ${FINAL_REGRESSION_MAX_CYCLES}`,
+              promptText: [
+                buildMergeGateFixPrompt({ run: repairRun, reportMarkdown: failureDetail }),
+                "Repair only these failed regression checks. Preserve their failure evidence and previously completed work:",
+                ...regression.checks
+                  .filter((check) => check.result?.status !== "passed")
+                  .map(
+                    (check) =>
+                      `${check.command}: ${check.result?.outputMarkdown ?? "Missing result"}`,
+                  ),
+                "Use focused tests while repairing. Commit the repair. A separate code reviewer will assess its impact before the next regression cycle reruns failures. Do not run the complete suite here.",
+              ].join("\n\n"),
+              createdAt: updatedAt,
+            });
+          } else {
+            yield* blockRun({
+              sourceThreadId,
+              run: failedRun,
+              reasonMarkdown: structurallyValid
+                ? `Final regression tests still fail after ${FINAL_REGRESSION_MAX_CYCLES} cycles.\n\n${failureDetail}`
+                : failureDetail,
+              updatedAt,
+              haltCategory: "validation-failed",
+              haltStage: "final-code-review",
+            });
+          }
           return;
         }
         const retryAttemptCount =
@@ -7253,8 +7403,9 @@ const make = Effect.gen(function* () {
         const validatedRun: OrchestrationImplementationRun = {
           ...run,
           status: "publishing-change-request",
-          finalValidation,
-          finalValidationResults: [...directive.validations],
+          finalValidation: regressionSummary,
+          finalValidationResults: regressionResults,
+          ...(regression ? { finalRegression: regression } : {}),
           integrationHeadSha: head.commitSha,
           validatedHeadSha: head.commitSha,
           activeValidationHeadSha: null,
@@ -7396,40 +7547,62 @@ const make = Effect.gen(function* () {
       }
     }
 
-    if (run.activeValidationKind === "final") {
-      const exhaustionReason = reviewGateExhaustionReason(run);
-      const stoppedRun: OrchestrationImplementationRun = {
-        ...run,
-        integrationHeadSha: head.commitSha,
-        activeValidationHeadSha: null,
-        activeValidationKind: null,
-        activeValidatorThreadId: null,
-        activeFixerThreadId: null,
-        fixOrigin: null,
-        reviewGateExhaustedAt: updatedAt,
-        reviewGateExhaustionReason: exhaustionReason,
-        updatedAt,
-      };
-      yield* appendActivity({
-        threadId: run.orchestratorThreadId,
-        tone: "error",
-        kind: "implementation-review-gate-exhausted",
-        summary: "Final validation repair completed without another Code Review",
-        payload: {
-          runId: run.id,
-          cycles: run.codeReviewAttemptCount,
-          maxCycles: IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
-          reasonMarkdown: exhaustionReason,
-        },
-        createdAt: updatedAt,
-      });
+    if (run.activeValidationKind === "final" && run.finalRegression === undefined) {
       yield* blockRun({
         sourceThreadId,
-        run: stoppedRun,
-        reasonMarkdown: exhaustionReason,
+        run,
+        reasonMarkdown:
+          "This repair predates saved regression cycles. Start Final Code Review again to review its changes before a new regression execution.",
         updatedAt,
         haltCategory: "validation-failed",
         haltStage: "final-code-review",
+      });
+      return;
+    }
+
+    if (run.activeValidationKind === "final" && run.finalRegression !== undefined) {
+      const repairBase = run.finalRegression.reviewBaseSha;
+      if (
+        !repairBase ||
+        !(yield* gitWorkflow.isAncestor({
+          cwd: run.orchestratorWorktreePath,
+          ancestorRef: repairBase,
+          descendantRef: head.commitSha,
+        }))
+      ) {
+        yield* handleFixerFailure({
+          sourceThreadId,
+          run,
+          detailMarkdown: "Regression repairs must preserve the tested commit and its history.",
+          createdAt: updatedAt,
+        });
+        return;
+      }
+      const repairedRun: OrchestrationImplementationRun = {
+        ...run,
+        status: "code-reviewing",
+        integrationHeadSha: head.commitSha,
+        codeReviewedHeadSha: null,
+        activeCodeReviewHeadSha: null,
+        activeCodeReviewThreadId: null,
+        activeValidatorThreadId: null,
+        activeValidationHeadSha: null,
+        activeFixerThreadId: null,
+        fixOrigin: null,
+        retryableFailure: null,
+        finalCodeReviewGeneration: run.finalCodeReviewGeneration + 1,
+        finalCodeReviewPassCount: 0,
+        finalCodeReviewLaunchCount: 0,
+        codeReviewExhaustedAt: null,
+        codeReviewExhaustionReason: null,
+        updatedAt,
+      };
+      yield* updateRun({ sourceThreadId, run: repairedRun, createdAt: updatedAt });
+      yield* startCodeReview({
+        sourceThreadId,
+        run: repairedRun,
+        skipAppReviewRequirement: true,
+        createdAt: updatedAt,
       });
       return;
     }
@@ -8237,13 +8410,61 @@ const make = Effect.gen(function* () {
                   : `${validationFailureMarkdown}\n\n${validationSummaryResult.outputMarkdown}`,
               }
             : null,
-          finalValidationResults: completeValidationRequired ? [...directive.validations] : [],
+          finalValidationResults: run.finalRegression?.reviewBaseSha
+            ? run.finalValidationResults
+            : completeValidationRequired
+              ? [...directive.validations]
+              : [],
           validatedHeadSha:
             completeValidationRequired && (completeValidationPassed || atCeiling)
               ? head.commitSha
               : null,
           updatedAt,
         };
+
+        if (
+          run.finalRegression?.reviewBaseSha &&
+          directive.status !== "blocked" &&
+          validationPassed &&
+          (directive.status === "clean" || atCeiling)
+        ) {
+          const finalRegression = invalidateRegressionChecks(
+            run.finalRegression,
+            directive.invalidatedValidationCommands,
+            directive.validationImpactMarkdown,
+          );
+          yield* startMergeGate({
+            sourceThreadId,
+            run: {
+              ...reviewedRun,
+              finalRegression,
+              ...(directive.status !== "clean"
+                ? {
+                    codeReviewExhaustedAt: updatedAt,
+                    codeReviewExhaustionReason: `Regression repair review exhausted ${cycleBudget} cycles with findings. ${directive.reportMarkdown}`,
+                  }
+                : {}),
+              finalValidationResults: finalRegression.checks.flatMap((check) =>
+                check.result ? [check.result] : [],
+              ),
+              activeValidationKind: "final",
+              validatedHeadSha: null,
+            },
+            integration: {
+              baseTicketId: null,
+              baseRefName: run.orchestratorBranch,
+              mergedTicketIds: [],
+              conflictedTicketId: null,
+              conflictedRefName: null,
+              conflictedFiles: [],
+              remainingTicketIds: [],
+              remainingRefNames: [],
+            },
+            kind: "final",
+            createdAt: updatedAt,
+          });
+          return;
+        }
 
         // Accept complete evidence from reviewers launched before validation moved to the gate.
         if (directive.status === "clean" && completeValidationPassed) {

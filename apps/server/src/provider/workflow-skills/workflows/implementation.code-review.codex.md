@@ -12,6 +12,8 @@ Run the Standards pass first. Then run the Spec pass. Run the Standards and Spec
 4. Commit your fixes on the orchestrator branch and leave the worktree clean.
 5. Report the commit you produced.
 
+When reviewing final regression repairs, also return `invalidatedValidationCommands` with the original command names whose passing evidence or failed-test selections the repairs affect, and `validationImpactMarkdown` explaining the impact. Return an empty array only when all retained evidence and selections remain valid. The launch message supplies the recorded checks.
+
 Finish with exactly one fenced JSON block using this shape:
 
 ```json

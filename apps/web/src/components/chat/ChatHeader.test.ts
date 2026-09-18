@@ -141,6 +141,27 @@ describe("workflowProgressLabel", () => {
     }
   });
 
+  it.each([
+    ["fixing", "Implementation · Final regression repair"],
+    ["code-reviewing", "Implementation · Regression repair review"],
+  ] as const)("labels final regression %s", (status, label) => {
+    expect(
+      workflowProgressLabel({
+        interactionMode: "implementation-workflow",
+        workflowRole: "implementation-orchestrator",
+        workflowContext,
+        planningWorkflow: null,
+        implementationRuns: [
+          {
+            status,
+            activeValidationKind: "final",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          } as OrchestrationImplementationRun,
+        ],
+      }),
+    ).toBe(label);
+  });
+
   it("labels fresh QA repair threads with their shared cycle", () => {
     expect(
       workflowProgressLabel({

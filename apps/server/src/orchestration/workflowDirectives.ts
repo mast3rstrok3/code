@@ -156,6 +156,8 @@ export type WorkflowDirective =
       readonly commitSha?: string;
       readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
       readonly reportMarkdown: string;
+      readonly invalidatedValidationCommands?: ReadonlyArray<string>;
+      readonly validationImpactMarkdown?: string;
     }
   | {
       readonly type: "implementation-change-request-babysit-result";
@@ -446,6 +448,8 @@ function parseValidationResults(
     ) {
       return "implementation validation supersedesCommand must be a non-empty string when provided.";
     }
+    const retryCommand = optionalString(record, "retryCommand");
+    if (retryCommand?.startsWith("Directive field")) return retryCommand;
     const scope = allowBlocked ? record["scope"] : undefined;
     if (scope !== undefined && scope !== "focused" && scope !== "project") {
       return "App Review validation scope must be focused or project.";
@@ -454,6 +458,7 @@ function parseValidationResults(
       command,
       ...(purpose === undefined ? {} : { purpose }),
       ...(supersedesCommand === undefined ? {} : { supersedesCommand: supersedesCommand.trim() }),
+      ...(retryCommand === undefined ? {} : { retryCommand }),
       ...(scope === undefined ? {} : { scope }),
       status,
       outputMarkdown: outputMarkdown ?? "",
@@ -1047,7 +1052,23 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       if (status === "findings" && commitSha === undefined) {
         return "implementation-code-review-result.commitSha is required when status is findings.";
       }
+      const invalidatedValidationCommands = record["invalidatedValidationCommands"];
+      if (
+        invalidatedValidationCommands !== undefined &&
+        (!Array.isArray(invalidatedValidationCommands) ||
+          invalidatedValidationCommands.some((value) => typeof value !== "string" || !value.trim()))
+      ) {
+        return "invalidatedValidationCommands must be an array of non-empty command strings.";
+      }
+      const validationImpactMarkdown = optionalString(record, "validationImpactMarkdown");
+      if (validationImpactMarkdown?.startsWith("Directive field")) return validationImpactMarkdown;
       return {
+        ...(invalidatedValidationCommands === undefined
+          ? {}
+          : {
+              invalidatedValidationCommands: invalidatedValidationCommands as string[],
+            }),
+        ...(validationImpactMarkdown === undefined ? {} : { validationImpactMarkdown }),
         type: "implementation-code-review-result",
         runId,
         ...(ticketId === undefined ? {} : { ticketId }),

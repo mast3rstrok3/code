@@ -8386,6 +8386,165 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  for (const succeeds of [true, false]) {
+    it.effect(
+      `final regression cycles ${succeeds ? "retry failures and publish" : "stop after five failed rounds"}`,
+      () =>
+        withSystem(
+          (system) =>
+            Effect.gen(function* () {
+              const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+              yield* appendWorkerResult(system, { run, status: "succeeded" });
+              yield* passMergeGate(system, run);
+              const current = () =>
+                Effect.map(system.query.getSnapshot(), (snapshot) =>
+                  snapshot.implementationRuns.find((entry) => entry.id === run.id)!,
+                );
+              let active = yield* current();
+              yield* appendCodeReviewResult(system, {
+                run,
+                threadId: active.activeCodeReviewThreadId!,
+                status: "clean",
+                tag: "regression-initial",
+                validations: [],
+              });
+              const emit = (
+                threadId: ThreadId,
+                type: string,
+                payload: Record<string, unknown>,
+                second: number,
+              ) =>
+                Effect.gen(function* () {
+                  const createdAt = `2026-01-01T00:01:${String(second).padStart(2, "0")}.000Z`;
+                  yield* system.engine.dispatch({
+                    type: "thread.activity.append",
+                    commandId: commandId(`regression-${second}`),
+                    threadId,
+                    activity: {
+                      id: eventId(`regression-${second}`),
+                      tone: "info",
+                      kind: type,
+                      summary: type,
+                      payload: { type, runId: run.id, ...payload },
+                      turnId: null,
+                      createdAt,
+                    },
+                    createdAt,
+                  });
+                  yield* system.reactor.drain;
+                });
+              for (let cycle = 1; cycle <= (succeeds ? 2 : 5); cycle++) {
+                active = yield* current();
+                expect(active.status).toBe("validating");
+                expect(active.activeValidationKind).toBe("final");
+                const snapshot = yield* system.query.getSnapshot();
+                const prompt =
+                  snapshot.threads
+                    .find((thread) => thread.id === active.activeValidatorThreadId)
+                    ?.messages.at(-1)?.text ?? "";
+                expect(prompt).toContain(`Final regression cycle ${cycle} of 5`);
+                if (cycle > 1) {
+                  expect(prompt).toContain("vp test failed-case");
+                  expect(prompt).not.toContain("- vp check\n");
+                }
+                const passed = succeeds && cycle === 2;
+                yield* emit(
+                  active.activeValidatorThreadId!,
+                  "implementation-merge-gate-result",
+                  {
+                    status: passed ? "passed" : "failed",
+                    validations: [
+                      ...(cycle === 1
+                        ? [
+                            {
+                              command: "vp check",
+                              status: "passed",
+                              outputMarkdown: "unchanged checks pass",
+                              completedAt: now,
+                            },
+                          ]
+                        : []),
+                      {
+                        command: cycle === 1 ? "vp run typecheck" : "vp test failed-case",
+                        status: passed ? "passed" : "failed",
+                        retryCommand: "vp test failed-case",
+                        outputMarkdown: "Exact failed case selection",
+                        completedAt: now,
+                      },
+                    ],
+                    summaryMarkdown: passed ? "Retest passed" : "One check failed",
+                  },
+                  cycle * 4,
+                );
+                active = yield* current();
+                expect(active.finalRegression?.cycles).toHaveLength(cycle);
+                if (passed) {
+                  expect(active.validatedHeadSha).toBe("repair-1@commit");
+                  expect(
+                    active.finalRegression?.checks.every(
+                      (check) => check.result?.status === "passed",
+                    ),
+                  ).toBe(true);
+                  expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(1);
+                  break;
+                }
+                expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
+                if (cycle === 5) {
+                  expect(active.status).toBe("needs-human-attention");
+                  expect(active.automationHalt?.detail).toContain("after 5 cycles");
+                  expect(active.activeFixerThreadId).toBeNull();
+                  expect(active.finalValidation?.status).toBe("failed");
+                  break;
+                }
+                expect(active.status).toBe("fixing");
+                yield* Ref.set(system.orchestratorHead, `repair-${cycle}@commit`);
+                yield* emit(
+                  active.activeFixerThreadId!,
+                  "implementation-fix-result",
+                  {
+                    status: "succeeded",
+                    commitSha: `repair-${cycle}@commit`,
+                    validations: requiredValidations(),
+                    notesMarkdown: "Fixed the failing case",
+                  },
+                  cycle * 4 + 1,
+                );
+                active = yield* current();
+                expect(
+                  active.status,
+                  active.automationHalt?.detail ?? active.retryableFailure?.detail,
+                ).toBe("code-reviewing");
+                expect(active.codeReviewedHeadSha).toBeNull();
+                yield* emit(
+                  active.activeCodeReviewThreadId!,
+                  "implementation-code-review-result",
+                  {
+                    status: "clean",
+                    validations: [],
+                    reportMarkdown: "Repair reviewed",
+                    invalidatedValidationCommands: [],
+                    validationImpactMarkdown:
+                      "Only the failing case changed. Passing checks and fixtures remain valid.",
+                  },
+                  cycle * 4 + 2,
+                );
+              }
+            }),
+          {
+            serverSettings: {
+              workflowStepReviewParts: [
+                {
+                  workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+                  e2e: false,
+                  browser: false,
+                },
+              ],
+            },
+          },
+        ),
+    );
+  }
+
   it.effect("runs one final gate after a clean review without repeating the review", () =>
     withSystem(
       (system) =>
@@ -11144,6 +11303,22 @@ describe("ImplementationWorkflowReactor", () => {
               activeValidatorThreadId: null,
               validatedHeadSha: null,
               mergeGateAttemptCount: IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS,
+              ...(gateKind === "final"
+                ? {
+                    finalRegression: {
+                      checks: run.launchSummary.validationCommands.map((command) => ({
+                        command,
+                        result: null,
+                      })),
+                      cycles: Array.from({ length: 5 }, () => ({
+                        headSha: "def456",
+                        validations: [],
+                        completedAt: now,
+                      })),
+                      reviewBaseSha: null,
+                    },
+                  }
+                : {}),
               updatedAt: now,
             },
             createdAt: now,
@@ -11190,6 +11365,45 @@ describe("ImplementationWorkflowReactor", () => {
       ),
     );
   }
+
+  it.effect("halts final regression recovery after repeated validator launch failures", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("regression-launch-budget"),
+          threadId: sourceThreadId,
+          run: {
+            ...run,
+            status: "validating",
+            activeValidationKind: "final",
+            orchestratorBranch: "main",
+            orchestratorWorktreePath: "/tmp/implementation-reactor-review",
+            integrationHeadSha: "def456",
+            codeReviewedHeadSha: "def456",
+            activeValidatorThreadId: null,
+            activeValidationHeadSha: null,
+            finalRegression: {
+              checks: [],
+              cycles: [],
+              reviewBaseSha: null,
+              launchCount: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+            },
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+        const snapshot = yield* system.query.getSnapshot();
+        const stopped = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(stopped?.status).toBe("needs-human-attention");
+        expect(stopped?.automationHalt?.category).toBe("retry-exhausted");
+        expect(stopped?.activeValidatorThreadId).toBeNull();
+      }),
+    ),
+  );
 
   it.effect("halts a run that has started its Merge Gate too many times", () =>
     withSystem((system) =>

@@ -98,6 +98,7 @@ export function workflowProgressLabel(input: {
       case "qa-reviewing":
         return "Implementation · App Review";
       case "fixing":
+        if (run.activeValidationKind === "final") return "Implementation · Final regression repair";
         if (run.fixOrigin === "app-dev-stack" || run.fixOrigin === "app-review") {
           return `${run.artifactSource === "proposed-plan" ? planLabel : "Implementation"} · TDD repair · ${run.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS}`;
         }
@@ -105,6 +106,8 @@ export function workflowProgressLabel(input: {
       case "code-review-fixing":
         return "Implementation · Fix";
       case "code-reviewing":
+        if (run.activeValidationKind === "final")
+          return "Implementation · Regression repair review";
         return "Implementation · Code review";
       case "completed":
         return "Implementation · Complete";

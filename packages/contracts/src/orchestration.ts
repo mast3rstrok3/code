@@ -1106,12 +1106,37 @@ export const OrchestrationImplementationValidationResult = Schema.Struct({
   purpose: Schema.optionalKey(Schema.Literals(["reproduction", "verification"])),
   command: TrimmedNonEmptyString,
   supersedesCommand: Schema.optionalKey(TrimmedNonEmptyString),
+  /** Exact runner selection covering every failure in this command. */
+  retryCommand: Schema.optionalKey(TrimmedNonEmptyString),
   status: OrchestrationImplementationValidationResultStatus,
   outputMarkdown: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   completedAt: IsoDateTime,
 });
 export type OrchestrationImplementationValidationResult =
   typeof OrchestrationImplementationValidationResult.Type;
+
+export const FINAL_REGRESSION_MAX_CYCLES = 5;
+
+export const FinalRegressionState = Schema.Struct({
+  /** Validator launches since the last completed test cycle. */
+  launchCount: Schema.optionalKey(NonNegativeInt),
+  checks: Schema.Array(
+    Schema.Struct({
+      command: TrimmedNonEmptyString,
+      result: Schema.NullOr(OrchestrationImplementationValidationResult),
+    }),
+  ),
+  cycles: Schema.Array(
+    Schema.Struct({
+      headSha: TrimmedNonEmptyString,
+      validations: Schema.Array(OrchestrationImplementationValidationResult),
+      completedAt: IsoDateTime,
+    }),
+  ),
+  /** Repairs are reviewed against the commit whose tests failed. */
+  reviewBaseSha: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type FinalRegressionState = typeof FinalRegressionState.Type;
 
 export const OrchestrationImplementationFastBuildResult = Schema.Union([
   Schema.Struct({
@@ -1455,6 +1480,7 @@ export const OrchestrationImplementationRun = Schema.Struct({
   finalValidationResults: Schema.Array(OrchestrationImplementationValidationResult).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  finalRegression: Schema.optionalKey(FinalRegressionState),
   validatedHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),

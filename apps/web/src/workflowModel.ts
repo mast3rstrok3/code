@@ -1,3 +1,4 @@
+import { FINAL_REGRESSION_MAX_CYCLES } from "@t3tools/contracts";
 import type {
   AppReviewWorkflowRun,
   OrchestrationImplementationAutomationHalt,
@@ -157,6 +158,8 @@ export function workflowStepMatchesImplementationFailure<TThread extends Workflo
   validationKind?: "integration" | "final" | null,
 ): boolean {
   const label = step.label?.toLowerCase() ?? "";
+  if (validationKind === "final" && (stage === "fixer" || stage === "code-review"))
+    return label.includes("final regression tests");
   switch (stage) {
     case "source-dirty":
     case "worktree-setup":
@@ -459,6 +462,8 @@ function entryMatchesDefinedStep<TThread extends WorkflowModelThread>(
   if (entry.kind === "workflow") return false;
   const role = entry.row.thread.workflowRole;
   const label = step.label.toLowerCase();
+  if (entry.row.thread.title?.toLowerCase().includes("final regression"))
+    return label.includes("final regression tests");
   if (label.includes("execute ticket waves")) {
     // The run's coordinator opens the implementation phase and stays alive for
     // the rest of it, so it describes no single step. Presets that give it a
@@ -821,7 +826,11 @@ export function resolveWorkflowCurrentPath<TThread extends WorkflowModelThread>(
 
     const stage = implementationRunCurrentStage(run);
     const finalValidation =
-      (stage === "merge-gate" || stage === "integration") && run.activeValidationKind === "final";
+      run.activeValidationKind === "final" &&
+      (stage === "merge-gate" ||
+        stage === "integration" ||
+        stage === "fixer" ||
+        stage === "code-review");
     const step = finalValidation
       ? currentPathStep(input.steps, (label) => label.includes("final regression tests"))
       : stage === "app-review"
@@ -853,9 +862,14 @@ export function resolveWorkflowCurrentPath<TThread extends WorkflowModelThread>(
             .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null)
         : null;
     const combinedAppReviewCycle = combinedAppReview?.cycles.at(-1) ?? null;
-    const cycleNumber = finalCodeReview
-      ? Math.min(run.finalCodeReviewPassCount + 1, input.finalCodeReviewBudget)
-      : (combinedAppReviewCycle?.cycleNumber ?? null);
+    const cycleNumber = finalValidation
+      ? Math.min(
+          (run.finalRegression?.cycles.length ?? 0) + (stage === "merge-gate" ? 1 : 0),
+          FINAL_REGRESSION_MAX_CYCLES,
+        ) || 1
+      : finalCodeReview
+        ? Math.min(run.finalCodeReviewPassCount + 1, input.finalCodeReviewBudget)
+        : (combinedAppReviewCycle?.cycleNumber ?? null);
     const appReviewPhase = combinedAppReview?.activePhase ?? null;
     const appReviewPhaseLabel =
       appReviewPhase === "e2e"
@@ -881,7 +895,13 @@ export function resolveWorkflowCurrentPath<TThread extends WorkflowModelThread>(
         ? "Final regression tests"
         : (step?.label ?? stage?.replaceAll("-", " ") ?? "Complete"),
       cycleNumber === null ? null : `Cycle ${cycleNumber}`,
-      appReviewPhaseLabel,
+      finalValidation
+        ? stage === "fixer"
+          ? "Repair"
+          : stage === "code-review"
+            ? "Repair code review"
+            : "Testing"
+        : appReviewPhaseLabel,
     ].filter((segment): segment is string => segment !== null);
     return {
       groupId: input.groupId,
@@ -895,12 +915,15 @@ export function resolveWorkflowCurrentPath<TThread extends WorkflowModelThread>(
       ticketStage: null,
       appReviewRunId: combinedAppReview?.id ?? null,
       cycleNumber,
-      cycleBudget: finalCodeReview
-        ? input.finalCodeReviewBudget
-        : (combinedAppReview?.cycleBudget ?? null),
+      cycleBudget: finalValidation
+        ? FINAL_REGRESSION_MAX_CYCLES
+        : finalCodeReview
+          ? input.finalCodeReviewBudget
+          : (combinedAppReview?.cycleBudget ?? null),
       appReviewPhase,
       threadId:
         run.activeCodeReviewThreadId ??
+        run.activeFixerThreadId ??
         combinedAppReview?.activeThreadId ??
         run.activeAppReviewThreadId ??
         run.activeValidatorThreadId ??

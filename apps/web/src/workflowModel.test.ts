@@ -288,6 +288,29 @@ describe("resolveWorkflowCurrentPath", () => {
     expect(path.threadId).toBe("validator-thread");
   });
 
+  it.each(["fixing", "code-reviewing"] as const)(
+    "keeps regression %s in the final regression step",
+    (status) => {
+      const path = resolve(
+        implementationRun([], {
+          status,
+          activeValidationKind: "final",
+          activeFixerThreadId: status === "fixing" ? ThreadId.make("fixer") : null,
+          activeCodeReviewThreadId: status === "code-reviewing" ? ThreadId.make("reviewer") : null,
+          finalRegression: {
+            checks: [],
+            cycles: [{ headSha: "head", validations: [], completedAt: "2026-01-01T00:00:00.000Z" }],
+            reviewBaseSha: "head",
+          },
+        }),
+      );
+      expect(path.stepId).toBe("final-regression");
+      expect(path.cycleNumber).toBe(1);
+      expect(path.cycleBudget).toBe(5);
+      expect(path.threadId).toBe(status === "fixing" ? "fixer" : "reviewer");
+    },
+  );
+
   it("resolves pull-request publication without a working thread", () => {
     const path = resolve(implementationRun([], { status: "publishing-change-request" }));
     expect(path.stepId).toBe("publication");
@@ -1007,6 +1030,12 @@ describe("buildWorkflowViewModel", () => {
       global("repair", "app-review-fixer"),
       global("code-review", "implementation-code-reviewer"),
       global("final-validation", "implementation-validator", "Implementation final validation"),
+      global("regression-fixer", "implementation-fixer", "Final regression repair 1 of 5"),
+      global(
+        "regression-review",
+        "implementation-code-reviewer",
+        "Final regression repair code review",
+      ),
       global("pr-babysitter", "implementation-change-request-babysitter"),
     ]);
     const groups = model.rootsByThreadKey.get("env:root")?.groups ?? [];
@@ -1041,7 +1070,11 @@ describe("buildWorkflowViewModel", () => {
       "env:repair",
     ]);
     expect(steps[8]?.entries.map((entry) => entry.id)).toEqual(["env:code-review"]);
-    expect(steps[9]?.entries.map((entry) => entry.id)).toEqual(["env:final-validation"]);
+    expect(steps[9]?.entries.map((entry) => entry.id)).toEqual([
+      "env:final-validation",
+      "env:regression-fixer",
+      "env:regression-review",
+    ]);
     expect(steps[10]?.entries).toEqual([]);
     expect(steps[11]?.entries.map((entry) => entry.id)).toEqual(["env:pr-babysitter"]);
   });

@@ -1,5 +1,6 @@
 import { TicketTestPlatformPicker } from "./ReviewTestPlatformPicker";
 import {
+  FINAL_REGRESSION_MAX_CYCLES,
   findWorkflowPauseScope,
   isRunStageSkipped,
   isTicketSkipped,
@@ -3049,6 +3050,20 @@ function WorkflowGroupCard(props: {
                               linkedImplementationRun != null &&
                               linkedImplementationRun.finalValidationResults.length > 0 ? (
                                 <div className="space-y-1 px-2 pb-2 text-xs">
+                                  {linkedImplementationRun.finalRegression ? (
+                                    <p className="text-muted-foreground">
+                                      {linkedImplementationRun.finalRegression.cycles.length} of{" "}
+                                      {FINAL_REGRESSION_MAX_CYCLES} test cycles completed
+                                      {linkedImplementationRun.activeValidationKind === "final" &&
+                                      linkedImplementationRun.status === "fixing"
+                                        ? " · Repairing failures"
+                                        : ""}
+                                      {linkedImplementationRun.activeValidationKind === "final" &&
+                                      linkedImplementationRun.status === "code-reviewing"
+                                        ? " · Reviewing repairs"
+                                        : ""}
+                                    </p>
+                                  ) : null}
                                   {linkedImplementationRun.finalValidationResults.map((result) => (
                                     <details
                                       key={`${result.command}:${result.completedAt}:${result.status}`}

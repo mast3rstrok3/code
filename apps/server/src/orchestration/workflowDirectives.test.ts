@@ -56,6 +56,51 @@ describe("workflowDirectives", () => {
     });
   }
 
+  it("preserves failed-test selections and repair impact evidence", () => {
+    const directive = {
+      type: "implementation-code-review-result",
+      runId: "run-1",
+      status: "clean",
+      reportMarkdown: "Repair reviewed.",
+      invalidatedValidationCommands: ["check"],
+      validationImpactMarkdown: "Shared build inputs changed; other E2E cases are unaffected.",
+      validations: [
+        {
+          command: "e2e",
+          status: "failed",
+          retryCommand: " e2e failed.spec ",
+          outputMarkdown: "failed.spec failed",
+          completedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    };
+    const parse = (value: unknown) =>
+      parseWorkflowDirectiveFromMarkdown("```json\n" + JSON.stringify(value) + "\n```");
+    const result = parse(directive);
+    NodeAssert.equal(result.kind, "parsed");
+    if (result.kind !== "parsed" || result.directive.type !== "implementation-code-review-result")
+      return;
+    NodeAssert.equal(result.directive.validations[0]?.retryCommand, "e2e failed.spec");
+    NodeAssert.deepEqual(result.directive.invalidatedValidationCommands, ["check"]);
+    NodeAssert.equal(result.directive.validationImpactMarkdown, directive.validationImpactMarkdown);
+    for (const invalid of ["", " ", 123]) {
+      NodeAssert.equal(
+        parse({
+          ...directive,
+          validations: [{ ...directive.validations[0], retryCommand: invalid }],
+        }).kind,
+        "error",
+      );
+      NodeAssert.equal(parse({ ...directive, validationImpactMarkdown: invalid }).kind, "error");
+    }
+    for (const invalid of ["check", [123], [""], null]) {
+      NodeAssert.equal(
+        parse({ ...directive, invalidatedValidationCommands: invalid }).kind,
+        "error",
+      );
+    }
+  });
+
   it("parses a green latest-commit PR babysit result", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 {
