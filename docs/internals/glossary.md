@@ -116,7 +116,7 @@ The bounded QA stage of an implementation run. A run may use up to ten cycles. E
 
 #### Code review
 
-The ticket and final automated review stage. One logical cycle uses one fresh thread to review the complete applicable diff, apply clear fixes, validate, commit, and report. A clean result stops early. Findings start another fresh cycle, up to `IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES` (5). Interrupted turns retry in the current cycle thread and do not consume a cycle. The Final Code Review thread that ends the stage runs complete validation. Exhaustion becomes a pull-request warning when the branch remains clean and usable. Prompted by `implementation.code-review.codex` in [WorkflowPromptRegistry.ts][26].
+The ticket and final automated review stage. One logical cycle uses one fresh thread to review the complete applicable diff, apply clear fixes, commit, and report. A clean result stops early. Findings start another fresh cycle, up to `IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES` (5). Interrupted turns retry in the current cycle thread and do not consume a cycle. Code Review uses the Matt Pocock skill and applies its findings. Validation runs in separate workflow stages. Exhaustion becomes a pull-request warning when the branch remains clean and usable. Prompted by `implementation.code-review.codex` in [WorkflowPromptRegistry.ts][26].
 
 #### Thread budget
 

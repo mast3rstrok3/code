@@ -776,14 +776,7 @@
     "title": "6. Code Review",
     "description": "Reviews implementation changes along the Standards and Spec axes.",
     "file": "skills/code-review.md",
-    "associatedDocs": [
-      {
-        "id": "app-dev-stack",
-        "title": "AppStack",
-        "path": "app-dev-stack.md",
-        "file": "documents/app-dev-stack.md"
-      }
-    ],
+    "associatedDocs": [],
     "workflowInstructionsFile": "workflows/implementation.code-review.codex.md"
   },
   {

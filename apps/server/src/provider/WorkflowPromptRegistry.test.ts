@@ -47,7 +47,7 @@ const GRILLING_BLUEPRINT = [
 ].join("\n");
 
 describe("WorkflowPromptRegistry", () => {
-  it("keeps workflow-stage prompts on one active thread", () => {
+  it("keeps workflow-stage prompts on one active thread except the upstream Code Review skill", () => {
     const promptIds = [
       WORKFLOW_PROMPT_IDS.productFixCodex,
       WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
@@ -66,11 +66,8 @@ describe("WorkflowPromptRegistry", () => {
     for (const promptId of promptIds) {
       const rendered = resolveWorkflowPromptText(promptId);
       if (promptId === WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex) {
-        NodeAssert.match(rendered, /This overrides upstream parallel sub-agent dispatch/);
-        NodeAssert.match(
-          rendered,
-          /Run the Standards and Spec passes sequentially in this reviewer thread/,
-        );
+        NodeAssert.match(rendered, /### 4\. Spawn both sub-agents in parallel/);
+        NodeAssert.doesNotMatch(rendered, /overrides upstream parallel|passes sequentially/);
       } else {
         const variation = rendered.split("<t3-workflow-variation>")[1] ?? rendered;
         NodeAssert.doesNotMatch(variation, parallelChildInstruction);
@@ -703,7 +700,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.doesNotMatch(rendered, /<ticket-template>/);
   });
 
-  it("renders Implementation Code Review with sequential two-axis passes", () => {
+  it("renders the upstream Code Review skill with only scope, fixes, and result instructions", () => {
     const contracts = listWorkflowPromptContracts();
     const codeReview = contracts.find(
       (contract) => contract.id === WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
@@ -716,13 +713,12 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.equal(codeReview.title, "6. Code Review");
     NodeAssert.deepEqual(
       codeReview.associatedDocs?.map((doc) => doc.id),
-      ["app-dev-stack"],
+      [],
     );
 
     const rendered = resolveWorkflowPromptText(WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex);
     NodeAssert.match(rendered, /name: code-review/);
     NodeAssert.match(rendered, /Two-axis review of the diff/);
-    NodeAssert.match(rendered, /Run the Standards pass first/);
     NodeAssert.match(rendered, /### 1\. Pin the fixed point/);
     NodeAssert.match(rendered, /git diff <fixed-point>\.\.\.HEAD/);
     NodeAssert.match(rendered, /### 2\. Identify the spec source/);
@@ -731,19 +727,26 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /The repo overrides\./);
     NodeAssert.match(rendered, /Mysterious Name/);
     NodeAssert.match(rendered, /Refused Bequest/);
-    NodeAssert.match(rendered, /Then run the Spec pass/);
     NodeAssert.doesNotMatch(rendered, /workflow-subagents-create/);
     NodeAssert.match(rendered, /Do \*\*not\*\* merge or rerank findings/);
     NodeAssert.match(rendered, /## Why two axes/);
     NodeAssert.match(rendered, /## Orchestrated Code Review Result/);
     NodeAssert.match(rendered, /"type": "implementation-code-review-result"/);
-    NodeAssert.match(rendered, /Use status "clean" when neither axis has findings/);
-    // Final Code Review must land its own fixes and name the commit before publication.
-    NodeAssert.match(rendered, /launch message defines the complete review scope/);
-    NodeAssert.match(rendered, /do not reopen unchanged code/);
-    NodeAssert.match(rendered, /"commitSha"/);
-    NodeAssert.match(rendered, /"validations"/);
-    NodeAssert.match(rendered, /do not use it to hand unfixed findings back/);
+    const upstream = NodeFS.readFileSync(
+      new URL("./workflow-skills/skills/code-review.md", import.meta.url),
+      "utf8",
+    ).trim();
+    NodeAssert.ok(rendered.includes(upstream));
+    NodeAssert.match(rendered, /Apply and commit the fixes required by the review/);
+    NodeAssert.match(rendered, /Review only that scope/);
+    NodeAssert.match(rendered, /`commitSha` naming the resulting HEAD/);
+    NodeAssert.match(rendered, /"validations": \[\]/);
+    const variation = rendered.split("## Orchestrated Code Review Result")[1] ?? "";
+    NodeAssert.ok(variation.length > 0);
+    NodeAssert.doesNotMatch(
+      variation,
+      /Run the Standards pass|Run focused|complete validation commands|invalidatedValidationCommands|reviewedRetryCommands/,
+    );
   });
 
   it("registers pull-request babysitting as its own implementation step", () => {

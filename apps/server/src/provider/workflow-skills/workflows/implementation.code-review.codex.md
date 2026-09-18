@@ -1,38 +1,19 @@
 ## Orchestrated Code Review Result
 
-When this prompt is run by an automatic implementation run, do not ask the user questions. The launch message provides the fixed point, the diff command, the worktree, the Spec source, and any existing change request. Use those instead of asking or searching the issue tracker.
+Use the Matt Pocock code-review skill above as the review procedure. The launch message supplies the fixed point, worktree, branch, and spec source. Review only that scope, including when the fixed point limits the diff to repair commits.
 
-Run the Standards pass first. Then run the Spec pass. Run the Standards and Spec passes sequentially in this reviewer thread. This overrides upstream parallel sub-agent dispatch. Provider-native agents and T3 workflow children do not run either pass. Aggregation, fixes, validation, the commit, and the final result directive stay here too.
+Apply and commit the fixes required by the review, as requested by this workflow. Leave the worktree clean. Testing belongs to the workflow's validation stages; this review adds no test-running requirement.
 
-**The launch message defines the complete review scope.** Review only its supplied diff and fixed point. A later bounded pass may intentionally cover only the repair delta, so do not reopen unchanged code before that fixed point. You are the last scheduled Code Review for the supplied scope: aggregate both axes, then act on their findings yourself:
-
-1. Run both axes and aggregate the two-axis report.
-2. If either axis produced findings that require code changes, fix them in the orchestrator worktree with the smallest reliable changes. Do not delegate the fixes and do not defer them to a follow-up.
-3. If you made changes, run focused tests or a documented sub-minute fast check and report the results. Do not run launch-level complete validation commands. If the review is clean, do not rerun validation.
-4. Commit your fixes on the orchestrator branch and leave the worktree clean.
-5. Report the commit you produced.
-
-When reviewing final regression repairs, also return `invalidatedValidationCommands` with the original command names whose passing evidence or failed-test selections the repairs affect, and `validationImpactMarkdown` explaining the impact. Return an empty array only when all retained evidence and selections remain valid. The launch message supplies the recorded checks.
-
-Finish with exactly one fenced JSON block using this shape:
+Return the skill's Standards and Spec reports in `reportMarkdown`. Finish with one fenced JSON result:
 
 ```json
 {
   "type": "implementation-code-review-result",
   "runId": "implementation-run-id",
-  "status": "findings",
-  "commitSha": "HEAD commit SHA after your fixes",
-  "validations": [
-    {
-      "command": "vp test focused-test",
-      "purpose": "verification",
-      "status": "passed",
-      "outputMarkdown": "summary",
-      "completedAt": "ISO timestamp"
-    }
-  ],
+  "status": "clean",
+  "validations": [],
   "reportMarkdown": "## Standards\n...\n\n## Spec\n..."
 }
 ```
 
-Use status "clean" when neither axis has findings that require code changes — omit `commitSha` and leave HEAD untouched. Use "findings" when code changes were required: include every finding in reportMarkdown, set `commitSha` to the HEAD you committed, and report each required validation in `validations`. Use "blocked" when the review cannot be performed at all (say why in reportMarkdown); do not use it to hand unfixed findings back.
+Include `ticketId` when the launch message provides it. Use `clean` when the review required no code changes and leave HEAD untouched. Use `findings` when you made fixes, and include `commitSha` naming the resulting HEAD. Use `blocked` when the review could not be completed and explain why in `reportMarkdown`. `validations` may be empty; if you ran checks, report their actual results and completion times.

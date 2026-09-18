@@ -1253,7 +1253,7 @@ function buildWorkerPrompt(input: {
     deferredTicketAppReviewInstructions(input.run, input.ticketId),
     "",
     "Do not ask the user questions. Run one focused failing test before implementation. Work in behavioral slices, rerunning the relevant focused test after each slice, then finish with affected-file formatting, linting, typing, and focused tests only.",
-    "Do not run launch-level complete validation commands or full test suites. A documented sub-minute fast check such as `pnpm check` is allowed. Final Code Review owns complete validation. Do not rerun an unchanged passing command without a new code change that could affect it.",
+    "Do not run launch-level complete validation commands or full test suites. A documented sub-minute fast check such as `pnpm check` is allowed. The separate validation stage owns complete validation. Do not rerun an unchanged passing command without a new code change that could affect it.",
     "",
     "Branch/worktree:",
     `- branch: ${input.branch}`,
@@ -1465,65 +1465,27 @@ function buildCodeReviewPrompt(input: {
   readonly cycleNumber: number;
   readonly cycleBudget: number;
 }): string {
-  const changeRequest = input.run.changeRequest;
   const reviewBaseSha =
     input.run.finalRegression?.reviewBaseSha ?? input.reviewBaseSha ?? input.run.pinnedCommit;
-  const isFinalReview = isFinalCodeReviewPass(input.run);
-  const finalValidationLines = isFinalReview
-    ? [
-        input.run.finalRegression?.reviewBaseSha
-          ? "Run focused validation for any additional repairs. A clean review may report an empty validations list. The regression gate runs pending selections after this review."
-          : "Run focused validation for any repairs. A clean review may report an empty validations list. The final gate runs the complete regression commands after Code Review finishes:",
-        ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
-      ]
-    : ["Run focused validation and report it in validations."];
   return [
-    WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
-    `Perform ${isFinalReview ? "Final Code Review" : "historical combined Code Review"} for run ${input.run.id}. Cycle ${input.cycleNumber} of ${input.cycleBudget}.`,
-    "",
-    input.run.finalRegression?.reviewBaseSha
-      ? "Review the final regression repairs against the same Standards and Spec axes. A clean result ends repair review early."
-      : isFinalReview
-        ? "Review the complete combined HEAD after App Review, including App Review repairs and unresolved warnings. A clean result ends Code Review early. Findings may advance the workflow to another bounded cycle."
-        : "Review the complete integrated ticket set along the Standards and Spec axes described in your workflow instructions.",
+    `Use the Matt Pocock code-review skill for run ${input.run.id}. Cycle ${input.cycleNumber} of ${input.cycleBudget}.`,
+    `Worktree: ${input.run.orchestratorWorktreePath}`,
+    `Branch: ${input.run.orchestratorBranch}`,
+    `Review base: ${reviewBaseSha}`,
+    `Diff command: git diff ${reviewBaseSha}...HEAD`,
+    ...(input.run.changeRequest ? [`Change request: ${input.run.changeRequest.url}`] : []),
+    input.run.artifactSource === "proposed-plan"
+      ? `Spec source: the locked proposed plan below.\n\n${input.artifactMarkdown ?? "Proposed-plan context unavailable."}`
+      : "Spec source: retrieve the canonical Spec with workflow_spec_get and the run tickets with workflow_tickets_list/workflow_ticket_get.",
+    "Apply and commit the fixes required by the review, and leave the worktree clean.",
     ...(input.run.finalRegression?.reviewBaseSha
       ? [
-          "This is the code review of final regression repairs. Review only the repair diff from the review base and affected contracts; do not repeat the complete feature review.",
-          "Return invalidatedValidationCommands, an array of original command names below whose previously passed checks or failure-only selections are no longer trustworthy after these repairs. Return [] when all retained evidence remains valid. Include validationImpactMarkdown explaining affected code, configuration, fixtures, deployment and why remaining checks can be retained. If uncertain, invalidate the affected full command. Do not run regression commands in this review.",
-          "Inspect the saved failure reports and repair notes. Return reviewedRetryCommands as [{command: originalCheckCommand, retryCommand: exactRerunCommand}] for pending checks whose failing tests can be selected or whose setup invocation needs correction. Explain selection coverage in validationImpactMarkdown. A subset must cover every failure from a completed original run; incomplete or setup-only runs still need all original checks. Never narrow a command you invalidated, skip unresolved failures, or weaken assertions.",
+          "Validation handoff: include invalidatedValidationCommands naming recorded checks affected by the repair diff, and validationImpactMarkdown explaining the impact. Use [] when retained evidence remains valid. Optional reviewedRetryCommands entries {command, retryCommand} correct a pending selection while covering every unresolved failure. The separate validator executes these commands.",
           JSON.stringify(input.run.finalRegression.checks),
         ]
       : []),
-    "Apply required fixes yourself and commit them. Do not ask the user questions.",
-    "",
-    input.run.finalRegression?.reviewBaseSha
-      ? "App Review finished before these regression repairs."
-      : "App Review passed at this commit.",
-    "",
-    "Review scope:",
-    `- worktree: ${input.run.orchestratorWorktreePath}`,
-    `- review base: ${reviewBaseSha}`,
-    `- diff command: git diff ${reviewBaseSha}...HEAD`,
-    changeRequest === null
-      ? "- change request: not available"
-      : `- change request: ${changeRequest.url} (#${changeRequest.number})`,
-    "",
-    input.run.artifactSource === "proposed-plan"
-      ? `Review against the locked product intent and proposed plan below; do not attempt to load a missing Spec or planning tickets.\n\n${input.artifactMarkdown ?? "Proposed-plan context unavailable."}`
-      : "Retrieve the canonical Spec with workflow_spec_get and the run tickets with workflow_tickets_list/workflow_ticket_get. Artifact bodies are intentionally not embedded in this prompt.",
-    input.run.finalRegression?.reviewBaseSha
-      ? "Check that the repair diff preserves the intended ticket behavior and changes only what the failures require."
-      : "Compare the actual diff with each ticket's plannedFileChanges. Report planned changes missing from the diff, unexplained changed files, and create/update/delete action mismatches. File-plan drift is review evidence rather than an automatic failure when supporting changes are justified and the implementation is correct.",
-    "",
-    'Use status "clean" only when neither axis has findings that require code changes, "findings" when code changes were required, and "blocked" when the review cannot be performed. Put the full two-axis report in reportMarkdown.',
-    "",
-    `When status is "findings", fix the findings in ${input.run.orchestratorWorktreePath} on branch ${input.run.orchestratorBranch}, commit them, and set commitSha to the resulting HEAD. Leave the worktree clean.`,
-    "",
-    ...finalValidationLines,
-    "If your changes affect capability evidence, review corpora, or their documentation, run the corresponding focused audit or contract test before handing off.",
-    "",
-    `Finish with exactly one fenced JSON directive of type implementation-code-review-result for runId ${input.run.id}. Report every validation command, status, output, and completion time in validations.`,
-  ].join("\n");
+    `Return one implementation-code-review-result JSON directive for runId ${input.run.id}. An empty validations array is valid.`,
+  ].join("\n\n");
 }
 
 function buildCodeReviewFixPrompt(input: {
@@ -4080,24 +4042,15 @@ const make = Effect.gen(function* () {
           role: "user",
           text: appendWorkflowSkillCommandSection(
             [
-              WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
-              deferredTicketAppReviewInstructions(input.run, input.ticketId),
               `Run Code Review Cycle ${state.codeReviewPassCount + 1} of ${cycleBudget} for ticket ${input.ticketId} in implementation run ${input.run.id}.`,
               `Worktree: ${state.worktreePath}`,
               `Branch: ${state.branch}`,
               `Review base: ${baseRef}`,
-              `The worker last verified commit ${state.workerResult?.commitSha ?? "unknown"}. If HEAD differs, include focused verification for the current HEAD even when this review is clean. Reuse existing passing output only when it verified the unchanged HEAD, preserving its original completion time.`,
-              ...currentWorkflowValidations(state.workerResult?.validations ?? [])
-                .filter((validation) => validation.status !== "passed")
-                .map(
-                  (validation) =>
-                    `Unresolved check from the previous result: ${validation.command}\n\nOriginal validation record:\n\n\`\`\`json\n${JSON.stringify(validation, null, 2)}\n\`\`\`\n\nRetain this record, including its original completedAt. Repair and rerun these checks. If a corrected command covers the same checks, retain the failed attempt and name it in supersedesCommand. Do not replace it with an unrelated passing test.`,
-                ),
               resultProblem === null
                 ? ""
-                : `Your previous Code Review result was rejected: ${resultProblem}\nCorrect the result and re-emit the complete directive. Preserve completed repairs and the original validation timestamps. Reuse passing evidence for unchanged HEAD; rerun only checks whose required evidence is missing.`,
+                : `Your previous Code Review result was rejected: ${resultProblem}\nCorrect the result and re-emit the directive. Preserve completed repairs; an empty validations array is valid.`,
               nativeVerificationEvidenceMarkdown(state.nativeVerification),
-              `Retrieve the durable ticket with workflow_ticket_get. Review Standards and Spec, apply and commit clear fixes, and leave the worktree clean.`,
+              `Use the Matt Pocock code-review skill. Spec source: retrieve the durable ticket with workflow_ticket_get. Apply and commit clear fixes, and leave the worktree clean.`,
               input.warningMarkdown === undefined
                 ? ""
                 : `Earlier review context:\n\n${input.warningMarkdown}`,
@@ -7601,7 +7554,7 @@ const make = Effect.gen(function* () {
         sourceThreadId,
         run,
         detailMarkdown:
-          "Fix result must include passing focused or documented sub-minute fast validation and must not run launch-level complete commands; Final Code Review owns complete validation.",
+          "Fix result must include passing focused or documented sub-minute fast validation and must not run launch-level complete commands; the separate validation stage owns complete validation.",
         createdAt: updatedAt,
       });
       return;
@@ -8200,12 +8153,12 @@ const make = Effect.gen(function* () {
         const reportedValidations =
           directive.validations.length > 0
             ? directive.validations
-            : directive.status === "clean" &&
-                state.workerResult?.status === "succeeded" &&
+            : state.workerResult?.status === "succeeded" &&
                 state.workerResult.commitSha === head.commitSha
               ? state.workerResult.validations
               : directive.validations;
         const validationValid =
+          reportedValidations.length === 0 ||
           directive.status === "blocked" ||
           focusedRepairValidationsPassed({
             finalCommands: focusedValidationCommands,
@@ -8756,10 +8709,12 @@ const make = Effect.gen(function* () {
         }
         return;
       }
-      const validationsValid = focusedRepairValidationsPassed({
-        finalCommands: requiredCompleteCommands,
-        validations: directive.validations,
-      });
+      const validationsValid =
+        directive.validations.length === 0 ||
+        focusedRepairValidationsPassed({
+          finalCommands: requiredCompleteCommands,
+          validations: directive.validations,
+        });
       if (!validationsValid) {
         yield* blockRun({
           sourceThreadId,

@@ -6692,7 +6692,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("uses a fresh ticket Code Review thread after findings", () =>
+  it.effect("accepts ticket review fixes without test receipts and starts a fresh review", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
@@ -6709,12 +6709,17 @@ describe("ImplementationWorkflowReactor", () => {
         if (ticketId === undefined || firstReviewerId === null || firstReviewerId === undefined) {
           throw new Error("Ticket Code Review missing.");
         }
+        const branch = current?.ticketStates[0]?.branch;
+        if (!branch) throw new Error("Ticket branch missing.");
+        yield* Ref.update(system.advancedBranchRefs, (refs) => new Set([...refs, branch]));
         yield* appendCodeReviewResult(system, {
           run,
           threadId: firstReviewerId,
           ticketId,
           status: "findings",
+          commitSha: branch,
           tag: "ticket-findings-cycle-one",
+          validations: [],
         });
 
         snapshot = yield* system.query.getSnapshot();
@@ -6723,6 +6728,11 @@ describe("ImplementationWorkflowReactor", () => {
         expect(secondReviewerId).not.toBe(firstReviewerId);
         expect(current?.ticketStates[0]?.codeReviewPassCount).toBe(1);
         expect(current?.ticketStates[0]?.codeReviewGeneration).toBe(1);
+        expect(current?.automationHalt).toBeNull();
+        expect(current?.ticketStates[0]?.workerResult).toMatchObject({
+          commitSha: `${branch}@advanced`,
+          validations: [],
+        });
         expect(
           snapshot.threads.filter(
             (thread) => thread.workflowRole === "implementation-code-reviewer",
@@ -6865,11 +6875,7 @@ describe("ImplementationWorkflowReactor", () => {
               expect(
                 snapshot.threads.find((thread) => thread.id === nextReviewer)?.messages.at(-1)
                   ?.text,
-              ).toContain("Unresolved check from the previous result: test writing.test.ts");
-              expect(
-                snapshot.threads.find((thread) => thread.id === nextReviewer)?.messages.at(-1)
-                  ?.text,
-              ).toContain('"completedAt": "2026-01-01T00:00:02.000Z"');
+              ).not.toContain("Repair and rerun these checks");
               yield* appendCodeReviewResult(system, {
                 run,
                 threadId: nextReviewer,
@@ -7525,10 +7531,10 @@ describe("ImplementationWorkflowReactor", () => {
         expect(reviewerThread).toBeDefined();
         expect(reviewerThread?.parentThreadId).toBe(run.orchestratorThreadId);
         expect(reviewerThread?.messages.at(-1)?.text).toContain(
-          "Compare the actual diff with each ticket's plannedFileChanges",
+          "Spec source: retrieve the canonical Spec with workflow_spec_get",
         );
-        expect(reviewerThread?.messages.at(-1)?.text).toContain("- vp check");
-        expect(reviewerThread?.messages.at(-1)?.text).toContain("- vp run typecheck");
+        expect(reviewerThread?.messages.at(-1)?.text).not.toContain("- vp check");
+        expect(reviewerThread?.messages.at(-1)?.text).not.toContain("- vp run typecheck");
 
         yield* appendCodeReviewResult(system, {
           run,
@@ -8655,6 +8661,15 @@ describe("ImplementationWorkflowReactor", () => {
             (thread) => thread.id === reviewingRun?.activeCodeReviewThreadId,
           );
           if (reviewer === undefined) throw new Error("Code reviewer missing.");
+          const reviewPrompt = reviewer.messages.at(-1)?.text ?? "";
+          expect(reviewPrompt).toContain("Use the Matt Pocock code-review skill");
+          expect(reviewPrompt).toContain("Review base:");
+          expect(reviewPrompt).toContain("An empty validations array is valid");
+          expect(reviewPrompt).not.toContain("Run focused validation");
+          expect(reviewPrompt).not.toContain("invalidatedValidationCommands");
+          for (const command of run.launchSummary.validationCommands) {
+            expect(reviewPrompt).not.toContain(`- ${command}`);
+          }
           const reviewerCount = snapshot.threads.filter(
             (thread) => thread.workflowRole === "implementation-code-reviewer",
           ).length;
@@ -9113,7 +9128,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("starts a fresh review when a findings cycle skips focused validation", () =>
+  it.effect("accepts final review fixes without test receipts and starts a fresh review", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system);
@@ -9591,7 +9606,9 @@ describe("ImplementationWorkflowReactor", () => {
           const reviewer = snapshot.threads.find(
             (thread) => thread.workflowRole === "implementation-code-reviewer",
           );
-          expect(reviewer?.messages.at(-1)?.text).toContain("final review of the integrated app");
+          expect(reviewer?.messages.at(-1)?.text).toContain(
+            "Use the Matt Pocock code-review skill",
+          );
         }),
       ),
   );
