@@ -1,6 +1,7 @@
 import { TicketTestPlatformPicker } from "./ReviewTestPlatformPicker";
 import {
   FINAL_REGRESSION_MAX_CYCLES,
+  isLegacyFinalRegressionFailure,
   findWorkflowPauseScope,
   isRunStageSkipped,
   isTicketSkipped,
@@ -1444,7 +1445,7 @@ function WorkflowExecutionStatusList(props: {
 }) {
   const executions = latestWorkflowStageExecutions(props.executions);
   if (executions.length === 0) return null;
-  const active = executions.filter((execution) =>
+  const unfinished = executions.filter((execution) =>
     ["queued", "starting", "running", "reconciling", "retry-wait"].includes(execution.state),
   ).length;
   const dependencyBlocked = executions.filter(
@@ -1457,9 +1458,12 @@ function WorkflowExecutionStatusList(props: {
   return (
     <div className="border-b border-border/70 px-3 py-2 text-[11px]">
       <div className="font-medium text-foreground">
-        {active > 0 ? "Running" : halted > 0 ? "Needs attention" : "Stage executions"}: {halted}{" "}
-        halted, {active} active, {dependencyBlocked} dependency-blocked
+        Recorded stages: {halted} halted, {unfinished} unfinished, {dependencyBlocked}{" "}
+        dependency-blocked
       </div>
+      <p className="text-muted-foreground">
+        These records include earlier attempts. See the current workflow step for live progress.
+      </p>
       <div className="mt-2 space-y-2">
         {executions.map((execution) => {
           const fallback = execution.recovery?.fallbackHistory.at(-1)?.model ?? null;
@@ -2468,6 +2472,10 @@ function WorkflowGroupCard(props: {
   // clears it. Scopes inside the run carry their own marks and their own
   // Resume; this one is only about the run as a whole.
   const workflowPaused = props.workflowRoot.workflowPausedAt != null;
+  const linkedValidationKind =
+    linkedImplementationRun && isLegacyFinalRegressionFailure(linkedImplementationRun)
+      ? "final"
+      : linkedImplementationRun?.activeValidationKind;
   const resumeStage =
     workflowPaused && linkedImplementationRun !== null
       ? implementationRunCurrentStage(linkedImplementationRun)
@@ -2476,11 +2484,7 @@ function WorkflowGroupCard(props: {
     resumeStage === null
       ? null
       : (steps.find((step) =>
-          workflowStepMatchesImplementationFailure(
-            step,
-            resumeStage,
-            linkedImplementationRun?.activeValidationKind,
-          ),
+          workflowStepMatchesImplementationFailure(step, resumeStage, linkedValidationKind),
         ) ?? null);
   const timeRange = resolveWorkflowGroupTimeRange(group, props.groups);
   const showsAppReviews =
@@ -2544,7 +2548,7 @@ function WorkflowGroupCard(props: {
                   workflowStepMatchesImplementationFailure(
                     step,
                     currentImplementationStage,
-                    linkedImplementationRun?.activeValidationKind,
+                    linkedValidationKind,
                   )
                 ? ("current" as const)
                 : null;
@@ -2565,7 +2569,7 @@ function WorkflowGroupCard(props: {
             workflowStepMatchesImplementationFailure(
               step,
               currentImplementationStage,
-              linkedImplementationRun?.activeValidationKind,
+              linkedValidationKind,
             ),
           // A run-wide pause reads as paused only on the step it stopped at.
           // Marking every step paused would bury the one a resume re-enters.

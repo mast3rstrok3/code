@@ -1,4 +1,5 @@
 import {
+  recoverLegacyRegression,
   regressionCommands,
   regressionPassed,
   recordRegressionCycle,
@@ -26,6 +27,7 @@ import {
   AppReviewWorkflowCycleBudget,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
   FINAL_REGRESSION_MAX_CYCLES,
+  isLegacyFinalRegressionFailure,
   IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS,
   IMPLEMENTATION_STAGE_MAX_LAUNCHES,
   MessageId,
@@ -261,6 +263,7 @@ type CodeReviewDirective = {
   readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
   readonly reportMarkdown: string;
   readonly invalidatedValidationCommands?: ReadonlyArray<string>;
+  readonly reviewedRetryCommands?: ReadonlyArray<{ command: string; retryCommand: string }>;
   readonly validationImpactMarkdown?: string;
 };
 
@@ -914,7 +917,9 @@ function clearRunStageForRerun(input: {
       automationHaltMatchesRunRerun({
         halt: input.run.automationHalt,
         stage: input.stage,
-        validationKind: input.run.activeValidationKind,
+        validationKind: isLegacyFinalRegressionFailure(input.run)
+          ? "final"
+          : input.run.activeValidationKind,
       })
         ? null
         : input.run.automationHalt,
@@ -1451,6 +1456,7 @@ function buildCodeReviewPrompt(input: {
       ? [
           "This is the code review of final regression repairs. Review only the repair diff from the review base and affected contracts; do not repeat the complete feature review.",
           "Return invalidatedValidationCommands, an array of original command names below whose previously passed checks or failure-only selections are no longer trustworthy after these repairs. Return [] when all retained evidence remains valid. Include validationImpactMarkdown explaining affected code, configuration, fixtures, deployment and why remaining checks can be retained. If uncertain, invalidate the affected full command. Do not run regression commands in this review.",
+          "Inspect the saved failure reports and repair notes. Return reviewedRetryCommands as [{command: originalCheckCommand, retryCommand: exactRerunCommand}] for pending checks whose failing tests can be selected or whose setup invocation needs correction. Explain selection coverage in validationImpactMarkdown. A subset must cover every failure from a completed original run; incomplete or setup-only runs still need all original checks. Never narrow a command you invalidated, skip unresolved failures, or weaken assertions.",
           JSON.stringify(input.run.finalRegression.checks),
         ]
       : []),
@@ -4471,6 +4477,41 @@ const make = Effect.gen(function* () {
     return { head, status };
   });
 
+  const startRegressionRepair = Effect.fn("ImplementationWorkflowReactor.startRegressionRepair")(
+    function* (input: {
+      sourceThreadId: ThreadId;
+      run: OrchestrationImplementationRun;
+      regression: NonNullable<OrchestrationImplementationRun["finalRegression"]>;
+      headSha: string;
+      reportMarkdown: string;
+      createdAt: string;
+    }) {
+      const repairRun = {
+        ...input.run,
+        activeValidationKind: "final" as const,
+        finalRegression: { ...input.regression, reviewBaseSha: input.headSha },
+      };
+      yield* startFixer({
+        sourceThreadId: input.sourceThreadId,
+        run: repairRun,
+        status: "fixing",
+        origin: "merge-gate",
+        title: `Final regression repair ${input.regression.cycles.length} of ${FINAL_REGRESSION_MAX_CYCLES}`,
+        promptText: [
+          buildMergeGateFixPrompt({ run: repairRun, reportMarkdown: input.reportMarkdown }),
+          "Repair only the pending regression checks below. Preserve their failure evidence and previously completed work. Inspect existing reports before running tests. Correct setup and test invocations within this workflow's assigned environment; never use another App Stack.",
+          ...input.regression.checks
+            .filter((check) => check.result?.status !== "passed")
+            .map(
+              (check) => `${check.command}: ${check.result?.outputMarkdown ?? "Missing result"}`,
+            ),
+          "Use focused tests while repairing. Commit the repair. Record the exact failing test IDs and a rerun command covering all failures in notesMarkdown. The repair reviewer will assess impact and select the next regression tests. Do not run complete suites here.",
+        ].join("\n\n"),
+        createdAt: input.createdAt,
+      });
+    },
+  );
+
   const startMergeGate = Effect.fn("ImplementationWorkflowReactor.startMergeGate")(
     function* (input: {
       readonly sourceThreadId: ThreadId;
@@ -4635,6 +4676,18 @@ const make = Effect.gen(function* () {
                 reviewBaseSha: null,
               }
           : undefined;
+      if (input.kind === "final" && finalRegression?.reviewBaseSha === validationHead.commitSha) {
+        yield* startRegressionRepair({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          regression: finalRegression,
+          headSha: validationHead.commitSha,
+          reportMarkdown:
+            "Resume the saved final regression failures. The first test cycle already completed on this unchanged, reviewed commit.",
+          createdAt: input.createdAt,
+        });
+        return;
+      }
       const validatingRun: OrchestrationImplementationRun = {
         ...input.run,
         status: "validating",
@@ -7307,27 +7360,12 @@ const make = Effect.gen(function* () {
             regression !== undefined &&
             regression.cycles.length < FINAL_REGRESSION_MAX_CYCLES
           ) {
-            const repairRun = {
-              ...failedRun,
-              finalRegression: { ...regression, reviewBaseSha: head.commitSha },
-            };
-            yield* startFixer({
+            yield* startRegressionRepair({
               sourceThreadId,
-              run: repairRun,
-              status: "fixing",
-              origin: "merge-gate",
-              title: `Final regression repair ${regression.cycles.length} of ${FINAL_REGRESSION_MAX_CYCLES}`,
-              promptText: [
-                buildMergeGateFixPrompt({ run: repairRun, reportMarkdown: failureDetail }),
-                "Repair only these failed regression checks. Preserve their failure evidence and previously completed work:",
-                ...regression.checks
-                  .filter((check) => check.result?.status !== "passed")
-                  .map(
-                    (check) =>
-                      `${check.command}: ${check.result?.outputMarkdown ?? "Missing result"}`,
-                  ),
-                "Use focused tests while repairing. Commit the repair. A separate code reviewer will assess its impact before the next regression cycle reruns failures. Do not run the complete suite here.",
-              ].join("\n\n"),
+              run: failedRun,
+              regression,
+              headSha: head.commitSha,
+              reportMarkdown: failureDetail,
               createdAt: updatedAt,
             });
           } else {
@@ -8432,6 +8470,7 @@ const make = Effect.gen(function* () {
             run.finalRegression,
             directive.invalidatedValidationCommands,
             directive.validationImpactMarkdown,
+            directive.reviewedRetryCommands,
           );
           yield* startMergeGate({
             sourceThreadId,
@@ -9427,7 +9466,9 @@ const make = Effect.gen(function* () {
           : !automationHaltMatchesRunRerun({
               halt: run.automationHalt,
               stage: target.stage,
-              validationKind: run.activeValidationKind,
+              validationKind: isLegacyFinalRegressionFailure(run)
+                ? "final"
+                : run.activeValidationKind,
             }))
       ) {
         return;
@@ -9446,7 +9487,25 @@ const make = Effect.gen(function* () {
       });
 
       if (target.kind === "run") {
-        const rerunRun = clearRunStageForRerun({ run, stage: target.stage, updatedAt: createdAt });
+        const clearedRun = clearRunStageForRerun({
+          run,
+          stage: target.stage,
+          updatedAt: createdAt,
+        });
+        const rerunRun =
+          target.stage === "merge-gate" && isLegacyFinalRegressionFailure(run)
+            ? {
+                ...clearedRun,
+                activeValidationKind: "final" as const,
+                finalRegression: recoverLegacyRegression({
+                  requiredCommands: run.launchSummary.validationCommands,
+                  validations: run.finalValidationResults,
+                  headSha: run.codeReviewedHeadSha!,
+                  completedAt: run.automationHalt!.haltedAt,
+                }),
+                finalValidation: run.finalValidation,
+              }
+            : clearedRun;
         yield* updateRun({
           sourceThreadId,
           run: rerunRun,

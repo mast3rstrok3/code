@@ -62,6 +62,7 @@ describe("workflowDirectives", () => {
       runId: "run-1",
       status: "clean",
       reportMarkdown: "Repair reviewed.",
+      reviewedRetryCommands: [{ command: "e2e", retryCommand: "e2e failed.spec" }],
       invalidatedValidationCommands: ["check"],
       validationImpactMarkdown: "Shared build inputs changed; other E2E cases are unaffected.",
       validations: [
@@ -82,6 +83,10 @@ describe("workflowDirectives", () => {
       return;
     NodeAssert.equal(result.directive.validations[0]?.retryCommand, "e2e failed.spec");
     NodeAssert.deepEqual(result.directive.invalidatedValidationCommands, ["check"]);
+    NodeAssert.deepEqual(result.directive.reviewedRetryCommands, directive.reviewedRetryCommands);
+    for (const invalid of [null, "e2e", [null], [{ command: "e2e", retryCommand: "" }]]) {
+      NodeAssert.equal(parse({ ...directive, reviewedRetryCommands: invalid }).kind, "error");
+    }
     NodeAssert.equal(result.directive.validationImpactMarkdown, directive.validationImpactMarkdown);
     for (const invalid of ["", " ", 123]) {
       NodeAssert.equal(

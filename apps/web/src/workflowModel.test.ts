@@ -275,6 +275,32 @@ describe("resolveWorkflowCurrentPath", () => {
     expect(path.subtitle).toContain("Cycle 2");
   });
 
+  it("places a legacy gate failure in final regression tests", () => {
+    const validation = {
+      command: "e2e",
+      status: "failed" as const,
+      outputMarkdown: "One test failed",
+      completedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const path = resolve(
+      implementationRun([], {
+        status: "needs-human-attention",
+        activeValidationKind: null,
+        codeReviewedHeadSha: "reviewed",
+        finalValidation: validation,
+        finalValidationResults: [validation],
+        automationHalt: {
+          stage: "final-code-review",
+          category: "validation-failed",
+          detail: "Old final gate failed",
+          haltedAt: "2026-01-01T00:00:00.000Z",
+        },
+      }),
+    );
+    expect(path.stepId).toBe("final-regression");
+    expect(path.status).toBe("blocked");
+  });
+
   it("gives final regression tests its own current step", () => {
     const path = resolve(
       implementationRun([], {

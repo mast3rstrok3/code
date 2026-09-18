@@ -1,4 +1,5 @@
 import {
+  isLegacyFinalRegressionFailure,
   type OrchestrationImplementationRerunTarget,
   type OrchestrationImplementationRun,
   type WorkflowStageExecution,
@@ -38,10 +39,19 @@ export function implementationRerunTargetMatchesHalt(
  * that step. Route it to the ticket stage so the action clears the real halt.
  */
 export function normalizeImplementationRerunTargetForHalt(
-  run: Pick<OrchestrationImplementationRun, "automationHalt">,
+  run: Pick<OrchestrationImplementationRun, "automationHalt"> &
+    Partial<OrchestrationImplementationRun>,
   target: OrchestrationImplementationRerunTarget,
 ): OrchestrationImplementationRerunTarget {
   const halt = run.automationHalt;
+  if (
+    isLegacyFinalRegressionFailure(run) &&
+    target.kind === "run" &&
+    target.stage === "code-review"
+  ) {
+    return { kind: "run", stage: "merge-gate" };
+  }
+
   if (halt?.ticketId === undefined || target.kind !== "run") return target;
   if (target.stage === "app-review" && halt.stage === "app-review") {
     return { kind: "ticket", ticketId: halt.ticketId, stage: "app-review" };

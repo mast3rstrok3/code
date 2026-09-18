@@ -1,4 +1,4 @@
-import { FINAL_REGRESSION_MAX_CYCLES } from "@t3tools/contracts";
+import { FINAL_REGRESSION_MAX_CYCLES, isLegacyFinalRegressionFailure } from "@t3tools/contracts";
 import type {
   AppReviewWorkflowRun,
   OrchestrationImplementationAutomationHalt,
@@ -279,6 +279,10 @@ export function implementationTicketStageDetails(
  */
 export function implementationRunCurrentStage(run: {
   readonly status: OrchestrationImplementationRunStatus;
+  readonly finalRegression?: OrchestrationImplementationRun["finalRegression"];
+  readonly codeReviewedHeadSha?: string | null;
+  readonly finalValidation?: OrchestrationImplementationRun["finalValidation"];
+  readonly finalValidationResults?: OrchestrationImplementationRun["finalValidationResults"];
   readonly activeValidationKind?: "integration" | "final" | null;
   readonly retryableFailure?: OrchestrationImplementationRetryableFailure | null | undefined;
   readonly automationHalt?: OrchestrationImplementationAutomationHalt | null | undefined;
@@ -292,7 +296,9 @@ export function implementationRunCurrentStage(run: {
         case "code-review":
           return "code-review";
         case "final-code-review":
-          return run.activeValidationKind === "final" ? "merge-gate" : "code-review";
+          return run.activeValidationKind === "final" || isLegacyFinalRegressionFailure(run)
+            ? "merge-gate"
+            : "code-review";
         case "integration":
           return "integration";
         case "implementation":
@@ -826,7 +832,7 @@ export function resolveWorkflowCurrentPath<TThread extends WorkflowModelThread>(
 
     const stage = implementationRunCurrentStage(run);
     const finalValidation =
-      run.activeValidationKind === "final" &&
+      (run.activeValidationKind === "final" || isLegacyFinalRegressionFailure(run)) &&
       (stage === "merge-gate" ||
         stage === "integration" ||
         stage === "fixer" ||

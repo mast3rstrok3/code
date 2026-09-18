@@ -8386,6 +8386,97 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  for (const headChanged of [false, true]) {
+    it.effect(
+      `recovers a legacy final regression failure ${headChanged ? "only on its tested commit" : "into repair without repeating tests"}`,
+      () =>
+        withSystem((system) =>
+          Effect.gen(function* () {
+            const { run } = yield* launchRun(system);
+            const validations: OrchestrationImplementationValidationResult[] = [
+              {
+                command: "vp check",
+                status: "failed",
+                completedAt: now,
+                outputMarkdown: "Bad report path",
+              },
+              {
+                command: "env -u REPORT vp check",
+                supersedesCommand: "vp check",
+                status: "passed",
+                completedAt: "2026-01-01T00:00:01.000Z",
+                outputMarkdown: "Same checks passed after correcting setup",
+              },
+              {
+                command: "vp run typecheck",
+                status: "failed",
+                completedAt: now,
+                outputMarkdown: "One case failed",
+              },
+            ];
+            yield* system.engine.dispatch({
+              type: "thread.implementation-run.update",
+              commandId: commandId("legacy-regression-stop"),
+              threadId: sourceThreadId,
+              run: {
+                ...run,
+                status: "needs-human-attention",
+                integrationHeadSha: "def456",
+                codeReviewedHeadSha: "def456",
+                activeValidationKind: null,
+                activeValidatorThreadId: null,
+                activeCodeReviewThreadId: null,
+                finalValidation: validations[2]!,
+                finalValidationResults: validations,
+                automationHalt: {
+                  stage: "final-code-review",
+                  category: "validation-failed",
+                  detail: "Legacy gate stopped",
+                  haltedAt: now,
+                },
+                updatedAt: now,
+              },
+              createdAt: now,
+            });
+            if (headChanged) yield* Ref.set(system.orchestratorHead, "changed@commit");
+            yield* system.engine.dispatch({
+              type: "thread.implementation-run.rerun",
+              commandId: commandId("resume-legacy-regression"),
+              threadId: sourceThreadId,
+              runId: run.id,
+              target: { kind: "run", stage: "code-review" },
+              createdAt: "2026-01-01T00:00:05.000Z",
+            });
+            yield* system.reactor.drain;
+            const snapshot = yield* system.query.getSnapshot();
+            const resumed = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
+            expect(resumed.activeValidatorThreadId).toBeNull();
+            expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
+            if (headChanged) {
+              expect(resumed.status).toBe("needs-human-attention");
+              expect(resumed.automationHalt?.detail).toContain("expected HEAD");
+              expect(resumed.activeFixerThreadId).toBeNull();
+              return;
+            }
+            expect(resumed.status, resumed.automationHalt?.detail).toBe("fixing");
+            expect(resumed.activeValidationKind).toBe("final");
+            expect(resumed.finalRegression?.cycles).toHaveLength(1);
+            expect(resumed.finalRegression?.checks[0]?.result?.status).toBe("passed");
+            expect(resumed.finalRegression?.checks[0]?.result?.command).toBe(
+              "env -u REPORT vp check",
+            );
+            expect(resumed.finalRegression?.checks[1]?.result?.status).toBe("failed");
+            const fixer = snapshot.threads.find(
+              (thread) => thread.id === resumed.activeFixerThreadId,
+            );
+            expect(fixer?.title).toBe("Final regression repair 1 of 5");
+            expect(fixer?.messages.at(-1)?.text).toContain("One case failed");
+            expect(fixer?.messages.at(-1)?.text).not.toContain("Bad report path");
+          }),
+        ),
+    );
+  }
+
   for (const succeeds of [true, false]) {
     it.effect(
       `final regression cycles ${succeeds ? "retry failures and publish" : "stop after five failed rounds"}`,
@@ -8523,6 +8614,9 @@ describe("ImplementationWorkflowReactor", () => {
                     validations: [],
                     reportMarkdown: "Repair reviewed",
                     invalidatedValidationCommands: [],
+                    reviewedRetryCommands: [
+                      { command: "vp run typecheck", retryCommand: "vp test failed-case" },
+                    ],
                     validationImpactMarkdown:
                       "Only the failing case changed. Passing checks and fixtures remain valid.",
                   },

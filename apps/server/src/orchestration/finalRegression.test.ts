@@ -4,6 +4,7 @@ import type {
   OrchestrationImplementationValidationResult,
 } from "@t3tools/contracts";
 import {
+  recoverLegacyRegression,
   invalidateRegressionChecks,
   recordRegressionCycle,
   regressionCommands,
@@ -86,6 +87,58 @@ describe("final regression selections", () => {
     expect(
       regressionCommands(invalidateRegressionChecks(first, ["typo"], "Invalid selection.")),
     ).toEqual(["check", "e2e"]);
+  });
+  it("recovers corrected passes and retains every unresolved legacy check", () => {
+    const validations = [
+      result("check", "failed"),
+      {
+        ...result("env check", "passed"),
+        supersedesCommand: "check",
+        completedAt: "2026-09-18T00:00:01.000Z",
+      },
+      result("e2e", "failed"),
+      result("extra", "failed"),
+    ];
+    const recovered = recoverLegacyRegression({
+      requiredCommands: ["check", "e2e", "missing"],
+      validations,
+      headSha: "head",
+      completedAt: at,
+    });
+    expect(regressionCommands(recovered)).toEqual(["e2e", "missing", "extra"]);
+    expect(recovered.cycles[0]?.validations).toEqual(validations);
+    expect(recovered.reviewBaseSha).toBe("head");
+    const selected = invalidateRegressionChecks(
+      recovered,
+      [],
+      "Completed E2E report contains exactly this failure.",
+      [{ command: "e2e", retryCommand: "e2e failure.spec" }],
+    );
+    expect(regressionCommands(selected)).toEqual(["e2e failure.spec", "missing", "extra"]);
+    const invalidated = invalidateRegressionChecks(recovered, ["e2e"], "Shared fixtures changed.", [
+      { command: "e2e", retryCommand: "e2e failure.spec" },
+    ]);
+    expect(regressionCommands(invalidated)).toContain("e2e");
+  });
+  it("accepts explicit newer setup corrections in a test cycle", () => {
+    const state = record(initial(), [
+      result("check", "failed"),
+      result("e2e", "passed"),
+      {
+        ...result("env check", "passed"),
+        supersedesCommand: "check",
+        completedAt: "2026-09-18T00:00:01.000Z",
+      },
+    ]);
+    expect(regressionPassed(state, ["check", "e2e"])).toBe(true);
+    expect(state.cycles[0]?.validations).toHaveLength(3);
+  });
+  it("does not accept a correction without the original failure evidence", () => {
+    const state = record(initial(), [
+      result("e2e", "passed"),
+      { ...result("env check", "passed"), supersedesCommand: "check" },
+    ]);
+    expect(regressionPassed(state, ["check", "e2e"])).toBe(false);
   });
   it("does not publish when a newly required command lacks evidence", () => {
     const passed = record(initial(), [result("check", "passed"), result("e2e", "passed")]);

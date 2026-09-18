@@ -157,6 +157,7 @@ export type WorkflowDirective =
       readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
       readonly reportMarkdown: string;
       readonly invalidatedValidationCommands?: ReadonlyArray<string>;
+      readonly reviewedRetryCommands?: ReadonlyArray<{ command: string; retryCommand: string }>;
       readonly validationImpactMarkdown?: string;
     }
   | {
@@ -1060,6 +1061,27 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       ) {
         return "invalidatedValidationCommands must be an array of non-empty command strings.";
       }
+      const reviewedRetryCommands: Array<{ command: string; retryCommand: string }> = [];
+      if (record["reviewedRetryCommands"] !== undefined) {
+        if (!Array.isArray(record["reviewedRetryCommands"]))
+          return "reviewedRetryCommands must be an array.";
+        for (const value of record["reviewedRetryCommands"]) {
+          const selection = asRecord(value);
+          if (
+            selection === null ||
+            typeof selection["command"] !== "string" ||
+            !selection["command"].trim() ||
+            typeof selection["retryCommand"] !== "string" ||
+            !selection["retryCommand"].trim()
+          ) {
+            return "Each reviewed retry requires a non-empty command and retryCommand.";
+          }
+          reviewedRetryCommands.push({
+            command: selection["command"].trim(),
+            retryCommand: selection["retryCommand"].trim(),
+          });
+        }
+      }
       const validationImpactMarkdown = optionalString(record, "validationImpactMarkdown");
       if (validationImpactMarkdown?.startsWith("Directive field")) return validationImpactMarkdown;
       return {
@@ -1069,6 +1091,7 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
               invalidatedValidationCommands: invalidatedValidationCommands as string[],
             }),
         ...(validationImpactMarkdown === undefined ? {} : { validationImpactMarkdown }),
+        ...(reviewedRetryCommands.length > 0 ? { reviewedRetryCommands } : {}),
         type: "implementation-code-review-result",
         runId,
         ...(ticketId === undefined ? {} : { ticketId }),

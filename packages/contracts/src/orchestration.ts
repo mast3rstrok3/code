@@ -1631,6 +1631,29 @@ export const OrchestrationImplementationRun = Schema.Struct({
 });
 export type OrchestrationImplementationRun = typeof OrchestrationImplementationRun.Type;
 
+/** Older final gates stored their failure under Code Review and cleared the validation kind. */
+export function isLegacyFinalRegressionFailure(run: {
+  readonly status?: OrchestrationImplementationRun["status"] | undefined;
+  readonly finalRegression?: OrchestrationImplementationRun["finalRegression"] | undefined;
+  readonly automationHalt?: OrchestrationImplementationRun["automationHalt"] | undefined;
+  readonly codeReviewedHeadSha?: string | null | undefined;
+  readonly finalValidation?: OrchestrationImplementationRun["finalValidation"] | undefined;
+  readonly finalValidationResults?:
+    | OrchestrationImplementationRun["finalValidationResults"]
+    | undefined;
+}) {
+  return (
+    run.status === "needs-human-attention" &&
+    run.finalRegression === undefined &&
+    run.automationHalt?.ticketId === undefined &&
+    run.automationHalt?.stage === "final-code-review" &&
+    run.automationHalt.category === "validation-failed" &&
+    run.codeReviewedHeadSha != null &&
+    run.finalValidation?.status === "failed" &&
+    (run.finalValidationResults?.length ?? 0) > 0
+  );
+}
+
 export const OrchestrationSessionStatus = Schema.Literals([
   "idle",
   "starting",
