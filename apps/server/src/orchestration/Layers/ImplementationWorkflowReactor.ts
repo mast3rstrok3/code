@@ -32,6 +32,7 @@ import {
   IMPLEMENTATION_STAGE_MAX_LAUNCHES,
   MessageId,
   ThreadId,
+  type TurnId,
   type OrchestrationEvent,
   type OrchestrationImplementationRerunRunStage,
   type OrchestrationImplementationRerunTarget,
@@ -877,6 +878,16 @@ function reopenTicketForRerun(input: {
   };
 }
 
+function isFinalValidatorLaunchHalt(run: OrchestrationImplementationRun): boolean {
+  return (
+    run.status === "needs-human-attention" &&
+    run.activeValidationKind === "final" &&
+    run.automationHalt?.stage === "final-code-review" &&
+    run.automationHalt.category === "retry-exhausted" &&
+    (run.finalRegression?.launchCount ?? 0) >= IMPLEMENTATION_STAGE_MAX_LAUNCHES
+  );
+}
+
 /**
  * Clear the run-wide state one stage owns so it can start again.
  *
@@ -946,6 +957,9 @@ function clearRunStageForRerun(input: {
     case "merge-gate":
       return {
         ...base,
+        ...(isFinalValidatorLaunchHalt(input.run) && input.run.finalRegression
+          ? { finalRegression: { ...input.run.finalRegression, launchCount: 0 } }
+          : {}),
         status: "validating" as const,
         activeValidatorThreadId: null,
         activeValidationHeadSha: null,
@@ -4530,6 +4544,33 @@ const make = Effect.gen(function* () {
       readonly createdAt: string;
     }) {
       if (input.run.automationHalt !== null) return;
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
+      if (orchestratorThread === null) return;
+      // A failed integration gate keeps its validator on the run so the thread
+      // gets the grace window to finish or be nudged before anything relaunches
+      // it. That claim is only a reason to stand down while the thread is still
+      // working: reading "the thread still exists" as "the gate is running" left
+      // the run at `validating` with no halt, because the sweep proved the
+      // validator dead and then called this, which returned right back.
+      const activeValidator =
+        input.run.activeValidatorThreadId === null
+          ? undefined
+          : readModel.threads.find(
+              (thread) =>
+                thread.id === input.run.activeValidatorThreadId && thread.deletedAt === null,
+            );
+      if (
+        activeValidator !== undefined &&
+        !stageThreadIsFinished({
+          thread: activeValidator,
+          threads: readModel.threads,
+          nowMs: Date.parse(input.createdAt),
+        })
+      ) {
+        return;
+      }
+
       // Every start claims another attempt. Without a reader the claim was free,
       // so a gate that kept failing kept being relaunched with nothing counting.
       if (
@@ -4576,32 +4617,6 @@ const make = Effect.gen(function* () {
           haltCategory: "retry-exhausted",
           haltStage: "final-code-review",
         });
-        return;
-      }
-      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-      const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
-      if (orchestratorThread === null) return;
-      // A failed integration gate keeps its validator on the run so the thread
-      // gets the grace window to finish or be nudged before anything relaunches
-      // it. That claim is only a reason to stand down while the thread is still
-      // working: reading "the thread still exists" as "the gate is running" left
-      // the run at `validating` with no halt, because the sweep proved the
-      // validator dead and then called this, which returned right back.
-      const activeValidator =
-        input.run.activeValidatorThreadId === null
-          ? undefined
-          : readModel.threads.find(
-              (thread) =>
-                thread.id === input.run.activeValidatorThreadId && thread.deletedAt === null,
-            );
-      if (
-        activeValidator !== undefined &&
-        !stageThreadIsFinished({
-          thread: activeValidator,
-          threads: readModel.threads,
-          nowMs: Date.parse(input.createdAt),
-        })
-      ) {
         return;
       }
 
@@ -7208,21 +7223,33 @@ const make = Effect.gen(function* () {
 
   const handleMergeGateResult = Effect.fn("ImplementationWorkflowReactor.handleMergeGateResult")(
     function* (
-      event: Extract<ImplementationWorkflowEvent, { type: "thread.activity-appended" }>,
+      event: {
+        readonly threadId: ThreadId;
+        readonly turnId: TurnId | null;
+        readonly createdAt: string;
+      },
       directive: MergeGateDirective,
     ) {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-      const run = findRunById(readModel, directive.runId);
+      const persistedRun = findRunById(readModel, directive.runId);
+      const run =
+        persistedRun !== null &&
+        isFinalValidatorLaunchHalt(persistedRun) &&
+        event.createdAt > persistedRun.automationHalt!.haltedAt &&
+        event.turnId === (findThread(readModel, event.threadId)?.latestTurn?.turnId ?? null)
+          ? { ...persistedRun, status: "validating" as const, automationHalt: null }
+          : persistedRun;
       if (
         run === null ||
         run.status !== "validating" ||
-        run.activeValidatorThreadId !== event.payload.threadId
+        run.activeValidatorThreadId !== event.threadId ||
+        isWorkflowThreadPaused(readModel.threads, event.threadId)
       ) {
         return;
       }
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) return;
-      const updatedAt = event.payload.activity.createdAt;
+      const updatedAt = event.createdAt;
       const [head, status] = yield* Effect.all([
         gitWorkflow.resolveCommit({ cwd: run.orchestratorWorktreePath, ref: "HEAD" }),
         gitWorkflow.localStatus({ cwd: run.orchestratorWorktreePath }),
@@ -7460,6 +7487,9 @@ const make = Effect.gen(function* () {
           retryableFailure: null,
           updatedAt,
         };
+        if (persistedRun !== null && isFinalValidatorLaunchHalt(persistedRun)) {
+          yield* updateRun({ sourceThreadId, run: validatedRun, createdAt: updatedAt });
+        }
         yield* fileChangeRequest({ sourceThreadId, run: validatedRun, createdAt: updatedAt });
         return;
       }
@@ -10452,7 +10482,15 @@ const make = Effect.gen(function* () {
       }
       case "implementation-merge-gate-result": {
         const directive = asMergeGateDirective(event.payload.activity.payload);
-        if (directive !== null) yield* handleMergeGateResult(event, directive);
+        if (directive !== null)
+          yield* handleMergeGateResult(
+            {
+              threadId: event.payload.threadId,
+              turnId: event.payload.activity.turnId,
+              createdAt: event.payload.activity.createdAt,
+            },
+            directive,
+          );
         return;
       }
       case "implementation-fix-result": {
@@ -11298,6 +11336,39 @@ const make = Effect.gen(function* () {
             createdAt,
           }),
         );
+      }
+      // A launch-limit halt can race the validator's final result. Recover only
+      // its current completed turn, then apply the usual HEAD and check validation.
+      if (isFinalValidatorLaunchHalt(run) && run.activeValidatorThreadId !== null) {
+        const validator = findThread(readModel, run.activeValidatorThreadId);
+        if (
+          validator?.deletedAt === null &&
+          validator.latestTurn?.state === "completed" &&
+          validator.session?.activeTurnId == null &&
+          !isWorkflowThreadPaused(readModel.threads, validator.id)
+        ) {
+          const detail = yield* projectionSnapshotQuery
+            .getThreadDetailById(validator.id)
+            .pipe(Effect.map(Option.getOrUndefined));
+          const reported = detail?.activities.findLast(
+            (activity) =>
+              activity.kind === "implementation-merge-gate-result" &&
+              activity.turnId === validator.latestTurn?.turnId &&
+              activity.createdAt > run.automationHalt!.haltedAt,
+          );
+          const directive = reported ? asMergeGateDirective(reported.payload) : null;
+          if (directive?.runId === run.id) {
+            yield* recoverRunStage(
+              run.id,
+              "final-validator-result",
+              handleMergeGateResult(
+                { threadId: validator.id, turnId: validator.latestTurn.turnId, createdAt },
+                directive,
+              ),
+            );
+            continue;
+          }
+        }
       }
       if (run.automationHalt !== null) continue;
       const childThreads = readModel.threads.filter(

@@ -11460,6 +11460,185 @@ describe("ImplementationWorkflowReactor", () => {
     );
   }
 
+  for (const scenario of [
+    "active",
+    "late",
+    "restart",
+    "changed-head",
+    "stale-turn",
+    "canceled",
+    "paused",
+  ] as const) {
+    it.effect(`final validator launch recovery handles ${scenario}`, () =>
+      withSystem(
+        (system) =>
+          Effect.gen(function* () {
+            const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+            yield* appendWorkerResult(system, { run, status: "succeeded" });
+            yield* passMergeGate(system, run);
+            let snapshot = yield* system.query.getSnapshot();
+            const reviewing = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
+            yield* appendCodeReviewResult(system, {
+              run,
+              threadId: reviewing.activeCodeReviewThreadId!,
+              status: "clean",
+              tag: "validator-launch-recovery",
+              validations: [],
+            });
+            snapshot = yield* system.query.getSnapshot();
+            const validating = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
+            const threadId = validating.activeValidatorThreadId!;
+            const turnId = TurnId.make("final-validator-current-turn");
+            yield* system.engine.dispatch({
+              type: "thread.session.set",
+              commandId: commandId("final-validator-running"),
+              threadId,
+              session: {
+                threadId,
+                status: "running",
+                providerName: "codex",
+                runtimeMode: "full-access",
+                activeTurnId: turnId,
+                lastError: null,
+                updatedAt: now,
+              },
+              createdAt: now,
+            });
+            const halted: OrchestrationImplementationRun = {
+              ...validating,
+              status:
+                scenario === "active"
+                  ? "validating"
+                  : scenario === "canceled"
+                    ? "canceled"
+                    : "needs-human-attention",
+              finalRegression: {
+                ...validating.finalRegression!,
+                launchCount: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+              },
+              automationHalt:
+                scenario === "active"
+                  ? null
+                  : {
+                      stage: "final-code-review",
+                      category: "retry-exhausted",
+                      detail: "Validator stopped without a result",
+                      haltedAt: now,
+                    },
+              updatedAt: now,
+            };
+            const update = (updatedRun: OrchestrationImplementationRun, tag: string) =>
+              system.engine.dispatch({
+                type: "thread.implementation-run.update",
+                commandId: commandId(tag),
+                threadId: sourceThreadId,
+                run: updatedRun,
+                createdAt: updatedRun.updatedAt,
+              });
+            const replay =
+              scenario === "restart" || scenario === "changed-head" || scenario === "stale-turn";
+            yield* update(
+              replay
+                ? {
+                    ...halted,
+                    automationHalt: { ...halted.automationHalt!, category: "validation-failed" },
+                  }
+                : halted,
+              "validator-halt",
+            );
+            if (scenario === "paused") {
+              yield* system.engine.dispatch({
+                type: "thread.workflow.pause",
+                commandId: commandId("pause-final-validator"),
+                threadId: sourceThreadId,
+                createdAt: now,
+              });
+              yield* system.reactor.drain;
+            }
+            if (scenario !== "active") {
+              yield* system.engine.dispatch({
+                type: "thread.activity.append",
+                commandId: commandId("late-validator-result"),
+                threadId,
+                activity: {
+                  id: eventId("late-validator-result"),
+                  tone: "info",
+                  kind: "implementation-merge-gate-result",
+                  summary: "Final validation passed",
+                  payload: {
+                    type: "implementation-merge-gate-result",
+                    runId: run.id,
+                    status: "passed",
+                    validations: completeValidations(),
+                    summaryMarkdown: "All checks passed",
+                  },
+                  turnId: scenario === "stale-turn" ? TurnId.make("old-validator-turn") : turnId,
+                  createdAt: "2026-01-01T00:01:00.000Z",
+                },
+                createdAt: "2026-01-01T00:01:00.000Z",
+              });
+              yield* system.reactor.drain;
+              yield* system.engine.dispatch({
+                type: "thread.session.set",
+                commandId: commandId("final-validator-ready"),
+                threadId,
+                session: {
+                  threadId,
+                  status: "ready",
+                  providerName: "codex",
+                  runtimeMode: "full-access",
+                  activeTurnId: null,
+                  lastError: null,
+                  updatedAt: "2026-01-01T00:01:01.000Z",
+                },
+                createdAt: "2026-01-01T00:01:01.000Z",
+              });
+              yield* system.reactor.drain;
+            }
+            if (replay) yield* update(halted, "restore-launch-halt");
+            if (scenario === "changed-head")
+              yield* Ref.set(system.orchestratorHead, "unreviewed-commit");
+            yield* TestClock.adjust(Duration.minutes(2));
+            yield* system.reactor.recoverIncompleteStages();
+            yield* system.reactor.drain;
+            yield* system.reactor.recoverIncompleteStages();
+            yield* system.reactor.drain;
+            snapshot = yield* system.query.getSnapshot();
+            const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
+            if (scenario === "late" || scenario === "restart") {
+              expect(recovered.automationHalt).toBeNull();
+              expect(recovered.validatedHeadSha).toBe(validating.codeReviewedHeadSha);
+              expect(recovered.finalRegression?.cycles).toHaveLength(1);
+              expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(1);
+            } else {
+              expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
+              expect(recovered.validatedHeadSha).toBeNull();
+              if (scenario === "active") {
+                expect(recovered.status).toBe("validating");
+                expect(recovered.automationHalt).toBeNull();
+                expect(recovered.activeValidatorThreadId).toBe(threadId);
+              } else {
+                expect(recovered.status).toBe(
+                  scenario === "canceled" ? "canceled" : "needs-human-attention",
+                );
+              }
+            }
+          }),
+        {
+          serverSettings: {
+            workflowStepReviewParts: [
+              {
+                workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+                e2e: false,
+                browser: false,
+              },
+            ],
+          },
+        },
+      ),
+    );
+  }
+
   it.effect("halts final regression recovery after repeated validator launch failures", () =>
     withSystem((system) =>
       Effect.gen(function* () {
@@ -11479,8 +11658,8 @@ describe("ImplementationWorkflowReactor", () => {
             activeValidatorThreadId: null,
             activeValidationHeadSha: null,
             finalRegression: {
-              checks: [],
-              cycles: [],
+              checks: completeValidations().map((result) => ({ command: result.command, result })),
+              cycles: [{ headSha: "def456", validations: completeValidations(), completedAt: now }],
               reviewBaseSha: null,
               launchCount: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
             },
@@ -11495,6 +11674,23 @@ describe("ImplementationWorkflowReactor", () => {
         expect(stopped?.status).toBe("needs-human-attention");
         expect(stopped?.automationHalt?.category).toBe("retry-exhausted");
         expect(stopped?.activeValidatorThreadId).toBeNull();
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.rerun",
+          commandId: commandId("restart-final-validator-with-history"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "run", stage: "merge-gate" },
+          createdAt: "2026-01-01T00:00:05.000Z",
+        });
+        yield* system.reactor.drain;
+        const restarted = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        );
+        expect(restarted?.automationHalt).toBeNull();
+        expect(restarted?.status).toBe("validating");
+        expect(restarted?.finalRegression?.cycles).toEqual(stopped?.finalRegression?.cycles);
+        expect(restarted?.finalRegression?.checks).toEqual(stopped?.finalRegression?.checks);
+        expect(restarted?.finalRegression?.launchCount).toBe(1);
       }),
     ),
   );
