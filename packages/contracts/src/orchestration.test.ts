@@ -7,6 +7,7 @@ import { CommandId, ProjectId, ThreadId } from "./baseSchemas.ts";
 import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
+  FinalRegressionState,
   IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS,
   IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS,
   IMPLEMENTATION_RUN_MAX_QA_CYCLES,
@@ -2057,3 +2058,17 @@ it("isProviderSendTurnSupportedImageMimeType accepts raster formats and rejects 
   assert.strictEqual(isProviderSendTurnSupportedImageMimeType("IMAGE/JPEG"), true);
   assert.strictEqual(isProviderSendTurnSupportedImageMimeType("image/svg+xml"), false);
 });
+
+it.effect("persists reviewed regression selections without inventing completed results", () =>
+  Effect.gen(function* () {
+    const legacy = { checks: [{ command: "e2e", result: null }], cycles: [], reviewBaseSha: null };
+    const decode = Schema.decodeUnknownEffect(FinalRegressionState);
+    assert.deepEqual(yield* decode(legacy), legacy);
+    const selected = {
+      ...legacy,
+      checks: [{ command: "e2e", retryCommand: "e2e failed.spec", result: null }],
+    };
+    const encoded = yield* Schema.encodeEffect(FinalRegressionState)(yield* decode(selected));
+    assert.deepEqual(yield* decode(encoded), selected);
+  }),
+);

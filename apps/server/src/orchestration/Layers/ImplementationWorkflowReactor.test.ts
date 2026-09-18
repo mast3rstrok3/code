@@ -11656,6 +11656,76 @@ describe("ImplementationWorkflowReactor", () => {
     );
   }
 
+  it.effect("concurrent recovery claims one fixer and replaces it only after it stops", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("missing-regression-fixer"),
+          threadId: sourceThreadId,
+          run: {
+            ...run,
+            status: "fixing",
+            fixOrigin: "merge-gate",
+            activeValidationKind: "final",
+            activeFixerThreadId: null,
+            orchestratorBranch: "main",
+            orchestratorWorktreePath: "/tmp/implementation-reactor-review",
+            finalRegression: { checks: [], cycles: [], reviewBaseSha: "def456" },
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+        const staleSnapshot = yield* system.query.getCommandReadModel();
+        const recover = () =>
+          Effect.all(
+            [system.reactor.recoverIncompleteStages(), system.reactor.recoverIncompleteStages()],
+            { concurrency: "unbounded", discard: true },
+          );
+        yield* recover();
+        yield* system.reactor.drain;
+        let snapshot = yield* system.query.getSnapshot();
+        const fixers = () =>
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer");
+        expect(fixers()).toHaveLength(1);
+        const fixer = fixers()[0]!;
+        expect(snapshot.implementationRuns[0]?.activeFixerThreadId).toBe(fixer.id);
+        const staleRead = vi
+          .spyOn(system.query, "getCommandReadModel")
+          .mockReturnValueOnce(Effect.succeed(staleSnapshot));
+        yield* system.reactor
+          .recoverIncompleteStages()
+          .pipe(Effect.ensuring(Effect.sync(() => staleRead.mockRestore())));
+        yield* recover();
+        yield* system.reactor.drain;
+        snapshot = yield* system.query.getSnapshot();
+        expect(fixers()).toHaveLength(1);
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("stop-regression-fixer"),
+          threadId: fixer.id,
+          session: {
+            threadId: fixer.id,
+            status: "stopped",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+        yield* recover();
+        yield* system.reactor.drain;
+        snapshot = yield* system.query.getSnapshot();
+        expect(fixers()).toHaveLength(2);
+        expect(snapshot.implementationRuns[0]?.activeFixerThreadId).not.toBe(fixer.id);
+        expect(snapshot.implementationRuns[0]?.finalRegression?.reviewBaseSha).toBe("def456");
+      }),
+    ),
+  );
+
   it.effect("halts final regression recovery after repeated validator launch failures", () =>
     withSystem((system) =>
       Effect.gen(function* () {

@@ -2054,6 +2054,7 @@ const make = Effect.gen(function* () {
     new Map<string, { readonly semaphore: Semaphore.Semaphore; readonly users: number }>(),
   );
   const ticketAppReviewAdmission = yield* Semaphore.make(1);
+  const fixerLaunchAdmission = yield* Semaphore.make(1);
 
   /**
    * Asks the frontend URL itself whether a reviewer could load it. Deliberately cheap and
@@ -7767,6 +7768,35 @@ const make = Effect.gen(function* () {
   }) {
     if (input.run.automationHalt !== null) return;
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const currentRun = currentRunForQueuedRerun(
+      readModel,
+      input.run.id,
+      input.run,
+      yield* Clock.currentTimeMillis,
+    );
+    if (
+      currentRun.status === "canceled" ||
+      currentRun.status === "completed" ||
+      currentRun.updatedAt > input.run.updatedAt ||
+      isWorkflowThreadPaused(readModel.threads, currentRun.orchestratorThreadId)
+    )
+      return;
+    const startsNextQaRepair =
+      (input.origin === "app-review" || input.origin === "app-dev-stack") &&
+      input.run.qaCycleCount === currentRun.qaCycleCount + 1;
+    if (currentRun.activeFixerThreadId !== null && !startsNextQaRepair) {
+      const fixer = findThread(readModel, currentRun.activeFixerThreadId);
+      if (
+        currentRun.activeFixerThreadId !== input.run.activeFixerThreadId ||
+        (fixer !== null &&
+          !stageThreadIsFinished({
+            thread: fixer,
+            threads: readModel.threads,
+            nowMs: Date.parse(input.createdAt),
+          }))
+      )
+        return;
+    }
     const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
     if (orchestratorThread === null) return;
     const [fixerStatus, fixerHead] = yield* Effect.all([
@@ -7881,7 +7911,7 @@ const make = Effect.gen(function* () {
       },
       createdAt: input.createdAt,
     });
-  });
+  }, fixerLaunchAdmission.withPermit);
 
   const exhaustQa = Effect.fn("ImplementationWorkflowReactor.exhaustQa")(function* (input: {
     readonly sourceThreadId: ThreadId;
@@ -9296,7 +9326,7 @@ const make = Effect.gen(function* () {
         }
         yield* startFixer({
           sourceThreadId: input.sourceThreadId,
-          run: { ...input.run, activeFixerThreadId: null },
+          run: input.run,
           status: origin === "code-review" ? "code-review-fixing" : "fixing",
           origin,
           title: origin === "merge-gate" ? "Fix merge gate failures" : "Fix code review findings",
@@ -11908,7 +11938,7 @@ const make = Effect.gen(function* () {
           "fixer",
           startFixer({
             sourceThreadId,
-            run: { ...run, activeFixerThreadId: null },
+            run,
             status: run.status,
             origin,
             title: origin === "merge-gate" ? "Fix merge gate failures" : "Fix code review findings",

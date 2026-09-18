@@ -1124,6 +1124,8 @@ export const FinalRegressionState = Schema.Struct({
   checks: Schema.Array(
     Schema.Struct({
       command: TrimmedNonEmptyString,
+      /** Reviewed selection to execute without replacing prior test evidence. */
+      retryCommand: Schema.optionalKey(TrimmedNonEmptyString),
       result: Schema.NullOr(OrchestrationImplementationValidationResult),
     }),
   ),

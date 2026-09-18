@@ -9,7 +9,7 @@ export function regressionCommands(state: FinalRegressionState): string[] {
     ...new Set(
       state.checks
         .filter((check) => check.result?.status !== "passed")
-        .map((check) => check.result?.retryCommand ?? check.command),
+        .map((check) => check.retryCommand ?? check.result?.retryCommand ?? check.command),
     ),
   ];
 }
@@ -76,7 +76,7 @@ export function recordRegressionCycle(input: {
     ],
     checks: input.state.checks.map((check) => {
       if (check.result?.status === "passed") return check;
-      const command = check.result?.retryCommand ?? check.command;
+      const command = check.retryCommand ?? check.result?.retryCommand ?? check.command;
       const reported = resultForCommand(command, input.validations, current);
       const result =
         reported && !unexpectedFailure
@@ -88,7 +88,8 @@ export function recordRegressionCycle(input: {
                 "The validator must resolve every reported failure and provide a current result for this selection.",
               completedAt: input.completedAt,
             };
-      return { ...check, result };
+      const { retryCommand: _executedSelection, ...recordedCheck } = check;
+      return { ...recordedCheck, result };
     }),
   };
 }
@@ -111,19 +112,25 @@ export function invalidateRegressionChecks(
     reviewedRetryCommands.every(
       (selection) =>
         state.checks.some(
-          (check) => check.command === selection.command && check.result?.status !== "passed",
+          (check) =>
+            check.command === selection.command &&
+            (check.result?.status !== "passed" || invalidatedCommands.includes(check.command)),
         ) && Boolean(selection.retryCommand.trim()),
     );
   return {
     ...state,
     reviewBaseSha: null,
     checks: state.checks.map((check) => {
-      if (!reviewed || invalidatedCommands?.includes(check.command))
-        return { ...check, result: null };
+      if (!reviewed) return { command: check.command, result: null };
       const selection = reviewedRetryCommands.find((entry) => entry.command === check.command);
-      return selection && check.result
-        ? { ...check, result: { ...check.result, retryCommand: selection.retryCommand } }
-        : check;
+      if (invalidatedCommands?.includes(check.command)) {
+        return {
+          command: check.command,
+          result: null,
+          ...(selection ? { retryCommand: selection.retryCommand } : {}),
+        };
+      }
+      return selection ? { ...check, retryCommand: selection.retryCommand } : check;
     }),
   };
 }

@@ -88,6 +88,63 @@ describe("final regression selections", () => {
       regressionCommands(invalidateRegressionChecks(first, ["typo"], "Invalid selection.")),
     ).toEqual(["check", "e2e"]);
   });
+  it("keeps unaffected passes when an invalidated passing check gets a corrected command", () => {
+    const first = record(initial(), [
+      result("check", "passed"),
+      result("e2e", "failed", "e2e failed"),
+    ]);
+    const state = {
+      ...first,
+      checks: [...first.checks, { command: "mobile", result: result("mobile", "passed") }],
+    };
+    const reviewed = invalidateRegressionChecks(
+      state,
+      ["check", "e2e"],
+      "Shared browser setup changed; mobile is unaffected.",
+      [
+        { command: "check", retryCommand: "env -u REPORT check" },
+        { command: "e2e", retryCommand: "NO_RETRY=1 e2e" },
+      ],
+    );
+    expect(regressionCommands(reviewed)).toEqual(["env -u REPORT check", "NO_RETRY=1 e2e"]);
+    expect(reviewed.checks[0]?.result).toBeNull();
+    expect(reviewed.checks[2]).toBe(state.checks[2]);
+    expect(reviewed.cycles).toBe(state.cycles);
+    expect(regressionPassed(reviewed, ["check", "e2e", "mobile"])).toBe(false);
+    const rerun = record(reviewed, [
+      result("env -u REPORT check", "passed"),
+      result("NO_RETRY=1 e2e", "failed", "e2e remaining"),
+    ]);
+    expect(regressionCommands(rerun)).toEqual(["e2e remaining"]);
+    expect(rerun.checks[2]).toBe(state.checks[2]);
+    expect(
+      regressionPassed(record(rerun, [result("e2e remaining", "passed")]), [
+        "check",
+        "e2e",
+        "mobile",
+      ]),
+    ).toBe(true);
+  });
+
+  it.each([
+    [{ command: "unknown", retryCommand: "test" }],
+    [
+      { command: "check", retryCommand: "one" },
+      { command: "check", retryCommand: "two" },
+    ],
+    [{ command: "check", retryCommand: " " }],
+  ])("invalid retry mappings retain all required work", (...selection) => {
+    const state = record(initial(), [result("check", "passed"), result("e2e", "failed")]);
+    const reviewed = invalidateRegressionChecks(
+      state,
+      ["check"],
+      "Check inputs changed.",
+      selection,
+    );
+    expect(regressionCommands(reviewed)).toEqual(["check", "e2e"]);
+    expect(regressionPassed(reviewed, ["check", "e2e"])).toBe(false);
+  });
+
   it("recovers corrected passes and retains every unresolved legacy check", () => {
     const validations = [
       result("check", "failed"),
@@ -118,7 +175,7 @@ describe("final regression selections", () => {
     const invalidated = invalidateRegressionChecks(recovered, ["e2e"], "Shared fixtures changed.", [
       { command: "e2e", retryCommand: "e2e failure.spec" },
     ]);
-    expect(regressionCommands(invalidated)).toContain("e2e");
+    expect(regressionCommands(invalidated)).toContain("e2e failure.spec");
   });
   it("accepts explicit newer setup corrections in a test cycle", () => {
     const state = record(initial(), [
