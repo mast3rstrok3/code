@@ -878,6 +878,21 @@ function reopenTicketForRerun(input: {
   };
 }
 
+function resultBelongsToValidatorTurn(
+  thread: OrchestrationThread | null,
+  result: { readonly turnId: TurnId | null; readonly createdAt: string },
+): boolean {
+  const turn = thread?.latestTurn;
+  if (!turn) return result.turnId === null;
+  if (result.turnId !== null) return result.turnId === turn.turnId;
+  // Older directive activities omitted the turn ID. Only accept evidence within
+  // the current turn's recorded lifetime, so a previous attempt stays closed.
+  return (
+    result.createdAt >= turn.requestedAt &&
+    (turn.completedAt === null || result.createdAt <= turn.completedAt)
+  );
+}
+
 function isFinalValidatorLaunchHalt(run: OrchestrationImplementationRun): boolean {
   return (
     run.status === "needs-human-attention" &&
@@ -7236,7 +7251,7 @@ const make = Effect.gen(function* () {
         persistedRun !== null &&
         isFinalValidatorLaunchHalt(persistedRun) &&
         event.createdAt > persistedRun.automationHalt!.haltedAt &&
-        event.turnId === (findThread(readModel, event.threadId)?.latestTurn?.turnId ?? null)
+        resultBelongsToValidatorTurn(findThread(readModel, event.threadId), event)
           ? { ...persistedRun, status: "validating" as const, automationHalt: null }
           : persistedRun;
       if (
@@ -11353,7 +11368,7 @@ const make = Effect.gen(function* () {
           const reported = detail?.activities.findLast(
             (activity) =>
               activity.kind === "implementation-merge-gate-result" &&
-              activity.turnId === validator.latestTurn?.turnId &&
+              resultBelongsToValidatorTurn(validator, activity) &&
               activity.createdAt > run.automationHalt!.haltedAt,
           );
           const directive = reported ? asMergeGateDirective(reported.payload) : null;

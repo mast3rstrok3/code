@@ -11464,6 +11464,8 @@ describe("ImplementationWorkflowReactor", () => {
     "active",
     "late",
     "restart",
+    "legacy-result",
+    "old-legacy-result",
     "changed-head",
     "stale-turn",
     "canceled",
@@ -11500,9 +11502,9 @@ describe("ImplementationWorkflowReactor", () => {
                 runtimeMode: "full-access",
                 activeTurnId: turnId,
                 lastError: null,
-                updatedAt: now,
+                updatedAt: "2026-01-01T00:00:30.000Z",
               },
-              createdAt: now,
+              createdAt: "2026-01-01T00:00:30.000Z",
             });
             const halted: OrchestrationImplementationRun = {
               ...validating,
@@ -11536,7 +11538,11 @@ describe("ImplementationWorkflowReactor", () => {
                 createdAt: updatedRun.updatedAt,
               });
             const replay =
-              scenario === "restart" || scenario === "changed-head" || scenario === "stale-turn";
+              scenario === "restart" ||
+              scenario === "changed-head" ||
+              scenario === "stale-turn" ||
+              scenario === "legacy-result" ||
+              scenario === "old-legacy-result";
             yield* update(
               replay
                 ? {
@@ -11572,10 +11578,21 @@ describe("ImplementationWorkflowReactor", () => {
                     validations: completeValidations(),
                     summaryMarkdown: "All checks passed",
                   },
-                  turnId: scenario === "stale-turn" ? TurnId.make("old-validator-turn") : turnId,
-                  createdAt: "2026-01-01T00:01:00.000Z",
+                  turnId:
+                    scenario === "stale-turn"
+                      ? TurnId.make("old-validator-turn")
+                      : scenario === "legacy-result" || scenario === "old-legacy-result"
+                        ? null
+                        : turnId,
+                  createdAt:
+                    scenario === "old-legacy-result"
+                      ? "2026-01-01T00:00:01.000Z"
+                      : "2026-01-01T00:01:00.000Z",
                 },
-                createdAt: "2026-01-01T00:01:00.000Z",
+                createdAt:
+                  scenario === "old-legacy-result"
+                    ? "2026-01-01T00:00:01.000Z"
+                    : "2026-01-01T00:01:00.000Z",
               });
               yield* system.reactor.drain;
               yield* system.engine.dispatch({
@@ -11605,7 +11622,7 @@ describe("ImplementationWorkflowReactor", () => {
             yield* system.reactor.drain;
             snapshot = yield* system.query.getSnapshot();
             const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
-            if (scenario === "late" || scenario === "restart") {
+            if (scenario === "late" || scenario === "restart" || scenario === "legacy-result") {
               expect(recovered.automationHalt).toBeNull();
               expect(recovered.validatedHeadSha).toBe(validating.codeReviewedHeadSha);
               expect(recovered.finalRegression?.cycles).toHaveLength(1);
