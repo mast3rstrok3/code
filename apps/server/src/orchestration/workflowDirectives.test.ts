@@ -330,6 +330,7 @@ describe("workflowDirectives", () => {
     ],
     "dependencyKeys": [],
     "appReviewEligible": true,
+    "appReviewCommands": ["pnpm exec playwright test booking.spec.ts"],
     "appReviewPlanMarkdown": "Open checkout, submit a valid cart, and capture the confirmation state."
   }]
 }
@@ -443,6 +444,7 @@ ${JSON.stringify({
       plannedFileChanges: [{ path: "src/checkout.ts", action: "create" }],
       dependencyKeys: [],
       appReviewEligible: true,
+      appReviewCommands: ["pnpm exec playwright test checkout.spec.ts"],
       appReviewPlanMarkdown: null,
     },
   ],
@@ -489,6 +491,7 @@ ${JSON.stringify({
       plannedFileChanges: [{ path: "src/checkout.ts", action: "create" }],
       dependencyKeys: [],
       appReviewEligible: true,
+      appReviewCommands: ["pnpm exec playwright test checkout.spec.ts"],
       appReviewPlanMarkdown: "Verify what the e2e journey cannot prove.",
       ...overrides,
     });
@@ -500,6 +503,20 @@ ${JSON.stringify({ type: "planning-tickets-artifact", specId: "spec-1", tickets:
     NodeAssert.equal(scoped.kind, "parsed");
     if (scoped.kind === "parsed" && scoped.directive.type === "planning-tickets-artifact") {
       NodeAssert.equal(scoped.directive.tickets[0]?.appReviewScope, "e2e");
+    }
+
+    NodeAssert.equal(
+      parseWorkflowDirectiveFromMarkdown(artifact({ appReviewCommands: [] })).kind,
+      "error",
+    );
+    NodeAssert.equal(
+      parseWorkflowDirectiveFromMarkdown(artifact({ appReviewCommands: undefined })).kind,
+      "error",
+    );
+    if (scoped.kind === "parsed" && scoped.directive.type === "planning-tickets-artifact") {
+      NodeAssert.deepEqual(scoped.directive.tickets[0]?.appReviewCommands, [
+        "pnpm exec playwright test checkout.spec.ts",
+      ]);
     }
 
     const invalid = parseWorkflowDirectiveFromMarkdown(artifact({ appReviewScope: "manual" }));

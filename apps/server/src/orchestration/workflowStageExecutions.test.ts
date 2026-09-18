@@ -157,6 +157,20 @@ describe("workflow stage reconciliation", () => {
     } as AppReviewWorkflowRun);
     expect(reopened.phaseExecution?.state).toBe("reconciling");
     expect(reopened.phaseExecution?.failure).toBeNull();
+    const automatic = normalizeAppReviewPhaseExecution({
+      ...reopened,
+      activePhase: "e2e",
+      activeThreadId: null,
+      cycles: reopened.cycles.map((cycle) => ({
+        ...cycle,
+        e2eExecution: {
+          id: "automatic-tests",
+          commands: [{ command: "test", retryCommand: "test" }],
+          results: [],
+        },
+      })),
+    });
+    expect(automatic.phaseExecution).toBeNull();
   });
 
   it("normalizes historical halt and retry summaries into canonical executions", () => {

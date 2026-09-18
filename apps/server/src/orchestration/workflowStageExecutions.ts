@@ -420,6 +420,10 @@ function categoryForAppReviewFailure(
 }
 
 export function normalizeAppReviewPhaseExecution(run: AppReviewWorkflowRun): AppReviewWorkflowRun {
+  // The command runner owns process timeouts; an agent lease must not restart its tests.
+  if (run.activePhase === "e2e" && run.cycles.at(-1)?.e2eExecution) {
+    return run.phaseExecution === null ? run : { ...run, phaseExecution: null };
+  }
   // Readiness waits have no provider lease. Startup recovery must preserve their blocker and deadline.
   if (run.status === "running" && run.prerequisiteCheck != null) {
     return run.phaseExecution === null ? run : { ...run, phaseExecution: null };

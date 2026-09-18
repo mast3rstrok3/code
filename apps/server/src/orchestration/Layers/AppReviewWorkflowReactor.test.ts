@@ -4110,3 +4110,185 @@ describe("combined acceptance and validation reuse", () => {
     ).toContain("invalid or stale");
   });
 });
+
+for (const testExit of [0, 1] as const)
+  for (const recovered of [false, true])
+    for (const exhausted of [false, true]) {
+      effectIt.effect(
+        `runs programmatic E2E and routes exit ${testExit}, recovered ${recovered}, exhausted ${exhausted}, without a tester agent`,
+        () =>
+          Effect.gen(function* () {
+            const finished = yield* Deferred.make<void>();
+            const initial = run();
+            let storedRun = run({
+              activePhase: "e2e",
+              activeThreadId: null,
+              cyclesUsed: exhausted ? 5 : 1,
+              cycleBudget: 5,
+              appReviewScope: "e2e",
+              cycles: [
+                {
+                  ...carryCycle(1, AppReviewId.make("programmatic-review")),
+                  status: "e2e-testing",
+                  appReviewScope: "e2e",
+                  e2eThreadId: null,
+                  reviewerThreadId: initial.controllerThreadId,
+                  e2eExecution: {
+                    id: "execution-1",
+                    commands: [
+                      ...(recovered
+                        ? [{ command: "passed-suite", retryCommand: "passed-suite" }]
+                        : []),
+                      { command: "suite", retryCommand: "suite --filter booking" },
+                    ],
+                    results: recovered
+                      ? [
+                          {
+                            command: "passed-suite",
+                            executedCommand: "passed-suite",
+                            status: "passed",
+                            outputMarkdown: "",
+                            completedAt: now,
+                          },
+                        ]
+                      : [],
+                  },
+                },
+              ],
+            });
+            const thread = (id: ThreadId) =>
+              decodeThread({
+                id,
+                projectId: "project",
+                title: "Automated review",
+                modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
+                runtimeMode: "full-access",
+                branch: "dev",
+                worktreePath: "/assigned/worktree",
+                createdAt: now,
+                updatedAt: now,
+                deletedAt: null,
+                messages: [],
+                activities: [],
+                latestTurn: null,
+                session: null,
+                checkpoints: [],
+              });
+            const threads = [
+              thread(storedRun.targetThreadId),
+              thread(storedRun.controllerThreadId),
+            ];
+            const commands: OrchestrationCommand[] = [];
+            const processes: ProcessRunInput[] = [];
+            const layer = AppReviewWorkflowReactorLive.pipe(
+              Layer.provide(
+                Layer.mergeAll(
+                  NodeServices.layer,
+                  Layer.mock(ProcessRunner)({
+                    run: (input) =>
+                      Effect.sync(() => {
+                        processes.push(input);
+                        return {
+                          code: ChildProcessSpawner.ExitCode(testExit),
+                          timedOut: false,
+                          stdout: "booking assertion",
+                          stderr: "",
+                          stdoutTruncated: false,
+                          stderrTruncated: false,
+                          stdoutInvalidUtf8: false,
+                          stderrInvalidUtf8: false,
+                        };
+                      }),
+                  }),
+                  Layer.mock(OrchestrationEngineService)({
+                    dispatch: (command) =>
+                      Effect.gen(function* () {
+                        commands.push(command);
+                        if (command.type === "thread.app-review-workflow.update") {
+                          storedRun = command.run;
+                          if (
+                            storedRun.status === "passed" ||
+                            storedRun.status === "exhausted" ||
+                            storedRun.activePhase === "planning"
+                          )
+                            yield* Deferred.succeed(finished, undefined);
+                        }
+                        return { sequence: commands.length };
+                      }),
+                  }),
+                  Layer.mock(ProjectionSnapshotQuery)({
+                    getCommandReadModel: () =>
+                      Effect.sync(() => ({
+                        snapshotSequence: commands.length,
+                        projects: [],
+                        threads,
+                        implementationRuns: [],
+                        appReviewWorkflowRuns: [storedRun],
+                        updatedAt: now,
+                      })),
+                    getThreadDetailById: (id) =>
+                      Effect.succeed(
+                        Option.fromUndefinedOr(threads.find((entry) => entry.id === id)),
+                      ),
+                  }),
+                  Layer.mock(GitWorkflowService)({
+                    resolveCommit: () => Effect.succeed({ commitSha: "abc123" }),
+                  }),
+                  Layer.mock(ReviewService)({
+                    getDiffPreview: ({ cwd }) =>
+                      Effect.succeed({
+                        cwd,
+                        generatedAt: DateTime.makeUnsafe(now),
+                        sources: (["working-tree", "branch-range"] as const).map((kind) => ({
+                          id: kind,
+                          kind,
+                          title: kind,
+                          baseRef: null,
+                          headRef: null,
+                          diff: "",
+                          diffHash: kind === "working-tree" ? "working" : "branch",
+                          truncated: false,
+                        })),
+                      }),
+                  }),
+                  Layer.mock(AppStackManager)({}),
+                  Layer.mock(ServerSettingsService)({
+                    getSettings: Effect.succeed(decodeServerSettings({})),
+                  }),
+                  Layer.mock(T3ProjectFileLoader)({
+                    loadStrict: () => Effect.succeed(Option.some({ e2eCommands: ["all-apps"] })),
+                  }),
+                ),
+              ),
+            );
+            yield* Effect.scoped(
+              Effect.gen(function* () {
+                const reactor = yield* AppReviewWorkflowReactor;
+                yield* reactor.reconcile();
+                yield* Deferred.await(finished);
+                yield* reactor.reconcile();
+                expect(processes.map((entry) => entry.args.at(-1))).toEqual([
+                  "suite --filter booking",
+                ]);
+                expect(
+                  commands.some((command) => command.type === "thread.app-review.launch"),
+                ).toBe(false);
+                expect(
+                  commands
+                    .filter((command) => command.type === "thread.turn.start")
+                    .every(
+                      (command) =>
+                        command.workflowPromptId !== "implementation.e2e-app-review.codex",
+                    ),
+                ).toBe(true);
+                expect(storedRun.cycles[0]?.e2eExecution?.results.at(-1)?.status).toBe(
+                  testExit ? "failed" : "passed",
+                );
+                expect(testExit && !exhausted ? storedRun.activePhase : storedRun.status).toBe(
+                  testExit ? (exhausted ? "exhausted" : "planning") : "passed",
+                );
+              }).pipe(Effect.provide(layer)),
+            );
+          }),
+      );
+    }

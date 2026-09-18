@@ -2388,6 +2388,9 @@ const make = Effect.gen(function* () {
               ...(ticket.appReviewScope === undefined
                 ? {}
                 : { appReviewScope: ticket.appReviewScope }),
+              ...(ticket.appReviewCommands === undefined
+                ? {}
+                : { appReviewCommands: ticket.appReviewCommands }),
               appReviewPlanMarkdown: ticket.appReviewPlanMarkdown,
             })),
             createdAt: input.createdAt,
@@ -2464,6 +2467,9 @@ const make = Effect.gen(function* () {
                     ...(edit.appReviewScope === undefined
                       ? {}
                       : { appReviewScope: edit.appReviewScope }),
+                    ...(edit.appReviewCommands === undefined
+                      ? {}
+                      : { appReviewCommands: edit.appReviewCommands }),
                     ...(edit.appReviewPlanMarkdown === undefined
                       ? {}
                       : { appReviewPlanMarkdown: edit.appReviewPlanMarkdown }),

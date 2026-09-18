@@ -104,9 +104,23 @@ export const AppReviewWorkflowFixValidation = Schema.Struct({
 });
 export type AppReviewWorkflowFixValidation = typeof AppReviewWorkflowFixValidation.Type;
 
+export const AppReviewRetryCommand = Schema.Struct({
+  command: TrimmedNonEmptyString,
+  retryCommand: TrimmedNonEmptyString,
+});
+export const AppReviewTestResult = Schema.Struct({
+  command: TrimmedNonEmptyString,
+  executedCommand: TrimmedNonEmptyString,
+  status: Schema.Literals(["passed", "failed"]),
+  outputMarkdown: Schema.String,
+  completedAt: IsoDateTime,
+});
+export type AppReviewTestResult = typeof AppReviewTestResult.Type;
+
 export const AppReviewWorkflowFixResult = Schema.Struct({
   runId: AppReviewWorkflowRunId,
   planId: TrimmedNonEmptyString,
+  retryCommands: Schema.optionalKey(Schema.Array(AppReviewRetryCommand)),
   status: Schema.Literals(["succeeded", "failed", "blocked"]),
   commitSha: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   validations: Schema.Array(AppReviewWorkflowFixValidation),
@@ -171,6 +185,13 @@ export const AppReviewWorkflowCycle = Schema.Struct({
   /** The isolated end-to-end section. Absent on browser-only and historical cycles. */
   e2eReviewId: Schema.optionalKey(Schema.NullOr(AppReviewId)),
   e2eThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
+  e2eExecution: Schema.optionalKey(
+    Schema.Struct({
+      id: TrimmedNonEmptyString,
+      commands: Schema.Array(AppReviewRetryCommand),
+      results: Schema.Array(AppReviewTestResult),
+    }),
+  ),
   e2eLaunchCount: Schema.optionalKey(NonNegativeInt),
   e2eVerdict: Schema.optionalKey(Schema.NullOr(Schema.Literals(["pending", "passed", "failed"]))),
   reviewId: AppReviewId,
@@ -232,6 +253,7 @@ export const AppReviewWorkflowRun = Schema.Struct({
   controllerThreadId: ThreadId,
   caller: AppReviewWorkflowCaller,
   testPlatforms: Schema.optionalKey(ReviewTestPlatforms),
+  e2eCommands: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   briefMarkdown: TrimmedNonEmptyString,
   supportingContextMarkdown: Schema.NullOr(Schema.String),
   previewTargets: Schema.Array(TrimmedNonEmptyString),

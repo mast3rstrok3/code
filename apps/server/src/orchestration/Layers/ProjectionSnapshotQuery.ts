@@ -176,6 +176,7 @@ const ProjectionThreadSpecDbRowSchema = ProjectionThreadSpec.mapFields(
 );
 const ProjectionThreadPlanningTicketDbRowSchema = ProjectionThreadPlanningTicket.mapFields(
   Struct.assign({
+    appReviewCommands: Schema.fromJsonString(Schema.Array(Schema.String)),
     plannedFileChanges: Schema.fromJsonString(Schema.Array(OrchestrationPlanningFileChange)),
     dependencies: Schema.fromJsonString(Schema.Array(OrchestrationPlanningTicketDependency)),
   }),
@@ -1332,6 +1333,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           app_review_eligible AS "appReviewEligible",
           app_review_scope AS "appReviewScope",
           app_review_plan_markdown AS "appReviewPlanMarkdown",
+        app_review_commands_json AS "appReviewCommands",
           status,
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -2081,6 +2083,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           app_review_eligible AS "appReviewEligible",
           app_review_scope AS "appReviewScope",
           app_review_plan_markdown AS "appReviewPlanMarkdown",
+        app_review_commands_json AS "appReviewCommands",
           status,
           created_at AS "createdAt",
           updated_at AS "updatedAt"

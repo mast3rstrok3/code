@@ -77,13 +77,12 @@ describe("workflow presets", () => {
     const engineeringWorkflow = WORKFLOW_PRESET_DEFINITIONS.find(
       (definition) => definition.id === "planning",
     );
-    expect(engineeringWorkflow?.helpSteps.slice(-4).map((step) => step.label)).toEqual([
+    expect(engineeringWorkflow?.helpSteps.slice(-3).map((step) => step.label)).toEqual([
       "Final Code Review",
-      "Final regression tests",
       "Create pull request",
       "Babysit pull request",
     ]);
-    expect(engineeringWorkflow?.helpSteps.at(-4)?.note).toContain("up to five cycles");
+    expect(engineeringWorkflow?.helpSteps.at(-3)?.note).toContain("up to five cycles");
     const ticketWave = engineeringWorkflow?.helpSteps.find((step) =>
       step.label.includes("Execute ticket waves"),
     );
@@ -92,7 +91,7 @@ describe("workflow presets", () => {
     ).toContain("up to five cycles");
   });
 
-  it("shows the twelve Engineering Workflow phases in order", () => {
+  it("shows the eleven Engineering Workflow phases in order", () => {
     const steps = WORKFLOW_PRESET_DEFINITION_BY_ID.planning.helpSteps;
     expect(steps.map((step) => step.label)).toEqual([
       "Prepare shared worktree and App Stack",
@@ -104,7 +103,6 @@ describe("workflow presets", () => {
       "Merge ticket branches",
       "Final App Review",
       "Final Code Review",
-      "Final regression tests",
       "Create pull request",
       "Babysit pull request",
     ]);
@@ -114,12 +112,12 @@ describe("workflow presets", () => {
     const engineeringWorkflow = WORKFLOW_PRESET_DEFINITIONS.find(
       (definition) => definition.id === "planning",
     );
-    expect(engineeringWorkflow?.helpSteps.slice(-6, -3).map((step) => step.label)).toEqual([
+    expect(engineeringWorkflow?.helpSteps.slice(-5, -2).map((step) => step.label)).toEqual([
       "Merge ticket branches",
       "Final App Review",
       "Final Code Review",
     ]);
-    expect(engineeringWorkflow?.helpSteps.at(-5)?.note).toContain("ten review");
+    expect(engineeringWorkflow?.helpSteps.at(-4)?.note).toContain("five test");
   });
 
   it("maps presets to provider modes and intent kinds", () => {

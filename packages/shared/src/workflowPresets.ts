@@ -62,7 +62,7 @@ const APP_REVIEW_SUB_STEPS: ReadonlyArray<WorkflowPresetSubStep> = [
   {
     label: "End-to-end test",
     workflowPromptId: "implementation.e2e-app-review.codex",
-    note: "runs the project's e2eCommands; enabled by default",
+    note: "runs planned ticket suites automatically; Final App Review runs all application suites, then retries failures",
   },
   {
     label: "Gap analysis & repair tickets",
@@ -90,13 +90,6 @@ const QUICK_PLAN_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
   },
 ];
 
-const FINAL_REGRESSION_STEP: WorkflowPresetHelpStep = {
-  label: "Final regression tests",
-  skillId: "implementation.merge-gate.codex",
-  threadBoundary: "new child thread",
-  note: "runs the full required E2E suites and project checks on the reviewed commit; independent suites run in parallel when isolated",
-};
-
 const PLAN_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
   ...QUICK_PLAN_HELP_STEPS,
   {
@@ -112,7 +105,6 @@ const PLAN_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
     threadBoundary: "new review thread",
     note: "one review-and-fix thread per cycle; stops clean or repeats up to five cycles",
   },
-  FINAL_REGRESSION_STEP,
   { label: "Create pull request", note: "publishes the reviewed branch" },
   {
     label: "Babysit pull request",
@@ -293,7 +285,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "App Review cycles",
         skillId: "implementation.browser-app-review.codex",
         threadBoundary: "new review thread",
-        note: "ten review, repair-ticket, and fix cycles by default; a passing review ends the run early",
+        note: "five test, repair-ticket, and fix cycles by default; a passing review ends the run early",
         subSteps: APP_REVIEW_SUB_STEPS,
       },
     ],
@@ -390,7 +382,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Run App Review",
         skillId: "implementation.browser-app-review.codex",
         threadBoundary: "new review thread",
-        note: "one active thread per ordered review phase; ten cycles maximum and one interrupted-phase retry",
+        note: "automated E2E execution, then gap analysis and repair threads; five test cycles maximum",
         subSteps: APP_REVIEW_SUB_STEPS,
       },
       {
@@ -399,7 +391,6 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         threadBoundary: "new review thread",
         note: "one thread per cycle; stops clean or repeats up to five cycles; validates repairs with focused tests",
       },
-      FINAL_REGRESSION_STEP,
       {
         label: "Create pull request",
         note: "publishes the reviewed and validated branch",
@@ -481,7 +472,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Final App Review",
         skillId: "implementation.browser-app-review.codex",
         threadBoundary: "new review thread",
-        note: "automatic; one active thread per ordered review phase; ten review cycles by default",
+        note: "automatic E2E commands, gap analysis and repairs; five test cycles maximum",
         subSteps: APP_REVIEW_SUB_STEPS,
       },
       {
@@ -490,7 +481,6 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         threadBoundary: "new review thread",
         note: "automatic; one thread per cycle, up to five cycles, with focused tests for repairs",
       },
-      FINAL_REGRESSION_STEP,
       {
         label: "Create pull request",
         note: "automatic; publishes the reviewed and validated branch",

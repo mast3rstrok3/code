@@ -108,6 +108,12 @@ export const T3ProjectFile = Schema.Struct({
       })
       .check(Schema.isMinLength(1)),
   ),
+  e2eConcurrency: Schema.optionalKey(
+    Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 2 })).annotate({
+      description:
+        "Concurrent E2E commands, default 1. Use 2 only for independent suites whose setup, databases, accounts and reports are isolated. APP_REVIEW_EXECUTION_ID identifies the run.",
+    }),
+  ),
   e2ePreflight: Schema.optionalKey(
     Schema.Struct({
       command: trimmedNonEmpty(

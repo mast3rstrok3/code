@@ -269,6 +269,9 @@ function buildPlanningTicketsFromArtifact(input: {
       dependencies,
       appReviewEligible: ticket.appReviewEligible ?? false,
       ...(ticket.appReviewScope === undefined ? {} : { appReviewScope: ticket.appReviewScope }),
+      ...(ticket.appReviewCommands === undefined
+        ? {}
+        : { appReviewCommands: ticket.appReviewCommands }),
       appReviewPlanMarkdown: ticket.appReviewPlanMarkdown ?? null,
       status: "open",
       createdAt: input.command.createdAt,
@@ -356,6 +359,9 @@ function applyPlanningReviewerEdits(input: {
         dependencies: [],
         appReviewEligible: edit.appReviewEligible,
         ...(edit.appReviewScope === undefined ? {} : { appReviewScope: edit.appReviewScope }),
+        ...(edit.appReviewCommands === undefined
+          ? {}
+          : { appReviewCommands: edit.appReviewCommands }),
         appReviewPlanMarkdown: edit.appReviewPlanMarkdown,
         status: "open",
         createdAt: input.updatedAt,
@@ -407,6 +413,9 @@ function applyPlanningReviewerEdits(input: {
         ? {}
         : { appReviewEligible: edit.appReviewEligible }),
       ...(edit.appReviewScope === undefined ? {} : { appReviewScope: edit.appReviewScope }),
+      ...(edit.appReviewCommands === undefined
+        ? {}
+        : { appReviewCommands: edit.appReviewCommands }),
       ...(edit.appReviewPlanMarkdown === undefined
         ? {}
         : { appReviewPlanMarkdown: edit.appReviewPlanMarkdown }),
@@ -519,7 +528,8 @@ function buildPlanningTicketsStagePrompt(spec: OrchestrationPlanningSpec): strin
             plannedFileChanges: [{ path: "apps/example/src/feature.ts", action: "update" }],
             dependencyKeys: [],
             appReviewEligible: true,
-            appReviewScope: "both",
+            appReviewScope: "e2e",
+            appReviewCommands: ["pnpm exec playwright test tests/feature.spec.ts"],
             appReviewPlanMarkdown:
               "Start the ticket worktree's App Stack, open the affected UI, exercise the primary flow, and capture the expected visible result.",
           },
@@ -4777,6 +4787,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         controllerThreadId: command.controllerThreadId,
         caller: command.caller,
         ...(command.testPlatforms === undefined ? {} : { testPlatforms: command.testPlatforms }),
+        ...(command.e2eCommands === undefined ? {} : { e2eCommands: command.e2eCommands }),
         briefMarkdown: command.briefMarkdown,
         supportingContextMarkdown: command.supportingContextMarkdown ?? null,
         previewTargets: command.previewTargets,

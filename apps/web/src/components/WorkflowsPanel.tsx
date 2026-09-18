@@ -947,8 +947,11 @@ export function TicketAppReviewCycles(props: {
             {
               label: "End-to-end test",
               phase: "e2e" as const,
-              detail:
-                cycle.e2eThreadId == null
+              detail: cycle.e2eExecution
+                ? cycle.e2eVerdict === "pending"
+                  ? "in progress"
+                  : (cycle.e2eVerdict ?? "pending")
+                : cycle.e2eThreadId == null
                   ? "not needed"
                   : (cycle.e2eVerdict ??
                     (cycle.status === "e2e-testing" ? "in progress" : "pending")),
@@ -1059,6 +1062,31 @@ export function TicketAppReviewCycles(props: {
                     timestampFormat={props.timestampFormat}
                     className="py-1.5"
                   />
+                  {cycle.e2eExecution ? (
+                    <div className="space-y-1 py-2 text-xs" aria-label="Automated E2E results">
+                      <p>
+                        Automated tests: {cycle.e2eExecution.results.length}/
+                        {cycle.e2eExecution.commands.length} finished. No agent runs during testing.
+                      </p>
+                      {cycle.e2eExecution.commands.map((selection) => {
+                        const result = cycle.e2eExecution!.results.find(
+                          (entry) => entry.command === selection.command,
+                        );
+                        return (
+                          <details key={selection.command}>
+                            <summary className="cursor-pointer break-all">
+                              {result?.status ?? "pending"} · {selection.retryCommand}
+                            </summary>
+                            {result ? (
+                              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all">
+                                {result.outputMarkdown}
+                              </pre>
+                            ) : null}
+                          </details>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                   <ol className="mt-2 space-y-1.5 border-l border-border/70 pl-3">
                     {steps.map((step, index) => {
                       const phaseStatus = resolveWorkflowStageDetailStatus(step.detail);
@@ -1150,7 +1178,11 @@ export function TicketAppReviewCycles(props: {
                                         ),
                                   ).scopeThreadIds
                                 }
-                                onSetStepModel={props.onSetStepModel}
+                                onSetStepModel={
+                                  cycle.e2eExecution && step.phase === "e2e"
+                                    ? undefined
+                                    : props.onSetStepModel
+                                }
                                 onStop={props.onStopThreads}
                                 onResume={props.onResumeThreads}
                                 onRestart={() => props.onRerunPhase?.(step.phase)}
@@ -1311,6 +1343,7 @@ function workflowStepSubSteps(
 }
 
 function workflowSkillLabel(skillId: string, titles: ReadonlyMap<string, string>): string {
+  if (skillId === "implementation.browser-app-review.codex") return "App Review";
   const title = titles.get(skillId);
   if (title) return title;
   switch (skillId) {
@@ -3024,7 +3057,7 @@ function WorkflowGroupCard(props: {
                                     ) : null}
                                     {isCombinedAppReviewStep ? (
                                       <span className="shrink-0 rounded-full bg-muted px-2 py-0.5">
-                                        Up to {effectiveStepCycleBudget ?? 10} cycles
+                                        Up to {Math.min(effectiveStepCycleBudget ?? 5, 5)} cycles
                                       </span>
                                     ) : step.skillId === "implementation.code-review.codex" &&
                                       effectiveStepCycleBudget !== null ? (

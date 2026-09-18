@@ -53,6 +53,7 @@ export type WorkflowDirective =
         readonly dependencyKeys: ReadonlyArray<string>;
         readonly appReviewEligible: boolean;
         readonly appReviewScope?: "e2e" | "browser" | "both";
+        readonly appReviewCommands?: ReadonlyArray<string>;
         readonly appReviewPlanMarkdown: string | null;
       }>;
     }
@@ -79,6 +80,7 @@ export type WorkflowDirective =
             readonly dependencyKeys?: ReadonlyArray<string>;
             readonly appReviewEligible?: boolean;
             readonly appReviewScope?: "e2e" | "browser" | "both";
+            readonly appReviewCommands?: ReadonlyArray<string>;
             readonly appReviewPlanMarkdown?: string | null;
           }
         | {
@@ -90,6 +92,7 @@ export type WorkflowDirective =
             readonly dependencyKeys: ReadonlyArray<string>;
             readonly appReviewEligible: boolean;
             readonly appReviewScope?: "e2e" | "browser" | "both";
+            readonly appReviewCommands?: ReadonlyArray<string>;
             readonly appReviewPlanMarkdown: string | null;
             readonly replacesPlanningTicketIds: ReadonlyArray<string>;
           }
@@ -133,6 +136,10 @@ export type WorkflowDirective =
     }
   | {
       readonly type: "app-review-fix-result";
+      readonly retryCommands?: ReadonlyArray<{
+        readonly command: string;
+        readonly retryCommand: string;
+      }>;
       readonly runId: string;
       readonly planId: string;
       readonly status: "succeeded" | "failed" | "blocked";
@@ -508,6 +515,7 @@ function parsePlanningTickets(value: unknown):
       readonly dependencyKeys: ReadonlyArray<string>;
       readonly appReviewEligible: boolean;
       readonly appReviewScope?: ParsedAppReviewScope;
+      readonly appReviewCommands?: ReadonlyArray<string>;
       readonly appReviewPlanMarkdown: string | null;
     }>
   | string {
@@ -550,6 +558,17 @@ function parsePlanningTickets(value: unknown):
     if (appReviewEligible && appReviewPlanMarkdown === null) {
       return "planning-tickets-artifact App Review eligible tickets require appReviewPlanMarkdown.";
     }
+    const appReviewCommands =
+      record["appReviewCommands"] === undefined
+        ? undefined
+        : stringArray(record["appReviewCommands"]);
+    if (typeof appReviewCommands === "string") return appReviewCommands;
+    if (
+      appReviewEligible === true &&
+      record["appReviewScope"] !== "browser" &&
+      !appReviewCommands?.length
+    )
+      return "E2E-eligible tickets require non-empty appReviewCommands.";
     const appReviewScope = record["appReviewScope"];
     if (appReviewScope !== undefined && !isAppReviewScope(appReviewScope)) {
       return "planning-tickets-artifact appReviewScope must be 'e2e', 'browser', or 'both'.";
@@ -565,6 +584,7 @@ function parsePlanningTickets(value: unknown):
       dependencyKeys,
       appReviewEligible,
       ...(appReviewScope === undefined ? {} : { appReviewScope }),
+      ...(appReviewCommands === undefined ? {} : { appReviewCommands }),
       appReviewPlanMarkdown,
     });
   }
@@ -651,6 +671,17 @@ function parsePlanningTicketEdits(
         return "ticket edit appReviewPlanMarkdown must be a non-empty string or null.";
       if (appReviewEligible && appReviewPlanMarkdown === null)
         return "App Review eligible ticket edits require appReviewPlanMarkdown.";
+      const appReviewCommands =
+        record["appReviewCommands"] === undefined
+          ? undefined
+          : stringArray(record["appReviewCommands"]);
+      if (typeof appReviewCommands === "string") return appReviewCommands;
+      if (
+        appReviewEligible === true &&
+        record["appReviewScope"] !== "browser" &&
+        !appReviewCommands?.length
+      )
+        return "E2E-eligible tickets require non-empty appReviewCommands.";
       const appReviewScope = record["appReviewScope"];
       if (appReviewScope !== undefined && !isAppReviewScope(appReviewScope))
         return "ticket edit appReviewScope must be 'e2e', 'browser', or 'both'.";
@@ -666,6 +697,7 @@ function parsePlanningTicketEdits(
         replacesPlanningTicketIds,
         appReviewEligible,
         ...(appReviewScope === undefined ? {} : { appReviewScope }),
+        ...(appReviewCommands === undefined ? {} : { appReviewCommands }),
         appReviewPlanMarkdown,
       });
       continue;
@@ -697,6 +729,11 @@ function parsePlanningTicketEdits(
         (typeof appReviewPlanMarkdown !== "string" || appReviewPlanMarkdown.trim().length === 0)
       )
         return "ticket edit appReviewPlanMarkdown must be a non-empty string or null.";
+      const appReviewCommands =
+        record["appReviewCommands"] === undefined
+          ? undefined
+          : stringArray(record["appReviewCommands"]);
+      if (typeof appReviewCommands === "string") return appReviewCommands;
       const appReviewScope = record["appReviewScope"];
       if (appReviewScope !== undefined && !isAppReviewScope(appReviewScope))
         return "ticket edit appReviewScope must be 'e2e', 'browser', or 'both'.";
@@ -709,6 +746,7 @@ function parsePlanningTicketEdits(
         ...(dependencyKeys === undefined ? {} : { dependencyKeys }),
         ...(appReviewEligible === undefined ? {} : { appReviewEligible }),
         ...(appReviewScope === undefined ? {} : { appReviewScope }),
+        ...(appReviewCommands === undefined ? {} : { appReviewCommands }),
         ...(appReviewPlanMarkdown === undefined ? {} : { appReviewPlanMarkdown }),
       });
       continue;
@@ -996,8 +1034,27 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       if (typeof commitSha === "string" && commitSha.startsWith("Directive field")) {
         return commitSha;
       }
+      const retryCommands = record["retryCommands"];
+      if (
+        retryCommands !== undefined &&
+        (!Array.isArray(retryCommands) ||
+          retryCommands.some((value) => {
+            const item = asRecord(value);
+            return (
+              item === null ||
+              typeof item.command !== "string" ||
+              !item.command.trim() ||
+              typeof item.retryCommand !== "string" ||
+              !item.retryCommand.trim()
+            );
+          }))
+      )
+        return "retryCommands must contain non-empty command and retryCommand strings.";
       return {
         type: "app-review-fix-result",
+        ...(retryCommands === undefined
+          ? {}
+          : { retryCommands: retryCommands as Array<{ command: string; retryCommand: string }> }),
         runId,
         planId,
         status,
@@ -1250,7 +1307,9 @@ export function planningReviewerVerdictExampleJson(input: {
           plannedFileChanges: [{ path: "apps/example/src/feature.ts", action: "update" }],
           dependencyKeys: ["TICKET-2"],
           appReviewEligible: true,
-          appReviewPlanMarkdown: "How a human-style UI review verifies this ticket in isolation.",
+          appReviewCommands: ["pnpm exec playwright test tests/feature.spec.ts"],
+          appReviewPlanMarkdown:
+            "Assigned stack, fixtures, acceptance coverage, expected results and cleanup.",
         },
         {
           type: "update-dependencies",

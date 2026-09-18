@@ -750,6 +750,7 @@ export const OrchestrationPlanningTicket = Schema.Struct({
   appReviewEligible: Schema.optionalKey(Schema.Boolean),
   /** How the ticket's App Review verifies it; absent means both. */
   appReviewScope: Schema.optionalKey(AppReviewScope),
+  appReviewCommands: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   appReviewPlanMarkdown: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   status: TrimmedNonEmptyString.pipe(Schema.withDecodingDefault(Effect.succeed("open"))),
   createdAt: IsoDateTime,
@@ -1535,6 +1536,7 @@ export const OrchestrationImplementationRun = Schema.Struct({
   appReviews: Schema.Array(OrchestrationImplementationAppReviewArtifact).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  appReviewE2eCommands: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   appReviewedHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -2663,6 +2665,7 @@ export const ThreadPlanningTicketArtifactInput = Schema.Struct({
   ),
   appReviewEligible: Schema.optionalKey(Schema.Boolean),
   appReviewScope: Schema.optionalKey(AppReviewScope),
+  appReviewCommands: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   appReviewPlanMarkdown: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
 });
 export type ThreadPlanningTicketArtifactInput = typeof ThreadPlanningTicketArtifactInput.Type;
@@ -2677,6 +2680,7 @@ export const PlanningReviewerTicketEdit = Schema.Union([
     dependencyKeys: Schema.optional(Schema.Array(OrchestrationPlanningTicketKey)),
     appReviewEligible: Schema.optional(Schema.Boolean),
     appReviewScope: Schema.optional(AppReviewScope),
+    appReviewCommands: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
     appReviewPlanMarkdown: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   }),
   Schema.Struct({
@@ -2690,6 +2694,7 @@ export const PlanningReviewerTicketEdit = Schema.Union([
     ),
     appReviewEligible: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
     appReviewScope: Schema.optional(AppReviewScope),
+    appReviewCommands: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
     appReviewPlanMarkdown: Schema.NullOr(TrimmedNonEmptyString).pipe(
       Schema.withDecodingDefault(Effect.succeed(null)),
     ),
@@ -3067,6 +3072,7 @@ export const ThreadAppReviewWorkflowLaunchCommand = Schema.Struct({
   controllerThreadId: ThreadId,
   caller: AppReviewWorkflowCaller,
   testPlatforms: Schema.optionalKey(ReviewTestPlatforms),
+  e2eCommands: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   briefMarkdown: TrimmedNonEmptyString,
   supportingContextMarkdown: Schema.optionalKey(Schema.NullOr(Schema.String)),
   previewTargets: Schema.Array(TrimmedNonEmptyString),

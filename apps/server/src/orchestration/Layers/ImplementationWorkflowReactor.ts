@@ -725,7 +725,12 @@ export function findAwaitingNestedAppReview(
 }
 
 export function nestedAppReviewOwnsActivePhase(run: AppReviewWorkflowRun): boolean {
-  return run.status === "running" && run.activePhase !== null && run.activeThreadId !== null;
+  return (
+    run.status === "running" &&
+    run.activePhase !== null &&
+    (run.activeThreadId !== null ||
+      (run.activePhase === "e2e" && run.cycles.at(-1)?.e2eExecution !== undefined))
+  );
 }
 
 /**
@@ -1566,7 +1571,9 @@ function completeValidationCommandsForFiles(
   run: OrchestrationImplementationRun,
   changedFiles: ReadonlyArray<string>,
 ): ReadonlyArray<string> {
-  const commands = [...run.launchSummary.validationCommands];
+  const commands = run.launchSummary.validationCommands.filter(
+    (command) => !run.appReviewE2eCommands?.includes(command),
+  );
   const nativeMobileChanged = changedFiles.some(
     (path) => path === "apps/mobile" || path.startsWith("apps/mobile/"),
   );
@@ -4296,6 +4303,7 @@ const make = Effect.gen(function* () {
         ticketId: input.ticketId,
       },
       testPlatforms: resolveReviewTestPlatforms(configuredParts, input.ticketId),
+      e2eCommands: ticket.appReviewCommands ?? [],
       briefMarkdown: ticket.appReviewPlanMarkdown,
       supportingContextMarkdown: `Review only ticket ${input.ticketId}: ${ticket.title}. Treat its attached plan and acceptance criteria as authoritative.\n\n${workerValidationContext(state.workerResult)}\n\n${nativeVerificationEvidenceMarkdown(state.nativeVerification)}`,
       previewTargets: [frontendUrl],
@@ -8505,6 +8513,49 @@ const make = Effect.gen(function* () {
           return;
         }
 
+        if (
+          run.appReviewE2eCommands !== undefined &&
+          run.appReviewedHeadSha !== head.commitSha &&
+          directive.status !== "blocked" &&
+          (directive.status === "clean" || atCeiling) &&
+          validationPassed
+        ) {
+          const retestRun = {
+            ...reviewedRun,
+            status: "qa-reviewing" as const,
+            appReviewedHeadSha: null,
+          };
+          yield* updateRun({ sourceThreadId, run: retestRun, createdAt: updatedAt });
+          yield* startBrowserReview({ sourceThreadId, run: retestRun, createdAt: updatedAt });
+          return;
+        }
+
+        if (
+          run.appReviewE2eCommands !== undefined &&
+          requiredCompleteCommands.length === 0 &&
+          run.appReviewedHeadSha === head.commitSha &&
+          directive.status === "clean"
+        ) {
+          yield* fileChangeRequest({
+            sourceThreadId,
+            run: {
+              ...reviewedRun,
+              status: "publishing-change-request",
+              validatedHeadSha: head.commitSha,
+              finalRegression: { checks: [], cycles: [], reviewBaseSha: null },
+              finalValidation: {
+                command: "App Review E2E",
+                status: "passed",
+                outputMarkdown:
+                  "Configured E2E suites passed in Final App Review on this reviewed commit.",
+                completedAt: updatedAt,
+              },
+            },
+            createdAt: updatedAt,
+          });
+          return;
+        }
+
         // Accept complete evidence from reviewers launched before validation moved to the gate.
         if (directive.status === "clean" && completeValidationPassed) {
           yield* fileChangeRequest({
@@ -10120,6 +10171,13 @@ const make = Effect.gen(function* () {
         status: "code-reviewing",
         integrationHeadSha: reviewedHeadSha,
         appReviewedHeadSha: reviewedHeadSha,
+        ...(nestedRun.cycles[0]?.e2eExecution
+          ? {
+              appReviewE2eCommands: nestedRun.cycles[0].e2eExecution.commands.map(
+                (entry) => entry.command,
+              ),
+            }
+          : {}),
         qaAttemptCount: nestedRun.cyclesUsed,
         appReviewUnblockAttemptCount: 0,
         retryableFailure: null,
@@ -10210,7 +10268,7 @@ const make = Effect.gen(function* () {
         retryableFailure: null,
         updatedAt: event.occurredAt,
       };
-      if (nestedRun.status === "exhausted") {
+      if (nestedRun.status === "exhausted" && !nestedRun.cycles.at(-1)?.e2eExecution) {
         const codeReviewRun: OrchestrationImplementationRun = {
           ...failedRun,
           status: "code-reviewing",

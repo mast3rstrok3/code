@@ -95,6 +95,7 @@ import Migration0090 from "./Migrations/047_ProjectionProjectIcon.ts";
 import Migration0091 from "./Migrations/048_ProjectionThreadBranchPullRequest.ts";
 import Migration0092 from "./Migrations/049_ProjectionThreadsActiveOrderKey.ts";
 import Migration0093 from "./Migrations/050_ProjectionThreadPullRequests.ts";
+import Migration0095 from "./Migrations/095_PlanningTicketAppReviewCommands.ts";
 import Migration0094 from "./Migrations/051_ProjectionThreadMessageContext.ts";
 
 /**
@@ -211,6 +212,7 @@ const migrationEntries = [
   [92, "ProjectionThreadsActiveOrderKey", Migration0092],
   [93, "ProjectionThreadPullRequests", Migration0093],
   [94, "ProjectionThreadMessageContext", Migration0094],
+  [95, "PlanningTicketAppReviewCommands", Migration0095],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

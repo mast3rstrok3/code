@@ -159,7 +159,7 @@ export function workflowStepMatchesImplementationFailure<TThread extends Workflo
 ): boolean {
   const label = step.label?.toLowerCase() ?? "";
   if (validationKind === "final" && (stage === "fixer" || stage === "code-review"))
-    return label.includes("final regression tests");
+    return label.includes("final regression tests") || label.includes("final code review");
   switch (stage) {
     case "source-dirty":
     case "worktree-setup":
@@ -176,11 +176,12 @@ export function workflowStepMatchesImplementationFailure<TThread extends Workflo
     case "worker-execution":
       return label.includes("tdd") || label.includes("build") || label.includes("ticket wave");
     case "merge-gate":
-      if (validationKind === "final") return label.includes("final regression tests");
+      if (validationKind === "final")
+        return label.includes("final regression tests") || label.includes("final code review");
       return label.includes("integrat") || label.includes("merge");
     case "integration":
       return validationKind === "final"
-        ? label.includes("final regression tests")
+        ? label.includes("final regression tests") || label.includes("final code review")
         : label.includes("integrat") || label.includes("merge");
     case "app-dev-stack":
       return label.includes("appdevstack") || label === "planning";
@@ -469,7 +470,7 @@ function entryMatchesDefinedStep<TThread extends WorkflowModelThread>(
   const role = entry.row.thread.workflowRole;
   const label = step.label.toLowerCase();
   if (entry.row.thread.title?.toLowerCase().includes("final regression"))
-    return label.includes("final regression tests");
+    return label.includes("final regression tests") || label.includes("final code review");
   if (label.includes("execute ticket waves")) {
     // The run's coordinator opens the implementation phase and stays alive for
     // the rest of it, so it describes no single step. Presets that give it a
@@ -503,19 +504,12 @@ function entryMatchesDefinedStep<TThread extends WorkflowModelThread>(
       entry.row.thread.workflowContext?.ticketScope?.length !== 1
     );
   }
-  if (label.includes("final regression tests")) {
+  if (label.includes("final regression tests") || label.includes("final code review")) {
     return (
-      role === "implementation-validator" &&
-      entry.row.thread.title?.toLowerCase().includes("final validation") === true
-    );
-  }
-  if (label.includes("final code review")) {
-    // Deliberately not the run's coordinator: it exists from the first ticket
-    // wave onward and reads as settled whenever it is idle, which called the
-    // final review done before it had started.
-    return (
-      role === "implementation-code-reviewer" &&
-      entry.row.thread.workflowContext?.ticketScope?.length !== 1
+      (role === "implementation-validator" &&
+        entry.row.thread.title?.toLowerCase().includes("final validation") === true) ||
+      (role === "implementation-code-reviewer" &&
+        entry.row.thread.workflowContext?.ticketScope?.length !== 1)
     );
   }
   if (step.skillId !== undefined && entrySkillIds(entry).has(step.skillId)) return true;
@@ -838,7 +832,11 @@ export function resolveWorkflowCurrentPath<TThread extends WorkflowModelThread>(
         stage === "fixer" ||
         stage === "code-review");
     const step = finalValidation
-      ? currentPathStep(input.steps, (label) => label.includes("final regression tests"))
+      ? currentPathStep(
+          input.steps,
+          (label) =>
+            label.includes("final regression tests") || label.includes("final code review"),
+        )
       : stage === "app-review"
         ? currentPathStep(input.steps, (label) => label.includes("app review"))
         : stage === "code-review"
@@ -898,7 +896,7 @@ export function resolveWorkflowCurrentPath<TThread extends WorkflowModelThread>(
     const segments = [
       input.workflowLabel,
       finalValidation
-        ? "Final regression tests"
+        ? "Final Code Review"
         : (step?.label ?? stage?.replaceAll("-", " ") ?? "Complete"),
       cycleNumber === null ? null : `Cycle ${cycleNumber}`,
       finalValidation
