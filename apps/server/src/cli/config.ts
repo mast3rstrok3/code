@@ -240,7 +240,11 @@ const EnvServerConfig = Config.all({
   appStackNativeFrontendUrl: appStackString("T3CODE_APP_STACK_NATIVE_FRONTEND_URL"),
   appStackNativeBackendUrl: appStackString("T3CODE_APP_STACK_NATIVE_BACKEND_URL"),
   appStackNativeKeycloakUrl: appStackString("T3CODE_APP_STACK_NATIVE_KEYCLOAK_URL"),
-  appStackNativeMinioUrl: appStackString("T3CODE_APP_STACK_NATIVE_MINIO_URL"),
+  // MINIO_URL is the former name. Hosts that still export it keep working.
+  appStackNativeObjectStorageUrl: Config.all([
+    appStackString("T3CODE_APP_STACK_NATIVE_OBJECT_STORAGE_URL"),
+    appStackString("T3CODE_APP_STACK_NATIVE_MINIO_URL"),
+  ]).pipe(Config.map(([current, former]) => current ?? former)),
   codeOidcIssuer: optionalUrl("CODE_OIDC_ISSUER"),
   codeOidcClientId: optionalTrimmedString("CODE_OIDC_CLIENT_ID"),
   codeOidcClientSecret: optionalRedactedString("CODE_OIDC_CLIENT_SECRET"),
@@ -576,7 +580,7 @@ export const resolveServerConfig = (
           frontendUrl: env.appStackNativeFrontendUrl,
           backendUrl: env.appStackNativeBackendUrl,
           keycloakUrl: env.appStackNativeKeycloakUrl,
-          minioUrl: env.appStackNativeMinioUrl,
+          objectStorageUrl: env.appStackNativeObjectStorageUrl,
         }
       : undefined;
 

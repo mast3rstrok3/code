@@ -69,7 +69,7 @@ export interface AppStackPreviewUrlConfig {
   readonly frontendUrl?: string | null | undefined;
   readonly backendUrl?: string | null | undefined;
   readonly keycloakUrl?: string | null | undefined;
-  readonly minioUrl?: string | null | undefined;
+  readonly objectStorageUrl?: string | null | undefined;
   readonly domain?: string | null | undefined;
 }
 
@@ -164,8 +164,12 @@ export function appStackPreviewUrlForService(config: AppStackPreviewUrlConfig): 
       return nonEmpty(config.backendUrl) ?? `https://api-${namespace}.${domain}`;
     case "keycloak":
       return nonEmpty(config.keycloakUrl) ?? `https://${namespace}-keycloak.${domain}`;
+    case "object-storage":
+    case "seaweedfs":
+      return nonEmpty(config.objectStorageUrl) ?? `https://storage-${namespace}.${domain}`;
+    // Stacks that still run MinIO keep the hostname they were given.
     case "minio":
-      return nonEmpty(config.minioUrl) ?? `https://minio-${namespace}.${domain}`;
+      return nonEmpty(config.objectStorageUrl) ?? `https://minio-${namespace}.${domain}`;
     default:
       return null;
   }

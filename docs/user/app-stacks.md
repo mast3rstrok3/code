@@ -30,12 +30,13 @@ For setup work in another repository, copy the full prompt in
 
 Conventional URLs:
 
-| Service names            | URL                                               |
-| ------------------------ | ------------------------------------------------- |
-| `frontend`, `web`, `app` | `https://<namespace>.nightingale-ai.com`          |
-| `backend`, `api`         | `https://api-<namespace>.nightingale-ai.com`      |
-| `keycloak`               | `https://<namespace>-keycloak.nightingale-ai.com` |
-| `minio`                  | `https://minio-<namespace>.nightingale-ai.com`    |
+| Service names                 | URL                                               |
+| ----------------------------- | ------------------------------------------------- |
+| `frontend`, `web`, `app`      | `https://<namespace>.nightingale-ai.com`          |
+| `backend`, `api`              | `https://api-<namespace>.nightingale-ai.com`      |
+| `keycloak`                    | `https://<namespace>-keycloak.nightingale-ai.com` |
+| `seaweedfs`, `object-storage` | `https://storage-<namespace>.nightingale-ai.com`  |
+| `minio`                       | `https://minio-<namespace>.nightingale-ai.com`    |
 
 ## Managing stacks
 

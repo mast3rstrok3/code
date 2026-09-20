@@ -182,8 +182,9 @@ URL and namespace contract:
   https://api-<namespace>.nightingale-ai.com
 - Keycloak, if present, is:
   https://<namespace>-keycloak.nightingale-ai.com
-- MinIO, if present, is:
-  https://minio-<namespace>.nightingale-ai.com
+- Object storage, if present (service seaweedfs/object-storage), is:
+  https://storage-<namespace>.nightingale-ai.com
+  A service still named minio keeps https://minio-<namespace>.nightingale-ai.com.
 - Do not hard-code those URLs in the repo. The App Stack system owns them.
 
 Repository README note:

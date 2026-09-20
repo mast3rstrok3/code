@@ -326,7 +326,7 @@ it.effect("uses the configured controller backend before native kubectl mode", (
       frontendUrl: undefined,
       backendUrl: undefined,
       keycloakUrl: undefined,
-      minioUrl: undefined,
+      objectStorageUrl: undefined,
     },
     response: (request) => {
       const url = new URL(request.url);

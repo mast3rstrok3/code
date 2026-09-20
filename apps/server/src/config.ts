@@ -93,7 +93,7 @@ export interface NativeAppStackConfig {
   readonly frontendUrl: string | undefined;
   readonly backendUrl: string | undefined;
   readonly keycloakUrl: string | undefined;
-  readonly minioUrl: string | undefined;
+  readonly objectStorageUrl: string | undefined;
 }
 
 export interface DeriveServerPathsOptions {

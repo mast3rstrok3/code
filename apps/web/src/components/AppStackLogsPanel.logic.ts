@@ -100,8 +100,10 @@ const SERVICE_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   frontend: "Front End",
   keycloak: "Keycloak",
   minio: "MinIO",
+  "object-storage": "Object Storage",
   postgres: "Postgres",
   redis: "Redis",
+  seaweedfs: "SeaweedFS",
 };
 
 export function displayNameFromStackPath(worktreePath: string): string {
