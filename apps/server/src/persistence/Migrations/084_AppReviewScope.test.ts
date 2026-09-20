@@ -16,6 +16,6 @@ describe("084_AppReviewScope", () => {
         PRAGMA table_info(projection_thread_app_reviews)
       `;
       assert.isTrue(columns.some((column) => column.name === "app_review_scope"));
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });

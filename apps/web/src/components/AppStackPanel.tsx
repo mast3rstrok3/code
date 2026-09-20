@@ -51,6 +51,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   APP_STACK_VARIANTS,
   appStackDisplayName,
@@ -207,16 +208,22 @@ function StackServices({ stack }: { readonly stack: AppStack }) {
               </div>
             </div>
             {previewUrl ? (
-              <a
-                href={previewUrl}
-                target="_blank"
-                rel="noreferrer"
-                title={previewUrl}
-                className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-                aria-label={`Open ${service.name}`}
-              >
-                <ExternalLinkIcon className="size-3.5" />
-              </a>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <a
+                      href={previewUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                      aria-label={`Open ${service.name}`}
+                    />
+                  }
+                >
+                  <ExternalLinkIcon className="size-3.5" />
+                </TooltipTrigger>
+                <TooltipPopup side="top">{previewUrl}</TooltipPopup>
+              </Tooltip>
             ) : null}
           </div>
         );
@@ -338,16 +345,22 @@ function StackKubernetesInspect(props: {
                 </button>
                 <span className="flex shrink-0 items-center gap-1">
                   {preview ? (
-                    <a
-                      href={preview.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      title={preview.url}
-                      className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-                      aria-label={`Open ${preview.serviceName}`}
-                    >
-                      <ExternalLinkIcon className="size-3.5" />
-                    </a>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <a
+                            href={preview.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                            aria-label={`Open ${preview.serviceName}`}
+                          />
+                        }
+                      >
+                        <ExternalLinkIcon className="size-3.5" />
+                      </TooltipTrigger>
+                      <TooltipPopup side="top">{preview.url}</TooltipPopup>
+                    </Tooltip>
                   ) : null}
                   <PodPhaseBadge phase={pod.phase} />
                 </span>

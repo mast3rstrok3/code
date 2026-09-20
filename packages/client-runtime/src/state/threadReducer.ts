@@ -302,6 +302,9 @@ export function applyThreadDetailEvent(
             ? { ownerUserId: event.payload.ownerUserId }
             : {}),
           ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
+          ...(event.payload.titleState !== undefined
+            ? { titleState: event.payload.titleState }
+            : {}),
           ...(event.payload.titleRegeneration !== undefined
             ? { titleRegeneration: event.payload.titleRegeneration }
             : {}),

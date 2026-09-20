@@ -102,6 +102,7 @@ const runReconciliation = (input: {
       getThreadReplayStats: () => Effect.die("unused thread replay stats"),
       dispatch: input.dispatch,
       streamDomainEvents: Stream.empty,
+      subscribeDomainEvents: Effect.succeed(Stream.empty),
       latestSequence: Effect.succeed(0),
     }),
     Effect.provide(
@@ -719,6 +720,7 @@ it.effect("does not fail startup when the live provider session inventory cannot
       getThreadReplayStats: () => Effect.die("unused thread replay stats"),
       dispatch: () => Effect.die("unused"),
       streamDomainEvents: Stream.empty,
+      subscribeDomainEvents: Effect.succeed(Stream.empty),
       latestSequence: Effect.succeed(0),
     }),
     Effect.provide(Layer.mergeAll(NodeServices.layer, ServerSettings.layerTest())),

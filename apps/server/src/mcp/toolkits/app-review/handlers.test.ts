@@ -140,6 +140,7 @@ const makeHarness = (input: {
           return Effect.succeed({ sequence: dispatched.length });
         },
         streamDomainEvents: Stream.empty,
+        subscribeDomainEvents: Effect.succeed(Stream.empty),
       }),
     ),
     ServerConfig.ServerConfig.layerTest(process.cwd(), {

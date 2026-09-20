@@ -25,6 +25,7 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 interface AppReviewLaunchDialogProps {
   readonly open: boolean;
@@ -143,9 +144,12 @@ export function AppReviewLaunchDialog(props: AppReviewLaunchDialogProps) {
               {resolvedPreviewTargets.length > 0 ? (
                 <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
                   {resolvedPreviewTargets.map((url) => (
-                    <li key={url} className="truncate" title={url}>
-                      {url}
-                    </li>
+                    <Tooltip key={url}>
+                      <TooltipTrigger render={<li className="truncate">{url}</li>} />
+                      <TooltipPopup side="top" className="max-w-80">
+                        {url}
+                      </TooltipPopup>
+                    </Tooltip>
                   ))}
                 </ul>
               ) : (

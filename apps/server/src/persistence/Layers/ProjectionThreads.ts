@@ -7,7 +7,6 @@ import * as Struct from "effect/Struct";
 
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
-  DeleteProjectionThreadInput,
   GetProjectionThreadInput,
   ListProjectionThreadsByProjectInput,
   ProjectionThread,
@@ -24,6 +23,7 @@ import {
   WorkflowStepModelOverride,
   ImplementationWorkflowSettings,
   ThreadLinkedPullRequest,
+  ThreadTitleState,
 } from "@t3tools/contracts";
 
 const ProjectionThreadDbRow = ProjectionThread.mapFields(
@@ -45,11 +45,11 @@ const ProjectionThreadDbRow = ProjectionThread.mapFields(
     workflowImplementationSettings: Schema.NullOr(
       Schema.fromJsonString(ImplementationWorkflowSettings),
     ),
+    titleState: Schema.NullOr(Schema.fromJsonString(ThreadTitleState)),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
     branchPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
   }),
 );
-type ProjectionThreadDbRow = typeof ProjectionThreadDbRow.Type;
 
 const makeProjectionThreadRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -71,6 +71,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           workflow_subagent_batch_id,
           workflow_subagent_child_index,
           title,
+          title_state_json,
           model_selection_json,
           runtime_mode,
           interaction_mode,
@@ -119,6 +120,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.workflowSubagentBatchId ?? null},
           ${row.workflowSubagentChildIndex ?? null},
           ${row.title},
+          ${row.titleState == null ? null : JSON.stringify(row.titleState)},
           ${JSON.stringify(row.modelSelection)},
           ${row.runtimeMode},
           ${row.interactionMode},
@@ -167,6 +169,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           workflow_subagent_batch_id = excluded.workflow_subagent_batch_id,
           workflow_subagent_child_index = excluded.workflow_subagent_child_index,
           title = excluded.title,
+          title_state_json = excluded.title_state_json,
           model_selection_json = excluded.model_selection_json,
           runtime_mode = excluded.runtime_mode,
           interaction_mode = excluded.interaction_mode,
@@ -227,6 +230,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           workflow_subagent_batch_id AS "workflowSubagentBatchId",
           workflow_subagent_child_index AS "workflowSubagentChildIndex",
           title,
+          title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
@@ -289,6 +293,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           workflow_subagent_batch_id AS "workflowSubagentBatchId",
           workflow_subagent_child_index AS "workflowSubagentChildIndex",
           title,
+          title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
@@ -326,15 +331,6 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
         FROM projection_threads
         WHERE project_id = ${projectId}
         ORDER BY created_at ASC, thread_id ASC
-      `,
-  });
-
-  const deleteProjectionThreadRow = SqlSchema.void({
-    Request: DeleteProjectionThreadInput,
-    execute: ({ threadId }) =>
-      sql`
-        DELETE FROM projection_threads
-        WHERE thread_id = ${threadId}
       `,
   });
 
@@ -384,25 +380,10 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.listByProjectId:query")),
     );
 
-  const deleteById: ProjectionThreadRepositoryShape["deleteById"] = Effect.fn(
-    "ProjectionThreadRepository.deleteById",
-  )(function* (input) {
-    yield* sql`DELETE FROM projection_thread_ticket_scope WHERE thread_id = ${input.threadId}`.pipe(
-      Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.deleteById:ticketScope")),
-    );
-    yield* sql`DELETE FROM projection_thread_workflow_membership WHERE thread_id = ${input.threadId}`.pipe(
-      Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.deleteById:membership")),
-    );
-    yield* deleteProjectionThreadRow(input).pipe(
-      Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.deleteById:query")),
-    );
-  });
-
   return {
     upsert,
     getById,
     listByProjectId,
-    deleteById,
   } satisfies ProjectionThreadRepositoryShape;
 });
 

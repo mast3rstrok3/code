@@ -21,7 +21,7 @@ const decodeAppReviewEvidenceJson = Schema.decodeUnknownEffect(
 );
 
 const makeLayer = () => {
-  const sqliteLayer = NodeSqliteClient.layerMemory();
+  const sqliteLayer = NodeSqliteClient.layer({ filename: ":memory:" });
   return Layer.mergeAll(
     sqliteLayer,
     ProjectionThreadAppReviewRepositoryLive.pipe(Layer.provideMerge(sqliteLayer)),

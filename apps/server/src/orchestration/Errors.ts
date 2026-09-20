@@ -4,30 +4,6 @@ import * as Schema from "effect/Schema";
 
 import type { ProjectionRepositoryError } from "../persistence/Errors.ts";
 
-export class OrchestrationCommandJsonParseError extends Schema.TaggedError<OrchestrationCommandJsonParseError>()(
-  "OrchestrationCommandJsonParseError",
-  {
-    detail: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Invalid orchestration command JSON: ${this.detail}`;
-  }
-}
-
-export class OrchestrationCommandDecodeError extends Schema.TaggedError<OrchestrationCommandDecodeError>()(
-  "OrchestrationCommandDecodeError",
-  {
-    ticket: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Invalid orchestration command payload: ${this.ticket}`;
-  }
-}
-
 export class OrchestrationCommandInvariantError extends Schema.TaggedError<OrchestrationCommandInvariantError>()(
   "OrchestrationCommandInvariantError",
   {
@@ -100,38 +76,12 @@ export class OrchestrationProjectorDecodeError extends Schema.TaggedError<Orches
   }
 }
 
-export class OrchestrationListenerCallbackError extends Schema.TaggedError<OrchestrationListenerCallbackError>()(
-  "OrchestrationListenerCallbackError",
-  {
-    listener: Schema.Literals(["read-model", "domain-event"]),
-    detail: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Orchestration ${this.listener} listener failed: ${this.detail}`;
-  }
-}
-
 export type OrchestrationDispatchError =
   | ProjectionRepositoryError
-  | OrchestrationCommandInvariantError
+  | OrchestrationCommandRejection
   | OrchestrationCommandIdConflictError
   | OrchestrationCommandPreviouslyRejectedError
-  | OrchestrationProjectorDecodeError
-  | OrchestrationListenerCallbackError;
-
-export type OrchestrationEngineError =
-  | OrchestrationDispatchError
-  | OrchestrationCommandJsonParseError
-  | OrchestrationCommandDecodeError;
-
-export function toOrchestrationCommandDecodeError(error: Schema.SchemaError) {
-  return new OrchestrationCommandDecodeError({
-    ticket: SchemaIssue.makeFormatterDefault()(error.issue),
-    cause: error,
-  });
-}
+  | OrchestrationProjectorDecodeError;
 
 export function toProjectorDecodeError(eventType: string) {
   return (error: Schema.SchemaError): OrchestrationProjectorDecodeError =>

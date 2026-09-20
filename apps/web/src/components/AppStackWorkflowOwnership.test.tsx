@@ -50,7 +50,7 @@ describe("AppStackWorkflowConflictWarning", () => {
       />,
     );
 
-    expect(markup).toContain("Multiple stacks map to one workflow");
+    expect(markup).toContain("Workflow stack ownership conflicts");
     expect(markup).toContain("2 stacks · workflow-calendar");
     expect(markup).toContain("No stacks were stopped or deleted automatically.");
   });

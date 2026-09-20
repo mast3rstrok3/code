@@ -13,6 +13,7 @@ import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as PubSub from "effect/PubSub";
+import * as Stream from "effect/Stream";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -3932,7 +3933,9 @@ effectIt.effect(
             NodeServices.layer,
             Layer.mock(ProcessRunner)({}),
             Layer.mock(OrchestrationEngineService)({
-              subscribeDomainEvents: PubSub.subscribe(events),
+              subscribeDomainEvents: PubSub.subscribe(events).pipe(
+                Effect.map(Stream.fromSubscription),
+              ),
               dispatch: (command) =>
                 Deferred.succeed(interrupted, command).pipe(Effect.as({ sequence: 2 })),
             }),

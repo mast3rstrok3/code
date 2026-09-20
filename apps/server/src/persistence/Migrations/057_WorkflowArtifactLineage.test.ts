@@ -60,6 +60,6 @@ describe("057_WorkflowArtifactLineage", () => {
           reviewerMessageId: "assistant:review-1",
         },
       ]);
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });

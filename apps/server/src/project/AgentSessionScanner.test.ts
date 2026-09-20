@@ -40,6 +40,7 @@ const makeProjectionSnapshotQueryLayer = (importedWorkspaceRoots: ReadonlyArray<
 
     getCommandReadModel: () => Effect.die("unused"),
     getUserInputActivity: () => Effect.die("unused"),
+    listActivitiesByKind: () => Effect.die("unused"),
     getSnapshot: () => Effect.die("unused"),
     getShellSnapshot: () =>
       Effect.succeed({
@@ -50,6 +51,7 @@ const makeProjectionSnapshotQueryLayer = (importedWorkspaceRoots: ReadonlyArray<
         threads: [],
         updatedAt: "2026-01-01T00:00:00.000Z",
       }),
+    getDeletedWorktreeThreads: () => Effect.die("unused"),
     getArchivedShellSnapshot: () => Effect.die("unused"),
     getSnapshotSequence: () => Effect.die("unused"),
     getCounts: () => Effect.die("unused"),
@@ -874,25 +876,23 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         const fileSystem = yield* FileSystem.FileSystem;
         const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
         const codexHomePath = yield* makeTempDir("t3code-codex-home-");
-        // The exclusions key off the real home directory, so these fixtures
-        // must live there. Each run owns a uniquely named subtree and removes
-        // only that subtree, never the shared Codex or Downloads parents.
-        const home = NodeOS.homedir();
-        // Borrow a unique suffix from a scoped temp dir instead of reaching for
-        // Date.now or Math.random, which the Effect lint rejects.
-        const runId = path.basename(yield* makeTempDir("t3code-scanner-test-"));
-        const scratchRoot = path.join(home, "Documents", "Codex", runId);
-        const scratch = path.join(scratchRoot, "2026-09-01", "some-conversation");
-        const downloads = path.join(home, "Downloads", runId);
+        // The exclusions key off the home directory. Point HOME at a scratch
+        // directory for this test so it never writes into the real one, which
+        // is not always writable (a root-owned ~/Downloads, for instance).
+        const home = yield* makeTempDir("t3code-scanner-home-");
+        const previousHome = process.env.HOME;
+        process.env.HOME = home;
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            if (previousHome === undefined) delete process.env.HOME;
+            else process.env.HOME = previousHome;
+          }),
+        );
+        const scratch = path.join(home, "Documents", "Codex", "2026-09-01", "some-conversation");
+        const downloads = path.join(home, "Downloads", "unpacked-archive");
         const keep = yield* makeTempDir("t3code-workspace-keep-");
         yield* fileSystem.makeDirectory(scratch, { recursive: true });
         yield* fileSystem.makeDirectory(downloads, { recursive: true });
-        yield* Effect.addFinalizer(() =>
-          Effect.all([
-            fileSystem.remove(scratchRoot, { recursive: true }).pipe(Effect.ignore),
-            fileSystem.remove(downloads, { recursive: true }).pipe(Effect.ignore),
-          ]),
-        );
 
         for (const [index, cwd] of [scratch, downloads, keep].entries()) {
           yield* writeTranscript({
@@ -1146,7 +1146,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
               Effect.map((file) => ({
                 ...file,
                 stat: file.stat,
-                readAlloc: (size: FileSystem.SizeInput) => {
+                readAlloc: (size: number) => {
                   reservedBytes += Number(size);
                   requests.push(Number(size));
                   return file.readAlloc(size);
@@ -1714,7 +1714,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
                   : {
                       ...file,
                       stat: file.stat,
-                      readAlloc: (size: FileSystem.SizeInput) =>
+                      readAlloc: (size: number) =>
                         file.readAlloc(size).pipe(
                           Effect.tap((chunk) =>
                             Effect.sync(() => {
@@ -2162,7 +2162,10 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
               payload: { type: "user_message", message: "Future work" },
             }),
           ].join("\n"),
-          mtimeMs: nowMs + 1,
+          // Node's BigInt stat (which the Effect file system now uses) floors
+          // sub-millisecond precision, so a one-millisecond offset can round
+          // back to `nowMs`; use a full second to stay clear of the clock.
+          mtimeMs: nowMs + 1_000,
         });
 
         const outcomes = yield* runRecentThreadOutcomes({
@@ -2216,7 +2219,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
               Effect.map((file) => ({
                 ...file,
                 stat: file.stat,
-                readAlloc: (size: FileSystem.SizeInput) =>
+                readAlloc: (size: number) =>
                   file.readAlloc(size).pipe(
                     Effect.tap((chunk) =>
                       Effect.gen(function* () {

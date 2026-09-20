@@ -32,6 +32,6 @@ describe("075_ProjectionThreadWorkflowStepModels", () => {
       `;
       assert.equal(rows.length, 1);
       assert.equal(rows[0]?.workflowStepModels, null);
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });

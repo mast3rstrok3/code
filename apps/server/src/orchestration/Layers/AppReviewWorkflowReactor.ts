@@ -4791,10 +4791,7 @@ ${result.outputMarkdown}`,
     worker.enqueue({ kind: "reconcile" }).pipe(Effect.andThen(worker.flush));
 
   const start: AppReviewWorkflowReactorShape["start"] = Effect.fn("start")(function* () {
-    const domainEvents =
-      orchestrationEngine.subscribeDomainEvents === undefined
-        ? orchestrationEngine.streamDomainEvents
-        : Stream.fromSubscription(yield* orchestrationEngine.subscribeDomainEvents);
+    const domainEvents = yield* orchestrationEngine.subscribeDomainEvents;
     yield* Effect.forkScoped(
       Stream.runForEach(domainEvents, (event) => {
         if (

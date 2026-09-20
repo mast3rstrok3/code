@@ -36,6 +36,6 @@ describe("076_ProjectionThreadWorkflowPause", () => {
       `;
       assert.equal(rows.length, 1);
       assert.equal(rows[0]?.workflowPausedAt, null);
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });

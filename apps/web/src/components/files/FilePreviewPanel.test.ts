@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+
+// The panel module pulls in the diff worker, which needs a browser `self`.
+vi.mock("../DiffWorkerPoolProvider", () => ({ DiffWorkerPoolProvider: () => null }));
 
 import { resolveWorkspaceMediaAssetPath } from "./FilePreviewPanel";
 import {

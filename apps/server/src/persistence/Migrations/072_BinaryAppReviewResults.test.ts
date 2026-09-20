@@ -77,6 +77,6 @@ describe("072_BinaryAppReviewResults", () => {
         cycleStatus: "completed",
         reviewVerdict: "failed",
       });
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });

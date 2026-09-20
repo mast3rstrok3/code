@@ -14,8 +14,8 @@ import {
   resolveComposerPrimaryMode,
   type ComposerModeControls,
 } from "./ComposerModePicker";
-import { ComposerControl } from "./ComposerControl";
-import { composerFloatingLayerProps } from "./composerEventScope";
+import { ComposerControl, ComposerControlIcon } from "./ComposerControl";
+import { useComposerMenuProps } from "./composerEventScope";
 import { useComposerMenuState } from "./useComposerMenuState";
 
 /**
@@ -36,6 +36,8 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
   const { modeControls } = props;
+  const composerFloatingLayerProps = useComposerMenuProps();
+  const size = props.size ?? "sm";
   const [open, setOpen] = useComposerMenuState(props.hidden);
   const activeMode = modeControls ? resolveComposerPrimaryMode(modeControls) : null;
   const modeSection = modeControls ? (
@@ -60,49 +62,50 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
     />
   ) : null;
   return (
-    <>
-      <Menu open={open} onOpenChange={setOpen}>
-        <MenuTrigger
-          render={
-            <ComposerControl
-              size={props.size ?? "sm"}
-              variant="ghost"
-              className="shrink-0 px-2 text-muted-foreground/70 hover:text-foreground/80"
-              aria-label="More composer controls"
-            />
-          }
+    <Menu open={open} onOpenChange={setOpen}>
+      <MenuTrigger
+        render={
+          <ComposerControl
+            size={size}
+            variant="ghost"
+            className={size === "xs" ? "shrink-0" : "shrink-0 px-2"}
+            aria-label="More composer controls"
+            data-composer-shortcut={
+              props.traitsMenuContent ? "composer.mode composer.effort" : "composer.mode"
+            }
+          />
+        }
+      >
+        <ComposerControlIcon icon={EllipsisIcon} size={size} />
+      </MenuTrigger>
+      <MenuPopup align="start" {...composerFloatingLayerProps}>
+        {props.traitsMenuContent ? (
+          <>
+            {props.traitsMenuContent}
+            <MenuDivider />
+          </>
+        ) : null}
+        {modeSection ? (
+          <>
+            <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Mode</div>
+            {modeSection}
+            <MenuDivider />
+          </>
+        ) : null}
+        <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Access</div>
+        <MenuRadioGroup
+          value={props.runtimeMode}
+          onValueChange={(value) => {
+            if (!value || value === props.runtimeMode) return;
+            props.onRuntimeModeChange(value as RuntimeMode);
+          }}
         >
-          <EllipsisIcon aria-hidden="true" className="size-4" />
-        </MenuTrigger>
-        <MenuPopup align="start" {...composerFloatingLayerProps}>
-          {props.traitsMenuContent ? (
-            <>
-              {props.traitsMenuContent}
-              <MenuDivider />
-            </>
-          ) : null}
-          {modeSection ? (
-            <>
-              <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Mode</div>
-              {modeSection}
-              <MenuDivider />
-            </>
-          ) : null}
-          <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Access</div>
-          <MenuRadioGroup
-            value={props.runtimeMode}
-            onValueChange={(value) => {
-              if (!value || value === props.runtimeMode) return;
-              props.onRuntimeModeChange(value as RuntimeMode);
-            }}
-          >
-            <MenuRadioItem value="approval-required">Supervised</MenuRadioItem>
-            <MenuRadioItem value="auto-accept-edits">Auto-accept edits</MenuRadioItem>
-            <MenuRadioItem value="auto">Auto</MenuRadioItem>
-            <MenuRadioItem value="full-access">Full access</MenuRadioItem>
-          </MenuRadioGroup>
-        </MenuPopup>
-      </Menu>
-    </>
+          <MenuRadioItem value="approval-required">Supervised</MenuRadioItem>
+          <MenuRadioItem value="auto-accept-edits">Auto-accept edits</MenuRadioItem>
+          <MenuRadioItem value="auto">Auto</MenuRadioItem>
+          <MenuRadioItem value="full-access">Full access</MenuRadioItem>
+        </MenuRadioGroup>
+      </MenuPopup>
+    </Menu>
   );
 });

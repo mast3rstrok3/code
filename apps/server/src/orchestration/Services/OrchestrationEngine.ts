@@ -89,11 +89,11 @@ export interface OrchestrationEngineShape {
   readonly streamDomainEvents: Stream.Stream<OrchestrationEvent>;
 
   /**
-   * Acquire the hot event subscription before forking its consumer. This
-   * closes the gap where a scheduled stream fiber has not subscribed yet.
+   * Acquire a domain-event subscription before starting a consumer.
+   * The subscription is ready when this effect returns and closes with the scope.
    */
-  readonly subscribeDomainEvents?: Effect.Effect<
-    PubSub.Subscription<OrchestrationEvent>,
+  readonly subscribeDomainEvents: Effect.Effect<
+    Stream.Stream<OrchestrationEvent>,
     never,
     Scope.Scope
   >;

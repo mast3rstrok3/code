@@ -31,6 +31,6 @@ describe("082_ProjectionThreadWorkflowImplementationSettings", () => {
         WHERE thread_id = 'thread-1'
       `;
       assert.deepStrictEqual(rows, [{ settings: null }]);
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });

@@ -10,6 +10,7 @@ import { Eraser, Pause, Play, RotateCcw, Settings2, SkipForward } from "lucide-r
 import { useState } from "react";
 
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { WorkflowStepCyclePins, type SetWorkflowStepCycles } from "./WorkflowStepCycles";
 import {
   WorkflowStepReviewPartPins,
@@ -200,51 +201,69 @@ export function WorkflowStepSettingsMenu(props: {
 
         <div className="space-y-1 border-t border-border/70 px-2 py-2">
           {paused ? (
-            <button
-              type="button"
-              disabled={props.onResume === undefined}
-              title={`Let the run pick this ${noun} back up where it stopped`}
-              onClick={() => {
-                props.onResume?.(pausedScopeThreadIds);
-                setOpen(false);
-              }}
-              className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
-            >
-              <Play className="size-3.5" aria-hidden />
-              Resume {noun}
-            </button>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    disabled={props.onResume === undefined}
+                    onClick={() => {
+                      props.onResume?.(pausedScopeThreadIds);
+                      setOpen(false);
+                    }}
+                    className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+                  />
+                }
+              >
+                <Play className="size-3.5" aria-hidden />
+                Resume {noun}
+              </TooltipTrigger>
+              <TooltipPopup side="top">{`Let the run pick this ${noun} back up where it stopped`}</TooltipPopup>
+            </Tooltip>
           ) : (
-            <button
-              type="button"
-              disabled={props.runningThreadIds.length === 0 || props.onStop === undefined}
-              title={
-                props.runningThreadIds.length === 0
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    disabled={props.runningThreadIds.length === 0 || props.onStop === undefined}
+                    onClick={() => {
+                      props.onStop?.(props.runningThreadIds);
+                      setOpen(false);
+                    }}
+                    className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+                  />
+                }
+              >
+                <Pause className="size-3.5" aria-hidden />
+                Stop {noun}
+              </TooltipTrigger>
+              <TooltipPopup side="top">
+                {props.runningThreadIds.length === 0
                   ? "Nothing is running in this step"
-                  : "Stop this step and its active agent sessions"
-              }
-              onClick={() => {
-                props.onStop?.(props.runningThreadIds);
-                setOpen(false);
-              }}
-              className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
-            >
-              <Pause className="size-3.5" aria-hidden />
-              Stop {noun}
-            </button>
+                  : "Stop this step and its active agent sessions"}
+              </TooltipPopup>
+            </Tooltip>
           )}
-          <button
-            type="button"
-            disabled={restartDisabledReason !== null || props.onRestart === undefined}
-            title={restartDisabledReason ?? props.restartLabel}
-            onClick={() => {
-              props.onRestart?.();
-              setOpen(false);
-            }}
-            className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
-          >
-            <RotateCcw className="size-3.5" aria-hidden />
-            Start {noun} again
-          </button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  disabled={restartDisabledReason !== null || props.onRestart === undefined}
+                  onClick={() => {
+                    props.onRestart?.();
+                    setOpen(false);
+                  }}
+                  className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+                />
+              }
+            >
+              <RotateCcw className="size-3.5" aria-hidden />
+              Start {noun} again
+            </TooltipTrigger>
+            <TooltipPopup side="top">{restartDisabledReason ?? props.restartLabel}</TooltipPopup>
+          </Tooltip>
           {restartDisabledReason !== null ? (
             <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
               {restartDisabledReason}
@@ -252,24 +271,32 @@ export function WorkflowStepSettingsMenu(props: {
           ) : null}
           {props.onClear === undefined ? null : (
             <>
-              <button
-                type="button"
-                disabled={clearDisabledReason !== null}
-                title={clearDisabledReason ?? `Clear this ${noun} without starting it`}
-                onClick={() => {
-                  if (confirmClearMessage !== null && !confirmingClear) {
-                    setConfirmingClear(true);
-                    return;
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      disabled={clearDisabledReason !== null}
+                      onClick={() => {
+                        if (confirmClearMessage !== null && !confirmingClear) {
+                          setConfirmingClear(true);
+                          return;
+                        }
+                        props.onClear?.();
+                        setConfirmingClear(false);
+                        setOpen(false);
+                      }}
+                      className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+                    />
                   }
-                  props.onClear?.();
-                  setConfirmingClear(false);
-                  setOpen(false);
-                }}
-                className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
-              >
-                <Eraser className="size-3.5" aria-hidden />
-                {confirmingClear ? `Yes, clear ${noun}` : `Clear ${noun}`}
-              </button>
+                >
+                  <Eraser className="size-3.5" aria-hidden />
+                  {confirmingClear ? `Yes, clear ${noun}` : `Clear ${noun}`}
+                </TooltipTrigger>
+                <TooltipPopup side="top">
+                  {clearDisabledReason ?? `Clear this ${noun} without starting it`}
+                </TooltipPopup>
+              </Tooltip>
               {confirmingClear && confirmClearMessage !== null ? (
                 <>
                   <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
@@ -292,22 +319,28 @@ export function WorkflowStepSettingsMenu(props: {
             </>
           )}
           {props.onSetSkipped === undefined ? null : (
-            <button
-              type="button"
-              title={
-                props.skipped === true
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    onClick={() => {
+                      props.onSetSkipped?.(props.skipped !== true);
+                      setOpen(false);
+                    }}
+                    className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent"
+                  />
+                }
+              >
+                <SkipForward className="size-3.5" aria-hidden />
+                {props.skipped === true ? `Stop skipping ${noun}` : `Skip ${noun}`}
+              </TooltipTrigger>
+              <TooltipPopup side="top">
+                {props.skipped === true
                   ? `Let the run do this ${noun} again`
-                  : `Have the run pass over this ${noun}`
-              }
-              onClick={() => {
-                props.onSetSkipped?.(props.skipped !== true);
-                setOpen(false);
-              }}
-              className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent"
-            >
-              <SkipForward className="size-3.5" aria-hidden />
-              {props.skipped === true ? `Stop skipping ${noun}` : `Skip ${noun}`}
-            </button>
+                  : `Have the run pass over this ${noun}`}
+              </TooltipPopup>
+            </Tooltip>
           )}
         </div>
       </PopoverPopup>

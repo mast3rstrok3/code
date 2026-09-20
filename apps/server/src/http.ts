@@ -1,4 +1,4 @@
-import Mime from "@effect/platform-node/Mime";
+import * as Mime from "effect/unstable/http/Mime";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
@@ -30,6 +30,7 @@ import { OtlpTracer, OtlpSerialization } from "effect/unstable/observability";
 
 import * as ServerConfig from "./config.ts";
 import { ASSET_ROUTE_PREFIX, resolveAsset } from "./assets/AssetAccess.ts";
+import { githubMediaResponse } from "./assets/GitHubMediaFetch.ts";
 import { statMediaFile, streamMediaFile, type OpenMediaFile } from "./assets/MediaFile.ts";
 import {
   ATTACHMENT_UPLOAD_ROUTE_PREFIX,
@@ -167,7 +168,18 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
   ifRangeHeader?: string,
   method: "GET" | "HEAD" = "GET",
 ) {
-  const headers = assetResponseHeaders(asset.path, asset);
+  // A workspace recording arrives without a declared type. Audio and video are
+  // recognised by extension so they still get range support for seeking.
+  const inferredMimeType =
+    asset.mimeType === undefined && asset.download !== true
+      ? workspacePreviewMimeType(asset.path)
+      : null;
+  const headers = assetResponseHeaders(
+    asset.path,
+    inferredMimeType !== null && /^(?:audio|video)\//i.test(inferredMimeType)
+      ? { ...asset, mimeType: inferredMimeType }
+      : asset,
+  );
   const mediaFile = asset.file;
   const mediaInfo = mediaFile ? yield* statMediaFile(asset.path, mediaFile) : undefined;
   const isMedia = /^(?:audio|video)\//i.test(headers["Content-Type"] ?? "");
@@ -203,7 +215,10 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
   }
   if (mediaFile && mediaInfo) {
     const size = bytesToRead ?? mediaInfo.size;
-    headers["Content-Type"] ??= Mime.getType(asset.path) ?? "application/octet-stream";
+    headers["Content-Type"] ??= Option.getOrElse(
+      Mime.getType(asset.path),
+      () => "application/octet-stream",
+    );
     headers["Content-Length"] = String(size);
     if (!isMedia) {
       headers["Last-Modified"] = mediaInfo.mtime.toUTCString();
@@ -402,16 +417,6 @@ export function parseByteRangeHeader(
   return { offset: start, bytesToRead: end - start + 1 };
 }
 
-const ASSET_FILE_HEADERS = {
-  "Cache-Control": "private, max-age=3600",
-  "X-Content-Type-Options": "nosniff",
-  "Accept-Ranges": "bytes",
-} as const;
-
-function resolveAssetFileContentType(path: string): string {
-  return workspacePreviewMimeType(path) ?? Mime.getType(path) ?? "application/octet-stream";
-}
-
 export const assetRouteLayer = HttpRouter.add(
   "GET",
   `${ASSET_ROUTE_PREFIX}/*`,
@@ -434,6 +439,19 @@ export const assetRouteLayer = HttpRouter.add(
     );
     if (!asset) {
       return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+    if (asset.kind === "github-media") {
+      return yield* githubMediaResponse(asset, request.headers).pipe(
+        Effect.tapError((cause) =>
+          Effect.logWarning("Failed to fetch GitHub media.", { url: asset.url, cause }),
+        ),
+        Effect.orElseSucceed(() =>
+          HttpServerResponse.empty({
+            status: 502,
+            headers: { "cache-control": "private, no-store", "x-content-type-options": "nosniff" },
+          }),
+        ),
+      );
     }
     return yield* assetFileResponse(
       asset,
@@ -537,7 +555,7 @@ const streamStaticFile = (file: FileSystem.File, size: bigint) =>
     Effect.fnUntraced(function* (offset: bigint) {
       if (offset >= size) return;
       const remaining = size - offset;
-      const bytes = yield* file.readAlloc(remaining < 65_536n ? remaining : 65_536n);
+      const bytes = yield* file.readAlloc(Number(remaining < 65_536n ? remaining : 65_536n));
       if (Option.isNone(bytes)) return;
       return [bytes.value, offset + BigInt(bytes.value.byteLength)] as const;
     }),
@@ -616,7 +634,7 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
       }
     }
     const fileInfo = opened.info;
-    const mimeType = Mime.getType(filePath) ?? "application/octet-stream";
+    const mimeType = Option.getOrElse(Mime.getType(filePath), () => "application/octet-stream");
     const isHtml = mimeType === "text/html";
 
     // A hash-like name is not enough: custom static files can use the same naming pattern.

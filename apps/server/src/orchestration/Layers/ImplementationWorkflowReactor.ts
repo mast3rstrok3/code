@@ -12428,10 +12428,7 @@ const make = Effect.gen(function* () {
   );
 
   const start: ImplementationWorkflowReactorShape["start"] = Effect.fn("start")(function* () {
-    const domainEvents =
-      orchestrationEngine.subscribeDomainEvents === undefined
-        ? orchestrationEngine.streamDomainEvents
-        : Stream.fromSubscription(yield* orchestrationEngine.subscribeDomainEvents);
+    const domainEvents = yield* orchestrationEngine.subscribeDomainEvents;
     yield* Effect.forkScoped(
       Stream.runForEach(domainEvents, (event) => {
         if (

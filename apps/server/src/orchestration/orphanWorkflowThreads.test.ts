@@ -40,5 +40,5 @@ it.effect("selects only empty workflow shells with no unfinished owner", () =>
 
     const selected = yield* selectOrphanWorkflowThreads();
     assert.deepEqual(selected.map((row) => row.threadId).sort(), ["completed-owner", "empty"]);
-  }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

@@ -42,7 +42,7 @@ describe("058_PlanningTicketPlannedFileChanges", () => {
         WHERE ticket_id = 'planning-ticket-legacy'
       `;
       assert.deepStrictEqual(rows, [{ plannedFileChanges: "[]" }]);
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
   it.effect("is safe when the column already exists", () =>
@@ -55,6 +55,6 @@ describe("058_PlanningTicketPlannedFileChanges", () => {
         WHERE name = 'planned_file_changes_json'
       `;
       assert.deepStrictEqual(columns, [{ count: 1 }]);
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });

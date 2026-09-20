@@ -93,6 +93,6 @@ describe("071_AppReviewRename", () => {
       assert.deepStrictEqual(runs, [
         { runJson: '{"cyclesUsed":2,"appReviewId":"review-existing"}' },
       ]);
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });

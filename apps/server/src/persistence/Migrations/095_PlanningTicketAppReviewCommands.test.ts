@@ -34,5 +34,5 @@ it.effect("preserves old tickets and round-trips executable suite selections", (
       const [cleared] = yield* repository.listByThreadId({ threadId: ThreadId.make("thread") });
       assert.deepStrictEqual(cleared?.appReviewCommands, []);
     }).pipe(Effect.provide(ProjectionThreadPlanningTicketRepositoryLive));
-  }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

@@ -36,5 +36,5 @@ it.effect("upgrades a fork database at 90 without replacing workflow data", () =
     ]);
     assert.deepEqual(yield* sql`SELECT * FROM projection_thread_pull_requests`, []);
     assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 93 }), []);
-  }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

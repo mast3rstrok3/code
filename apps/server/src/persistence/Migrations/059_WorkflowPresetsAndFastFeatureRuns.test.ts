@@ -75,6 +75,6 @@ describe("059_WorkflowPresetsAndFastFeatureRuns", () => {
       assert.deepStrictEqual(proposed, [
         { specId: null, sourceThreadId: "source-2", planId: "plan-2" },
       ]);
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });

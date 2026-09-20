@@ -49,6 +49,6 @@ describe("074_PlanningTicketAppReviewMetadata", () => {
         WHERE ticket_id = 'ticket-1'
       `;
       assert.deepStrictEqual(rows, [{ eligible: 1, plan: "Review the ticket UI" }]);
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });

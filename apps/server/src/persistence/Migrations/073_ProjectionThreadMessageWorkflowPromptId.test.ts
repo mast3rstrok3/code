@@ -38,6 +38,6 @@ describe("073_ProjectionThreadMessageWorkflowPromptId", () => {
         WHERE message_id = 'message-1'
       `;
       assert.equal(rows[0]?.workflowPromptId, "planning.spec.codex");
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });

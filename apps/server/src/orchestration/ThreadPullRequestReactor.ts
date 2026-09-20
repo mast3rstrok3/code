@@ -348,10 +348,7 @@ export const make = Effect.gen(function* () {
   };
 
   const start = Effect.fn("ThreadPullRequestReactor.start")(function* () {
-    const events =
-      engine.subscribeDomainEvents === undefined
-        ? engine.streamDomainEvents
-        : Stream.fromSubscription(yield* engine.subscribeDomainEvents);
+    const events = yield* engine.subscribeDomainEvents;
     yield* forkParked(Stream.runForEach(events, processEvent));
     // Run without client demand. Saved branch lookups share GitManager's
     // provider cache and retry backoff with status and automatic settlement.

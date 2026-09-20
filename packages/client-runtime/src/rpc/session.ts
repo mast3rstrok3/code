@@ -43,6 +43,7 @@ import {
 import { environmentMismatchError } from "../connection/errors.ts";
 
 const SOCKET_OPEN_TIMEOUT = "15 seconds";
+// Matches the missed-pong count the patched RpcClient tolerates before it times out.
 const RPC_PING_MISS_TOLERANCE = 3;
 const MAX_CLOSE_REASON_LENGTH = 200;
 
@@ -273,7 +274,7 @@ function disconnectLogAttributes(input: {
 }
 
 function observeWebSocket(
-  socket: globalThis.WebSocket,
+  socket: Socket.WebSocketLike,
   observed: ObservedWebSocketLifecycle,
   createdAtMs: number,
 ) {
@@ -291,7 +292,8 @@ function observeWebSocket(
         ageMs: elapsedSince(observed.openedAtMs, createdAtMs),
         code: typeof event.code === "number" ? event.code : 1001,
         reason: typeof event.reason === "string" ? event.reason : "",
-        wasClean: typeof event.wasClean === "boolean" ? event.wasClean : null,
+        wasClean:
+          "wasClean" in event && typeof event.wasClean === "boolean" ? event.wasClean : null,
       };
     },
     { once: true },
@@ -438,7 +440,6 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     const protocolLayer = Layer.effect(
       RpcClient.Protocol,
       RpcClient.makeProtocolSocket({
-        pingMissTolerance: RPC_PING_MISS_TOLERANCE,
         retryTransientErrors: false,
         retryPolicy: Schedule.recurs(0),
       }),

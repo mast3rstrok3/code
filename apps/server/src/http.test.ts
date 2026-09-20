@@ -12,6 +12,7 @@ import { HttpClient, HttpRouter, HttpServerResponse } from "effect/unstable/http
 import { vi } from "vite-plus/test";
 
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as GitHubCli from "./sourceControl/GitHubCli.ts";
 import * as ServerConfig from "./config.ts";
 import {
   ProjectionThreadAppReviewRepository,
@@ -56,6 +57,8 @@ const assetRouteSupportLayer = Layer.mergeAll(
   ServerSecretStore.layer.pipe(Layer.provide(configLayer)),
   NativeAppIconResolver.layer.pipe(Layer.provide(configLayer)),
   appReviewRepositoryLayer,
+  // The asset route fetches GitHub-hosted media through the CLI. These tests never reach it.
+  Layer.mock(GitHubCli.GitHubCli)({}),
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 function withAssetRoute<A, E, R>(effect: Effect.Effect<A, E, R>) {

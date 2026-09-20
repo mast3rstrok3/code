@@ -6,7 +6,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
 layer("051_ProjectionThreadMessageContext", (it) => {
   it.effect("accepts context added by an earlier development migration", () =>
@@ -50,7 +50,7 @@ it.effect("adds message context after fork migration 93 and preserves workflow p
           '2026-09-14T00:00:00.000Z', '2026-09-14T00:00:00.000Z'
         )
       `;
-    const executed = yield* runMigrations();
+    const executed = yield* runMigrations({ toMigrationInclusive: 94 });
     assert.deepEqual(
       executed.map(([id]) => id),
       [94],
@@ -66,6 +66,6 @@ it.effect("adds message context after fork migration 93 and preserves workflow p
         context_json: null,
       },
     ]);
-    assert.deepEqual(yield* runMigrations(), []);
-  }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+    assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 94 }), []);
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

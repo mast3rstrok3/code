@@ -121,13 +121,13 @@ const run = (input: {
 export const deleteOrphanWorkflowThreadsCommand = Command.make(
   "delete-orphan-workflow-threads",
   {
-    baseDir: Flag.string("base-dir").pipe(
+    baseDir: Flag.String("base-dir").pipe(
       Flag.withDescription("T3 base directory containing userdata/state.sqlite."),
     ),
-    workflowRole: Flag.string("workflow-role").pipe(
+    workflowRole: Flag.String("workflow-role").pipe(
       Flag.withDescription("Workflow role to sweep, e.g. implementation-code-reviewer."),
     ),
-    apply: Flag.boolean("apply").pipe(
+    apply: Flag.Boolean("apply").pipe(
       Flag.withDescription("Delete for real. Without it the command only reports what it found."),
     ),
   },

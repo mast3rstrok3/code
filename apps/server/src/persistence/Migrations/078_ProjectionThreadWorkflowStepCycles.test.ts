@@ -32,6 +32,6 @@ describe("078_ProjectionThreadWorkflowStepCycles", () => {
       `;
       assert.equal(rows.length, 1);
       assert.equal(rows[0]?.workflowStepCycles, null);
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });

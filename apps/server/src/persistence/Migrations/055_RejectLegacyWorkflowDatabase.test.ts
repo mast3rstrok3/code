@@ -9,7 +9,7 @@ import RejectLegacyWorkflowDatabase, {
   LEGACY_WORKFLOW_DATABASE_RESET_MESSAGE,
 } from "./055_RejectLegacyWorkflowDatabase.ts";
 
-const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
 layer("055_RejectLegacyWorkflowDatabase", (it) => {
   it.effect("creates only canonical Spec and Ticket workflow tables", () =>

@@ -23,6 +23,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
+import * as Stream from "effect/Stream";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import { TestClock } from "effect/testing";
@@ -184,7 +185,7 @@ const makeHarness = Effect.fn("makeThreadPullRequestHarness")(function* (options
         (() => Effect.succeed(options.project?.repositoryIdentity ?? project.repositoryIdentity)),
     }),
     Layer.mock(OrchestrationEngineService)({
-      subscribeDomainEvents: PubSub.subscribe(events),
+      subscribeDomainEvents: PubSub.subscribe(events).pipe(Effect.map(Stream.fromSubscription)),
       dispatch: (command) => {
         if (command.type !== "thread.pull-request.sync") {
           return Effect.die(`Unexpected command: ${command.type}`);

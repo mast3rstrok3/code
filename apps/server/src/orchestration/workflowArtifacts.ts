@@ -103,7 +103,7 @@ export const getWorkflowArtifactsForThread = Effect.fn("getWorkflowArtifactsForT
         : [],
     );
     const familyWorkflowIds = new Set(workflowIds);
-    for (let grew = true; grew; ) {
+    for (let grew = true; grew;) {
       grew = false;
       for (const candidateContext of familyContexts) {
         if (familyWorkflowIds.has(candidateContext.workflowId)) continue;

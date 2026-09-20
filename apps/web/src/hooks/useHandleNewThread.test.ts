@@ -145,6 +145,7 @@ vi.mock("../lib/utils", () => ({
 }));
 vi.mock("../logicalProject", () => ({
   deriveLogicalProjectKeyFromSettings: () => "remote-project",
+  deriveDraftProjectKey: () => "remote-project",
   getProjectOrderKey: () => "remote-project",
   selectProjectGroupingSettings: () => ({}),
 }));
@@ -171,7 +172,15 @@ vi.mock("../uiStateStore", () => ({
   legacyProjectCwdPreferenceKey: () => "remote-project",
   useUiStateStore: () => [],
 }));
-vi.mock("./useSettings", () => ({ useClientSettings: () => ({}) }));
+vi.mock("./useSettings", () => ({
+  useClientSettings: () => ({}),
+  usePrimarySettings: () => [],
+}));
+// The toast module reaches the clipboard schema through the mocked contracts.
+vi.mock("../components/ui/toast", () => ({ toastManager: { add: vi.fn() } }));
+vi.mock("../lib/workspaceUsers", () => ({
+  resolveDefaultThreadOwnerUserId: () => "default",
+}));
 
 import { useNewThreadHandler } from "./useHandleNewThread";
 

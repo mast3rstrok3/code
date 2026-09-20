@@ -43,6 +43,8 @@ describe("buildT3ProjectFileJsonSchema", () => {
       "$schema",
       "defaultThreadEnvMode",
       "e2eCommands",
+      "e2eConcurrency",
+      "e2ePreflight",
       "iconPath",
       "scripts",
       "validationCommands",
@@ -62,6 +64,7 @@ describe("buildT3ProjectFileJsonSchema", () => {
     const script = schema.properties.scripts?.items;
     expect(script?.required).toEqual(["name", "command"]);
     expect(Object.keys(script?.properties ?? {}).sort()).toEqual([
+      "async",
       "autoOpenPreview",
       "command",
       "icon",

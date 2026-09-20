@@ -7,8 +7,7 @@ import {
   FILL_PREVIEW_VIEWPORT,
   ThreadId,
 } from "@t3tools/contracts";
-import { Profiler } from "react";
-import { flushSync } from "react-dom";
+import { act, Profiler } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -28,7 +27,6 @@ const mocks = vi.hoisted(() => ({
   openPictureInPicture: vi.fn(async (_tabId: string): Promise<void> => undefined),
   closePictureInPicture: vi.fn(async (_tabId: string): Promise<void> => undefined),
   pickElement: vi.fn(),
-  capturePreviewAnnotationScreenshot: vi.fn(),
   addPreviewAnnotation: vi.fn(),
   addImage: vi.fn(),
   toggleAnnotation: null as (() => void) | null,
@@ -89,10 +87,6 @@ vi.mock("~/composerDraftStore", () => ({
       addPreviewAnnotation: mocks.addPreviewAnnotation,
       addImage: mocks.addImage,
     }),
-}));
-
-vi.mock("~/lib/previewAnnotation", () => ({
-  capturePreviewAnnotationScreenshot: mocks.capturePreviewAnnotationScreenshot,
 }));
 
 vi.mock("~/localApi", () => ({
@@ -347,8 +341,6 @@ describe("PreviewView navigation", () => {
     mocks.openPictureInPicture.mockClear();
     mocks.closePictureInPicture.mockClear();
     mocks.pickElement.mockReset();
-    mocks.capturePreviewAnnotationScreenshot.mockReset();
-    mocks.capturePreviewAnnotationScreenshot.mockResolvedValue({ status: "none" });
     mocks.addPreviewAnnotation.mockClear();
     vi.mocked(toastManager.add).mockClear();
     mocks.addImage.mockClear();
@@ -368,7 +360,7 @@ describe("PreviewView navigation", () => {
     const onRender = vi.fn();
 
     try {
-      flushSync(() => {
+      await act(() => {
         root.render(
           <Profiler id="preview" onRender={onRender}>
             <PreviewView threadRef={TEST_THREAD_REF} tabId="tab-1" visible />
@@ -377,11 +369,11 @@ describe("PreviewView navigation", () => {
       });
       const initialRenderCount = onRender.mock.calls.length;
 
-      await vi.advanceTimersByTimeAsync(1_000);
+      await act(() => vi.advanceTimersByTimeAsync(1_000));
 
       expect(onRender).toHaveBeenCalledTimes(initialRenderCount);
     } finally {
-      flushSync(() => root.unmount());
+      await act(() => root.unmount());
       vi.useRealTimers();
       vi.unstubAllGlobals();
     }
@@ -590,7 +582,7 @@ describe("PreviewView navigation", () => {
     expect(toastManager.add).toHaveBeenCalledTimes(1);
   });
 
-  it("still sends when the picked element's crop cannot be captured", async () => {
+  it("still sends annotation text when the picked element's crop is malformed", async () => {
     const annotation = {
       id: "annotation-2",
       pageUrl: "https://example.com/dashboard",
@@ -601,7 +593,7 @@ describe("PreviewView navigation", () => {
       strokes: [],
       styleChanges: [],
       screenshot: {
-        dataUrl: "data:image/png;base64,c2NyZWVuc2hvdA==",
+        dataUrl: "data:image/png;base64,%%%",
         width: 10,
         height: 10,
         cropRect: { x: 0, y: 0, width: 10, height: 10 },
@@ -610,7 +602,6 @@ describe("PreviewView navigation", () => {
     };
     const onSendAnnotation = vi.fn();
     mocks.pickElement.mockResolvedValue({ annotation, submission: "send" });
-    mocks.capturePreviewAnnotationScreenshot.mockResolvedValue({ status: "failed" });
 
     renderToStaticMarkup(
       <PreviewView
