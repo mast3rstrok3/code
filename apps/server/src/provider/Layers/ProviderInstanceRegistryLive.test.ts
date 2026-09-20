@@ -40,6 +40,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
@@ -51,6 +52,7 @@ import { expandHomePath } from "../../pathExpansion.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ClaudeDriver } from "../Drivers/ClaudeDriver.ts";
 import { CodexDriver } from "../Drivers/CodexDriver.ts";
+import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import { CursorDriver } from "../Drivers/CursorDriver.ts";
 import { GrokDriver } from "../Drivers/GrokDriver.ts";
 import { OpenCodeDriver } from "../Drivers/OpenCodeDriver.ts";
@@ -232,6 +234,67 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
     Layer.provideMerge(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
     Layer.provideMerge(ModelManifest.layerTest),
     Layer.provideMerge(CodexResetCredit.layerTest),
+  );
+
+  it.live("supplies stack credentials at startup and after provider reconfiguration", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig;
+      const environments: NodeJS.ProcessEnv[] = [];
+      const instanceId = ProviderInstanceId.make("codex_stack_test");
+      const entry = {
+        driver: CodexDriver.driverKind,
+        enabled: false,
+        config: makeCodexConfig({}),
+        environment: [{ name: "PROVIDER_FIXTURE", value: "preserved", sensitive: false }],
+      };
+      const configMap = { [instanceId]: entry };
+      const { mutator } = yield* makeProviderInstanceRegistry({
+        drivers: [
+          {
+            ...CodexDriver,
+            create: (input) => {
+              environments.push(mergeProviderInstanceEnvironment(input.environment, {}));
+              return CodexDriver.create(input);
+            },
+          },
+        ],
+        configMap,
+      }).pipe(
+        Effect.provideService(ServerConfig, {
+          ...config,
+          appStackBackendUrl: new URL("https://stacks.example.test"),
+          appStackBackendBearerToken: Redacted.make("fixture-token"),
+        }),
+      );
+
+      expect(environments).toEqual([
+        {
+          APP_DEV_STACK_API_URL: "https://stacks.example.test/api/app-dev-stacks",
+          APP_DEV_STACK_API_TOKEN: "fixture-token",
+          PROVIDER_FIXTURE: "preserved",
+        },
+      ]);
+      expect(entry.environment).toEqual([
+        { name: "PROVIDER_FIXTURE", value: "preserved", sensitive: false },
+      ]);
+
+      yield* mutator.reconcile({
+        [instanceId]: {
+          ...entry,
+          environment: [
+            ...entry.environment,
+            { name: "APP_DEV_STACK_API_TOKEN", value: "instance-token", sensitive: true },
+          ],
+        },
+      });
+
+      expect(environments).toHaveLength(2);
+      expect(environments[1]).toEqual({
+        APP_DEV_STACK_API_URL: "https://stacks.example.test/api/app-dev-stacks",
+        APP_DEV_STACK_API_TOKEN: "instance-token",
+        PROVIDER_FIXTURE: "preserved",
+      });
+    }).pipe(Effect.provide(testLayer)),
   );
 
   it.live("boots two independent codex instances from a ProviderInstanceConfigMap", () =>

@@ -45,12 +45,15 @@ import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
+import { appStackEnvironment } from "../../appStackEnvironment.ts";
+import { ServerConfig } from "../../config.ts";
 import { buildUnavailableProviderSnapshot } from "../unavailableProviderSnapshot.ts";
 import {
   ProviderInstanceRegistry,
@@ -173,12 +176,22 @@ const buildEntry = <R>(input: {
     // finalizer is a no-op because `Scope.close` is idempotent.
     yield* Scope.addFinalizer(parentScope, Scope.close(childScope, Exit.void).pipe(Effect.ignore));
 
+    const stackEnvironment = appStackEnvironment(
+      Option.getOrUndefined(yield* Effect.serviceOption(ServerConfig)),
+    );
     const createResult = yield* driver
       .create({
         instanceId,
         displayName: entry.displayName,
         accentColor: entry.accentColor,
-        environment: entry.environment ?? [],
+        environment: [
+          ...Object.entries(stackEnvironment ?? {}).map(([name, value]) => ({
+            name,
+            value,
+            sensitive: name === "APP_DEV_STACK_API_TOKEN",
+          })),
+          ...(entry.environment ?? []),
+        ],
         enabled: resolveEntryEnabled(entry, typedConfig),
         config: typedConfig,
       })
