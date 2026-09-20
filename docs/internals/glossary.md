@@ -60,7 +60,7 @@ The durable identity of one workflow run. A top-level controller creates the ID 
 
 #### App Review Workflow
 
-A durable workflow made of budgeted three-step cycles: human-style Browser App Review, gap analysis and repair planning in a child thread, then plan implementation in a further child thread using the Implement skill. It can run standalone against an in-place worktree or as a nested workflow below Implementation.
+A durable workflow made of budgeted three-step cycles: human-style Browser App Review, gap analysis and repair planning in a child thread, then plan implementation in a further child thread using the Implement skill. It can run standalone against an in-place worktree or as a nested workflow below Implementation. Clients show it as App Preview. Code, events, MCP tools, environment variables and server messages keep the `appReview` spelling, because persisted events and in-flight runs are matched on it.
 
 #### App Review controller
 

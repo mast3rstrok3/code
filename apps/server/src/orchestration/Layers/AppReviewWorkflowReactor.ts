@@ -46,12 +46,15 @@ import * as Scope from "effect/Scope";
 import {
   appReviewRetryCommandsFailure,
   appReviewTestCommands,
+  appReviewTestRecordingsDir,
   completedAppReviewTests,
   runAppReviewTest,
 } from "../appReviewTestRunner.ts";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
+import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 
 import {
@@ -68,6 +71,7 @@ import {
 import { APP_REVIEW_PREFLIGHT_RETRY_MS, runAppReviewPreflight } from "../appReviewPreflight.ts";
 
 import { AppStackManager } from "../../appStack/AppStackManager.ts";
+import { ServerConfig } from "../../config.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
 import { ServerActivation } from "../../serverActivation.ts";
@@ -1779,6 +1783,19 @@ const make = Effect.gen(function* () {
   const reviewService = yield* ReviewService;
   const serverSettingsService = yield* ServerSettingsService;
   const projectFileLoader = yield* T3ProjectFileLoader;
+  const path = yield* Path.Path;
+  // Suites such as a test fleet ask the Stacks controller for their own stacks,
+  // so they get the access this server already holds instead of a second copy.
+  const serverConfig = Option.getOrUndefined(yield* Effect.serviceOption(ServerConfig));
+  const e2eEnvironment =
+    serverConfig?.appStackBackendUrl === undefined ||
+    serverConfig.appStackBackendBearerToken === undefined
+      ? undefined
+      : {
+          APP_DEV_STACK_API_URL: new URL("/api/app-dev-stacks", serverConfig.appStackBackendUrl)
+            .href,
+          APP_DEV_STACK_API_TOKEN: Redacted.value(serverConfig.appStackBackendBearerToken),
+        };
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const serverCommandId = (tag: string) =>
@@ -2311,6 +2328,11 @@ const make = Effect.gen(function* () {
               cwd: target.cwd,
               previewUrl: run.previewTargets[0] ?? null,
               executionId: execution.id,
+              recordingsDir:
+                serverConfig === undefined
+                  ? undefined
+                  : appReviewTestRecordingsDir(path, serverConfig.stateDir, run.id),
+              env: e2eEnvironment,
             }).pipe(
               Effect.flatMap((result) =>
                 worker.enqueue({

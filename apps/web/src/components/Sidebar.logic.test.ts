@@ -3163,9 +3163,9 @@ describe("resolveHighestPrioritySidebarV2Status", () => {
 describe("workflowRoleShortLabel", () => {
   it("labels workflow sub-threads and leaves plain threads unlabeled", () => {
     expect(workflowRoleShortLabel("implementation-worker")).toBe("Worker");
-    expect(workflowRoleShortLabel("implementation-qa-reviewer")).toBe("App review");
+    expect(workflowRoleShortLabel("implementation-qa-reviewer")).toBe("App preview");
     expect(workflowRoleShortLabel("planning-orchestrator")).toBe("Planning");
-    expect(workflowRoleShortLabel("app-review-orchestrator")).toBe("App Review");
+    expect(workflowRoleShortLabel("app-review-orchestrator")).toBe("App Preview");
     expect(workflowRoleShortLabel("app-review-reviewer")).toBe("Browser review");
     expect(workflowRoleShortLabel("app-review-fixer")).toBe("Implement");
     expect(workflowRoleShortLabel(null)).toBeNull();

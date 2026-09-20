@@ -33,9 +33,9 @@ export function skippableImplementationSettingForStep(
   step: EngineeringWorkflowDefaultStep,
 ): SkippableImplementationSetting | null {
   switch (step.label) {
-    case "App Review":
-    case "Run App Review":
-    case "Final App Review":
+    case "App Preview":
+    case "Run App Preview":
+    case "Final App Preview":
       return "appReviewEnabled";
     case "Final Code Review":
       return "finalCodeReviewEnabled";

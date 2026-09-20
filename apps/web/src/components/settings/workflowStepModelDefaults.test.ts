@@ -41,7 +41,7 @@ it("lists the eleven Engineering steps in phase order", () => {
     "Ticket review and revision",
     "Execute ticket waves",
     "Merge ticket branches",
-    "Final App Review",
+    "Final App Preview",
     "Final Code Review",
     "Create pull request",
     "Babysit pull request",
@@ -69,7 +69,7 @@ it("keeps the review and pull-request steps in Feature", () => {
   expect(targets.map((target) => target.label)).toEqual([
     "Planning",
     "Build",
-    "App Review",
+    "App Preview",
     "Final Code Review",
     "Create pull request",
     "Babysit pull request",
@@ -103,11 +103,11 @@ it("marks automatic, same-thread, and separately configurable steps", () => {
 it("keeps nested worker and review agents under their workflow step", () => {
   const targets = engineeringWorkflowDefaultSteps();
   const ticketWaves = targets.find((target) => target.label === "Execute ticket waves");
-  const appReview = targets.find((target) => target.label === "Final App Review");
+  const appReview = targets.find((target) => target.label === "Final App Preview");
 
   expect(ticketWaves?.subSteps.map((subStep) => subStep.label)).toEqual([
     "TDD implementation worker",
-    "Ticket App Review",
+    "Ticket App Preview",
     "Ticket Code Review",
   ]);
   expect(appReview?.subSteps.map((subStep) => subStep.label)).toEqual([
@@ -125,7 +125,7 @@ it("maps the final workflow steps to their run switches", () => {
     ]),
   );
 
-  expect(settingsByLabel["Final App Review"]).toBe("appReviewEnabled");
+  expect(settingsByLabel["Final App Preview"]).toBe("appReviewEnabled");
   expect(settingsByLabel["Final Code Review"]).toBe("finalCodeReviewEnabled");
   expect(settingsByLabel["Create pull request"]).toBe("pullRequestCreationEnabled");
   expect(settingsByLabel["Babysit pull request"]).toBe("pullRequestBabysittingEnabled");

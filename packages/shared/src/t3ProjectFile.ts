@@ -24,7 +24,7 @@ export function resolveImplementationValidationCommands(input: {
 }
 
 /**
- * End-to-end test commands App Review runs before each browser review cycle.
+ * End-to-end test commands App Preview runs before each browser review cycle.
  * Opt-in with no defaults: a project without `e2eCommands` reviews in the
  * browser only.
  */

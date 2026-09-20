@@ -1,8 +1,11 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, expect } from "@effect/vitest";
 import { AppReviewWorkflowRunId, type AppReviewWorkflowCycle } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { ProcessRunner, type ProcessRunInput } from "../processRunner.ts";
 import {
@@ -239,7 +242,7 @@ for (const [code, timedOut, status] of [
         timeout: "45 minutes",
         maxOutputBytes: 8192,
       });
-    }),
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 }
 
@@ -269,5 +272,61 @@ it.effect("interrupts the process scope when execution is cancelled", () =>
     yield* Deferred.await(started);
     yield* Fiber.interrupt(task);
     yield* Deferred.await(stopped);
-  }),
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("collects what the suite recorded under server-chosen names", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const recordingsDir = yield* fileSystem.makeTempDirectoryScoped();
+    const result = yield* runAppReviewTest({
+      command: "suite",
+      retryCommand: "suite",
+      cwd: "/assigned",
+      previewUrl: null,
+      executionId: "cycle-1",
+      recordingsDir,
+      env: { APP_DEV_STACK_API_TOKEN: "token" },
+    }).pipe(
+      Effect.provideService(ProcessRunner, {
+        run: (input) =>
+          Effect.gen(function* () {
+            const incoming = input.env?.APP_REVIEW_RECORDING_DIR ?? "";
+            expect(input.env).toMatchObject({
+              APP_DEV_STACK_API_TOKEN: "token",
+              APP_REVIEW_RECORDER_BINDING: "__t3DomRecorderEmit",
+            });
+            expect(yield* fileSystem.exists(input.env?.APP_REVIEW_RECORDER_SCRIPT ?? "")).toBe(
+              true,
+            );
+            yield* fileSystem.writeFileString(
+              path.join(incoming, "test_login.rrweb.jsonl"),
+              '{"type":4}\n',
+            );
+            yield* fileSystem.writeFileString(path.join(incoming, "empty.rrweb.jsonl"), "");
+            yield* fileSystem.writeFileString(path.join(incoming, "trace.zip"), "ignored");
+            return {
+              code: ChildProcessSpawner.ExitCode(1),
+              timedOut: false,
+              stdout: "",
+              stderr: "",
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              stdoutInvalidUtf8: false,
+              stderrInvalidUtf8: false,
+            };
+          }).pipe(Effect.orDie),
+      }),
+    );
+    expect(result.status).toBe("failed");
+    expect(result.recordings).toHaveLength(1);
+    const [recording] = result.recordings ?? [];
+    expect(recording).toMatchObject({ label: "test_login", sizeBytes: 11 });
+    expect(recording?.path).toBe(path.join(recordingsDir, `${recording?.id}.rrweb.jsonl`));
+    expect(yield* fileSystem.readFileString(recording?.path ?? "")).toBe('{"type":4}\n');
+    expect(
+      (yield* fileSystem.readDirectory(recordingsDir)).some((name) => name.endsWith(".incoming")),
+    ).toBe(false);
+  }).pipe(Effect.provide(NodeServices.layer)),
 );

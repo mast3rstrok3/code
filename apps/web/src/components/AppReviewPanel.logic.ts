@@ -49,7 +49,7 @@ export function appReviewRunContainsThread(run: AppReviewWorkflowRun, threadId: 
   );
 }
 
-/** The ticket an App Review was launched for, when it was launched for one. */
+/** The ticket an App Preview was launched for, when it was launched for one. */
 export function appReviewRunTicketId(run: AppReviewWorkflowRun): string | null {
   return run.caller.type === "implementation" ? (run.caller.ticketId ?? null) : null;
 }

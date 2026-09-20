@@ -44,7 +44,7 @@ describe("workflowModelQuickActions", () => {
     ]);
   });
 
-  it("only offers the E2E test assignment in the App Review workflow", () => {
+  it("only offers the E2E test assignment in the App Preview workflow", () => {
     expect(workflowModelQuickActions("app-review").map((action) => action.id)).toEqual([
       "e2e-review",
     ]);
@@ -73,7 +73,7 @@ describe("workflowModelQuickActions", () => {
     });
   });
 
-  it("reports mixed when ticket and standalone App Review models differ", () => {
+  it("reports mixed when ticket and standalone App Preview models differ", () => {
     const keys = workflowModelQuickActions("planning").find(
       (action) => action.id === "e2e-review",
     )!.pinKeys;

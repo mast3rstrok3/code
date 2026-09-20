@@ -86,7 +86,7 @@ export function WorkflowStepSettingsMenu(props: {
   readonly stepCycles?: ReadonlyArray<WorkflowStepCycleOverride> | undefined;
   readonly defaultStepCycles?: ReadonlyArray<WorkflowStepCycleOverride> | undefined;
   readonly onSetStepCycles?: SetWorkflowStepCycles | undefined;
-  /** The workflow root's App Review parts overrides, and the standing defaults behind them. */
+  /** The workflow root's App Preview parts overrides, and the standing defaults behind them. */
   readonly stepReviewParts?: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
   readonly defaultStepReviewParts?: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
   readonly onSetStepReviewParts?: SetWorkflowStepReviewParts | undefined;

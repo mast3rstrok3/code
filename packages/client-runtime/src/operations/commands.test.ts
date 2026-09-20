@@ -198,7 +198,7 @@ describe("environment commands", () => {
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 
-  it.effect("dispatches App Review as a workflow launch instead of a provider turn", () =>
+  it.effect("dispatches App Preview as a workflow launch instead of a provider turn", () =>
     Effect.gen(function* () {
       const dispatched: ClientOrchestrationCommand[] = [];
       const supervisor = yield* makeSupervisor(dispatched);

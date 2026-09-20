@@ -104,7 +104,7 @@ export const T3ProjectFile = Schema.Struct({
     )
       .annotate({
         description:
-          "Ordered end-to-end test commands available to App Review. E2E review requires at least one command.",
+          "Complete end-to-end suites the final and standalone App Preview run, such as one command that shards the whole suite across a test fleet. Ticket reviews run their own focused commands instead, so do not list per-feature selections here. E2E review requires at least one command. A suite that records its browsers into APP_REVIEW_RECORDING_DIR gets every test replayable in the App Preview.",
       })
       .check(Schema.isMinLength(1)),
   ),

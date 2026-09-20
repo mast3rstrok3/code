@@ -26,6 +26,20 @@ export type AppReviewId = typeof AppReviewId.Type;
 export const APP_REVIEW_PREVIEW_URL_ENV = "APP_REVIEW_PREVIEW_URL";
 
 /**
+ * Recording contract for `e2eCommands`. The suite launches its own browsers, so
+ * the server cannot attach a recorder to them. A suite that wants its tests
+ * replayable adds the script at `APP_REVIEW_RECORDER_SCRIPT` to each browser
+ * context as an init script, exposes a binding named
+ * `APP_REVIEW_RECORDER_BINDING` that appends every event of the batch it
+ * receives as one JSON line to `<APP_REVIEW_RECORDING_DIR>/<test name>.rrweb.jsonl`,
+ * and returns nothing. The server collects that directory when the command exits.
+ */
+export const APP_REVIEW_RECORDING_DIR_ENV = "APP_REVIEW_RECORDING_DIR";
+export const APP_REVIEW_RECORDER_SCRIPT_ENV = "APP_REVIEW_RECORDER_SCRIPT";
+export const APP_REVIEW_RECORDER_BINDING_ENV = "APP_REVIEW_RECORDER_BINDING";
+export const APP_REVIEW_TEST_RECORDING_SUFFIX = ".rrweb.jsonl";
+
+/**
  * How an App Review verifies its target: the project's e2e commands only, the
  * browser only, or both. Direct browser reviews and historical records keep
  * their scope. Workflow cycles use E2E testing and require `e2eCommands`.
@@ -108,11 +122,22 @@ export const AppReviewRetryCommand = Schema.Struct({
   command: TrimmedNonEmptyString,
   retryCommand: TrimmedNonEmptyString,
 });
+/** One test's rrweb event log, collected from the command's recording directory. */
+export const AppReviewTestRecording = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  /** The recording's file name without its suffix; suites name files after tests. */
+  label: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  sizeBytes: NonNegativeInt,
+});
+export type AppReviewTestRecording = typeof AppReviewTestRecording.Type;
+
 export const AppReviewTestResult = Schema.Struct({
   command: TrimmedNonEmptyString,
   executedCommand: TrimmedNonEmptyString,
   status: Schema.Literals(["passed", "failed"]),
   outputMarkdown: Schema.String,
+  recordings: Schema.optionalKey(Schema.Array(AppReviewTestRecording)),
   completedAt: IsoDateTime,
 });
 export type AppReviewTestResult = typeof AppReviewTestResult.Type;

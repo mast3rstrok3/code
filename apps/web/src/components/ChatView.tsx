@@ -5151,7 +5151,7 @@ export default function ChatView(props: ChatViewProps) {
           stackedThreadToast({
             type: "warning",
             title: "Wait for the current turn",
-            description: "App Review can take ownership after the source turn settles.",
+            description: "App Preview can take ownership after the source turn settles.",
           }),
         );
         return;
@@ -5160,8 +5160,8 @@ export default function ChatView(props: ChatViewProps) {
         toastManager.add(
           stackedThreadToast({
             type: "warning",
-            title: "App Review is already running",
-            description: "Only one active App Review can own this worktree.",
+            title: "App Preview is already running",
+            description: "Only one active App Preview can own this worktree.",
           }),
         );
         return;
@@ -5213,7 +5213,7 @@ export default function ChatView(props: ChatViewProps) {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not launch App Review",
+              title: "Could not launch App Preview",
               description:
                 error instanceof Error
                   ? error.message
@@ -5261,7 +5261,7 @@ export default function ChatView(props: ChatViewProps) {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not stop App Review",
+            title: "Could not stop App Preview",
             description:
               error instanceof Error ? error.message : "The workflow could not be stopped.",
           }),
@@ -7176,8 +7176,8 @@ export default function ChatView(props: ChatViewProps) {
       icon: <GitBranchIcon />,
       title:
         activeWorktreeAppReviewRun.prerequisiteCheck != null
-          ? "App Review is waiting for test prerequisites"
-          : `App Review owns this worktree · ${activeWorktreeAppReviewRun.activePhase ?? "refreshing preview"}`,
+          ? "App Preview is waiting for test prerequisites"
+          : `App Preview owns this worktree · ${activeWorktreeAppReviewRun.activePhase ?? "refreshing preview"}`,
       description:
         activeWorktreeAppReviewRun.prerequisiteCheck != null
           ? activeWorktreeAppReviewRun.failure?.detailMarkdown
@@ -8201,7 +8201,7 @@ export default function ChatView(props: ChatViewProps) {
         stackedThreadToast({
           type: "warning",
           title: "Add a review brief",
-          description: "The composer message is the acceptance boundary for App Review.",
+          description: "The composer message is the acceptance boundary for App Preview.",
         }),
       );
       return;
@@ -8210,8 +8210,8 @@ export default function ChatView(props: ChatViewProps) {
       toastManager.add(
         stackedThreadToast({
           type: "warning",
-          title: "App Review is already running",
-          description: "Only one active App Review can own this worktree.",
+          title: "App Preview is already running",
+          description: "Only one active App Preview can own this worktree.",
         }),
       );
       return;
@@ -10321,7 +10321,7 @@ export default function ChatView(props: ChatViewProps) {
                                   : threadDetailLoading
                                     ? "Messages loading"
                                     : activeWorktreeAppReviewRun
-                                      ? "App Review owns this worktree"
+                                      ? "App Preview owns this worktree"
                                       : null
                             }
                             isPreparingWorktree={isPreparingWorktree}

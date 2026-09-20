@@ -3490,6 +3490,7 @@ const makeWsRpcLayer = (
               if (
                 input.resource._tag === "attachment" ||
                 input.resource._tag === "app-review-evidence" ||
+                input.resource._tag === "app-review-test-recording" ||
                 input.resource._tag === "native-app-icon" ||
                 (input.resource._tag === "media-file" && path.isAbsolute(input.resource.path))
               ) {

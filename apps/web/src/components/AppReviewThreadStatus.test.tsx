@@ -10,11 +10,11 @@ describe("AppReviewThreadStatus", () => {
       <AppReviewThreadStatus run={failedRun()} onOpenDetails={() => {}} />,
     );
 
-    expect(markup).toContain("App Review failed");
+    expect(markup).toContain("App Preview failed");
     expect(markup).toContain("Review the email test seams");
     expect(markup).toContain("VcsRepositoryDetectionError: Workspace rejected.");
     expect(markup).not.toContain("internal.ts:10:2");
-    expect(markup).toContain("Open App Review details");
+    expect(markup).toContain("Open App Preview details");
   });
 });
 
@@ -47,7 +47,7 @@ function failedRun(): AppReviewWorkflowRun {
       phase: null,
       cycleNumber: null,
       detailMarkdown:
-        "App Review automation failed.\n\nVcsRepositoryDetectionError: Workspace rejected.\n    at internal.ts:10:2",
+        "App Preview automation failed.\n\nVcsRepositoryDetectionError: Workspace rejected.\n    at internal.ts:10:2",
       failedAt: "2026-08-13T00:00:00.000Z",
     },
     createdAt: "2026-08-13T00:00:00.000Z",

@@ -717,7 +717,7 @@ function rerunRunStageForStep(
   if (label.includes("final regression tests"))
     return run?.codeReviewedHeadSha != null ? "merge-gate" : null;
   if (label.includes("merge ticket branches")) return "integration";
-  if (label.includes("app review")) return "app-review";
+  if (label.includes("app preview")) return "app-review";
   if (label.includes("code review")) return "code-review";
   return null;
 }
@@ -847,7 +847,7 @@ function PlanningArtifacts(props: {
   );
 }
 
-/** The Models-list pin each App Review phase reads. */
+/** The Models-list pin each App Preview phase reads. */
 const APP_REVIEW_PHASE_PIN = {
   e2e: { workflowPromptId: "implementation.e2e-app-review.codex" },
   review: { workflowPromptId: "implementation.browser-app-review.codex" },
@@ -862,7 +862,7 @@ const APP_REVIEW_PHASE_PIN = {
 } as const satisfies Record<AppReviewWorkflowPhase, WorkflowModelPinKey>;
 
 /**
- * Why an App Review phase cannot start again yet, if it cannot.
+ * Why an App Preview phase cannot start again yet, if it cannot.
  *
  * Mirrors the server's rules so the panel never offers an action the decider
  * refuses: only the current cycle can be redone, the phases need what the
@@ -882,7 +882,7 @@ function appReviewPhaseRerunDisabledReason(input: {
   if (input.callerBusyReason !== null) return input.callerBusyReason;
   const session = input.activeThread?.session?.status;
   if (session === "starting" || session === "running") {
-    return "This App Review is still running. Stop it before starting a phase again.";
+    return "This App Preview is still running. Stop it before starting a phase again.";
   }
   // A browser review redo runs a new cycle rather than overwriting this one, so
   // it needs a cycle left to run in.
@@ -1297,7 +1297,7 @@ function AppReviewRunsTimeline(props: {
           <section key={run.id}>
             {props.runs.length > 1 ? (
               <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                Recorded App Review {index + 1} · {run.status}
+                Recorded App Preview {index + 1} · {run.status}
               </div>
             ) : null}
             <TicketAppReviewCycles
@@ -1343,12 +1343,12 @@ function workflowStepSubSteps(
 }
 
 function workflowSkillLabel(skillId: string, titles: ReadonlyMap<string, string>): string {
-  if (skillId === "implementation.browser-app-review.codex") return "App Review";
+  if (skillId === "implementation.browser-app-review.codex") return "App Preview";
   const title = titles.get(skillId);
   if (title) return title;
   switch (skillId) {
     case "implementation.browser-app-review.codex":
-      return "App Review";
+      return "App Preview";
     case "implementation.code-review.codex":
       return "Code Review";
     case "implementation.merge-gate.codex":
@@ -1452,7 +1452,7 @@ function executionTargetLabel(execution: WorkflowStageExecution): string {
     return `${target.ticketId} · ${target.stage.replaceAll("-", " ")}`;
   }
   if (target.kind === "app-review-phase") {
-    return `App Review cycle ${String(target.cycleNumber)} · ${target.phase}`;
+    return `App Preview cycle ${String(target.cycleNumber)} · ${target.phase}`;
   }
   return target.stage.replaceAll("-", " ");
 }
@@ -1546,9 +1546,9 @@ function ticketStageRerunDisabledReason(input: {
   readonly threads: readonly EnvironmentThreadShell[];
   readonly appReviewRun: AppReviewWorkflowRun | null | undefined;
 }): string | null {
-  if (input.stageLabel === "App Review") {
+  if (input.stageLabel === "App Preview") {
     return appReviewRunActiveThreadIsBusy(input.appReviewRun, input.threads)
-      ? "This App Review is still running. Stop it before starting it again."
+      ? "This App Preview is still running. Stop it before starting it again."
       : null;
   }
   const busy = input.threads.find(
@@ -1559,7 +1559,7 @@ function ticketStageRerunDisabledReason(input: {
     : `${input.stageLabel} is still running. Stop it before starting it again.`;
 }
 
-/** Whether the App Review's current phase still has a live provider session. */
+/** Whether the App Preview's current phase still has a live provider session. */
 export function appReviewRunActiveThreadIsBusy(
   run: AppReviewWorkflowRun | null | undefined,
   threads: readonly EnvironmentThreadShell[],
@@ -1577,7 +1577,7 @@ const TICKET_STAGE_RERUN = {
     stage: "implementation",
     pinKey: { workflowPromptId: TICKET_WAVE_PROMPT_ID },
   },
-  "App Review": {
+  "App Preview": {
     stage: "app-review",
     pinKey: {
       workflowPromptId: "implementation.browser-app-review.codex",
@@ -1904,7 +1904,7 @@ function TicketPhases(props: {
                   threads: primaryImplementationThreads,
                 },
                 {
-                  label: "App Review",
+                  label: "App Preview",
                   detail: stageDetails.appReview,
                   threads: appReviewThreads,
                 },
@@ -1932,7 +1932,7 @@ function TicketPhases(props: {
                   : ticketStatus === "paused"
                     ? "paused"
                     : state?.status === "app-reviewing" && state.appReviewOutcome != null
-                      ? `App Review ${state.appReviewOutcome}`
+                      ? `App Preview ${state.appReviewOutcome}`
                       : state?.status === "code-reviewing" && state.codeReviewOutcome != null
                         ? `Code Review ${state.codeReviewOutcome}`
                         : (state?.status ?? ticket.status);
@@ -2116,7 +2116,7 @@ function TicketPhases(props: {
                                     {stageDetail}
                                   </span>
                                 </button>
-                                {stage.label === "App Review" && appReviewRun ? (
+                                {stage.label === "App Preview" && appReviewRun ? (
                                   <button
                                     type="button"
                                     onClick={props.onOpenAppReview}
@@ -2189,7 +2189,7 @@ function TicketPhases(props: {
                                   }
                                 />
                               </div>
-                              {stageOpen && stage.label === "App Review" && appReviewRun ? (
+                              {stageOpen && stage.label === "App Preview" && appReviewRun ? (
                                 <>
                                   <TicketAppReviewCycles
                                     groupId={props.groupId}
@@ -2718,16 +2718,16 @@ function WorkflowGroupCard(props: {
                 render={
                   <button
                     type="button"
-                    aria-label="View App Review results"
+                    aria-label="View App Preview results"
                     onClick={props.onOpenAppReview}
                     className="cursor-pointer flex items-center gap-1 rounded-md px-2 py-1.5 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
                   />
                 }
               >
                 <Eye className="size-3.5" aria-hidden />
-                App Reviews
+                App Previews
               </TooltipTrigger>
-              <TooltipPopup>View App Review results</TooltipPopup>
+              <TooltipPopup>View App Preview results</TooltipPopup>
             </Tooltip>
           ) : null}
           {group.kind === "workflow" ? (
@@ -2930,7 +2930,7 @@ function WorkflowGroupCard(props: {
                               group.preset === "implementation") &&
                             workflowStepLabel(step).toLowerCase().includes("execute ticket waves");
                           const isCombinedAppReviewStep =
-                            workflowStepLabel(step).toLowerCase().includes("app review") &&
+                            workflowStepLabel(step).toLowerCase().includes("app preview") &&
                             !isTicketExecutionStep;
                           const effectiveStepCycleBudget =
                             step.skillId === null

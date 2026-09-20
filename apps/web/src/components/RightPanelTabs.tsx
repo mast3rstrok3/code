@@ -171,7 +171,7 @@ export function shouldOpenDefaultBrowserProfileFromMenuClick(
 const SURFACE_DISABLED_REASONS = {
   browser: "Browser preview is unavailable for this environment.",
   terminal: "Terminal surfaces are only available from a project thread.",
-  review: "App review is only available for server threads in Git repositories.",
+  review: "App preview is only available for server threads in Git repositories.",
   logs: "App Stack pod logs require a project with an app-stack context.",
   appStack: "App stacks are only available when a project is open.",
   files: "Files are only available when a project is open.",
@@ -370,7 +370,7 @@ function RightPanelEmptyState(props: {
 
   const actions = [
     {
-      label: "App Review",
+      label: "App Preview",
       description: "Inspect and annotate the current implementation diff.",
       icon: EyeIcon,
       shortcut: "R",
@@ -704,7 +704,7 @@ function surfaceTitle(
         getTerminalLabel(surface.activeTerminalId)
       );
     case "review":
-      return "App Review";
+      return "App Preview";
     case "logs":
       return "Logs";
     case "pull-request":
@@ -975,7 +975,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: props.onAddTerminal,
     },
     {
-      label: "App Review",
+      label: "App Preview",
       icon: EyeIcon,
       shortcut: "R",
       available: props.reviewAvailable,

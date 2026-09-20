@@ -2,7 +2,10 @@ import type {
   AssetResource,
   AppReviewRecord,
   AppReviewRecordingEvidence,
+  AppReviewTestRecording,
+  AppReviewTestResult,
   AppReviewWorkflowCycle,
+  AppReviewWorkflowRunId,
   EnvironmentId,
 } from "@t3tools/contracts";
 import { APP_REVIEW_RECORDING_EVIDENCE_ID } from "@t3tools/contracts";
@@ -351,6 +354,7 @@ export function AppReviewDocument(props: {
 }
 
 export function AppReviewCycleDocument(props: {
+  runId: AppReviewWorkflowRunId;
   cycle: AppReviewWorkflowCycle;
   e2eRecord?: AppReviewRecord | undefined;
   browserRecord?: AppReviewRecord | undefined;
@@ -359,10 +363,11 @@ export function AppReviewCycleDocument(props: {
   const summaryRecords = [props.e2eRecord, props.browserRecord].filter(
     (record): record is AppReviewRecord => Boolean(record?.document.summary),
   );
+  const testResults = props.cycle.e2eExecution?.results ?? [];
   return (
     <div>
       <section className="border-b border-border px-4 py-3">
-        <h3 className="text-sm font-semibold">Overall review</h3>
+        <h3 className="text-sm font-semibold">Overall result</h3>
         <p className="mt-1 text-xs text-muted-foreground">{props.cycle.status}</p>
         {summaryRecords.length > 0 ? (
           summaryRecords.map((record) => (
@@ -370,28 +375,163 @@ export function AppReviewCycleDocument(props: {
               {record.document.summary}
             </p>
           ))
-        ) : (
-          <p className="mt-2 text-sm text-muted-foreground">No review summary yet.</p>
-        )}
+        ) : testResults.length === 0 ? (
+          <p className="mt-2 text-sm text-muted-foreground">No summary yet.</p>
+        ) : null}
         {props.cycle.actionableFindingsMarkdown ? (
           <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">
             {props.cycle.actionableFindingsMarkdown}
           </p>
         ) : null}
       </section>
-      <ReviewEvidenceSection
-        title="End-to-end tests"
-        record={props.e2eRecord}
+      <TestRecordingsSection
+        runId={props.runId}
+        results={testResults}
         environmentId={props.environmentId}
       />
+      {props.e2eRecord !== undefined ? (
+        <ReviewEvidenceSection
+          title="Agent review · end-to-end tests"
+          record={props.e2eRecord}
+          environmentId={props.environmentId}
+        />
+      ) : null}
       {props.cycle.appReviewScope !== "e2e" || props.browserRecord !== undefined ? (
         <ReviewEvidenceSection
-          title="Browser review"
+          title="Agent review · browser"
           record={props.browserRecord}
           environmentId={props.environmentId}
         />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Every test the cycle's commands recorded, replayable in place. A fleet run
+ * yields hundreds, so a row mints its URL and mounts the player only while open.
+ */
+function TestRecordingsSection(props: {
+  runId: AppReviewWorkflowRunId;
+  results: ReadonlyArray<AppReviewTestResult>;
+  environmentId: EnvironmentId;
+}) {
+  const [open, setOpen] = useState(false);
+  const [openRecordingId, setOpenRecordingId] = useState<string | null>(null);
+  const recordingCount = props.results.reduce(
+    (count, result) => count + (result.recordings?.length ?? 0),
+    0,
+  );
+  return (
+    <section className="border-b border-border">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        className="flex w-full cursor-pointer items-center justify-between px-4 py-3 text-left text-sm font-medium"
+      >
+        <span>Test recordings</span>
+        <span className="text-xs text-muted-foreground">
+          {props.results.length === 0
+            ? "No results"
+            : `${recordingCount} ${recordingCount === 1 ? "recording" : "recordings"}`}{" "}
+          · {open ? "Collapse" : "Expand"}
+        </span>
+      </button>
+      {open ? (
+        props.results.length === 0 ? (
+          <p className="px-4 pb-3 text-sm text-muted-foreground">No test command has finished.</p>
+        ) : (
+          <ul className="space-y-3 px-4 pb-3">
+            {props.results.map((result) => (
+              <li key={result.command} className="rounded-md border border-border">
+                <div className="flex items-start justify-between gap-3 px-3 py-2">
+                  <code className="min-w-0 break-words text-xs">{result.executedCommand}</code>
+                  <span className={cn("shrink-0 text-xs", statusClassName[result.status])}>
+                    {result.status}
+                  </span>
+                </div>
+                {result.recordings?.length ? (
+                  <ul className="border-t border-border">
+                    {result.recordings.map((recording) => (
+                      <TestRecordingRow
+                        key={recording.id}
+                        runId={props.runId}
+                        recording={recording}
+                        open={openRecordingId === recording.id}
+                        onToggle={() =>
+                          setOpenRecordingId(openRecordingId === recording.id ? null : recording.id)
+                        }
+                        environmentId={props.environmentId}
+                      />
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
+                    This command recorded no tests.
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        )
+      ) : null}
+    </section>
+  );
+}
+
+function TestRecordingRow(props: {
+  runId: AppReviewWorkflowRunId;
+  recording: AppReviewTestRecording;
+  open: boolean;
+  onToggle: () => void;
+  environmentId: EnvironmentId;
+}) {
+  return (
+    <li className="border-b border-border last:border-b-0">
+      <button
+        type="button"
+        aria-expanded={props.open}
+        onClick={props.onToggle}
+        className="flex w-full cursor-pointer items-center justify-between gap-3 px-3 py-1.5 text-left text-xs hover:bg-muted/50"
+      >
+        <span className="min-w-0 truncate">{props.recording.label}</span>
+        <span className="shrink-0 text-muted-foreground">
+          {(props.recording.sizeBytes / (1024 * 1024)).toFixed(1)} MB
+        </span>
+      </button>
+      {props.open ? (
+        <TestRecordingReplay
+          runId={props.runId}
+          recordingId={props.recording.id}
+          environmentId={props.environmentId}
+        />
+      ) : null}
+    </li>
+  );
+}
+
+function TestRecordingReplay(props: {
+  runId: AppReviewWorkflowRunId;
+  recordingId: string;
+  environmentId: EnvironmentId;
+}) {
+  const resources = useMemo<AssetResource[]>(
+    () => [
+      { _tag: "app-review-test-recording", runId: props.runId, recordingId: props.recordingId },
+    ],
+    [props.runId, props.recordingId],
+  );
+  const [url] = useAssetUrls(props.environmentId, resources);
+  const loading = <div className="px-3 py-4 text-sm text-muted-foreground">Loading replay...</div>;
+  return url ? (
+    <Suspense fallback={loading}>
+      <div className="px-3 pb-3">
+        <DomReplaySurface url={url} />
+      </div>
+    </Suspense>
+  ) : (
+    loading
   );
 }
 

@@ -5,6 +5,7 @@ import * as NodeFSP from "node:fs/promises";
 import {
   APP_REVIEW_RECORDING_EVIDENCE_ID,
   AppReviewId,
+  AppReviewWorkflowRunId,
   EMPTY_APP_REVIEW_EVIDENCE,
   AssetPreviewTypeValidationError,
   ThreadId,
@@ -1323,6 +1324,38 @@ describe("AssetAccess", () => {
         },
       }).pipe(Effect.flip);
       expect(unknown._tag).toBe("AssetAppReviewEvidenceNotFoundError");
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("serves a run's test recordings and nothing outside the run directory", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const runId = AppReviewWorkflowRunId.make("app-review-workflow-recorded");
+      const runDir = path.join(config.stateDir, "preview-artifacts", "app-review-e2e", runId);
+      yield* fileSystem.makeDirectory(runDir, { recursive: true });
+      const recordingPath = path.join(runDir, "exec-1.rrweb.jsonl");
+      yield* fileSystem.writeFileString(recordingPath, '{"type":4}\n');
+      yield* fileSystem.writeFileString(
+        path.join(config.stateDir, "preview-artifacts", "secret.rrweb.jsonl"),
+        "{}",
+      );
+
+      const result = yield* issueAssetUrl({
+        resource: { _tag: "app-review-test-recording", runId, recordingId: "exec-1" },
+      });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const token = suffix.slice(0, suffix.indexOf("/"));
+      expect(yield* resolveAsset(token, "exec-1.rrweb.jsonl")).toEqual({
+        kind: "file",
+        path: yield* fileSystem.realPath(recordingPath),
+      });
+
+      const escaped = yield* issueAssetUrl({
+        resource: { _tag: "app-review-test-recording", runId, recordingId: "../../secret" },
+      }).pipe(Effect.flip);
+      expect(escaped._tag).toBe("AssetAppReviewEvidenceNotFoundError");
     }).pipe(Effect.provide(testLayer)),
   );
 });

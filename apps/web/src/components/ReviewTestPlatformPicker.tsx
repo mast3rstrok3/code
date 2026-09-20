@@ -85,7 +85,7 @@ export function TicketTestPlatformPicker(props: {
       ) : null}
       {props.ticketId !== undefined ? (
         <p className="text-[11px] text-muted-foreground">
-          Applies to the next App Review run. Rerun App Review to test a completed ticket again.
+          Applies to the next App Preview run. Rerun App Preview to test a completed ticket again.
         </p>
       ) : null}
       {props.ticketId !== undefined &&

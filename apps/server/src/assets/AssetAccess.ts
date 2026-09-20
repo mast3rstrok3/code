@@ -15,6 +15,7 @@ import {
   AssetWorkspaceResolutionError,
   AssetWorkspaceRootNormalizationError,
   APP_REVIEW_RECORDING_EVIDENCE_ID,
+  APP_REVIEW_TEST_RECORDING_SUFFIX,
   ToolActivityNativeAppReference,
 } from "@t3tools/contracts";
 import {
@@ -52,6 +53,7 @@ import {
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { parseAttachmentFileExtension, resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
+import { appReviewTestRecordingsDir } from "../orchestration/appReviewTestRunner.ts";
 import { ProjectionThreadAppReviewRepository } from "../persistence/Services/ProjectionThreadAppReviews.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
@@ -135,6 +137,13 @@ const AssetClaimsSchema = Schema.Union([
     kind: Schema.Literal("app-review-evidence"),
     reviewId: Schema.String,
     evidenceId: Schema.String,
+    expiresAt: Schema.Number,
+  }),
+  Schema.Struct({
+    version: Schema.Literal(1),
+    kind: Schema.Literal("app-review-test-recording"),
+    runId: Schema.String,
+    recordingId: Schema.String,
     expiresAt: Schema.Number,
   }),
   Schema.Struct({
@@ -282,6 +291,34 @@ const resolveAppReviewEvidenceFile = Effect.fn("AssetAccess.resolveAppReviewEvid
     return Option.isSome(info) && info.value.type === "File" ? canonicalFile.value : null;
   },
 );
+
+/**
+ * Resolve an E2E test recording. The test runner stores every recording as
+ * `<runId>/<recordingId>.rrweb.jsonl`, so the ids locate the file and the
+ * containment check rejects an id that tries to leave the run's directory.
+ */
+const resolveAppReviewTestRecordingFile = Effect.fn(
+  "AssetAccess.resolveAppReviewTestRecordingFile",
+)(function* (input: { readonly runId: string; readonly recordingId: string }) {
+  const config = yield* ServerConfig.ServerConfig;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+
+  const runDir = appReviewTestRecordingsDir(path, config.stateDir, input.runId);
+  const [canonicalRunDir, canonicalFile] = yield* Effect.all([
+    optionOnNotFound(fileSystem.realPath(runDir)),
+    optionOnNotFound(
+      fileSystem.realPath(
+        path.join(runDir, `${input.recordingId}${APP_REVIEW_TEST_RECORDING_SUFFIX}`),
+      ),
+    ),
+  ]);
+  if (Option.isNone(canonicalRunDir) || Option.isNone(canonicalFile)) return null;
+  if (path.dirname(canonicalFile.value) !== canonicalRunDir.value) return null;
+
+  const info = yield* optionOnNotFound(fileSystem.stat(canonicalFile.value));
+  return Option.isSome(info) && info.value.type === "File" ? canonicalFile.value : null;
+});
 
 /**
  * Reads pixel dimensions from an image's header so clients can reserve the
@@ -728,6 +765,24 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       fileName = path.basename(evidenceFile);
       break;
     }
+    case "app-review-test-recording": {
+      const resource = input.resource;
+      const recordingFile = yield* resolveAppReviewTestRecordingFile(resource).pipe(
+        Effect.mapError((cause) => new AssetAppReviewEvidenceResolutionError({ resource, cause })),
+      );
+      if (!recordingFile) {
+        return yield* new AssetAppReviewEvidenceNotFoundError({ resource });
+      }
+      claims = {
+        version: 1,
+        kind: "app-review-test-recording",
+        runId: resource.runId,
+        recordingId: resource.recordingId,
+        expiresAt,
+      };
+      fileName = path.basename(recordingFile);
+      break;
+    }
     case "native-app-icon": {
       claims = {
         version: 1,
@@ -838,6 +893,20 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
       Effect.orElseSucceed(() => null),
     );
     return evidenceFile ? ({ kind: "file", path: evidenceFile } satisfies ResolvedAsset) : null;
+  }
+
+  if (claims.kind === "app-review-test-recording") {
+    const recordingFile = yield* resolveAppReviewTestRecordingFile(claims).pipe(
+      Effect.tapError((cause) =>
+        Effect.logError("Failed to resolve App Review test recording asset.", {
+          runId: claims.runId,
+          recordingId: claims.recordingId,
+          cause,
+        }),
+      ),
+      Effect.orElseSucceed(() => null),
+    );
+    return recordingFile ? ({ kind: "file", path: recordingFile } satisfies ResolvedAsset) : null;
   }
 
   if (claims.kind === "project-favicon-external") {

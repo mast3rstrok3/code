@@ -81,7 +81,7 @@ export function AppReviewPanel(props: {
         <>
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold">
-              {relevantRuns.length > 1 ? `App Reviews · ${relevantRuns.length}` : "App Review"}
+              {relevantRuns.length > 1 ? `App Previews · ${relevantRuns.length}` : "App Preview"}
             </h2>
             <p className="truncate text-xs text-muted-foreground">
               {currentRun ? appReviewRunStatusLabel(currentRun) : "No workflow launched"}
@@ -107,7 +107,7 @@ export function AppReviewPanel(props: {
               onClick={() => setLaunchDialogOpen(true)}
             >
               <PlayCircle className="size-4" />
-              Launch App Review
+              Launch App Preview
             </Button>
           )}
         </>
@@ -125,7 +125,7 @@ export function AppReviewPanel(props: {
                 onOpenThread={props.onOpenThread}
                 label={
                   appReviewRunTicketLabel(run, planningWorkflow?.tickets ?? []) ??
-                  (relevantRuns.length > 1 ? `App Review ${String(index + 1)}` : "App Review")
+                  (relevantRuns.length > 1 ? `App Preview ${String(index + 1)}` : "App Preview")
                 }
                 open={expandedRunIds[run.id] ?? false}
                 onToggle={() =>
@@ -137,7 +137,7 @@ export function AppReviewPanel(props: {
         ) : (
           <div className="flex min-h-52 items-center justify-center p-6 text-center">
             <div className="max-w-sm">
-              <h3 className="text-sm font-medium">No App Review workflow</h3>
+              <h3 className="text-sm font-medium">No App Preview workflow</h3>
               <p className="mt-2 text-sm text-muted-foreground">
                 Run automated acceptance tests and repair the failures they find.
               </p>
@@ -194,7 +194,7 @@ export function AppReviewPanel(props: {
 }
 
 /**
- * One App Review run, folded down to its ticket and status. A workflow can
+ * One App Preview run, folded down to its ticket and status. A workflow can
  * carry a review per ticket plus its own, so every run and every cycle inside
  * it starts closed and the panel opens as a list the user can scan.
  */
@@ -347,6 +347,7 @@ function RunDetails(props: {
                         </p>
                       ) : null}
                       <AppReviewCycleDocument
+                        runId={props.run.id}
                         cycle={cycle}
                         e2eRecord={e2eRecord}
                         browserRecord={record}

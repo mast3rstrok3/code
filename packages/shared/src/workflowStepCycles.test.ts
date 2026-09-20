@@ -63,7 +63,7 @@ it("prefers the run's own budget over the standing default", () => {
   ).toBe(10);
 });
 
-it("keeps a ticket App Review budget separate from the run's own App Review", () => {
+it("keeps a ticket App Preview budget separate from the run's own App Preview", () => {
   // The two run the same agent under different steps, so a budget set on one
   // must not be picked up by the other.
   const overrides = [{ ...TICKET_APP_REVIEW, maxCycles: 2 }];

@@ -61,7 +61,7 @@ describe("selectActiveAppReviewRecord", () => {
   });
 });
 
-describe("App Review workflow panel logic", () => {
+describe("App Preview workflow panel logic", () => {
   it("labels a stoppable review as waiting while its readiness check retries", () => {
     const run = makeAppReviewWorkflowRun();
     expect(
@@ -359,13 +359,13 @@ describe("App Review workflow panel logic", () => {
         phase: null,
         cycleNumber: null,
         detailMarkdown:
-          "App Review automation failed.\n\nVcsRepositoryDetectionError: Workspace rejected.\n    at internal.ts:10:2",
+          "App Preview automation failed.\n\nVcsRepositoryDetectionError: Workspace rejected.\n    at internal.ts:10:2",
         failedAt: "2026-08-11T00:02:00.000Z",
       },
     };
 
     expect(appReviewRunFailureSummary(failed)).toBe(
-      "App Review automation failed.\nVcsRepositoryDetectionError: Workspace rejected.",
+      "App Preview automation failed.\nVcsRepositoryDetectionError: Workspace rejected.",
     );
     expect(appReviewRunFailureSummary(run)).toBeNull();
   });
