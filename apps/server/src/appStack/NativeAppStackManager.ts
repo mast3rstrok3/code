@@ -198,7 +198,7 @@ interface ResolvedNativeAppStackConfig {
   readonly frontendUrl: string | undefined;
   readonly backendUrl: string | undefined;
   readonly keycloakUrl: string | undefined;
-  readonly minioUrl: string | undefined;
+  readonly objectStorageUrl: string | undefined;
   readonly preferStackScopedUrls: boolean;
 }
 
@@ -325,19 +325,22 @@ const normalizeOptionalNamespace = (namespace: string | null | undefined) => {
 const optionalConfiguredUrls = (
   config: NativeAppStackConfig,
   namespace: string,
-): Pick<ResolvedNativeAppStackConfig, "frontendUrl" | "backendUrl" | "keycloakUrl" | "minioUrl"> =>
+): Pick<
+  ResolvedNativeAppStackConfig,
+  "frontendUrl" | "backendUrl" | "keycloakUrl" | "objectStorageUrl"
+> =>
   config.namespace !== undefined && normalizeKubernetesNamespace(config.namespace) === namespace
     ? {
         frontendUrl: config.frontendUrl,
         backendUrl: config.backendUrl,
         keycloakUrl: config.keycloakUrl,
-        minioUrl: config.minioUrl,
+        objectStorageUrl: config.objectStorageUrl,
       }
     : {
         frontendUrl: undefined,
         backendUrl: undefined,
         keycloakUrl: undefined,
-        minioUrl: undefined,
+        objectStorageUrl: undefined,
       };
 
 const nonEmptyString = (value: string | null | undefined): string | undefined => {
@@ -534,7 +537,7 @@ const previewUrlForService = (
     frontendUrl: config.frontendUrl,
     backendUrl: config.backendUrl,
     keycloakUrl: config.keycloakUrl,
-    minioUrl: config.minioUrl,
+    objectStorageUrl: config.objectStorageUrl,
   });
   const discoveredUrl = discoveredPreviewUrls.get(serviceLookupKey(name));
   return config.preferStackScopedUrls
@@ -675,7 +678,17 @@ const resolvePodPreview = (
       addCandidate(serviceName);
     }
   }
-  for (const serviceName of ["frontend", "web", "app", "backend", "api", "keycloak", "minio"]) {
+  for (const serviceName of [
+    "frontend",
+    "web",
+    "app",
+    "backend",
+    "api",
+    "keycloak",
+    "object-storage",
+    "seaweedfs",
+    "minio",
+  ]) {
     if (podName === serviceName || podName.startsWith(`${serviceName}-`)) {
       addCandidate(serviceName);
     }
@@ -702,6 +715,8 @@ const serviceOrder = (name: string) => {
     "keycloak",
     "postgres",
     "redis",
+    "object-storage",
+    "seaweedfs",
     "minio",
     "codex-runner",
   ];

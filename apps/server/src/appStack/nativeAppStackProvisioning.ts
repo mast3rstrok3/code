@@ -37,7 +37,7 @@ interface NativeProvisionConfig {
   readonly frontendUrl: string | undefined;
   readonly backendUrl: string | undefined;
   readonly keycloakUrl: string | undefined;
-  readonly minioUrl: string | undefined;
+  readonly objectStorageUrl: string | undefined;
   readonly preferStackScopedUrls: boolean;
 }
 
@@ -396,7 +396,7 @@ const rewriteComposeHostReferences = (
         frontendUrl: config.frontendUrl,
         backendUrl: config.backendUrl,
         keycloakUrl: config.keycloakUrl,
-        minioUrl: config.minioUrl,
+        objectStorageUrl: config.objectStorageUrl,
       });
       if (
         !config.preferStackScopedUrls ||
@@ -500,7 +500,7 @@ const configuredPreviewUrl = (
     frontendUrl: config.frontendUrl,
     backendUrl: config.backendUrl,
     keycloakUrl: config.keycloakUrl,
-    minioUrl: config.minioUrl,
+    objectStorageUrl: config.objectStorageUrl,
   });
   if (config.preferStackScopedUrls && stackScopedUrl !== null) return stackScopedUrl;
 

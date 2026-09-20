@@ -35,7 +35,7 @@ const nativeConfig = {
   frontendUrl: "https://rudi-dev.nightingale-ai.com",
   backendUrl: "https://api-rudi-dev.nightingale-ai.com",
   keycloakUrl: "https://rudi-dev-keycloak.nightingale-ai.com",
-  minioUrl: "https://minio-rudi-dev.nightingale-ai.com",
+  objectStorageUrl: "https://minio-rudi-dev.nightingale-ai.com",
 } satisfies NativeAppStackConfig;
 
 const namespaceJson = JSON.stringify({
@@ -139,7 +139,7 @@ it.effect("stamps stack identity on the namespace so discovery can name it", () 
         frontendUrl: undefined,
         backendUrl: undefined,
         keycloakUrl: undefined,
-        minioUrl: undefined,
+        objectStorageUrl: undefined,
         preferStackScopedUrls: true,
       }),
     );
@@ -349,7 +349,7 @@ it.effect("translates interpolated bind mounts and string commands for Kubernete
         frontendUrl: undefined,
         backendUrl: undefined,
         keycloakUrl: undefined,
-        minioUrl: undefined,
+        objectStorageUrl: undefined,
         preferStackScopedUrls: true,
       }),
     );
@@ -418,7 +418,7 @@ it.effect("rewrites Compose host port references to Kubernetes service DNS", () 
         frontendUrl: undefined,
         backendUrl: undefined,
         keycloakUrl: undefined,
-        minioUrl: undefined,
+        objectStorageUrl: undefined,
         preferStackScopedUrls: true,
       }),
     );
@@ -496,7 +496,7 @@ it.effect("seeds anonymous Compose volumes from the container image", () => {
         frontendUrl: undefined,
         backendUrl: undefined,
         keycloakUrl: undefined,
-        minioUrl: undefined,
+        objectStorageUrl: undefined,
         preferStackScopedUrls: true,
       }),
     );
@@ -1330,7 +1330,7 @@ it.effect("uses an explicit native namespace for a new worktree when provided", 
       frontendUrl: undefined,
       backendUrl: undefined,
       keycloakUrl: undefined,
-      minioUrl: undefined,
+      objectStorageUrl: undefined,
     },
     runKubectl,
   );
@@ -1400,7 +1400,7 @@ it.effect("provisions Kubernetes resources when auto-creating a missing native n
       frontendUrl: undefined,
       backendUrl: undefined,
       keycloakUrl: undefined,
-      minioUrl: undefined,
+      objectStorageUrl: undefined,
     },
     runKubectl,
   );
@@ -1495,7 +1495,7 @@ it.effect("builds and pushes compose build services before applying Kubernetes r
       frontendUrl: undefined,
       backendUrl: undefined,
       keycloakUrl: undefined,
-      minioUrl: undefined,
+      objectStorageUrl: undefined,
     },
     runKubectl,
     runCommand,
@@ -1619,7 +1619,7 @@ it.effect("can build and push compose build services through BuildKit", () => {
       frontendUrl: undefined,
       backendUrl: undefined,
       keycloakUrl: undefined,
-      minioUrl: undefined,
+      objectStorageUrl: undefined,
     },
     runKubectl,
     runCommand,
@@ -1690,7 +1690,7 @@ it.effect("finds the app-dev compose file from a nested worktree path", () => {
       frontendUrl: undefined,
       backendUrl: undefined,
       keycloakUrl: undefined,
-      minioUrl: undefined,
+      objectStorageUrl: undefined,
     },
     runKubectl,
   );
@@ -1736,7 +1736,7 @@ it.effect("reports a clear error when the worktree is missing an app-dev compose
       frontendUrl: undefined,
       backendUrl: undefined,
       keycloakUrl: undefined,
-      minioUrl: undefined,
+      objectStorageUrl: undefined,
     },
     runKubectl,
   );
@@ -1790,7 +1790,7 @@ it.effect("restores Kubernetes resources when auto-creating an empty native name
       frontendUrl: undefined,
       backendUrl: undefined,
       keycloakUrl: undefined,
-      minioUrl: undefined,
+      objectStorageUrl: undefined,
     },
     runKubectl,
   );
@@ -1845,7 +1845,7 @@ it.effect("does not report a derived worktree stack before its namespace exists"
       frontendUrl: undefined,
       backendUrl: undefined,
       keycloakUrl: undefined,
-      minioUrl: undefined,
+      objectStorageUrl: undefined,
     },
     runKubectl,
   );
@@ -1924,7 +1924,7 @@ it.effect("wires the backend's OpenBao-backed Google OAuth credentials", () => {
         frontendUrl: undefined,
         backendUrl: undefined,
         keycloakUrl: undefined,
-        minioUrl: undefined,
+        objectStorageUrl: undefined,
         preferStackScopedUrls: true,
       }),
     );
@@ -2016,7 +2016,7 @@ it.effect("omits the credential wiring for stacks without a backend service", ()
         frontendUrl: undefined,
         backendUrl: undefined,
         keycloakUrl: undefined,
-        minioUrl: undefined,
+        objectStorageUrl: undefined,
         preferStackScopedUrls: true,
       }),
     );
@@ -2152,7 +2152,7 @@ it.effect("protection is stored as a namespace annotation and read back", () => 
       frontendUrl: undefined,
       backendUrl: undefined,
       keycloakUrl: undefined,
-      minioUrl: undefined,
+      objectStorageUrl: undefined,
     },
     runKubectl,
   );

@@ -76,6 +76,12 @@ describe("app stack namespace helpers", () => {
     expect(appStackPreviewUrlForService({ namespace: "hero-dev", serviceName: "keycloak" })).toBe(
       "https://hero-dev-keycloak.nightingale-ai.com",
     );
+    expect(appStackPreviewUrlForService({ namespace: "hero-dev", serviceName: "seaweedfs" })).toBe(
+      "https://storage-hero-dev.nightingale-ai.com",
+    );
+    expect(
+      appStackPreviewUrlForService({ namespace: "hero-dev", serviceName: "object-storage" }),
+    ).toBe("https://storage-hero-dev.nightingale-ai.com");
     expect(appStackPreviewUrlForService({ namespace: "hero-dev", serviceName: "minio" })).toBe(
       "https://minio-hero-dev.nightingale-ai.com",
     );
@@ -107,9 +113,16 @@ describe("app stack namespace helpers", () => {
       appStackPreviewUrlForService({
         namespace: "rudi-dev",
         serviceName: "minio",
-        minioUrl: "https://custom-minio.example.test",
+        objectStorageUrl: "https://custom-minio.example.test",
       }),
     ).toBe("https://custom-minio.example.test");
+    expect(
+      appStackPreviewUrlForService({
+        namespace: "rudi-dev",
+        serviceName: "seaweedfs",
+        objectStorageUrl: "https://custom-storage.example.test",
+      }),
+    ).toBe("https://custom-storage.example.test");
   });
 
   it("returns null for services without a conventional public URL", () => {

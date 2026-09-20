@@ -448,7 +448,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         frontendUrl: undefined,
         backendUrl: undefined,
         keycloakUrl: undefined,
-        minioUrl: undefined,
+        objectStorageUrl: undefined,
       });
     }),
   );
@@ -486,6 +486,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
                   // The new name wins when both are set.
                   T3CODE_APP_DEV_STACK_NATIVE_DISPLAY_NAME: "old",
                   T3CODE_APP_STACK_NATIVE_DISPLAY_NAME: "new",
+                  // Object storage was configured as MINIO_URL before the rename.
+                  T3CODE_APP_DEV_STACK_NATIVE_MINIO_URL: "https://minio-hero-dev.example.test",
                 },
               }),
             ),
@@ -498,6 +500,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         namespace: "hero-dev",
         imageBuilder: "buildkit",
         displayName: "new",
+        objectStorageUrl: "https://minio-hero-dev.example.test",
       });
     }),
   );
