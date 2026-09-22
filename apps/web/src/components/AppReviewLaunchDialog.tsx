@@ -80,7 +80,7 @@ export function AppReviewLaunchDialog(props: AppReviewLaunchDialogProps) {
     >
       <DialogPopup className="max-w-xl overflow-hidden">
         <DialogHeader>
-          <DialogTitle>Launch App Preview</DialogTitle>
+          <DialogTitle>Launch App Review</DialogTitle>
           <DialogDescription>
             Each cycle reviews the app, analyzes gaps and plans in that same thread, then implements
             the plan in a new thread. Only review stops after the gap analysis.
@@ -111,7 +111,7 @@ export function AppReviewLaunchDialog(props: AppReviewLaunchDialogProps) {
           </label>
           {reviewOnly ? null : (
             <label className="grid gap-2">
-              <span className="text-xs font-medium text-foreground">App Preview cycle budget</span>
+              <span className="text-xs font-medium text-foreground">App Review cycle budget</span>
               <Input
                 type="number"
                 min={1}
@@ -186,7 +186,7 @@ export function AppReviewLaunchDialog(props: AppReviewLaunchDialogProps) {
               props.onLaunch({ brief: normalizedBrief, cycleBudget, reviewUrl, reviewOnly })
             }
           >
-            Launch App Preview
+            Launch App Review
           </Button>
         </DialogFooter>
       </DialogPopup>

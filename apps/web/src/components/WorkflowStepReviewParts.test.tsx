@@ -20,7 +20,7 @@ describe("WorkflowStepReviewPartPins", () => {
       />,
     );
 
-    expect(markup).toContain("App Preview parts");
+    expect(markup).toContain("App Review parts");
     expect(markup).toContain("E2E tests: yes");
     expect(markup).toContain("Auto");
   });
@@ -64,11 +64,11 @@ describe("WorkflowStepReviewPartPins", () => {
       />,
     );
 
-    expect(markup).toContain("Ticket App Preview parts");
-    expect(markup).not.toContain(">App Preview parts<");
+    expect(markup).toContain("Ticket App Review parts");
+    expect(markup).not.toContain(">App Review parts<");
   });
 
-  it("renders nothing for a step that starts no App Preview", () => {
+  it("renders nothing for a step that starts no App Review", () => {
     const markup = renderToStaticMarkup(
       <WorkflowStepReviewPartPins
         workflowPromptId="implementation.code-review.codex"

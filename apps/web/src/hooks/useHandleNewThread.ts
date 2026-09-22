@@ -66,11 +66,11 @@ function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undef
 export function useNewThreadHandler() {
   const environmentServerConfigs = useAtomValue(environmentServerConfigsAtom);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
-  const activeWorkspaceUserView = useClientSettings((settings) => settings.activeWorkspaceUserView);
+  const activeWorkspaceUserId = useClientSettings((settings) => settings.activeWorkspaceUserId);
   const workspaceUsers = usePrimarySettings((settings) => settings.workspaceUsers);
   const defaultNewThreadOwnerUserId = useMemo(
-    () => resolveDefaultThreadOwnerUserId({ activeWorkspaceUserView, workspaceUsers }),
-    [activeWorkspaceUserView, workspaceUsers],
+    () => resolveDefaultThreadOwnerUserId({ activeWorkspaceUserId, workspaceUsers }),
+    [activeWorkspaceUserId, workspaceUsers],
   );
   const router = useRouter();
   const getCurrentRouteTarget = useCallback(() => {

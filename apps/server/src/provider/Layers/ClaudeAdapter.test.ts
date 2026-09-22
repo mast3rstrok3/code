@@ -1,3 +1,4 @@
+import { WorkspaceUserEnvironment } from "../../workspaceUserCredentials.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
@@ -7397,11 +7398,18 @@ describe("ClaudeAdapterLive", () => {
     });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: ProviderDriverKind.make("claudeAgent"),
-        runtimeMode: "full-access",
-      });
+      const session = yield* adapter
+        .startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        })
+        .pipe(
+          Effect.provideService(WorkspaceUserEnvironment, {
+            GH_TOKEN: "ada-token",
+            GIT_AUTHOR_NAME: "Ada",
+          }),
+        );
       yield* sendCompletedClaudeTurn(adapter, harness, session.threadId, "first");
       yield* sendCompletedClaudeTurn(adapter, harness, session.threadId, "second");
 
@@ -7411,6 +7419,8 @@ describe("ClaudeAdapterLive", () => {
       const resetOptions = harness.getLastCreateQueryInput()?.options;
       assert.equal(resetOptions?.resume, undefined);
       assert.ok(resetOptions?.sessionId);
+      assert.equal(resetOptions?.env?.GH_TOKEN, "ada-token");
+      assert.equal(resetOptions?.env?.GIT_AUTHOR_NAME, "Ada");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

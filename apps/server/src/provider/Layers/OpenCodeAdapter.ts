@@ -1,3 +1,4 @@
+import { WorkspaceUserEnvironment } from "../../workspaceUserCredentials.ts";
 import {
   EventId,
   type OpenCodeSettings,
@@ -2838,6 +2839,14 @@ export function makeOpenCodeAdapter(
       function* (input) {
         const binaryPath = openCodeSettings.binaryPath;
         const serverUrl = openCodeSettings.serverUrl;
+        if (serverUrl && Object.keys(yield* WorkspaceUserEnvironment).length > 0) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "startSession",
+            ticket:
+              "Workspace user credentials require a local OpenCode server. Clear the external server URL in provider settings.",
+          });
+        }
         const serverPassword = openCodeSettings.serverPassword;
         const directory = input.cwd ?? serverConfig.cwd;
         const resumeSessionId = parseOpenCodeResume(input.resumeCursor)?.sessionId;
@@ -2863,10 +2872,13 @@ export function makeOpenCodeAdapter(
                 directory,
                 serverUrl,
                 ...(serverPassword ? { serverPassword } : {}),
-                environment: McpProviderSession.withAgentDeviceEnvironment(
-                  options?.environment ?? process.env,
-                  mcpSession,
-                ),
+                environment: {
+                  ...McpProviderSession.withAgentDeviceEnvironment(
+                    options?.environment ?? process.env,
+                    mcpSession,
+                  ),
+                  ...(yield* WorkspaceUserEnvironment),
+                },
               });
               const client = openCodeRuntime.createOpenCodeSdkClient({
                 baseUrl: server.url,

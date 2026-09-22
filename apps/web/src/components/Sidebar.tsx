@@ -846,6 +846,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
 }) {
   const draftThreadsByThreadKey = useComposerDraftStore((store) => store.draftThreadsByThreadKey);
   const draftsByThreadKey = useComposerDraftStore((store) => store.draftsByThreadKey);
+  const userView = useClientSettings((settings) => settings.activeWorkspaceUserView);
   const clearDraftThread = useComposerDraftStore((store) => store.clearDraftThread);
   // The open draft's row is FROZEN at the moment the draft became the route:
   // it stays visible (like a thread row) but never repaints while the user
@@ -877,7 +878,10 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
     // new-thread surfaces mint fresh drafts and leave invested ones behind
     // unmapped, so the mapping only knows about the latest per project.
     for (const [draftKey, session] of Object.entries(draftThreadsByThreadKey)) {
-      if (session.promotedTo != null) {
+      if (
+        session.promotedTo != null ||
+        (userView.kind === "user" && session.ownerUserId !== userView.userId)
+      ) {
         continue;
       }
       if (
@@ -906,6 +910,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   }, [
     draftThreadsByThreadKey,
     draftsByThreadKey,
+    userView,
     frozenActive,
     props.routeDraftId,
     props.scopedProjectKeys,

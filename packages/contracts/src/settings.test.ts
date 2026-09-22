@@ -981,3 +981,15 @@ it("validates remote device hosts and rejects ambiguous host ids", () => {
   ).toThrow();
   expect(() => decodeDeviceHostSettings({ deviceHosts: [{ ...host, port: 0 }] })).toThrow();
 });
+
+describe("workspace user selection", () => {
+  it("defaults old settings to the original user and preserves an independent view", () => {
+    expect(decodeClientSettings({}).activeWorkspaceUserId).toBe("nils");
+    const preference = {
+      activeWorkspaceUserId: "ada",
+      activeWorkspaceUserView: { kind: "user", userId: "grace" },
+    };
+    expect(decodeClientSettingsPatch(preference)).toEqual(preference);
+    expect(decodeClientSettings(preference)).toMatchObject(preference);
+  });
+});

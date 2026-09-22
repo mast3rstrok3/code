@@ -26,6 +26,7 @@ import {
 } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
+import { WorkspaceUserMenu } from "./WorkspaceUserMenu";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
@@ -73,6 +74,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
           {pillLabel}
         </Badge>
       ) : null}
+      <WorkspaceUserMenu />
     </SidebarHeader>
   );
 });

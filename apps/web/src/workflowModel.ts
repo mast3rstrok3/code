@@ -186,7 +186,7 @@ export function workflowStepMatchesImplementationFailure<TThread extends Workflo
     case "app-dev-stack":
       return label.includes("appdevstack") || label === "planning";
     case "app-review":
-      return label.includes("app preview");
+      return label.includes("app review");
     case "code-review":
       return label.includes("code review");
     case "fixer":
@@ -275,7 +275,7 @@ export function implementationTicketStageDetails(
  * A paused or stalled run reports no `retryableFailure`, so this is what tells
  * the panel which step a resume would actually re-enter — the difference
  * between one honest "Start step again" and the same button on every row.
- * Ticket-level App Preview and Code Review report as worker execution because
+ * Ticket-level App Review and Code Review report as worker execution because
  * the ticket-wave step owns them.
  */
 export function implementationRunCurrentStage(run: {
@@ -493,7 +493,7 @@ function entryMatchesDefinedStep<TThread extends WorkflowModelThread>(
       !entry.row.thread.title?.toLowerCase().includes("final validation")
     );
   }
-  if (label.includes("app preview") && !label.includes("ticket")) {
+  if (label.includes("app review") && !label.includes("ticket")) {
     return (
       (role === "app-review-orchestrator" ||
         role === "app-review-reviewer" ||
@@ -793,7 +793,7 @@ export function resolveWorkflowCurrentPath<TThread extends WorkflowModelThread>(
         ticketStage === "implementation"
           ? "Implementation"
           : ticketStage === "app-review"
-            ? "App Preview"
+            ? "App Review"
             : "Code Review",
         cycleNumber === null ? null : `Cycle ${cycleNumber}`,
         phaseLabel,
@@ -838,7 +838,7 @@ export function resolveWorkflowCurrentPath<TThread extends WorkflowModelThread>(
             label.includes("final regression tests") || label.includes("final code review"),
         )
       : stage === "app-review"
-        ? currentPathStep(input.steps, (label) => label.includes("app preview"))
+        ? currentPathStep(input.steps, (label) => label.includes("app review"))
         : stage === "code-review"
           ? (currentPathStep(input.steps, (label) => label.includes("final code review")) ??
             currentPathStep(input.steps, (label) => label.includes("code review")))
@@ -1428,7 +1428,7 @@ function resolveOwner<TThread extends WorkflowModelThread>(
     ? byKey.get(`${thread.environmentId}:${contextRootId}`)
     : undefined;
   // A nested workflow's rootThreadId identifies its local controller (for
-  // example, App Preview can root at a Fast Feature Build child). Continue up
+  // example, App Review can root at a Fast Feature Build child). Continue up
   // the physical thread ancestry so every nested workflow remains visible from
   // the thread that initiated the complete workflow tree.
   let current = contextRoot ?? thread;

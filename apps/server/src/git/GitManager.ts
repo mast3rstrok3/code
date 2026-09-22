@@ -1,3 +1,8 @@
+import {
+  resolveWorkspaceUserCredentials,
+  workspaceUserGitEnvironment,
+  workspaceUserProviderEnvironment,
+} from "../workspaceUserCredentials.ts";
 import * as Arr from "effect/Array";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
@@ -1055,12 +1060,17 @@ export const make = Effect.gen(function* () {
       (yield* gitCore
         .readConfigValue(cwd, `remote.${targetRemoteName}.url`)
         .pipe(Effect.orElseSucceed(() => null)));
-    if (!isHttpsGitHubRemoteUrl(remoteUrl)) {
+    if (
+      !isHttpsGitHubRemoteUrl(remoteUrl) &&
+      !/^(git@github\.com:|ssh:\/\/git@github\.com\/)/i.test(remoteUrl ?? "")
+    ) {
       return yield* gitCore.pushCurrentBranch(cwd, currentBranch);
     }
     const askPass = yield* createGitHubAskPassEnv(cwd, token);
     return yield* gitCore
-      .pushCurrentBranch(cwd, currentBranch, { env: askPass.env })
+      .pushCurrentBranch(cwd, currentBranch, {
+        env: { ...askPass.env, ...workspaceUserProviderEnvironment(credentials) },
+      })
       .pipe(
         Effect.ensuring(
           fileSystem.remove(askPass.scriptPath).pipe(Effect.catch(() => Effect.void)),
@@ -1972,6 +1982,7 @@ export const make = Effect.gen(function* () {
     filePaths?: readonly string[],
     progressReporter?: GitActionProgressReporter,
     actionId?: string,
+    credentials?: SourceControlProvider.SourceControlCredentialContext,
   ) {
     const emit = (event: GitActionProgressPayload) =>
       progressReporter && actionId
@@ -2056,6 +2067,7 @@ export const make = Effect.gen(function* () {
           }
         : null;
     const { commitSha } = yield* gitCore.commit(cwd, suggestion.subject, suggestion.body, {
+      env: workspaceUserGitEnvironment(credentials),
       timeoutMs: COMMIT_TIMEOUT_MS,
       ...(commitProgress ? { progress: commitProgress } : {}),
     });
@@ -2743,6 +2755,57 @@ export const make = Effect.gen(function* () {
           (input.action === "create_pr" &&
             (!initialStatus.hasUpstream || initialStatus.aheadCount > 0));
         const wantsPr = input.action === "create_pr" || input.action === "commit_push_pr";
+        let credentials = options?.credentials;
+        if (input.threadId !== undefined) {
+          if (Option.isNone(projectionQuery)) {
+            return yield* new GitManagerError({
+              operation: "resolveThreadOwner",
+              cwd: input.cwd,
+              detail:
+                "Cannot resolve the thread owner. GitHub credentials are required for thread Git actions.",
+            });
+          }
+          const thread = yield* projectionQuery.value.getThreadShellById(input.threadId).pipe(
+            Effect.mapError(
+              (cause) =>
+                new GitManagerError({
+                  operation: "resolveThreadOwner",
+                  cwd: input.cwd,
+                  detail: "Could not read the thread owner.",
+                  cause,
+                }),
+            ),
+          );
+          if (Option.isNone(thread)) {
+            return yield* new GitManagerError({
+              operation: "resolveThreadOwner",
+              cwd: input.cwd,
+              detail: "The thread no longer exists.",
+            });
+          }
+          const settings = yield* serverSettingsService.getSettings.pipe(
+            Effect.mapError(
+              (error) =>
+                new GitManagerError({
+                  operation: "resolveThreadOwner",
+                  cwd: input.cwd,
+                  detail: error.message,
+                }),
+            ),
+          );
+          credentials = yield* resolveWorkspaceUserCredentials(
+            settings.workspaceUsers.find((user) => user.id === thread.value.ownerUserId),
+          ).pipe(
+            Effect.mapError(
+              (error) =>
+                new GitManagerError({
+                  operation: "resolveThreadOwner",
+                  cwd: input.cwd,
+                  detail: error.message,
+                }),
+            ),
+          );
+        }
 
         if (input.featureBranch && !wantsCommit) {
           return yield* new GitManagerError({
@@ -2861,6 +2924,7 @@ export const make = Effect.gen(function* () {
                   input.filePaths,
                   options?.progressReporter,
                   progress.actionId,
+                  credentials,
                 ),
               ),
             )
@@ -2875,9 +2939,7 @@ export const make = Effect.gen(function* () {
               })
               .pipe(
                 Effect.tap(() => Ref.set(currentPhase, Option.some("push"))),
-                Effect.flatMap(() =>
-                  runPushCurrentBranch(input.cwd, currentBranch, options?.credentials),
-                ),
+                Effect.flatMap(() => runPushCurrentBranch(input.cwd, currentBranch, credentials)),
               )
           : { status: "skipped_not_requested" as const };
 
@@ -2897,7 +2959,7 @@ export const make = Effect.gen(function* () {
                     currentBranch,
                     progress.emit,
                     input.pullRequestBaseBranch,
-                    options?.credentials,
+                    credentials,
                     input.pullRequestBodyNote,
                   ),
                 ),
@@ -2913,7 +2975,7 @@ export const make = Effect.gen(function* () {
             push,
             pr,
           },
-          options?.credentials,
+          credentials,
         );
 
         const result = {

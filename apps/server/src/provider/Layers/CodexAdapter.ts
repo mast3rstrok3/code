@@ -1,3 +1,4 @@
+import { WorkspaceUserEnvironment } from "../../workspaceUserCredentials.ts";
 /**
  * CodexAdapterLive - Scoped live implementation for the Codex provider adapter.
  *
@@ -2301,13 +2302,16 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+        const ownerEnvironment = yield* WorkspaceUserEnvironment;
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
           cwd: input.cwd ?? process.cwd(),
           binaryPath: codexConfig.binaryPath,
           launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
-          ...(options?.environment ? { environment: options.environment } : {}),
+          ...(options?.environment || Object.keys(ownerEnvironment).length > 0
+            ? { environment: { ...(options?.environment ?? process.env), ...ownerEnvironment } }
+            : {}),
           ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
           ...(isCodexResumeCursorSchema(input.resumeCursor)
             ? { resumeCursor: input.resumeCursor }
@@ -2324,6 +2328,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                     options?.environment ?? process.env,
                     mcpSession,
                   ),
+                  ...ownerEnvironment,
                   T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),
                 },
                 appServerArgs: [

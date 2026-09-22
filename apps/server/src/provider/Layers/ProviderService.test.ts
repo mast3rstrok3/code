@@ -1,4 +1,10 @@
-import { DEFAULT_WORKSPACE_USER_ID } from "@t3tools/contracts";
+import { WorkspaceUserEnvironment } from "../../workspaceUserCredentials.ts";
+import {
+  DEFAULT_WORKSPACE_USER,
+  DEFAULT_WORKSPACE_USER_ID,
+  WorkspaceUserId,
+  type WorkspaceUser,
+} from "@t3tools/contracts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -35,7 +41,7 @@ import {
 } from "@t3tools/shared/assistantCitations";
 import { createModelSelection } from "@t3tools/shared/model";
 import { it, assert, describe, vi } from "@effect/vitest";
-import { afterAll } from "vite-plus/test";
+import { afterAll, beforeEach, afterEach } from "vite-plus/test";
 
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -60,6 +66,7 @@ import {
   ProviderValidationError,
   ProviderWorkspaceMissingError,
   type ProviderAdapterError,
+  type ProviderServiceError,
 } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
@@ -89,7 +96,24 @@ const makeProviderServiceLive = (...args: Parameters<typeof makeProviderServiceL
   makeProviderServiceLiveBase(...args).pipe(Layer.provideMerge(WorkflowUserInputBroker.layer));
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-const defaultServerSettingsLayer = ServerSettings.ServerSettingsService.layerTest();
+const testDefaultUser: WorkspaceUser = {
+  ...DEFAULT_WORKSPACE_USER,
+  github: { personalAccessToken: "test-default-token" },
+};
+const testServerSettingsLayer = (overrides: Parameters<typeof ServerSettings.layerTest>[0] = {}) =>
+  ServerSettings.layerTest({ workspaceUsers: [testDefaultUser], ...overrides });
+beforeEach(() => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>().mockImplementation(async (url, options) => {
+      assert.equal(url, "https://api.github.com/user");
+      assert.equal(new Headers(options?.headers).get("Authorization"), "Bearer test-default-token");
+      return Response.json({ id: 1, login: "default-user", name: "Default user" });
+    }),
+  );
+});
+afterEach(() => vi.unstubAllGlobals());
+const defaultServerSettingsLayer = testServerSettingsLayer();
 const serverConfigTestLayer = ServerConfig.layerTest(process.cwd(), process.cwd()).pipe(
   Layer.provide(NodeServices.layer),
 );
@@ -524,7 +548,7 @@ for (const [enabled, completed] of [
                 makeStaticInstanceRegistry([[codexInstanceId, codex.adapter]]),
               ),
             ),
-            Layer.provide(ServerSettings.layerTest({ continueThreadsAfterServerUpdate: enabled })),
+            Layer.provide(testServerSettingsLayer({ continueThreadsAfterServerUpdate: enabled })),
             Layer.provide(serverConfigTestLayer),
             Layer.provide(AnalyticsService.layerTest),
             Layer.provide(
@@ -884,7 +908,7 @@ it.effect(
         ProviderAdapterRegistry.ProviderAdapterRegistry,
         registry,
       );
-      const serverSettingsLayer = ServerSettings.ServerSettingsService.layerTest({
+      const serverSettingsLayer = testServerSettingsLayer({
         providers: {
           codex: {
             enabled: false,
@@ -5007,7 +5031,18 @@ describe("agent browser access", () => {
     threadId: ThreadId,
     projectOverride?: boolean | { readonly browser?: boolean; readonly device?: boolean },
     recoverSession = false,
-    options?: { readonly withoutOrchestration?: boolean },
+    options?: {
+      readonly withoutOrchestration?: boolean;
+      readonly userContext?: {
+        users: ReadonlyArray<WorkspaceUser>;
+        ownerUserId: () => WorkspaceUserId;
+        environments: NodeJS.ProcessEnv[];
+        onStarted: (
+          provider: ProviderService.ProviderService["Service"],
+          settings: ServerSettings.ServerSettingsService["Service"],
+        ) => Effect.Effect<void, ProviderServiceError>;
+      };
+    },
   ) =>
     Effect.gen(function* () {
       const enableAgentBrowserAccess = typeof access === "boolean" ? access : access.browser;
@@ -5016,7 +5051,16 @@ describe("agent browser access", () => {
       const codex = makeFakeCodexAdapter();
       const providerAdapterLayer = Layer.succeed(
         ProviderAdapterRegistry.ProviderAdapterRegistry,
-        makeAdapterRegistryMock({ [CODEX_DRIVER]: codex.adapter }),
+        makeAdapterRegistryMock({
+          [CODEX_DRIVER]: {
+            ...codex.adapter,
+            startSession: (input) =>
+              Effect.gen(function* () {
+                options?.userContext?.environments.push(yield* WorkspaceUserEnvironment);
+                return yield* codex.adapter.startSession(input);
+              }),
+          },
+        }),
       );
       const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
         Layer.provide(SqlitePersistenceMemory),
@@ -5051,7 +5095,7 @@ describe("agent browser access", () => {
             assert.equal(requestedThreadId, threadId);
             return Option.some(
               yield* decodeBrowserAccessThreadShell({
-                ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+                ownerUserId: options?.userContext?.ownerUserId() ?? DEFAULT_WORKSPACE_USER_ID,
                 parentThreadId: null,
                 workflowRole: null,
                 pullRequests: [],
@@ -5091,8 +5135,9 @@ describe("agent browser access", () => {
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
         Layer.provide(options?.withoutOrchestration ? Layer.empty : projectionLayer),
-        Layer.provide(
-          ServerSettings.ServerSettingsService.layerTest({
+        Layer.provideMerge(
+          testServerSettingsLayer({
+            ...(options?.userContext ? { workspaceUsers: options.userContext.users } : {}),
             enableAgentBrowserAccess,
             enableAgentDeviceAccess,
             projectSettingsOverrides:
@@ -5130,15 +5175,160 @@ describe("agent browser access", () => {
           threadId,
           runtimeMode: "full-access",
         });
+        if (options?.userContext)
+          yield* options.userContext.onStarted(
+            provider,
+            yield* ServerSettings.ServerSettingsService,
+          );
         if (recoverSession) {
           yield* provider.stopSession({ threadId });
           yield* provider.sendTurn({ threadId, input: "Resume this thread", attachments: [] });
-          assert.equal(codex.startSession.mock.calls.length, 2);
+          assert.equal(codex.startSession.mock.calls.length, options?.userContext ? 3 : 2);
         }
       }).pipe(Effect.provide(providerLayer));
 
       return issued;
     });
+
+  it.effect("does not start the default user's agent without a token", () =>
+    Effect.gen(function* () {
+      const environments: NodeJS.ProcessEnv[] = [];
+      const error = yield* startSessionWith(
+        false,
+        asThreadId("thread-default-no-token"),
+        undefined,
+        false,
+        {
+          userContext: {
+            users: [DEFAULT_WORKSPACE_USER],
+            ownerUserId: () => DEFAULT_WORKSPACE_USER_ID,
+            environments,
+            onStarted: () => Effect.die("The agent must not start without a token."),
+          },
+        },
+      ).pipe(Effect.flip);
+      assert.ok(error.message.includes("Add a GitHub token for Nils"));
+      assert.deepEqual(environments, []);
+      assert.equal(vi.mocked(fetch).mock.calls.length, 0);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("does not start the default user's agent when GitHub rejects the token", () =>
+    Effect.gen(function* () {
+      vi.mocked(fetch).mockResolvedValueOnce(new Response("Bad credentials", { status: 401 }));
+      const environments: NodeJS.ProcessEnv[] = [];
+      const error = yield* startSessionWith(
+        false,
+        asThreadId("thread-default-invalid-token"),
+        undefined,
+        false,
+        {
+          userContext: {
+            users: [testDefaultUser],
+            ownerUserId: () => DEFAULT_WORKSPACE_USER_ID,
+            environments,
+            onStarted: () => Effect.die("The agent must not start with an invalid token."),
+          },
+        },
+      ).pipe(Effect.flip);
+      assert.ok(error.message.includes("Could not verify the GitHub token for Nils"));
+      assert.deepEqual(environments, []);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("blocks the next turn after the default user's token is cleared", () =>
+    Effect.gen(function* () {
+      const environments: NodeJS.ProcessEnv[] = [];
+      const threadId = asThreadId("thread-default-cleared-token");
+      yield* startSessionWith(false, threadId, undefined, false, {
+        userContext: {
+          users: [testDefaultUser],
+          ownerUserId: () => DEFAULT_WORKSPACE_USER_ID,
+          environments,
+          onStarted: (provider, settings) =>
+            Effect.gen(function* () {
+              yield* settings
+                .updateSettings({ workspaceUsers: [DEFAULT_WORKSPACE_USER] })
+                .pipe(Effect.orDie);
+              const error = yield* provider
+                .sendTurn({ threadId, input: "Continue", attachments: [] })
+                .pipe(Effect.flip, Effect.orDie);
+              assert.ok(error.message.includes("Add a GitHub token for Nils"));
+              assert.equal(environments.length, 1);
+              assert.equal((yield* provider.listSessions()).length, 0);
+            }),
+        },
+      });
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("uses the main user's configured name and restarts after it changes", () =>
+    Effect.gen(function* () {
+      const environments: NodeJS.ProcessEnv[] = [];
+      const threadId = asThreadId("thread-default-renamed");
+      yield* startSessionWith(false, threadId, undefined, false, {
+        userContext: {
+          users: [testDefaultUser],
+          ownerUserId: () => DEFAULT_WORKSPACE_USER_ID,
+          environments,
+          onStarted: (provider, settings) =>
+            Effect.gen(function* () {
+              assert.equal(environments[0]?.GIT_AUTHOR_NAME, testDefaultUser.displayName);
+              yield* settings
+                .updateSettings({
+                  workspaceUsers: [{ ...testDefaultUser, displayName: "Nils Updated" }],
+                })
+                .pipe(Effect.orDie);
+              yield* provider.sendTurn({ threadId, input: "Continue", attachments: [] });
+              assert.equal(environments.length, 2);
+              assert.equal(environments[1]?.GIT_AUTHOR_NAME, "Nils Updated");
+              assert.equal(environments[1]?.GIT_COMMITTER_NAME, "Nils Updated");
+              assert.equal(environments[1]?.GH_TOKEN, "test-default-token");
+            }),
+        },
+      });
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("uses the owner credentials and replaces them before a turn after reassignment", () =>
+    Effect.gen(function* () {
+      const request = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, options) => {
+        const ada = new Headers(options?.headers).get("Authorization") === "Bearer ada-token";
+        return Response.json({ id: ada ? 42 : 43, login: ada ? "ada" : "grace", name: null });
+      });
+      yield* Effect.addFinalizer(() => Effect.sync(() => request.mockRestore()));
+      const ada: WorkspaceUser = {
+        id: WorkspaceUserId.make("ada"),
+        displayName: "Ada",
+        github: { personalAccessToken: "ada-token" },
+      };
+      const grace: WorkspaceUser = {
+        id: WorkspaceUserId.make("grace"),
+        displayName: "Grace",
+        github: { personalAccessToken: "grace-token" },
+      };
+      let owner = ada.id;
+      const environments: NodeJS.ProcessEnv[] = [];
+      const threadId = asThreadId("thread-owner-rotation");
+      yield* startSessionWith(false, threadId, undefined, true, {
+        userContext: {
+          users: [ada, grace],
+          ownerUserId: () => owner,
+          environments,
+          onStarted: (provider) =>
+            Effect.gen(function* () {
+              assert.equal(environments[0]?.GH_TOKEN, "ada-token");
+              assert.equal(environments[0]?.GIT_AUTHOR_EMAIL, "42+ada@users.noreply.github.com");
+              owner = grace.id;
+              yield* provider.sendTurn({ threadId, input: "Continue as Grace", attachments: [] });
+              assert.equal(environments[1]?.GH_TOKEN, "grace-token");
+              assert.equal(environments[1]?.GIT_AUTHOR_EMAIL, "43+grace@users.noreply.github.com");
+            }),
+        },
+      });
+      assert.equal(environments[2]?.GH_TOKEN, "grace-token");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 
   // The capability on the credential is the observable that matters: a session
   // always gets a credential (the pull request toolkit is never withheld), and

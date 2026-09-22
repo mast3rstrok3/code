@@ -10,7 +10,7 @@ export type WorkflowPresetRoute = "product" | "implementation" | "planning" | "r
  * One agent a step starts, as the model settings surface it.
  *
  * A step is a phase of the run, not a single agent: "Execute ticket waves"
- * starts TDD workers, ticket App Previews, and ticket Code Reviews. Each entry
+ * starts TDD workers, ticket App Reviews, and ticket Code Reviews. Each entry
  * here is separately pinnable; the step's own pin covers any that are not.
  * Only work that runs in a thread of its own can appear — an agent's later
  * turns in the same thread keep the model that thread launched with.
@@ -56,13 +56,13 @@ const FULL_IMPLEMENTATION_DEFAULTS: ImplementationWorkflowSettings = {
 };
 
 /**
- * App Preview runs end-to-end tests, gap analysis, and repairs in order.
+ * App Review runs end-to-end tests, gap analysis, and repairs in order.
  */
 const APP_REVIEW_SUB_STEPS: ReadonlyArray<WorkflowPresetSubStep> = [
   {
     label: "End-to-end test",
     workflowPromptId: "implementation.e2e-app-review.codex",
-    note: "runs planned ticket suites automatically; Final App Preview runs all application suites, then retries failures",
+    note: "runs planned ticket suites automatically; Final App Review runs all application suites, then retries failures",
   },
   {
     label: "Gap analysis & repair tickets",
@@ -93,7 +93,7 @@ const QUICK_PLAN_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
 const PLAN_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
   ...QUICK_PLAN_HELP_STEPS,
   {
-    label: "App Preview",
+    label: "App Review",
     skillId: "implementation.browser-app-review.codex",
     threadBoundary: "new review thread",
     note: "runs acceptance lanes in order in the durable reviewer thread",
@@ -160,7 +160,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         note: "runs ordered workstreams in one Build thread",
       },
       {
-        label: "App Preview",
+        label: "App Review",
         skillId: "implementation.browser-app-review.codex",
         threadBoundary: "new review thread",
         note: "runs acceptance lanes in order in the durable reviewer thread",
@@ -256,10 +256,10 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       },
       { label: "Start and probe AppStack from the integrated worktree", note: "automatic" },
       {
-        label: "Nested App Preview against the shared AppStack",
+        label: "Nested App Review against the shared AppStack",
         skillId: "implementation.browser-app-review.codex",
         threadBoundary: "new review thread",
-        note: "automatic; App Preview has its own cycle budget",
+        note: "automatic; App Review has its own cycle budget",
         subSteps: APP_REVIEW_SUB_STEPS,
       },
       {
@@ -273,16 +273,16 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
   },
   {
     id: "app-review",
-    label: "App Preview",
+    label: "App Review",
     description:
       "Run the project's E2E tests, turn failures into repair tickets, and verify the fixes.",
     route: "review",
     interactionMode: "default",
-    // No entry prompt: sending in this mode dispatches an App Preview launch
+    // No entry prompt: sending in this mode dispatches an App Review launch
     // rather than a turn, and the run's reactor owns the test and repair prompts.
     helpSteps: [
       {
-        label: "App Preview cycles",
+        label: "App Review cycles",
         skillId: "implementation.browser-app-review.codex",
         threadBoundary: "new review thread",
         note: "five test, repair-ticket, and fix cycles by default; a passing review ends the run early",
@@ -362,9 +362,9 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         subSteps: [
           { label: "TDD implementation worker", workflowPromptId: "implementation.tdd.codex" },
           {
-            label: "Ticket App Preview",
+            label: "Ticket App Review",
             workflowPromptId: "implementation.browser-app-review.codex",
-            note: "the review's own agents follow the App Preview step",
+            note: "the review's own agents follow the App Review step",
           },
           {
             label: "Ticket Code Review",
@@ -379,7 +379,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         threadBoundary: "new child thread",
       },
       {
-        label: "Run App Preview",
+        label: "Run App Review",
         skillId: "implementation.browser-app-review.codex",
         threadBoundary: "new review thread",
         note: "automated E2E execution, then gap analysis and repair threads; five test cycles maximum",
@@ -451,9 +451,9 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         subSteps: [
           { label: "TDD implementation worker", workflowPromptId: "implementation.tdd.codex" },
           {
-            label: "Ticket App Preview",
+            label: "Ticket App Review",
             workflowPromptId: "implementation.browser-app-review.codex",
-            note: "the review's own agents follow the App Preview step",
+            note: "the review's own agents follow the App Review step",
           },
           {
             label: "Ticket Code Review",
@@ -469,7 +469,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         note: "automatic",
       },
       {
-        label: "Final App Preview",
+        label: "Final App Review",
         skillId: "implementation.browser-app-review.codex",
         threadBoundary: "new review thread",
         note: "automatic E2E commands, gap analysis and repairs; five test cycles maximum",
@@ -504,7 +504,7 @@ const FAST_ENGINEERING_WORKFLOW_DEFINITION: WorkflowPresetDefinition = {
   id: "fast-engineering",
   label: "Quick Engineering",
   description:
-    "Run the full engineering sequence with ticket and Final App Previews skipped by default.",
+    "Run the full engineering sequence with ticket and Final App Reviews skipped by default.",
   implementationDefaults: {
     ...FULL_IMPLEMENTATION_DEFAULTS,
     ticketAppReviewEnabled: false,

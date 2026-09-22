@@ -96,7 +96,7 @@ export function workflowProgressLabel(input: {
           ? "Implementation · Final regression tests"
           : "Implementation · Merge gate";
       case "qa-reviewing":
-        return "Implementation · App Preview";
+        return "Implementation · App Review";
       case "fixing":
         if (run.activeValidationKind === "final") return "Implementation · Final regression repair";
         if (run.fixOrigin === "app-dev-stack" || run.fixOrigin === "app-review") {
@@ -149,15 +149,15 @@ export function workflowProgressLabel(input: {
     case "implementation-validator":
       return "Implementation · Merge gate";
     case "implementation-qa-reviewer":
-      return "Implementation · App Preview";
+      return "Implementation · App Review";
     case "app-review-orchestrator":
-      return "App Preview · Controller";
+      return "App Review · Controller";
     case "app-review-reviewer":
-      return "App Preview · Review";
+      return "App Review · Review";
     case "app-review-planner":
-      return "App Preview · Gap analysis";
+      return "App Review · Gap analysis";
     case "app-review-fixer":
-      return "App Preview · Implement plan";
+      return "App Review · Implement plan";
     case "implementation-fixer":
     case "product-fix-implementer":
       return "Implementation · Fix";

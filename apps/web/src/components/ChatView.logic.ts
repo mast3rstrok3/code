@@ -112,7 +112,7 @@ export function normalizeAppReviewPreviewTarget(value: string): string | null {
 }
 
 /**
- * What one App Preview launch reviews.
+ * What one App Review launch reviews.
  *
  * A target the user named is pinned: the run uses it as given, rather than
  * letting the worktree's App Stack substitute its own frontend. With no

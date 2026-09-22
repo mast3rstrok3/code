@@ -17,6 +17,19 @@ Install [GitHub CLI](https://cli.github.com/) 2.81.0 or newer, then sign in:
 gh auth login
 ```
 
+Add each person's name and GitHub token in **Settings > Users** and choose
+your user from the sidebar before starting threads. Commits use the name entered in Settings
+and the token owner's private noreply address. Push and pull request actions use that person's token. Give the
+token access to the repositories you intend to work on, including permission to push and
+create pull requests.
+
+Every user, including the main user, needs a name and a valid token before running agents. A missing
+name or a missing or invalid token produces an error before the agent starts or a thread Git action runs.
+These actions do not fall back to the server's GitHub CLI login. Changing a name, replacing a token, or
+changing a thread's owner restarts its agent with the updated identity on the next turn. Local Codex,
+Claude, Cursor, Grok, OpenCode, and Antigravity sessions receive these credentials. An external
+OpenCode server cannot receive per-thread credentials; use a local OpenCode server for this.
+
 ### Forgejo and Gitea
 
 Install [Forgejo CLI (`fj`)](https://codeberg.org/forgejo-contrib/forgejo-cli) or

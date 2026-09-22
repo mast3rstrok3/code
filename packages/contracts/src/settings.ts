@@ -31,6 +31,7 @@ import {
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
 import {
   DEFAULT_WORKSPACE_USER,
+  DEFAULT_WORKSPACE_USER_ID,
   DEFAULT_WORKSPACE_USER_VIEW,
   WorkspaceUser,
   WorkspaceUserId,
@@ -296,6 +297,9 @@ export const LoadBalancingWeights = Schema.Record(
 export const DiffColorScheme = Schema.Literals(["red-green", "blue-orange"]);
 
 export const ClientSettingsSchema = Schema.Struct({
+  activeWorkspaceUserId: WorkspaceUserId.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKSPACE_USER_ID)),
+  ),
   activeWorkspaceUserView: WorkspaceUserView.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKSPACE_USER_VIEW)),
   ),
@@ -1589,6 +1593,7 @@ export const ServerSettingsPatch = Schema.Struct({
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
+  activeWorkspaceUserId: Schema.optionalKey(WorkspaceUserId),
   activeWorkspaceUserView: Schema.optionalKey(WorkspaceUserView),
   notificationMode: Schema.optionalKey(NotificationMode),
   inAppNotificationsEnabled: Schema.optionalKey(Schema.Boolean),

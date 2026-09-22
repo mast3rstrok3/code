@@ -1,3 +1,8 @@
+import {
+  resolveWorkspaceUserCredentials,
+  workspaceUserProviderEnvironment,
+  WorkspaceUserEnvironment,
+} from "../../workspaceUserCredentials.ts";
 /**
  * ProviderServiceLive - Cross-provider orchestration layer.
  *
@@ -10,6 +15,7 @@
  * @module ProviderServiceLive
  */
 import {
+  DEFAULT_WORKSPACE_USER_ID,
   isPlanningWorkflowInteractionMode,
   ModelSelection,
   NonNegativeInt,
@@ -35,6 +41,7 @@ import {
   type ProviderRuntimeEvent,
   type ProviderSession,
   type ServerSettings as ServerSettingsValue,
+  type WorkspaceUser,
 } from "@t3tools/contracts";
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -516,6 +523,48 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const projectionQuery = yield* Effect.serviceOption(
     ProjectionSnapshotQuery.ProjectionSnapshotQuery,
   );
+  const sessionOwners = new Map<ThreadId, WorkspaceUser>();
+  const workspaceUserForThread = Effect.fn("ProviderService.workspaceUserForThread")(function* (
+    threadId: ThreadId,
+  ) {
+    const settings = yield* serverSettings.getSettings.pipe(
+      Effect.mapError(() => toValidationError("startSession", "Could not read workspace users.")),
+    );
+    let ownerUserId = DEFAULT_WORKSPACE_USER_ID;
+    if (Option.isSome(projectionQuery)) {
+      const thread = yield* projectionQuery.value
+        .getThreadShellById(threadId)
+        .pipe(
+          Effect.mapError(() =>
+            toValidationError("startSession", "Could not read the thread owner."),
+          ),
+        );
+      if (Option.isNone(thread)) {
+        return yield* toValidationError(
+          "startSession",
+          "The thread no longer exists. Cannot resolve its GitHub credentials.",
+        );
+      }
+      ownerUserId = thread.value.ownerUserId;
+    }
+    const user = settings.workspaceUsers.find((user) => user.id === ownerUserId);
+    if (!user)
+      return yield* toValidationError(
+        "startSession",
+        "The thread owner no longer exists. Restore the owner in Settings > Users.",
+      );
+    return user;
+  });
+  const workspaceUserEnvironment = Effect.fn("ProviderService.workspaceUserEnvironment")(function* (
+    threadId: ThreadId,
+  ) {
+    const user = yield* workspaceUserForThread(threadId);
+    const credentials = yield* resolveWorkspaceUserCredentials(user).pipe(
+      Effect.mapError((error) => toValidationError("startSession", error.message)),
+    );
+    sessionOwners.set(threadId, user);
+    return workspaceUserProviderEnvironment(credentials);
+  });
   const issueMcpCredential =
     options?.issueMcpCredential ?? McpSessionRegistry.issueActiveMcpCredential;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -1365,6 +1414,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
 
+      const ownerEnvironment = yield* workspaceUserEnvironment(input.binding.threadId);
       yield* prepareMcpSession({
         threadId: input.binding.threadId,
         providerInstanceId: bindingInstanceId,
@@ -1379,7 +1429,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
           runtimeMode: input.binding.runtimeMode ?? "full-access",
         })
-        .pipe(Effect.onError(() => clearMcpSession(input.binding.threadId)));
+        .pipe(
+          Effect.provideService(WorkspaceUserEnvironment, ownerEnvironment),
+          Effect.onError(() => clearMcpSession(input.binding.threadId)),
+        );
       if (resumed.provider !== adapter.provider) {
         yield* clearMcpSession(input.binding.threadId);
         return yield* toValidationError(
@@ -1599,6 +1652,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         }
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
         yield* clearTurnAnalyticsSession(resolvedInstanceId, threadId);
+        const ownerEnvironment = yield* workspaceUserEnvironment(threadId);
         yield* prepareMcpSession({
           threadId,
           providerInstanceId: resolvedInstanceId,
@@ -1613,7 +1667,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
             ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
           })
-          .pipe(Effect.onError(() => clearMcpSession(threadId)));
+          .pipe(
+            Effect.provideService(WorkspaceUserEnvironment, ownerEnvironment),
+            Effect.onError(() => clearMcpSession(threadId)),
+          );
 
         if (session.provider !== adapter.provider) {
           yield* clearMcpSession(threadId);
@@ -1814,6 +1871,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "ProviderService.sendTurn",
           `Provider '${routed.adapter.provider}' requires an explicit continuation prompt`,
         );
+      }
+      const previousOwner = sessionOwners.get(input.threadId);
+      const owner = yield* workspaceUserForThread(input.threadId);
+      if (
+        routed.isActive &&
+        (owner.id !== previousOwner?.id ||
+          owner.displayName !== previousOwner?.displayName ||
+          owner.github.personalAccessToken !== previousOwner?.github.personalAccessToken)
+      ) {
+        yield* stopSession({ threadId: input.threadId });
+        routed = { ...routed, isActive: false };
       }
       if (!routed.isActive) {
         routed = yield* resolveRoutableSession({
@@ -2191,6 +2259,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           yield* settleCompaction(input.threadId, pendingCompaction, "turn.aborted");
         }
         timedOutNativeCompactions.delete(input.threadId);
+        sessionOwners.delete(input.threadId);
         yield* clearTurnAnalyticsSession(routed.instanceId, input.threadId);
         yield* clearMcpSession(input.threadId);
         yield* directory.upsert({

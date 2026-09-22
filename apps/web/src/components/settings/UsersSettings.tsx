@@ -239,6 +239,12 @@ export function UsersSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <p className="px-4 text-sm text-muted-foreground sm:px-5">
+        Choose your user in the sidebar before starting a thread. Each thread keeps its owner when
+        you switch users or view someone else's threads. Every user, including the main user, needs
+        a name and a valid GitHub token before running an agent. Commits use the name entered here.
+        Pushes and pull requests use that user's token.
+      </p>
       <SettingsSection title="Users">
         {workspaceUsers.map((user) => (
           <WorkspaceUserSettingsRow

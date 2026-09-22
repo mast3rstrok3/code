@@ -1384,7 +1384,7 @@ const makeWsRpcLayer = (
           // one so terminals the user opened meanwhile survive.
           let setupTerminalId: string | null = null;
 
-          // An App Preview launch carries no runtime mode of its own, so it
+          // An App Review launch carries no runtime mode of its own, so it
           // reports the one its created thread will run in.
           const bootstrapRuntimeMode =
             command.type === "thread.turn.start"

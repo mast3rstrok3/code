@@ -207,7 +207,7 @@ describe("resolveWorkflowCurrentPath", () => {
     ["review", "Browser review"],
     ["planning", "Gap analysis"],
     ["fixing", "TDD repair"],
-  ] as const)("names App Preview %s in the current cycle", (activePhase, phaseLabel) => {
+  ] as const)("names App Review %s in the current cycle", (activePhase, phaseLabel) => {
     const appReviewRun = {
       id: "app-review-1",
       cycleBudget: 10,
@@ -224,7 +224,7 @@ describe("resolveWorkflowCurrentPath", () => {
       ]),
       [appReviewRun],
     );
-    expect(path.subtitle).toContain(`App Preview · Cycle 2 · ${phaseLabel}`);
+    expect(path.subtitle).toContain(`App Review · Cycle 2 · ${phaseLabel}`);
     expect(path.threadId).toBe(`${activePhase}-thread`);
   });
 
@@ -611,7 +611,7 @@ describe("buildWorkflowViewModel", () => {
     expect(groups?.find((group) => group.id === "batch:batch-a")?.preset).toBeNull();
   });
 
-  it("keeps nested App Preview as its own workflow group under Implementation", () => {
+  it("keeps nested App Review as its own workflow group under Implementation", () => {
     const root = thread("root", { workflowPreset: "full-feature" });
     const orchestrator = thread("implementation", {
       parentThreadId: "root",
@@ -872,7 +872,7 @@ describe("buildWorkflowViewModel", () => {
     ]);
   });
 
-  it("uses Settings workflow steps and groups repeated App Previews as cycles", () => {
+  it("uses Settings workflow steps and groups repeated App Reviews as cycles", () => {
     const root = thread("root", { workflowPreset: "fast-feature" });
     const build = thread("build", {
       parentThreadId: "root",
@@ -906,7 +906,7 @@ describe("buildWorkflowViewModel", () => {
     const groups = model.rootsByThreadKey.get("env:root")?.groups;
     const fastFeature = groups?.find((group) => group.sourceId === "fast-feature-run");
     // The panel flattens nested runs into their parent's steps, so the two
-    // App Preview runs read as two cycles of the one App Preview step.
+    // App Review runs read as two cycles of the one App Review step.
     const steps =
       fastFeature && groups
         ? buildWorkflowSteps(fastFeature, groups, root, { flattenNestedWorkflows: true })
@@ -915,7 +915,7 @@ describe("buildWorkflowViewModel", () => {
     expect(steps.map((step) => step.label)).toEqual([
       "Planning",
       "Building",
-      "App Preview",
+      "App Review",
       "Code Review",
     ]);
     expect(steps[2]).toMatchObject({
@@ -1078,7 +1078,7 @@ describe("buildWorkflowViewModel", () => {
       "Ticket review and revision",
       "Execute ticket waves",
       "Merge ticket branches",
-      "Final App Preview",
+      "Final App Review",
       "Final Code Review",
       "Create pull request",
       "Babysit pull request",
@@ -1211,7 +1211,7 @@ describe("buildWorkflowViewModel", () => {
       "Planning phase · Prepare shared worktree and App Stack",
       "Implementation phase · Execute ticket waves",
       "Implementation phase · Merge ticket branches",
-      "Implementation phase · App Preview",
+      "Implementation phase · App Review",
       "Implementation phase · Final Code Review",
       "Implementation phase · Final regression tests",
       "Implementation phase · Create pull request",
@@ -1233,7 +1233,7 @@ describe("buildWorkflowViewModel", () => {
       )?.label,
     ).toBe("Implementation phase · Final Code Review");
     expect(matched("integration")).toBe("Implementation phase · Merge ticket branches");
-    expect(matched("app-review")).toBe("Implementation phase · App Preview");
+    expect(matched("app-review")).toBe("Implementation phase · App Review");
     expect(matched("code-review")).toBe("Implementation phase · Final Code Review");
     expect(matched("change-request")).toBe("Implementation phase · Create pull request");
     expect(matched("change-request-babysit")).toBe("Implementation phase · Babysit pull request");
@@ -1334,7 +1334,7 @@ describe("buildWorkflowViewModel", () => {
         status: "needs-human-attention",
         retryableFailure: {
           stage: "app-review",
-          detail: "App Preview did not pass",
+          detail: "App Review did not pass",
           failedAt: "2026-01-01T00:00:00.000Z",
           attemptCount: 1,
           maxAttempts: 3,

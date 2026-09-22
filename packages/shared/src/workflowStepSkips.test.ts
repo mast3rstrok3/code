@@ -33,7 +33,7 @@ describe("Engineering Workflow default skips", () => {
     ]);
   });
 
-  it("keeps ticket and combined App Previews separate", () => {
+  it("keeps ticket and combined App Reviews separate", () => {
     expect(
       implementationWorkflowDefaultSkips(
         {

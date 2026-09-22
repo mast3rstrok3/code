@@ -22,7 +22,7 @@ export type SetWorkflowStepReviewParts = (
 
 /**
  * On/off per review part for a step and the agents it starts, or nothing when
- * none of them is an App Preview.
+ * none of them is an App Review.
  *
  * Keyed like the model and cycle pins so "which parts", "how many times", and
  * "with which model" live side by side. A part turned off here is a

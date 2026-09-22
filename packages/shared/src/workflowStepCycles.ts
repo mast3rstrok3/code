@@ -6,7 +6,7 @@ export interface WorkflowStepCycleKey {
   readonly stepWorkflowPromptId?: string | undefined;
 }
 
-/** The configuration key shared by standalone, final, and ticket App Preview steps. */
+/** The configuration key shared by standalone, final, and ticket App Review steps. */
 export const APP_REVIEW_WORKFLOW_PROMPT_ID = "implementation.browser-app-review.codex";
 
 /** One configurable cycle target and its accepted bounds. */
@@ -30,7 +30,7 @@ export const WORKFLOW_STEP_CYCLE_TARGETS: ReadonlyArray<WorkflowStepCycleTarget>
   },
   {
     key: { workflowPromptId: APP_REVIEW_WORKFLOW_PROMPT_ID },
-    label: "App Preview cycles",
+    label: "App Review cycles",
     description:
       "An E2E test, gap analysis, and fix. The review ends unresolved when the budget runs out.",
     defaultCycles: 10,
@@ -41,9 +41,9 @@ export const WORKFLOW_STEP_CYCLE_TARGETS: ReadonlyArray<WorkflowStepCycleTarget>
       workflowPromptId: APP_REVIEW_WORKFLOW_PROMPT_ID,
       stepWorkflowPromptId: "implementation.tdd.codex",
     },
-    label: "Ticket App Preview cycles",
+    label: "Ticket App Review cycles",
     description:
-      "The same three phases, for the App Preview a single ticket runs before its Code Review.",
+      "The same three phases, for the App Review a single ticket runs before its Code Review.",
     defaultCycles: 10,
     maxCycles: 10,
   },

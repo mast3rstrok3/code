@@ -23,7 +23,7 @@ const QUICK_ACTION_DEFINITIONS = [
   {
     id: "e2e-review",
     label: "E2E tests",
-    description: "Set the test runner model for ticket and combined App Previews.",
+    description: "Set the test runner model for ticket and combined App Reviews.",
     workflowPromptId: APP_REVIEW_PROMPT_ID,
     matches: (key: WorkflowModelPinKey) =>
       key.stepWorkflowPromptId === TICKET_WAVE_PROMPT_ID ||
@@ -32,7 +32,7 @@ const QUICK_ACTION_DEFINITIONS = [
   {
     id: "ticket-code-review",
     label: "Ticket Code Review",
-    description: "Set the model that reviews each ticket after its implementation and App Preview.",
+    description: "Set the model that reviews each ticket after its implementation and App Review.",
     workflowPromptId: CODE_REVIEW_PROMPT_ID,
     matches: (key: WorkflowModelPinKey) => key.stepWorkflowPromptId === "implementation.tdd.codex",
   },

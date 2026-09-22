@@ -1703,10 +1703,10 @@ export default function ChatView(props: ChatViewProps) {
   const timestampFormat = settings.timestampFormat;
   const defaultNewThreadOwnerUserId = useMemo(() => {
     return resolveDefaultThreadOwnerUserId({
-      activeWorkspaceUserView: settings.activeWorkspaceUserView,
+      activeWorkspaceUserId: settings.activeWorkspaceUserId,
       workspaceUsers: settings.workspaceUsers,
     });
-  }, [settings.activeWorkspaceUserView, settings.workspaceUsers]);
+  }, [settings.activeWorkspaceUserId, settings.workspaceUsers]);
   const navigate = useNavigate();
   const citationLocation = useLocation({
     select: (location) => ({
@@ -2504,7 +2504,9 @@ export default function ChatView(props: ChatViewProps) {
     isServerThread &&
       activeThread !== undefined &&
       activeProject !== null &&
-      (activeRightPanelKind === "review" || activeRightPanelKind === "workflows")
+      (activeRightPanelKind === "review" ||
+        activeRightPanelKind === "test-replays" ||
+        activeRightPanelKind === "workflows")
       ? reviewEnvironment.workflowArtifacts({
           environmentId: activeThread.environmentId,
           input: { projectId: activeProject.id, threadId: activeThread.id },
@@ -5383,7 +5385,7 @@ export default function ChatView(props: ChatViewProps) {
           stackedThreadToast({
             type: "warning",
             title: "Wait for the current turn",
-            description: "App Preview can take ownership after the source turn settles.",
+            description: "App Review can take ownership after the source turn settles.",
           }),
         );
         return;
@@ -5392,8 +5394,8 @@ export default function ChatView(props: ChatViewProps) {
         toastManager.add(
           stackedThreadToast({
             type: "warning",
-            title: "App Preview is already running",
-            description: "Only one active App Preview can own this worktree.",
+            title: "App Review is already running",
+            description: "Only one active App Review can own this worktree.",
           }),
         );
         return;
@@ -5445,7 +5447,7 @@ export default function ChatView(props: ChatViewProps) {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not launch App Preview",
+              title: "Could not launch App Review",
               description:
                 error instanceof Error
                   ? error.message
@@ -5493,7 +5495,7 @@ export default function ChatView(props: ChatViewProps) {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not stop App Preview",
+            title: "Could not stop App Review",
             description:
               error instanceof Error ? error.message : "The workflow could not be stopped.",
           }),
@@ -5503,6 +5505,10 @@ export default function ChatView(props: ChatViewProps) {
     },
     [cancelAppReviewWorkflow, appReviewLaunchInFlight, appReviewWorkflowRuns, environmentId],
   );
+  const addTestReplaysSurface = useCallback(() => {
+    if (!activeThreadRef || !isServerThread || !isGitRepo) return;
+    useRightPanelStore.getState().open(activeThreadRef, "test-replays");
+  }, [activeThreadRef, isGitRepo, isServerThread]);
   const addLogsSurface = useCallback(() => {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "logs");
@@ -7448,8 +7454,8 @@ export default function ChatView(props: ChatViewProps) {
       icon: <GitBranchIcon />,
       title:
         activeWorktreeAppReviewRun.prerequisiteCheck != null
-          ? "App Preview is waiting for test prerequisites"
-          : `App Preview owns this worktree · ${activeWorktreeAppReviewRun.activePhase ?? "refreshing preview"}`,
+          ? "App Review is waiting for test prerequisites"
+          : `App Review owns this worktree · ${activeWorktreeAppReviewRun.activePhase ?? "refreshing preview"}`,
       description:
         activeWorktreeAppReviewRun.prerequisiteCheck != null
           ? activeWorktreeAppReviewRun.failure?.detailMarkdown
@@ -8638,7 +8644,7 @@ export default function ChatView(props: ChatViewProps) {
         stackedThreadToast({
           type: "warning",
           title: "Add a review brief",
-          description: "The composer message is the acceptance boundary for App Preview.",
+          description: "The composer message is the acceptance boundary for App Review.",
         }),
       );
       return;
@@ -8647,8 +8653,8 @@ export default function ChatView(props: ChatViewProps) {
       toastManager.add(
         stackedThreadToast({
           type: "warning",
-          title: "App Preview is already running",
-          description: "Only one active App Preview can own this worktree.",
+          title: "App Review is already running",
+          description: "Only one active App Review can own this worktree.",
         }),
       );
       return;
@@ -10739,10 +10745,12 @@ export default function ChatView(props: ChatViewProps) {
           workspaceMutationId={workspaceMutationId}
         />
       </Suspense>
-    ) : renderedRightPanelSurface?.kind === "review" ? (
+    ) : renderedRightPanelSurface?.kind === "review" ||
+      renderedRightPanelSurface?.kind === "test-replays" ? (
       <Suspense fallback={null}>
         <AppReviewPanel
           mode="embedded"
+          view={renderedRightPanelSurface.kind === "review" ? "review" : "replays"}
           threadRef={activeThreadRef}
           launchInFlight={appReviewLaunchInFlight}
           launchDisabled={activeWorktreeAppReviewRun !== null}
@@ -11294,7 +11302,7 @@ export default function ChatView(props: ChatViewProps) {
                                   : threadDetailLoading
                                     ? "Messages loading"
                                     : activeWorktreeAppReviewRun
-                                      ? "App Preview owns this worktree"
+                                      ? "App Review owns this worktree"
                                       : worktreeSetupBlocksSend
                                         ? "Preparing worktree"
                                         : projectCloneSendBlockReason
@@ -11580,6 +11588,7 @@ export default function ChatView(props: ChatViewProps) {
           onAddBrowserInProfile={createBrowserSurface}
           onAddTerminal={addTerminalSurface}
           onAddReview={addReviewSurface}
+          onAddTestReplays={addTestReplaysSurface}
           onAddLogs={addLogsSurface}
           onAddDiff={addDiffSurface}
           onAddFiles={addFilesSurface}
@@ -11650,6 +11659,7 @@ export default function ChatView(props: ChatViewProps) {
             onAddBrowserInProfile={createBrowserSurface}
             onAddTerminal={addTerminalSurface}
             onAddReview={addReviewSurface}
+            onAddTestReplays={addTestReplaysSurface}
             onAddLogs={addLogsSurface}
             onAddDiff={addDiffSurface}
             onAddFiles={addFilesSurface}

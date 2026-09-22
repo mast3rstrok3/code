@@ -32,13 +32,13 @@ export interface AppReviewPartsTarget {
 /**
  * The steps review parts can be set for. The step-level entry governs
  * standalone runs and the combined post-merge review, and is the standing
- * default for ticket reviews; the ticket entry overrides it for the App Preview
+ * default for ticket reviews; the ticket entry overrides it for the App Review
  * each ticket runs.
  */
 export const APP_REVIEW_PARTS_TARGETS: ReadonlyArray<AppReviewPartsTarget> = [
   {
     key: { workflowPromptId: APP_REVIEW_WORKFLOW_PROMPT_ID },
-    label: "App Preview parts",
+    label: "App Review parts",
     description:
       "Standalone runs and the combined post-merge review, and the default for ticket reviews.",
   },
@@ -47,8 +47,8 @@ export const APP_REVIEW_PARTS_TARGETS: ReadonlyArray<AppReviewPartsTarget> = [
       workflowPromptId: APP_REVIEW_WORKFLOW_PROMPT_ID,
       stepWorkflowPromptId: "implementation.tdd.codex",
     },
-    label: "Ticket App Preview parts",
-    description: "The App Preview a single ticket runs before its Code Review.",
+    label: "Ticket App Review parts",
+    description: "The App Review a single ticket runs before its Code Review.",
   },
 ];
 

@@ -1,3 +1,4 @@
+import { WorkspaceUserEnvironment } from "../../workspaceUserCredentials.ts";
 import { withAgentDeviceEnvironment } from "../../mcp/McpProviderSession.ts";
 import { AntigravitySettings, ProviderDriverKind, ProviderSetupError } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -214,7 +215,10 @@ export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityD
             installation: executable,
             profile,
             cwd: input.cwd,
-            baseEnv: withAgentDeviceEnvironment(processEnvironment, input),
+            baseEnv: {
+              ...withAgentDeviceEnvironment(processEnvironment, input),
+              ...(yield* WorkspaceUserEnvironment),
+            },
             auth,
             runtimeTempDirectory,
           }),

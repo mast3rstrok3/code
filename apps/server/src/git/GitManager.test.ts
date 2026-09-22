@@ -1,3 +1,4 @@
+import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -16,7 +17,7 @@ import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import { ChildProcessSpawner } from "effect/unstable/process";
-import { expect } from "vite-plus/test";
+import { expect, vi } from "vite-plus/test";
 import type {
   GitActionProgressEvent,
   GitPreparePullRequestThreadInput,
@@ -25,6 +26,8 @@ import type {
 
 import {
   DEFAULT_SERVER_SETTINGS,
+  OrchestrationThreadShell,
+  WorkspaceUserId,
   GitCommandError,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -48,6 +51,28 @@ import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.t
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitManager from "./GitManager.ts";
+
+const decodeUserThread = Schema.decodeUnknownSync(OrchestrationThreadShell);
+function makeUserThread(ownerUserId: string) {
+  return decodeUserThread({
+    id: `thread-${ownerUserId}`,
+    projectId: "project-1",
+    ownerUserId,
+    title: "User thread",
+    modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+    runtimeMode: "full-access",
+    branch: null,
+    worktreePath: null,
+    latestTurn: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    session: null,
+    latestUserMessageAt: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+  });
+}
 
 const encodeCliJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeForgejoPullRequest = Schema.decodeEffect(ForgejoPullRequestSchema);
@@ -652,6 +677,7 @@ function makeManager(input?: {
   serverSettings?: Parameters<typeof ServerSettings.layerTest>[0];
   setupScriptRunner?: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"];
   gitConfigReads?: string[];
+  projectionLayer?: Layer.Layer<ProjectionSnapshotQuery.ProjectionSnapshotQuery>;
 }) {
   const { service: gitHubCli, ghCalls, prBodies } = createGitHubCliWithFakeGh(input?.ghScenario);
   const textGeneration = createTextGeneration(input?.textGeneration);
@@ -717,6 +743,7 @@ function makeManager(input?: {
     ),
     vcsDriverLayer,
     serverSettingsLayer,
+    input?.projectionLayer ?? Layer.empty,
   ).pipe(Layer.provideMerge(sourceControlRegistryLayer), Layer.provideMerge(NodeServices.layer));
 
   return GitManager.make.pipe(
@@ -2794,6 +2821,110 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       const second = yield* manager.status({ cwd: repoDir });
       expect(second.pr?.number).toBe(217);
+    }),
+  );
+
+  it.effect("commits as each thread owner without changing repository identity", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-users-");
+      yield* initRepo(repoDir);
+      const { manager } = yield* makeManager();
+      const originalName = (yield* runGit(repoDir, ["config", "user.name"])).stdout;
+      for (const name of ["Ada", "Grace"]) {
+        NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), name);
+        yield* runStackedAction(
+          manager,
+          { cwd: repoDir, action: "commit", commitMessage: `Changes by ${name}` },
+          {
+            credentials: { gitIdentity: { name, email: `${name.toLowerCase()}@example.com` } },
+          },
+        );
+        const result = yield* runGit(repoDir, ["log", "-1", "--format=%an|%ae|%cn|%ce"]);
+        expect(result.stdout.trim()).toBe(
+          `${name}|${name.toLowerCase()}@example.com|${name}|${name.toLowerCase()}@example.com`,
+        );
+      }
+      expect((yield* runGit(repoDir, ["config", "user.name"])).stdout).toBe(originalName);
+    }),
+  );
+
+  it.effect("blocks default-user thread Git actions without a token before any mutation", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-required-token-");
+      yield* initRepo(repoDir);
+      const headBefore = (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout;
+      NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "Uncommitted change");
+      const thread = makeUserThread("nils");
+      const { manager, ghCalls } = yield* makeManager({
+        projectionLayer: Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
+          getThreadShellById: () => Effect.succeed(Option.some(thread)),
+        }),
+      });
+      for (const action of ["commit", "push", "create_pr", "commit_push_pr"] as const) {
+        const error = yield* manager
+          .runStackedAction(
+            {
+              cwd: repoDir,
+              actionId: `blocked-${action}`,
+              action,
+              threadId: thread.id,
+              commitMessage: "Must not commit",
+            },
+            {
+              credentials: { githubPersonalAccessToken: "ambient-account-token" },
+            },
+          )
+          .pipe(Effect.flip);
+        expect(error.message).toContain("Add a GitHub token for Nils");
+      }
+      expect((yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout).toBe(headBefore);
+      expect((yield* runGit(repoDir, ["diff", "--cached", "--name-only"])).stdout.trim()).toBe("");
+      expect(ghCalls).toEqual([]);
+    }),
+  );
+
+  it.effect("resolves commit credentials from the persisted thread owner", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-owner-");
+      yield* initRepo(repoDir);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "Ada's change");
+      const request = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(Response.json({ id: 42, login: "ada", name: "Ada Lovelace" }));
+      yield* Effect.addFinalizer(() => Effect.sync(() => request.mockRestore()));
+      const thread = makeUserThread("ada");
+      const { manager } = yield* makeManager({
+        serverSettings: {
+          workspaceUsers: [
+            {
+              id: WorkspaceUserId.make("ada"),
+              displayName: "Ada",
+              github: { personalAccessToken: "ada-token" },
+            },
+          ],
+        },
+        projectionLayer: Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
+          getThreadShellById: (id) =>
+            Effect.succeed(id === thread.id ? Option.some(thread) : Option.none()),
+        }),
+      });
+      yield* manager.runStackedAction({
+        cwd: repoDir,
+        actionId: "owner-commit",
+        action: "commit",
+        threadId: thread.id,
+        commitMessage: "Ada's change",
+      });
+      const result = yield* runGit(repoDir, ["log", "-1", "--format=%an|%ae|%cn|%ce"]);
+      expect(result.stdout.trim()).toBe(
+        "Ada|42+ada@users.noreply.github.com|Ada|42+ada@users.noreply.github.com",
+      );
+      expect(request).toHaveBeenCalledWith(
+        "https://api.github.com/user",
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: "Bearer ada-token" }),
+        }),
+      );
     }),
   );
 

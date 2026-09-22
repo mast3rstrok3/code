@@ -1520,9 +1520,9 @@ export function workflowRoleShortLabel(
     case "implementation-validator":
       return "Merge gate";
     case "implementation-qa-reviewer":
-      return "App preview";
+      return "App review";
     case "app-review-orchestrator":
-      return "App Preview";
+      return "App Review";
     case "app-review-reviewer":
       return "Browser review";
     case "app-review-planner":

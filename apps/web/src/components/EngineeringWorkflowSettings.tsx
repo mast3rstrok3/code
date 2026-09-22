@@ -315,14 +315,14 @@ function EngineeringWorkflowStepControls(
           <div className="space-y-3 p-3">
             <div className="flex items-start justify-between gap-2">
               <div>
-                <div className="text-xs font-medium text-foreground">Ticket App Preview</div>
+                <div className="text-xs font-medium text-foreground">Ticket App Review</div>
                 <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
                   Runs before the ticket's Code Review. Each step can use its own model.
                 </p>
               </div>
               {implementationSettings && onSetImplementationSettings ? (
                 <Button
-                  aria-label="Remove Ticket App Preview"
+                  aria-label="Remove Ticket App Review"
                   className="-mr-1 -mt-1"
                   onClick={() =>
                     onSetImplementationSettings({
@@ -331,7 +331,7 @@ function EngineeringWorkflowStepControls(
                     })
                   }
                   size="icon-micro"
-                  title="Remove Ticket App Preview"
+                  title="Remove Ticket App Review"
                   variant="ghost-muted"
                 >
                   <XIcon aria-hidden="true" />
@@ -368,13 +368,13 @@ function EngineeringWorkflowStepControls(
             }
           >
             <PlusIcon aria-hidden="true" className="size-3.5" />
-            Add Ticket App Preview
+            Add Ticket App Review
           </button>
         )}
         <div className="grid gap-4 p-3 sm:grid-cols-2">
           <StepModelControl
             label="Ticket Code Review"
-            note="reviews the ticket after implementation and App Preview"
+            note="reviews the ticket after implementation and App Review"
             pinKey={TICKET_CODE_REVIEW_KEY}
             pinFor={props.pinFor}
             inheritedSelection={inheritedSelection(
@@ -406,8 +406,8 @@ function EngineeringWorkflowStepControls(
       <div className="space-y-3 rounded-md border border-border/60 p-3">
         <div className="grid gap-4 sm:grid-cols-2">
           <StepModelControl
-            label="App Preview default"
-            note="the fallback for App Preview steps that do not have their own model"
+            label="App Review default"
+            note="the fallback for App Review steps that do not have their own model"
             pinKey={APP_REVIEW_KEY}
             pinFor={props.pinFor}
             inheritedSelection={inheritedSelection(props, APP_REVIEW_KEY, props.rootModelSelection)}
@@ -430,7 +430,7 @@ function EngineeringWorkflowStepControls(
           phases={APP_REVIEW_PHASES}
           reviewKey={APP_REVIEW_KEY}
           reviewSelection={appReviewSelection}
-          inheritedLabel={`Follows the App Preview default (${props.choices.describeSelection(appReviewSelection)})`}
+          inheritedLabel={`Follows the App Review default (${props.choices.describeSelection(appReviewSelection)})`}
         />
       </div>
     );

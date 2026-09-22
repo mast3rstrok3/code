@@ -290,13 +290,13 @@ function ProjectDetail({
     [group.memberProjects, updateAllMembers],
   );
 
-  // ----- App Preview recording -----
+  // ----- App Review recording -----
   const storedRecordingMode = representative.previewRecordingMode ?? null;
   const setPreviewRecordingMode = useCallback(
     (mode: PreviewRecordingMode | null) =>
       void updateAllMembers(
         { previewRecordingMode: mode },
-        "Failed to update App Preview recording",
+        "Failed to update App Review recording",
       ),
     [updateAllMembers],
   );
@@ -511,12 +511,12 @@ function ProjectDetail({
             }
           />
           <SettingsRow
-            title="App Preview recording"
-            description="How Browser App Previews capture this project. Recording the page is small and cheap, but an app drawn in canvas or WebGL replays blank and needs video."
+            title="App Review recording"
+            description="How Browser App Reviews capture this project. Recording the page is small and cheap, but an app drawn in canvas or WebGL replays blank and needs video."
             resetAction={
               storedRecordingMode !== null ? (
                 <SettingResetButton
-                  label="App Preview recording"
+                  label="App Review recording"
                   onClick={() => setPreviewRecordingMode(null)}
                 />
               ) : null
@@ -532,7 +532,7 @@ function ProjectDetail({
                   }
                 }}
               >
-                <SelectTrigger aria-label="App Preview recording">
+                <SelectTrigger aria-label="App Review recording">
                   <SelectValue>{recordingModeLabel(storedRecordingMode)}</SelectValue>
                 </SelectTrigger>
                 <SelectPopup align="end" alignItemWithTrigger={false}>

@@ -59,7 +59,7 @@ describe("workflow presets", () => {
     });
   });
 
-  it("makes App Preview one looping step over its test, planning, and repair agents", () => {
+  it("makes App Review one looping step over its test, planning, and repair agents", () => {
     const appReview = WORKFLOW_PRESET_DEFINITION_BY_ID["app-review"];
     // Sending in this mode launches a run instead of starting a turn, so the
     // preset carries no entry prompt of its own.
@@ -101,20 +101,20 @@ describe("workflow presets", () => {
       "Ticket review and revision",
       "Execute ticket waves",
       "Merge ticket branches",
-      "Final App Preview",
+      "Final App Review",
       "Final Code Review",
       "Create pull request",
       "Babysit pull request",
     ]);
   });
 
-  it("uses one bounded App Preview between merge gate and final review", () => {
+  it("uses one bounded App Review between merge gate and final review", () => {
     const engineeringWorkflow = WORKFLOW_PRESET_DEFINITIONS.find(
       (definition) => definition.id === "planning",
     );
     expect(engineeringWorkflow?.helpSteps.slice(-5, -2).map((step) => step.label)).toEqual([
       "Merge ticket branches",
-      "Final App Preview",
+      "Final App Review",
       "Final Code Review",
     ]);
     expect(engineeringWorkflow?.helpSteps.at(-4)?.note).toContain("five test");

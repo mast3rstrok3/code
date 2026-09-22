@@ -1,3 +1,4 @@
+import { WorkspaceUserEnvironment } from "../../workspaceUserCredentials.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 /**
  * ClaudeAdapterLive - Scoped live implementation for the Claude Agent provider adapter.
@@ -413,6 +414,7 @@ function rememberPendingTaskModel(
 }
 
 interface ClaudeSessionContext {
+  readonly workspaceUserEnvironment: NodeJS.ProcessEnv;
   session: ProviderSession;
   startInput: Parameters<ClaudeAdapterShape["startSession"]>[0];
   readonly turnStartMessageIds: Array<string | null>;
@@ -4485,6 +4487,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const startSession: ClaudeAdapterShape["startSession"] = Effect.fn("startSession")(
     function* (input) {
+      const workspaceUserEnvironment = yield* WorkspaceUserEnvironment;
       const modelCatalog = yield* modelCatalogEffect;
       if (input.provider !== undefined && input.provider !== PROVIDER) {
         return yield* new ProviderAdapterValidationError({
@@ -5059,7 +5062,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         canUseTool,
         onUserDialog,
         supportedDialogKinds: ["resume_return"],
-        env: McpProviderSession.withAgentDeviceEnvironment(claudeEnvironment, mcpSession),
+        env: {
+          ...McpProviderSession.withAgentDeviceEnvironment(claudeEnvironment, mcpSession),
+          ...workspaceUserEnvironment,
+        },
         additionalDirectories,
         ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),
         ...(mcpServers ? { mcpServers } : {}),
@@ -5128,6 +5134,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       };
 
       const context: ClaudeSessionContext = {
+        workspaceUserEnvironment,
         session,
         startInput: input,
         turnStartMessageIds: resumeState?.turnStartMessageIds
@@ -5429,7 +5436,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           ...context.startInput,
           runtimeMode: context.session.runtimeMode,
           resumeCursor: undefined,
-        });
+        }).pipe(Effect.provideService(WorkspaceUserEnvironment, context.workspaceUserEnvironment));
         return yield* snapshotThread(yield* requireSession(threadId));
       }
       const sessionId = context.resumeSessionId;
@@ -5584,7 +5591,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               turnStartMessageIds: retainedBoundaries,
             }
           : undefined,
-      });
+      }).pipe(Effect.provideService(WorkspaceUserEnvironment, context.workspaceUserEnvironment));
       const restarted = yield* requireSession(threadId);
       restarted.turns.push(...retainedTurns);
       return yield* snapshotThread(restarted);

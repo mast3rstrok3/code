@@ -1,5 +1,5 @@
 /**
- * DomReplaySurface - plays back an App Preview recorded with rrweb.
+ * DomReplaySurface - plays back an App Review recorded with rrweb.
  *
  * The artifact is a JSON event log, not a video, so there is no `<video>` element
  * to hand the browser. rrweb rebuilds the recorded DOM inside its own iframe and

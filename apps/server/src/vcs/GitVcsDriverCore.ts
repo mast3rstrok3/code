@@ -2044,6 +2044,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               options.progress?.onOutputLine?.({ stream: "stderr", text: line }) ?? Effect.void,
           };
     yield* executeGit("GitVcsDriver.commit.commit", cwd, args, {
+      ...(options?.env ? { env: options.env } : {}),
       ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
       ...(progress ? { progress } : {}),
     }).pipe(Effect.asVoid);

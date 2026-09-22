@@ -153,6 +153,7 @@ export interface GitCommitProgress {
 }
 
 export interface GitCommitOptions {
+  readonly env?: NodeJS.ProcessEnv;
   readonly timeoutMs?: number;
   readonly progress?: GitCommitProgress;
 }

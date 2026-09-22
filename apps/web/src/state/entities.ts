@@ -354,7 +354,7 @@ export function useSetImplementationSkipCommand() {
 
 export function useRerunAppReviewPhaseCommand() {
   return useAtomCommand(threadEnvironment.rerunAppReviewPhase, {
-    label: "app preview phase re-run",
+    label: "app review phase re-run",
   });
 }
 

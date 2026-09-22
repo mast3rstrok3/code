@@ -88,12 +88,12 @@ describe("workflowProgressLabel", () => {
     const labels = [
       ["implementation-worker", "Implementation · TDD"],
       ["implementation-validator", "Implementation · Merge gate"],
-      ["implementation-qa-reviewer", "Implementation · App Preview"],
+      ["implementation-qa-reviewer", "Implementation · App Review"],
       ["implementation-fixer", "Implementation · Fix"],
       ["implementation-code-reviewer", "Implementation · Code review"],
-      ["app-review-orchestrator", "App Preview · Controller"],
-      ["app-review-reviewer", "App Preview · Review"],
-      ["app-review-fixer", "App Preview · Implement plan"],
+      ["app-review-orchestrator", "App Review · Controller"],
+      ["app-review-reviewer", "App Review · Review"],
+      ["app-review-fixer", "App Review · Implement plan"],
     ] as const;
     for (const [workflowRole, expected] of labels) {
       expect(

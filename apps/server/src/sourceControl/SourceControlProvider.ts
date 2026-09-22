@@ -31,6 +31,7 @@ export interface SourceControlProviderContext {
 
 export interface SourceControlCredentialContext {
   readonly githubPersonalAccessToken?: string;
+  readonly gitIdentity?: { readonly name: string; readonly email: string };
 }
 
 export interface SourceControlRefSelector {

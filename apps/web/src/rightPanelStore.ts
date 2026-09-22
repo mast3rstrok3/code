@@ -21,6 +21,7 @@ import { resolveStorage } from "./lib/storage";
 
 export const RIGHT_PANEL_KINDS = [
   "review",
+  "test-replays",
   "logs",
   "diff",
   "files",
@@ -71,6 +72,7 @@ export type RightPanelSurface =
       attachment?: ChatFileAttachment;
     }
   | { id: "review"; kind: "review" }
+  | { id: "test-replays"; kind: "test-replays" }
   | { id: "logs"; kind: "logs" }
   | {
       /**
@@ -204,6 +206,8 @@ const singletonSurface = (
       return { id: "app-stack", kind };
     case "review":
       return { id: "review", kind };
+    case "test-replays":
+      return { id: "test-replays", kind };
     case "logs":
       return { id: "logs", kind };
     case "agents":

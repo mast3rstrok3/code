@@ -52,8 +52,8 @@ function PlanWorkflowStageControls(props: {
   readonly onChange: (settings: ImplementationWorkflowSettings) => void;
 }) {
   const entries = [
-    ["Ticket App Preview", "ticketAppReviewEnabled"],
-    ["Final App Preview", "appReviewEnabled"],
+    ["Ticket App Review", "ticketAppReviewEnabled"],
+    ["Final App Review", "appReviewEnabled"],
     ["Final Code Review", "finalCodeReviewEnabled"],
     ["Create pull request", "pullRequestCreationEnabled"],
     ["Babysit pull request", "pullRequestBabysittingEnabled"],
@@ -167,7 +167,7 @@ export function WorkflowSettingsBody(props: {
           {recoveryBackupControl}
           <p className="text-[11px] leading-relaxed text-muted-foreground">
             {props.description ??
-              "Set models, cycle budgets, and App Preview parts in workflow order. App Preview stops at 10 cycles. Ticket and Final Code Review stop clean or run at most five cycles. Recovery continues the current cycle thread. Changes apply to the next agent each step starts."}
+              "Set models, cycle budgets, and App Review parts in workflow order. App Review stops at 10 cycles. Ticket and Final Code Review stop clean or run at most five cycles. Recovery continues the current cycle thread. Changes apply to the next agent each step starts."}
           </p>
           <EngineeringWorkflowSettings
             preset={props.preset}
@@ -201,7 +201,7 @@ export function WorkflowSettingsBody(props: {
         {recoveryBackupControl}
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           {props.description ??
-            "Set models for steps that start separate threads, cycle budgets, and the parts an App Preview verifies. App Preview stops at 10 cycles. Ticket and Final Code Review stop clean or run at most five cycles. Recovery continues the current cycle thread. Shared-thread steps use the workflow composer model. Changes apply to the next agent a step starts."}
+            "Set models for steps that start separate threads, cycle budgets, and the parts an App Review verifies. App Review stops at 10 cycles. Ticket and Final Code Review stop clean or run at most five cycles. Recovery continues the current cycle thread. Shared-thread steps use the workflow composer model. Changes apply to the next agent a step starts."}
         </p>
         <WorkflowModelQuickPins
           preset={props.preset}
@@ -270,7 +270,7 @@ export function WorkflowSettingsBody(props: {
  *
  * The per-step menus tune one stage at a time; this is where a whole run gets
  * laid out — cheap models for the mechanical steps, fewer cycles on the slow
- * ones, an App Preview that skips the browser — without opening nine menus. The
+ * ones, an App Review that skips the browser — without opening nine menus. The
  * two entry points carry the same settings on purpose, so nothing is reachable
  * from only one of them.
  */
@@ -289,7 +289,7 @@ export function WorkflowSettingsMenu(props: {
   readonly stepCycles?: ReadonlyArray<WorkflowStepCycleOverride> | undefined;
   readonly defaultStepCycles?: ReadonlyArray<WorkflowStepCycleOverride> | undefined;
   readonly onSetStepCycles?: SetWorkflowStepCycles | undefined;
-  /** The run's own App Preview parts, and the standing defaults behind them. */
+  /** The run's own App Review parts, and the standing defaults behind them. */
   readonly stepReviewParts?: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
   readonly defaultStepReviewParts?: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
   readonly onSetStepReviewParts?: SetWorkflowStepReviewParts | undefined;

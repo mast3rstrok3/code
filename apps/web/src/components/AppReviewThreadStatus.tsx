@@ -7,22 +7,22 @@ import { cn } from "~/lib/utils";
 
 const STATUS_COPY = {
   running: {
-    title: "App Preview is running",
+    title: "App Review is running",
     icon: CircleDotIcon,
     tone: "text-primary",
   },
   passed: {
-    title: "App Preview passed",
+    title: "App Review passed",
     icon: CheckCircle2Icon,
     tone: "text-emerald-600 dark:text-emerald-400",
   },
   exhausted: {
-    title: "App Preview exhausted its attempts",
+    title: "App Review exhausted its attempts",
     icon: AlertTriangleIcon,
     tone: "text-amber-600 dark:text-amber-400",
   },
   failed: {
-    title: "App Preview failed",
+    title: "App Review failed",
     tone: "text-destructive",
     icon: XCircleIcon,
   },
@@ -72,7 +72,7 @@ export function AppReviewThreadStatus(props: {
           variant="outline"
           onClick={props.onOpenDetails}
         >
-          Open App Preview details
+          Open App Review details
         </Button>
       </section>
     </div>

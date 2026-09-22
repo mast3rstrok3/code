@@ -82,7 +82,7 @@ describe("TicketAppReviewCycles", () => {
 });
 
 describe("workflowDisclosureIdsForCurrentPath", () => {
-  it("reveals the full App Preview ticket path", () => {
+  it("reveals the full App Review ticket path", () => {
     expect(
       workflowDisclosureIdsForCurrentPath(
         currentPath({

@@ -106,13 +106,13 @@ describe("workflow step restart", () => {
     activeThreadId: "planner",
   } as unknown as AppReviewWorkflowRun;
 
-  it("lets an orphaned App Preview start again", () => {
+  it("lets an orphaned App Review start again", () => {
     const orphanedPlanner = thread("planner", "controller");
 
     expect(appReviewRunActiveThreadIsBusy(appReviewRun, [orphanedPlanner])).toBe(false);
   });
 
-  it("keeps App Preview restart blocked while its phase agent is live", () => {
+  it("keeps App Review restart blocked while its phase agent is live", () => {
     const runningPlanner = {
       ...thread("planner", "controller"),
       session: { status: "running" },
@@ -138,7 +138,7 @@ describe("workflow step restart", () => {
 });
 
 describe("implementationRunWorkflowIds", () => {
-  it("keeps every App Preview from the current implementation run", () => {
+  it("keeps every App Review from the current implementation run", () => {
     const run = {
       id: "implementation-current",
       appReviewWorkflowRunIds: ["root-app-review"],

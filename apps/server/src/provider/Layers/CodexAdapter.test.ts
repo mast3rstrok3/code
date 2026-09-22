@@ -1,3 +1,4 @@
+import { WorkspaceUserEnvironment } from "../../workspaceUserCredentials.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeAssert from "node:assert/strict";
 import * as NodeFS from "node:fs";
@@ -275,6 +276,32 @@ validationLayer("CodexAdapterLive validation", (it) => {
       NodeAssert.equal(validationRuntimeFactory.factory.mock.calls.length, 0);
     }),
   );
+  it.effect("scopes GitHub and commit credentials to each provider process without MCP", () =>
+    Effect.gen(function* () {
+      validationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      for (const name of ["Ada", "Grace"]) {
+        yield* adapter
+          .startSession({
+            provider: ProviderDriverKind.make("codex"),
+            threadId: asThreadId(`thread-owner-${name}`),
+            runtimeMode: "full-access",
+          })
+          .pipe(
+            Effect.provideService(WorkspaceUserEnvironment, {
+              GH_TOKEN: `${name}-token`,
+              GIT_AUTHOR_NAME: name,
+            }),
+          );
+      }
+      const calls = validationRuntimeFactory.factory.mock.calls;
+      NodeAssert.equal(calls[0]?.[0].environment?.GH_TOKEN, "Ada-token");
+      NodeAssert.equal(calls[0]?.[0].environment?.GIT_AUTHOR_NAME, "Ada");
+      NodeAssert.equal(calls[1]?.[0].environment?.GH_TOKEN, "Grace-token");
+      NodeAssert.equal(calls[1]?.[0].environment?.GIT_AUTHOR_NAME, "Grace");
+    }),
+  );
+
   it.effect("maps codex model options before starting a session", () =>
     Effect.gen(function* () {
       validationRuntimeFactory.factory.mockClear();

@@ -5,6 +5,16 @@ need a separate branch and working directory.
 
 ## Start a thread
 
+On web and desktop, add users and their GitHub tokens in **Settings > Users**. Choose
+**Acting as** from the user menu at the top right of the sidebar before starting a thread.
+New threads belong to that user. In the same menu, **Show threads** lets you view your own
+threads, another user's threads, or everyone without changing who you are acting as.
+The selection stays in that browser, so people on different devices can choose different users.
+
+Threads keep their owner when you switch users. Their agents and Git actions use the owner's
+GitHub account. You can change a thread's owner in its header. Workspace users share access
+to the environment; the thread filter does not restrict access.
+
 On web and desktop, a new thread keeps the current project and carries your model
 and mode selections, unless the destination project has its own model default.
 Its branch and workspace mode come from your configured defaults. To continue in

@@ -16,6 +16,7 @@ import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
   Bot,
   Boxes,
+  CirclePlayIcon,
   EyeIcon,
   Smartphone,
   ChevronDown,
@@ -121,6 +122,7 @@ export interface RightPanelTabsProps {
   onAddBrowserInProfile: (profileId: string) => void;
   onAddTerminal: () => void;
   onAddReview: () => void;
+  onAddTestReplays: () => void;
   onAddLogs: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
@@ -170,7 +172,7 @@ export function shouldOpenDefaultBrowserProfileFromMenuClick(
 const SURFACE_DISABLED_REASONS = {
   browser: "Browser preview is unavailable for this environment.",
   terminal: "Terminal surfaces are only available from a project thread.",
-  review: "App preview is only available for server threads in Git repositories.",
+  review: "App Review is only available for server threads in Git repositories.",
   logs: "App Stack pod logs require a project with an app-stack context.",
   appStack: "App stacks are only available when a project is open.",
   files: "Files are only available when a project is open.",
@@ -339,6 +341,7 @@ function RightPanelEmptyState(props: {
   browserProfiles: ReadonlyArray<{ readonly id: string; readonly name: string }>;
   onAddTerminal: () => void;
   onAddReview: () => void;
+  onAddTestReplays: () => void;
   onAddLogs: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
@@ -369,13 +372,23 @@ function RightPanelEmptyState(props: {
 
   const actions = [
     {
-      label: "App Preview",
+      label: "App Review",
       description: "Inspect and annotate the current implementation diff.",
       icon: EyeIcon,
       shortcut: "R",
       available: props.reviewAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.review,
       onClick: props.onAddReview,
+      badgeCount: 0,
+    },
+    {
+      label: "Test replays",
+      description: "Replay the E2E tests an App Review recorded.",
+      icon: CirclePlayIcon,
+      shortcut: "E",
+      available: props.reviewAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.review,
+      onClick: props.onAddTestReplays,
       badgeCount: 0,
     },
     {
@@ -703,7 +716,9 @@ function surfaceTitle(
         getTerminalLabel(surface.activeTerminalId)
       );
     case "review":
-      return "App Preview";
+      return "App Review";
+    case "test-replays":
+      return "Test replays";
     case "logs":
       return "Logs";
     case "pull-request":
@@ -793,6 +808,8 @@ function SurfaceIcon({
       return <TerminalSquare className="size-3 shrink-0" />;
     case "review":
       return <EyeIcon className="size-3.5 shrink-0" />;
+    case "test-replays":
+      return <CirclePlayIcon className="size-3.5 shrink-0" />;
     case "logs":
       return <ScrollTextIcon className="size-3.5 shrink-0" />;
     case "pull-request":
@@ -975,12 +992,20 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: props.onAddTerminal,
     },
     {
-      label: "App Preview",
+      label: "App Review",
       icon: EyeIcon,
       shortcut: "R",
       available: props.reviewAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.review,
       onClick: props.onAddReview,
+    },
+    {
+      label: "Test replays",
+      icon: CirclePlayIcon,
+      shortcut: "E",
+      available: props.reviewAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.review,
+      onClick: props.onAddTestReplays,
     },
     {
       label: "Logs",
@@ -1522,6 +1547,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             browserProfiles={browserProfiles}
             onAddTerminal={props.onAddTerminal}
             onAddReview={props.onAddReview}
+            onAddTestReplays={props.onAddTestReplays}
             onAddLogs={props.onAddLogs}
             onAddDiff={props.onAddDiff}
             onAddFiles={props.onAddFiles}

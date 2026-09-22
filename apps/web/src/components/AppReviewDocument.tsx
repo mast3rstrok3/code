@@ -353,17 +353,30 @@ export function AppReviewDocument(props: {
   );
 }
 
+/** Which half of a cycle the panel shows: the agent's written review, or the recorded test replays. */
+export type AppReviewCycleView = "review" | "replays";
+
 export function AppReviewCycleDocument(props: {
   runId: AppReviewWorkflowRunId;
   cycle: AppReviewWorkflowCycle;
+  view: AppReviewCycleView;
   e2eRecord?: AppReviewRecord | undefined;
   browserRecord?: AppReviewRecord | undefined;
   environmentId: EnvironmentId;
 }) {
+  const testResults = props.cycle.e2eExecution?.results ?? [];
+  if (props.view === "replays") {
+    return (
+      <TestRecordingsList
+        runId={props.runId}
+        results={testResults}
+        environmentId={props.environmentId}
+      />
+    );
+  }
   const summaryRecords = [props.e2eRecord, props.browserRecord].filter(
     (record): record is AppReviewRecord => Boolean(record?.document.summary),
   );
-  const testResults = props.cycle.e2eExecution?.results ?? [];
   return (
     <div>
       <section className="border-b border-border px-4 py-3">
@@ -384,11 +397,6 @@ export function AppReviewCycleDocument(props: {
           </p>
         ) : null}
       </section>
-      <TestRecordingsSection
-        runId={props.runId}
-        results={testResults}
-        environmentId={props.environmentId}
-      />
       {props.e2eRecord !== undefined ? (
         <ReviewEvidenceSection
           title="Agent review · end-to-end tests"
@@ -411,72 +419,48 @@ export function AppReviewCycleDocument(props: {
  * Every test the cycle's commands recorded, replayable in place. A fleet run
  * yields hundreds, so a row mints its URL and mounts the player only while open.
  */
-function TestRecordingsSection(props: {
+function TestRecordingsList(props: {
   runId: AppReviewWorkflowRunId;
   results: ReadonlyArray<AppReviewTestResult>;
   environmentId: EnvironmentId;
 }) {
-  const [open, setOpen] = useState(false);
   const [openRecordingId, setOpenRecordingId] = useState<string | null>(null);
-  const recordingCount = props.results.reduce(
-    (count, result) => count + (result.recordings?.length ?? 0),
-    0,
-  );
+  if (props.results.length === 0) {
+    return <p className="px-4 py-3 text-sm text-muted-foreground">No test command has finished.</p>;
+  }
   return (
-    <section className="border-b border-border">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        className="flex w-full cursor-pointer items-center justify-between px-4 py-3 text-left text-sm font-medium"
-      >
-        <span>Test recordings</span>
-        <span className="text-xs text-muted-foreground">
-          {props.results.length === 0
-            ? "No results"
-            : `${recordingCount} ${recordingCount === 1 ? "recording" : "recordings"}`}{" "}
-          · {open ? "Collapse" : "Expand"}
-        </span>
-      </button>
-      {open ? (
-        props.results.length === 0 ? (
-          <p className="px-4 pb-3 text-sm text-muted-foreground">No test command has finished.</p>
-        ) : (
-          <ul className="space-y-3 px-4 pb-3">
-            {props.results.map((result) => (
-              <li key={result.command} className="rounded-md border border-border">
-                <div className="flex items-start justify-between gap-3 px-3 py-2">
-                  <code className="min-w-0 break-words text-xs">{result.executedCommand}</code>
-                  <span className={cn("shrink-0 text-xs", statusClassName[result.status])}>
-                    {result.status}
-                  </span>
-                </div>
-                {result.recordings?.length ? (
-                  <ul className="border-t border-border">
-                    {result.recordings.map((recording) => (
-                      <TestRecordingRow
-                        key={recording.id}
-                        runId={props.runId}
-                        recording={recording}
-                        open={openRecordingId === recording.id}
-                        onToggle={() =>
-                          setOpenRecordingId(openRecordingId === recording.id ? null : recording.id)
-                        }
-                        environmentId={props.environmentId}
-                      />
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
-                    This command recorded no tests.
-                  </p>
-                )}
-              </li>
-            ))}
-          </ul>
-        )
-      ) : null}
-    </section>
+    <ul className="space-y-3 px-4 py-3">
+      {props.results.map((result) => (
+        <li key={result.command} className="rounded-md border border-border">
+          <div className="flex items-start justify-between gap-3 px-3 py-2">
+            <code className="min-w-0 break-words text-xs">{result.executedCommand}</code>
+            <span className={cn("shrink-0 text-xs", statusClassName[result.status])}>
+              {result.status}
+            </span>
+          </div>
+          {result.recordings?.length ? (
+            <ul className="border-t border-border">
+              {result.recordings.map((recording) => (
+                <TestRecordingRow
+                  key={recording.id}
+                  runId={props.runId}
+                  recording={recording}
+                  open={openRecordingId === recording.id}
+                  onToggle={() =>
+                    setOpenRecordingId(openRecordingId === recording.id ? null : recording.id)
+                  }
+                  environmentId={props.environmentId}
+                />
+              ))}
+            </ul>
+          ) : (
+            <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
+              This command recorded no tests.
+            </p>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }
 

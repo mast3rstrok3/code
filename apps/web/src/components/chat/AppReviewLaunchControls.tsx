@@ -33,7 +33,7 @@ export function appReviewLaunchSummary(input: {
 }
 
 /**
- * What an App Preview launch needs beyond its brief: whether it repairs what it
+ * What an App Review launch needs beyond its brief: whether it repairs what it
  * finds, how many cycles it may spend, and what it drives.
  *
  * All three live in one popover rather than inline in the composer footer,
@@ -56,7 +56,7 @@ export function AppReviewLaunchControls(props: {
       <PopoverTrigger
         render={
           <Button
-            aria-label="App Preview cycles and target"
+            aria-label="App Review cycles and target"
             className="ml-1 h-7 shrink-0 gap-1.5 px-2 text-xs text-muted-foreground"
             size="sm"
             variant="ghost"
@@ -89,7 +89,7 @@ export function AppReviewLaunchControls(props: {
           <label className="grid gap-1.5">
             <span className="text-xs font-medium text-foreground">Cycles</span>
             <Input
-              aria-label="App Preview cycles"
+              aria-label="App Review cycles"
               className="h-8 text-xs"
               max={APP_REVIEW_WORKFLOW_MAX_CYCLES}
               min={1}
@@ -108,7 +108,7 @@ export function AppReviewLaunchControls(props: {
         <label className="grid gap-1.5">
           <span className="text-xs font-medium text-foreground">Review URL</span>
           <Input
-            aria-label="App Preview URL"
+            aria-label="App Review URL"
             className="h-8 text-xs"
             onChange={(event) => props.onReviewUrlChange(event.currentTarget.value)}
             placeholder="localhost:5173"

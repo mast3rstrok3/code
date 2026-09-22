@@ -26,12 +26,18 @@ import {
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
-import { AppReviewDocument, AppReviewCycleDocument } from "./AppReviewDocument";
+import {
+  AppReviewDocument,
+  AppReviewCycleDocument,
+  type AppReviewCycleView,
+} from "./AppReviewDocument";
 import { AppReviewLaunchDialog } from "./AppReviewLaunchDialog";
 import { cn } from "~/lib/utils";
 
 export function AppReviewPanel(props: {
   mode: DiffPanelMode;
+  /** The App Review tab shows the written review; the Test replays tab shows the recorded tests. */
+  view: AppReviewCycleView;
   threadRef: ScopedThreadRef;
   launchInFlight: boolean;
   launchDisabled: boolean;
@@ -81,7 +87,11 @@ export function AppReviewPanel(props: {
         <>
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold">
-              {relevantRuns.length > 1 ? `App Previews · ${relevantRuns.length}` : "App Preview"}
+              {props.view === "replays"
+                ? "Test replays"
+                : relevantRuns.length > 1
+                  ? `App Reviews · ${relevantRuns.length}`
+                  : "App Review"}
             </h2>
             <p className="truncate text-xs text-muted-foreground">
               {currentRun ? appReviewRunStatusLabel(currentRun) : "No workflow launched"}
@@ -107,7 +117,7 @@ export function AppReviewPanel(props: {
               onClick={() => setLaunchDialogOpen(true)}
             >
               <PlayCircle className="size-4" />
-              Launch App Preview
+              Launch App Review
             </Button>
           )}
         </>
@@ -120,12 +130,13 @@ export function AppReviewPanel(props: {
               <RunDetails
                 key={run.id}
                 run={run}
+                view={props.view}
                 records={records}
                 environmentId={props.threadRef.environmentId}
                 onOpenThread={props.onOpenThread}
                 label={
                   appReviewRunTicketLabel(run, planningWorkflow?.tickets ?? []) ??
-                  (relevantRuns.length > 1 ? `App Preview ${String(index + 1)}` : "App Preview")
+                  (relevantRuns.length > 1 ? `App Review ${String(index + 1)}` : "App Review")
                 }
                 open={expandedRunIds[run.id] ?? false}
                 onToggle={() =>
@@ -137,7 +148,7 @@ export function AppReviewPanel(props: {
         ) : (
           <div className="flex min-h-52 items-center justify-center p-6 text-center">
             <div className="max-w-sm">
-              <h3 className="text-sm font-medium">No App Preview workflow</h3>
+              <h3 className="text-sm font-medium">No App Review workflow</h3>
               <p className="mt-2 text-sm text-muted-foreground">
                 Run automated acceptance tests and repair the failures they find.
               </p>
@@ -145,7 +156,7 @@ export function AppReviewPanel(props: {
           </div>
         )}
 
-        {planningWorkflow?.spec ? (
+        {props.view === "review" && planningWorkflow?.spec ? (
           <div className="border-t border-border px-4 py-3">
             <Button
               type="button"
@@ -158,7 +169,7 @@ export function AppReviewPanel(props: {
           </div>
         ) : null}
 
-        {legacyRecords.length > 0 ? (
+        {props.view === "review" && legacyRecords.length > 0 ? (
           <section className="border-t border-border">
             <div className="px-4 py-3">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -194,12 +205,13 @@ export function AppReviewPanel(props: {
 }
 
 /**
- * One App Preview run, folded down to its ticket and status. A workflow can
+ * One App Review run, folded down to its ticket and status. A workflow can
  * carry a review per ticket plus its own, so every run and every cycle inside
  * it starts closed and the panel opens as a list the user can scan.
  */
 function RunDetails(props: {
   readonly run: AppReviewWorkflowRun;
+  readonly view: AppReviewCycleView;
   readonly records: WorkflowArtifactsSnapshot["appReviews"];
   readonly environmentId: ScopedThreadRef["environmentId"];
   readonly onOpenThread: (threadId: ThreadId) => void;
@@ -230,7 +242,12 @@ function RunDetails(props: {
 
       {props.open ? (
         <>
-          <div className="space-y-3 border-b border-t border-border px-4 py-3">
+          <div
+            className={cn(
+              "space-y-3 border-b border-t border-border px-4 py-3",
+              props.view === "replays" && "hidden",
+            )}
+          >
             <p className="text-xs text-muted-foreground">
               {props.run.cyclesUsed} of {props.run.cycleBudget} cycles used
             </p>
@@ -290,7 +307,12 @@ function RunDetails(props: {
                   </button>
                   {cycleOpen ? (
                     <>
-                      <ol className="space-y-2 border-b border-t px-3 py-3">
+                      <ol
+                        className={cn(
+                          "space-y-2 border-b border-t px-3 py-3",
+                          props.view === "replays" && "hidden",
+                        )}
+                      >
                         <CycleStep
                           number={1}
                           title="End-to-end test"
@@ -349,6 +371,7 @@ function RunDetails(props: {
                       <AppReviewCycleDocument
                         runId={props.run.id}
                         cycle={cycle}
+                        view={props.view}
                         e2eRecord={e2eRecord}
                         browserRecord={record}
                         environmentId={props.environmentId}
