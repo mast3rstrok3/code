@@ -531,62 +531,63 @@ function EngineeringWorkflowStepRow(
   }
 
   return (
-    <Collapsible
-      data-engineering-workflow-step={target.number}
-      onOpenChange={setOpen}
-      open={open}
-      className="border-t border-border/60 first:border-t-0"
-    >
-      <div className="grid grid-cols-[1.75rem_minmax(0,1fr)_auto] items-center gap-2 p-3">
-        <span className="flex size-7 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">
-          {target.number}
-        </span>
-        <CollapsibleTrigger className="flex min-w-0 items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          {open ? (
-            <ChevronDownIcon
-              aria-hidden="true"
-              className="size-3.5 shrink-0 text-muted-foreground"
-            />
-          ) : (
-            <ChevronRightIcon
-              aria-hidden="true"
-              className="size-3.5 shrink-0 text-muted-foreground"
-            />
-          )}
-          <span className="min-w-0">
-            <span className="block truncate text-xs font-medium text-foreground">
-              {target.label}
-            </span>
-            <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
-              {summary}
-            </span>
+    <div className="border-t border-border/60 first:border-t-0">
+      <Collapsible
+        data-engineering-workflow-step={target.number}
+        onOpenChange={setOpen}
+        open={open}
+      >
+        <div className="grid grid-cols-[1.75rem_minmax(0,1fr)_auto] items-center gap-2 p-3">
+          <span className="flex size-7 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">
+            {target.number}
           </span>
-        </CollapsibleTrigger>
-        {canChangeEnabled ? (
-          <Button
-            aria-label={`Remove ${target.label}`}
-            onClick={() => {
-              setOpen(false);
-              setImplementationStepEnabled(props, target, false);
-            }}
-            size="icon-micro"
-            title={`Remove ${target.label}`}
-            variant="ghost-muted"
-          >
-            <XIcon aria-hidden="true" />
-          </Button>
-        ) : null}
-      </div>
-      <CollapsiblePanel>
-        <div className="border-t border-border/60 px-3 pb-3 pt-3 sm:pl-[3.75rem]">
-          <EngineeringWorkflowStepControls
-            {...props}
-            target={target}
-            workflowPromptId={target.workflowPromptId}
-          />
+          <CollapsibleTrigger className="flex min-w-0 items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            {open ? (
+              <ChevronDownIcon
+                aria-hidden="true"
+                className="size-3.5 shrink-0 text-muted-foreground"
+              />
+            ) : (
+              <ChevronRightIcon
+                aria-hidden="true"
+                className="size-3.5 shrink-0 text-muted-foreground"
+              />
+            )}
+            <span className="min-w-0">
+              <span className="block truncate text-xs font-medium text-foreground">
+                {target.label}
+              </span>
+              <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                {summary}
+              </span>
+            </span>
+          </CollapsibleTrigger>
+          {canChangeEnabled ? (
+            <Button
+              aria-label={`Remove ${target.label}`}
+              onClick={() => {
+                setOpen(false);
+                setImplementationStepEnabled(props, target, false);
+              }}
+              size="icon-micro"
+              title={`Remove ${target.label}`}
+              variant="ghost-muted"
+            >
+              <XIcon aria-hidden="true" />
+            </Button>
+          ) : null}
         </div>
-      </CollapsiblePanel>
-    </Collapsible>
+        <CollapsiblePanel>
+          <div className="border-t border-border/60 px-3 pb-3 pt-3 sm:pl-[3.75rem]">
+            <EngineeringWorkflowStepControls
+              {...props}
+              target={target}
+              workflowPromptId={target.workflowPromptId}
+            />
+          </div>
+        </CollapsiblePanel>
+      </Collapsible>
+    </div>
   );
 }
 
@@ -607,30 +608,31 @@ function WorkflowPhaseSection(
       : `${enabledCount} of ${props.targets.length} ${stepNoun} added`;
 
   return (
-    <Collapsible
-      className="max-w-lg overflow-hidden rounded-lg border border-border/70"
-      onOpenChange={setOpen}
-      open={open}
-    >
-      <CollapsibleTrigger className="flex min-h-12 w-full items-center gap-2 px-3 text-left outline-none hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-        {open ? (
-          <ChevronDownIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-        ) : (
-          <ChevronRightIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-        )}
-        <span className="min-w-0 flex-1">
-          <span className="block text-xs font-semibold text-foreground">{props.label}</span>
-          <span className="mt-0.5 block text-[11px] text-muted-foreground">{summary}</span>
-        </span>
-      </CollapsibleTrigger>
-      <CollapsiblePanel>
-        <div className="border-t border-border/60">
-          {props.targets.map((target) => (
-            <EngineeringWorkflowStepRow {...props} key={target.number} target={target} />
-          ))}
-        </div>
-      </CollapsiblePanel>
-    </Collapsible>
+    <div className="max-w-lg overflow-hidden rounded-lg border border-border/70">
+      <Collapsible onOpenChange={setOpen} open={open}>
+        <CollapsibleTrigger className="flex min-h-12 w-full items-center gap-2 px-3 text-left outline-none hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+          {open ? (
+            <ChevronDownIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronRightIcon
+              aria-hidden="true"
+              className="size-4 shrink-0 text-muted-foreground"
+            />
+          )}
+          <span className="min-w-0 flex-1">
+            <span className="block text-xs font-semibold text-foreground">{props.label}</span>
+            <span className="mt-0.5 block text-[11px] text-muted-foreground">{summary}</span>
+          </span>
+        </CollapsibleTrigger>
+        <CollapsiblePanel>
+          <div className="border-t border-border/60">
+            {props.targets.map((target) => (
+              <EngineeringWorkflowStepRow {...props} key={target.number} target={target} />
+            ))}
+          </div>
+        </CollapsiblePanel>
+      </Collapsible>
+    </div>
   );
 }
 
@@ -641,38 +643,39 @@ function WorkflowModelSetup(
 ) {
   const [open, setOpen] = useState(false);
   return (
-    <Collapsible
-      className="max-w-lg overflow-hidden rounded-lg border border-border/70"
-      onOpenChange={setOpen}
-      open={open}
-    >
-      <CollapsibleTrigger className="flex min-h-12 w-full items-center gap-2 px-3 text-left outline-none hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-        {open ? (
-          <ChevronDownIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-        ) : (
-          <ChevronRightIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-        )}
-        <span className="min-w-0">
-          <span className="block text-xs font-semibold text-foreground">Model setup</span>
-          <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
-            Preselected workflow and review models
+    <div className="max-w-lg overflow-hidden rounded-lg border border-border/70">
+      <Collapsible onOpenChange={setOpen} open={open}>
+        <CollapsibleTrigger className="flex min-h-12 w-full items-center gap-2 px-3 text-left outline-none hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+          {open ? (
+            <ChevronDownIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronRightIcon
+              aria-hidden="true"
+              className="size-4 shrink-0 text-muted-foreground"
+            />
+          )}
+          <span className="min-w-0">
+            <span className="block text-xs font-semibold text-foreground">Model setup</span>
+            <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+              Preselected workflow and review models
+            </span>
           </span>
-        </span>
-      </CollapsibleTrigger>
-      <CollapsiblePanel>
-        <div className="border-t border-border/60 p-3">
-          <WorkflowModelQuickPins
-            preset={props.preset}
-            pinFor={props.pinFor}
-            selectionFor={props.effectivePinFor}
-            rootModelSelection={props.rootModelSelection}
-            rootLabel={props.rootLabel}
-            choices={props.choices}
-            onSetStepModels={props.onSetStepModels}
-          />
-        </div>
-      </CollapsiblePanel>
-    </Collapsible>
+        </CollapsibleTrigger>
+        <CollapsiblePanel>
+          <div className="border-t border-border/60 p-3">
+            <WorkflowModelQuickPins
+              preset={props.preset}
+              pinFor={props.pinFor}
+              selectionFor={props.effectivePinFor}
+              rootModelSelection={props.rootModelSelection}
+              rootLabel={props.rootLabel}
+              choices={props.choices}
+              onSetStepModels={props.onSetStepModels}
+            />
+          </div>
+        </CollapsiblePanel>
+      </Collapsible>
+    </div>
   );
 }
 

@@ -57,9 +57,9 @@ export function AppReviewLaunchControls(props: {
         render={
           <Button
             aria-label="App Review cycles and target"
-            className="ml-1 h-7 shrink-0 gap-1.5 px-2 text-xs text-muted-foreground"
-            size="sm"
-            variant="ghost"
+            className="ml-1 shrink-0"
+            size="xs"
+            variant="ghost-muted"
           />
         }
       >
@@ -85,7 +85,7 @@ export function AppReviewLaunchControls(props: {
               <span className="text-xs font-medium text-foreground">Cycles</span>
               <Input
                 aria-label="App Review cycles"
-                className="h-8 text-xs"
+                size="compact"
                 max={APP_REVIEW_WORKFLOW_MAX_CYCLES}
                 min={1}
                 onChange={(event) => props.onCycleBudgetChange(Number(event.currentTarget.value))}
@@ -104,7 +104,7 @@ export function AppReviewLaunchControls(props: {
             <span className="text-xs font-medium text-foreground">Review URL</span>
             <Input
               aria-label="App Review URL"
-              className="h-8 text-xs"
+              size="compact"
               onChange={(event) => props.onReviewUrlChange(event.currentTarget.value)}
               placeholder="localhost:5173"
               type="text"

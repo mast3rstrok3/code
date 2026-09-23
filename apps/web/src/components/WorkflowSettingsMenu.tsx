@@ -17,6 +17,7 @@ import { SlidersHorizontal } from "lucide-react";
 import { useState } from "react";
 
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
+import { Button } from "./ui/button";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { EngineeringWorkflowSettings } from "./EngineeringWorkflowSettings";
 import { Switch } from "./ui/switch";
@@ -302,17 +303,18 @@ export function WorkflowSettingsMenu(props: {
       <PopoverTrigger
         aria-label="Workflow settings"
         title="Set the model, cycles, and review parts for every step of this workflow"
-        className="cursor-pointer inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border/80 px-2 text-xs font-medium hover:bg-accent"
+        render={<Button variant="outline" size="xs" className="shrink-0" />}
       >
         <SlidersHorizontal className="size-3" aria-hidden /> Settings
       </PopoverTrigger>
       <PopoverPopup
         side="bottom"
         align="end"
+        padding="none"
         className={
           props.preset === "planning" || props.preset === "fast-engineering"
-            ? "w-[min(42rem,calc(100vw-2rem))] p-0"
-            : "w-80 p-0"
+            ? "w-[min(42rem,calc(100vw-2rem))]"
+            : "w-80"
         }
       >
         <div className="border-b border-border/70 px-3 py-2">

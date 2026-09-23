@@ -62,9 +62,9 @@ export function ThreadAppStackIndicator(props: {
       <TooltipTrigger
         render={
           <Button
-            variant="ghost"
+            variant="ghost-muted"
             size="xs"
-            className="h-7 min-w-0 shrink px-1.5 text-xs font-normal text-muted-foreground sm:h-6"
+            className="min-w-0 shrink"
             data-composer-context-control
             aria-label={`App Stack: ${label} · Dev. Open App Stack`}
             onClick={() =>

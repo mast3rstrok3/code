@@ -1054,11 +1054,10 @@ export function AppStackPanel(props: AppStackPanelProps) {
             </Button>
             <Button
               size="icon-xs"
-              variant="ghost"
+              variant="ghost-destructive"
               onClick={() => void runDelete(stack)}
               disabled={pendingAction !== undefined}
               aria-label={`Delete ${stackName}`}
-              className="text-muted-foreground hover:text-destructive"
             >
               {pendingAction === "delete" ? (
                 <LoaderIcon className="size-3.5 animate-spin" />

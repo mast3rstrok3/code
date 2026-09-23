@@ -42,9 +42,9 @@ function SkillHelp({ skill }: { readonly skill: ComposerBuildSkill }) {
         render={
           <Button
             aria-label={`Read ${skill.title} skill instructions`}
-            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 size-8 rounded-md text-muted-foreground"
-            size="icon-xs"
-            variant="ghost"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11"
+            size="icon-sm"
+            variant="ghost-muted"
           />
         }
       >
@@ -132,7 +132,7 @@ export function ComposerModeCatalogDialog(props: {
   return (
     <Dialog open={props.catalog !== null} onOpenChange={props.onOpenChange}>
       <DialogPopup className="max-w-3xl overflow-hidden">
-        <DialogHeader className="border-b border-border/70 pr-14">
+        <DialogHeader>
           <DialogTitle>{showingSkills ? "Skills" : "Engineering workflow"}</DialogTitle>
           <DialogDescription>
             {showingSkills
@@ -170,7 +170,7 @@ export function ComposerModeCatalogDialog(props: {
             </div>
           )}
         </DialogHeader>
-        <DialogPanel className="px-4 py-4 sm:px-6">
+        <DialogPanel>
           {showingSkills ? (
             <div className="grid gap-1" data-composer-mode-view="skills" role="menu">
               {sortComposerBuildSkills(props.buildSkills).map((skill) => {

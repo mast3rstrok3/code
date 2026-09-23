@@ -81,7 +81,7 @@ function WorkflowStepCycleControl(props: {
                 event.currentTarget.blur();
               }
             }}
-            className="h-8 text-xs"
+            size="compact"
           />
           <p className="text-[11px] leading-relaxed text-muted-foreground">
             1 to {target.maxCycles}. {target.description}

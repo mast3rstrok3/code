@@ -81,12 +81,12 @@ function LogEntryRow({
             {formatShortTimestamp(entry.createdAt, timestampFormat)}
           </span>
           {entry.toolLifecycleStatus ? (
-            <Badge variant="outline" className="h-5 rounded-md px-1.5 py-0 text-[10px]">
+            <Badge variant="outline" size="sm">
               {entry.toolLifecycleStatus}
             </Badge>
           ) : null}
           {entry.requestKind ? (
-            <Badge variant="secondary" className="h-5 rounded-md px-1.5 py-0 text-[10px]">
+            <Badge variant="secondary" size="sm">
               {entry.requestKind}
             </Badge>
           ) : null}
@@ -104,12 +104,12 @@ function LogEntryRow({
         {changedFiles.length > 0 ? (
           <div className="flex flex-wrap gap-1">
             {changedFiles.slice(0, 8).map((file) => (
-              <Badge key={file} variant="secondary" className="rounded-md px-1.5 py-0 text-[10px]">
+              <Badge key={file} variant="secondary" size="sm">
                 {file}
               </Badge>
             ))}
             {changedFiles.length > 8 ? (
-              <Badge variant="secondary" className="rounded-md px-1.5 py-0 text-[10px]">
+              <Badge variant="secondary" size="sm">
                 +{changedFiles.length - 8}
               </Badge>
             ) : null}
@@ -142,7 +142,7 @@ export function WorkflowLogsPanel({ entries, timestampFormat }: WorkflowLogsPane
             <ScrollTextIcon />
           </EmptyMedia>
           <EmptyHeader>
-            <EmptyTitle className="text-base">No workflow logs yet</EmptyTitle>
+            <EmptyTitle>No workflow logs yet</EmptyTitle>
             <EmptyDescription>
               Thread activity and workflow tool logs will appear here as the agent works.
             </EmptyDescription>

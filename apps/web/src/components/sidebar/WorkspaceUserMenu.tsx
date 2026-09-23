@@ -48,7 +48,7 @@ export function WorkspaceUserMenu() {
           <Button
             variant="ghost"
             size="sm"
-            className="no-drag relative z-10 ml-auto mr-2 min-w-0 max-w-36"
+            className="relative z-10 ml-auto mr-2 min-w-0 max-w-36"
             aria-label={`Active user: ${user?.displayName ?? userId}`}
           />
         }

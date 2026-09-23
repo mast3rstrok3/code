@@ -32,7 +32,7 @@ import {
 } from "./AppStackLogsPanel.logic";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
-import { Input } from "./ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "./ui/input-group";
 import { ScrollArea } from "./ui/scroll-area";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
@@ -452,18 +452,19 @@ export function AppStackLogsPanel(props: AppStackLogsPanelProps) {
               </SelectPopup>
             </Select>
           </div>
-          <div className="relative min-w-48 flex-1">
-            <SearchIcon className="pointer-events-none absolute left-2 top-1/2 z-10 size-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
+          <InputGroup className="min-w-48 flex-1">
+            <InputGroupAddon>
+              <SearchIcon aria-hidden className="size-3.5" />
+            </InputGroupAddon>
+            <InputGroupInput
               size="sm"
               type="search"
               value={search}
               onChange={(event) => setSearch(event.currentTarget.value)}
               placeholder="Search logs"
-              className="[&_[data-slot=input]]:pl-7"
               aria-label="Search pod logs"
             />
-          </div>
+          </InputGroup>
           <label className="flex h-7 shrink-0 cursor-pointer items-center gap-2 rounded-md px-1 text-xs text-muted-foreground">
             <Checkbox
               checked={hideEmpty}

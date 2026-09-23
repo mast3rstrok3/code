@@ -647,7 +647,7 @@ export const ChatHeader = memo(function ChatHeader({
                 variant="secondary"
                 size="sm"
                 aria-label={progressLabel}
-                className="max-w-52 shrink truncate @max-md/header-actions:hidden"
+                className="max-w-52 shrink @max-md/header-actions:hidden"
               >
                 <span className="truncate">{progressLabel}</span>
               </Badge>
@@ -664,7 +664,9 @@ export const ChatHeader = memo(function ChatHeader({
           }}
         >
           <SelectTrigger
-            className="h-7 max-w-32 shrink-0 px-2 text-xs text-muted-foreground @max-sm/header-actions:hidden"
+            variant="ghost"
+            size="xs"
+            className="max-w-32 shrink-0 @max-sm/header-actions:hidden"
             aria-label="Thread owner"
           >
             <SelectValue>

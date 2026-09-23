@@ -86,7 +86,7 @@ export function AppReviewLaunchDialog(props: AppReviewLaunchDialogProps) {
             the plan in a new thread. Only review stops after the gap analysis.
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="space-y-4">
+        <DialogPanel>
           <label className="grid gap-2">
             <span className="text-xs font-medium text-foreground">Review brief</span>
             <Textarea

@@ -10,6 +10,7 @@ import { Eraser, Pause, Play, RotateCcw, Settings2, SkipForward } from "lucide-r
 import { useState } from "react";
 
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
+import { Button } from "./ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { WorkflowStepCyclePins, type SetWorkflowStepCycles } from "./WorkflowStepCycles";
 import {
@@ -138,11 +139,11 @@ export function WorkflowStepSettingsMenu(props: {
         aria-label={`Settings for ${props.stepLabel}`}
         title={`Settings for ${props.stepLabel}`}
         data-testid="workflow-scope-menu"
-        className="cursor-pointer mt-1 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+        render={<Button variant="ghost-muted" size="icon-xs" className="mt-1 shrink-0" />}
       >
         <Settings2 className="size-3.5" aria-hidden />
       </PopoverTrigger>
-      <PopoverPopup side="bottom" align="end" className="w-72 p-0">
+      <PopoverPopup side="bottom" align="end" padding="none" className="w-72">
         <div className="border-b border-border/70 px-3 py-2">
           <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
             Step settings
