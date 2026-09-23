@@ -246,6 +246,11 @@ export function parseGitHubRepositoryNameWithOwnerFromRemoteUrl(url: string | nu
   return repositoryNameWithOwner.length > 0 ? repositoryNameWithOwner : null;
 }
 
+/** The user or organization that owns a GitHub remote; null for other hosts. */
+export function parseGitHubRepositoryOwnerFromRemoteUrl(url: string | null): string | null {
+  return parseGitHubRepositoryNameWithOwnerFromRemoteUrl(url)?.split("/")[0] ?? null;
+}
+
 function deriveLocalBranchNameCandidatesFromRemoteRef(
   branchName: string,
   remoteName?: string,

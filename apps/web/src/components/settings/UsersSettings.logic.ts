@@ -84,35 +84,7 @@ export function renameWorkspaceUser(
   );
 }
 
-export function replaceWorkspaceUserGithubPersonalAccessToken(
-  workspaceUsers: ReadonlyArray<WorkspaceUser>,
-  userId: WorkspaceUser["id"],
-  personalAccessToken: string,
-): ReadonlyArray<WorkspaceUser> | null {
-  const trimmedToken = personalAccessToken.trim();
-  if (trimmedToken.length === 0) {
-    return null;
-  }
-
-  let didReplace = false;
-  const nextUsers = workspaceUsers.map((user) => {
-    if (user.id !== userId) {
-      return user;
-    }
-    didReplace = true;
-    return {
-      ...user,
-      github: {
-        ...user.github,
-        personalAccessToken: trimmedToken,
-        personalAccessTokenRedacted: false,
-      },
-    };
-  });
-
-  return didReplace ? nextUsers : null;
-}
-
+/** Removes the legacy token saved before tokens had owners. */
 export function clearWorkspaceUserGithubPersonalAccessToken(
   workspaceUsers: ReadonlyArray<WorkspaceUser>,
   userId: WorkspaceUser["id"],

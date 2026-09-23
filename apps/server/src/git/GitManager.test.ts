@@ -2950,7 +2950,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
-  it.effect("uses the owner token that matches the repository's GitHub remote", () =>
+  it.effect("uses the owner token for the GitHub remote and blocks pushes it does not cover", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-owner-token-");
       yield* initRepo(repoDir);
@@ -2961,24 +2961,43 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         .mockResolvedValue(Response.json({ id: 42, login: "ada", name: "Ada Lovelace" }));
       yield* Effect.addFinalizer(() => Effect.sync(() => request.mockRestore()));
       const thread = makeUserThread("ada");
-      const { manager } = yield* makeManager({
-        serverSettings: {
-          workspaceUsers: [
-            {
-              id: WorkspaceUserId.make("ada"),
-              displayName: "Ada",
-              github: {
-                personalAccessToken: "ada-token",
-                ownerTokens: [{ owner: "acme", personalAccessToken: "acme-token" }],
+      const makeOwnerManager = (owner: string) =>
+        makeManager({
+          serverSettings: {
+            workspaceUsers: [
+              {
+                id: WorkspaceUserId.make("ada"),
+                displayName: "Ada",
+                github: {
+                  personalAccessToken: "",
+                  ownerTokens: [
+                    { owner: "ada", personalAccessToken: "ada-token" },
+                    { owner, personalAccessToken: `${owner}-token` },
+                  ],
+                },
               },
-            },
-          ],
-        },
-        projectionLayer: Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
-          getThreadShellById: (id) =>
-            Effect.succeed(id === thread.id ? Option.some(thread) : Option.none()),
-        }),
-      });
+            ],
+          },
+          projectionLayer: Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
+            getThreadShellById: (id) =>
+              Effect.succeed(id === thread.id ? Option.some(thread) : Option.none()),
+          }),
+        });
+
+      const { manager: uncovered } = yield* makeOwnerManager("globex");
+      const error = yield* uncovered
+        .runStackedAction({
+          cwd: repoDir,
+          actionId: "uncovered-push",
+          action: "commit_push",
+          threadId: thread.id,
+          commitMessage: "Must not commit",
+        })
+        .pipe(Effect.flip);
+      expect(error.message).toContain("Add a GitHub token for Ada that covers Acme");
+      expect(request).not.toHaveBeenCalled();
+
+      const { manager } = yield* makeOwnerManager("acme");
       yield* manager.runStackedAction({
         cwd: repoDir,
         actionId: "owner-token-commit",

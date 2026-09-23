@@ -9,7 +9,6 @@ import {
   removeWorkspaceUserGithubOwnerToken,
   renameWorkspaceUser,
   replaceWorkspaceUserGithubOwnerToken,
-  replaceWorkspaceUserGithubPersonalAccessToken,
   validateAddGithubOwnerToken,
   validateAddWorkspaceUser,
   validateRenameWorkspaceUser,
@@ -62,34 +61,7 @@ describe("renameWorkspaceUser", () => {
   });
 });
 
-describe("workspace user GitHub token updates", () => {
-  it("trims replacement tokens and marks redaction false for server persistence", () => {
-    const existingUsers = [
-      user({
-        id: "alice",
-        displayName: "Alice",
-        github: { personalAccessToken: "", personalAccessTokenRedacted: true },
-      }),
-    ];
-
-    expect(
-      replaceWorkspaceUserGithubPersonalAccessToken(
-        existingUsers,
-        WorkspaceUserId.make("alice"),
-        "  ghp_token  ",
-      ),
-    ).toEqual([
-      {
-        id: "alice",
-        displayName: "Alice",
-        github: {
-          personalAccessToken: "ghp_token",
-          personalAccessTokenRedacted: false,
-        },
-      },
-    ]);
-  });
-
+describe("removing the ownerless GitHub token", () => {
   it("sends an empty token and redaction false when clearing", () => {
     const existingUsers = [
       user({

@@ -23,10 +23,12 @@ and the token owner's private noreply address. Push and pull request actions use
 token access to the repositories you intend to work on, including permission to push and
 create pull requests.
 
-A fine-grained token covers repositories of one GitHub user or organization. To work across several,
-add an owner token for each extra user or organization under the person's default token. A thread uses
-the token whose owner matches its project's GitHub remote (`origin`, or the branch's remote for Git
-actions) and the default token for everything else.
+Each token belongs to one GitHub user or organization, which you enter when adding it. A thread
+uses the token whose owner matches its project's GitHub remote (`origin`, or the branch's remote for
+Git actions). The **Create a fine-grained token** link in the form opens GitHub with that owner and the
+needed permissions already selected; choose the repositories there yourself. When no token matches,
+agents still start with one of the person's tokens, but push and pull request actions stop with an
+error naming the owner.
 
 Every user, including the main user, needs a name and a valid token before running agents. A missing
 name or a missing or invalid token produces an error before the agent starts or a thread Git action runs.

@@ -22,28 +22,50 @@ const GithubIdentity = Schema.Struct({
 
 const decodeGithubIdentity = Schema.decodeUnknownEffect(GithubIdentity);
 
-/** The owner token whose owner matches the repository's, else the user's default token. */
+/**
+ * Picks the token for a repository: the owner token matching its GitHub owner,
+ * then the legacy ownerless token, then any owner token. The same person owns
+ * every token, so any of them yields the right commit identity; `covers` says
+ * whether it is expected to grant access to that owner's repositories.
+ */
 export function selectWorkspaceUserGithubToken(
   user: WorkspaceUser,
   repositoryOwner: string | null | undefined,
-): { readonly token: string; readonly owner?: string } {
+): { readonly token: string; readonly owner?: string; readonly covers: boolean } | undefined {
+  const ownerTokens = (user.github.ownerTokens ?? []).filter((token) =>
+    token.personalAccessToken.trim(),
+  );
   const owner = repositoryOwner?.trim().toLowerCase();
-  const ownerToken = owner
-    ? user.github.ownerTokens?.find(
-        (token) => token.owner.toLowerCase() === owner && token.personalAccessToken.trim(),
-      )
+  const match = owner
+    ? ownerTokens.find((token) => token.owner.toLowerCase() === owner)
     : undefined;
-  return ownerToken
-    ? { token: ownerToken.personalAccessToken.trim(), owner: ownerToken.owner }
-    : { token: user.github.personalAccessToken.trim() };
+  if (match) {
+    return { token: match.personalAccessToken.trim(), owner: match.owner, covers: true };
+  }
+  const legacyToken = user.github.personalAccessToken.trim();
+  if (legacyToken) {
+    return { token: legacyToken, covers: true };
+  }
+  const [fallback] = ownerTokens;
+  return fallback
+    ? { token: fallback.personalAccessToken.trim(), owner: fallback.owner, covers: !owner }
+    : undefined;
+}
+
+export interface ResolveWorkspaceUserCredentialsOptions {
+  /** The repository's GitHub owner, when known. */
+  readonly repositoryOwner?: string | null;
+  /** Fail instead of falling back to a token for another owner, e.g. before a push. */
+  readonly requireRepositoryAccess?: boolean;
+  readonly request?: typeof fetch;
 }
 
 export const resolveWorkspaceUserCredentials = Effect.fn("resolveWorkspaceUserCredentials")(
   function* (
     user: WorkspaceUser | undefined,
-    repositoryOwner?: string | null,
-    request: typeof fetch = fetch,
+    options: ResolveWorkspaceUserCredentialsOptions = {},
   ) {
+    const request = options.request ?? fetch;
     if (!user) {
       return yield* new WorkspaceUserCredentialsError({
         message: "The thread owner no longer exists. Restore the owner in Settings > Users.",
@@ -55,14 +77,18 @@ export const resolveWorkspaceUserCredentials = Effect.fn("resolveWorkspaceUserCr
         message: "Add a name for the thread owner in Settings > Users before running this thread.",
       });
     }
-    const { token, owner } = selectWorkspaceUserGithubToken(user, repositoryOwner);
-    if (!token) {
+    const selected = selectWorkspaceUserGithubToken(user, options.repositoryOwner);
+    if (!selected) {
       return yield* new WorkspaceUserCredentialsError({
-        message: repositoryOwner
-          ? `Add a GitHub token for ${user.displayName} that covers ${repositoryOwner} in Settings > Users before running this thread.`
-          : `Add a GitHub token for ${user.displayName} in Settings > Users before running this thread.`,
+        message: `Add a GitHub token for ${user.displayName} in Settings > Users before running this thread.`,
       });
     }
+    if (options.requireRepositoryAccess && !selected.covers) {
+      return yield* new WorkspaceUserCredentialsError({
+        message: `Add a GitHub token for ${user.displayName} that covers ${options.repositoryOwner} in Settings > Users.`,
+      });
+    }
+    const { token, owner } = selected;
     const identity = yield* Effect.tryPromise({
       try: async (signal) => {
         const response = await request("https://api.github.com/user", {

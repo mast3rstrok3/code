@@ -50,6 +50,7 @@ import {
   detectSourceControlProviderFromGitRemoteUrl,
   mergeGitStatusParts,
   normalizeGitRemoteUrl,
+  parseGitHubRepositoryOwnerFromRemoteUrl,
   resolveAutoFeatureBranchName,
   sanitizeBranchFragment,
   sanitizeFeatureBranchName,
@@ -2841,13 +2842,15 @@ export const make = Effect.gen(function* () {
             (yield* gitCore
               .resolvePrimaryRemoteName(input.cwd)
               .pipe(Effect.orElseSucceed(() => null)));
-          const { ownerLogin } = yield* resolveRemoteRepositoryContext(
-            input.cwd,
-            repositoryRemoteName,
+          // Tokens are GitHub-only, so other hosts have no owner to match.
+          const ownerLogin = parseGitHubRepositoryOwnerFromRemoteUrl(
+            repositoryRemoteName
+              ? yield* readConfigValueNullable(input.cwd, `remote.${repositoryRemoteName}.url`)
+              : null,
           );
           credentials = yield* resolveWorkspaceUserCredentials(
             settings.workspaceUsers.find((user) => user.id === thread.value.ownerUserId),
-            ownerLogin,
+            { repositoryOwner: ownerLogin, requireRepositoryAccess: wantsPush || wantsPr },
           ).pipe(
             Effect.mapError(
               (error) =>

@@ -46,7 +46,7 @@ import {
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { causeErrorTag } from "@t3tools/shared/observability";
-import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@t3tools/shared/git";
+import { parseGitHubRepositoryOwnerFromRemoteUrl } from "@t3tools/shared/git";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as DateTime from "effect/DateTime";
@@ -575,15 +575,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     return user;
   });
   const gitVcsDriver = yield* Effect.serviceOption(GitVcsDriver.GitVcsDriver);
-  // Picks the owner-specific GitHub token; any lookup failure falls back to the default token.
+  // The GitHub owner of the session's repository; null when it cannot be read.
   const githubRepositoryOwner = (cwd: string | undefined) => {
     if (cwd === undefined || Option.isNone(gitVcsDriver)) return Effect.succeed(null);
     const git = gitVcsDriver.value;
     return git.resolvePrimaryRemoteName(cwd).pipe(
       Effect.flatMap((remote) => git.readConfigValue(cwd, `remote.${remote}.url`)),
-      Effect.map(
-        (url) => parseGitHubRepositoryNameWithOwnerFromRemoteUrl(url)?.split("/")[0] ?? null,
-      ),
+      Effect.map(parseGitHubRepositoryOwnerFromRemoteUrl),
       Effect.orElseSucceed(() => null),
     );
   };
@@ -593,7 +591,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   ) {
     const user = yield* workspaceUserForThread(threadId);
     const repositoryOwner = yield* githubRepositoryOwner(cwd);
-    const credentials = yield* resolveWorkspaceUserCredentials(user, repositoryOwner).pipe(
+    const credentials = yield* resolveWorkspaceUserCredentials(user, { repositoryOwner }).pipe(
       Effect.mapError((error) => toValidationError("startSession", error.message)),
     );
     sessionOwners.set(threadId, user);
