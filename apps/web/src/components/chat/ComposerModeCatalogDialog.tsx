@@ -52,17 +52,19 @@ function SkillHelp({ skill }: { readonly skill: ComposerBuildSkill }) {
       </PopoverTrigger>
       <PopoverPopup
         align="end"
-        className="w-[min(38rem,var(--available-width))] p-0"
+        className="w-[min(38rem,var(--available-width))]"
+        padding="compact"
         side="right"
         sideOffset={8}
-        viewportClassName="max-h-[min(34rem,var(--available-height))] overflow-y-auto p-3 [--viewport-inline-padding:--spacing(3)]"
       >
-        <div className="mb-2 font-semibold text-sm">{skill.title}</div>
-        <WorkflowCatalogContent
-          text={skill.promptText}
-          label={`${skill.title} skill instructions`}
-          maxHeightClassName="max-h-none"
-        />
+        <div className="max-h-[min(34rem,var(--available-height))] overflow-y-auto">
+          <div className="mb-2 font-semibold text-sm">{skill.title}</div>
+          <WorkflowCatalogContent
+            text={skill.promptText}
+            label={`${skill.title} skill instructions`}
+            maxHeightClassName="max-h-none"
+          />
+        </div>
       </PopoverPopup>
     </Popover>
   );

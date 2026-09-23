@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 
 import * as ServerConfig from "../config.ts";
 import { AppStackManager } from "./AppStackManager.ts";
@@ -101,12 +102,12 @@ const makeConfigLayer = (input?: {
     traceBatchWindowMs: 200,
     traceMaxBytes: 10 * 1024 * 1024,
     traceMaxFiles: 10,
-    otlpHeaders: undefined,
-    otlpProtocol: "http/json",
     otlpTracesUrl: undefined,
     otlpMetricsUrl: undefined,
     otlpLogsUrl: undefined,
-    otlpExportIntervalMs: 10_000,
+    otlpTracesExport: DEFAULT_SIGNAL_EXPORT,
+    otlpMetricsExport: DEFAULT_SIGNAL_EXPORT,
+    otlpLogsExport: DEFAULT_SIGNAL_EXPORT,
     otlpServiceName: "t3-server",
     mode: "web",
     port: 0,

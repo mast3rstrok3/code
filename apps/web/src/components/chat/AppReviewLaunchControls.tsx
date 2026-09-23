@@ -66,61 +66,57 @@ export function AppReviewLaunchControls(props: {
         <MonitorPlayIcon aria-hidden="true" className="size-3.5" />
         <span className="truncate">{appReviewLaunchSummary(props)}</span>
       </PopoverTrigger>
-      <PopoverPopup
-        align="start"
-        className="w-[min(20rem,var(--available-width))]"
-        side="top"
-        sideOffset={8}
-        viewportClassName="grid gap-3 p-3"
-      >
-        <label className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-2 gap-y-1">
-          <Checkbox
-            checked={props.reviewOnly}
-            className="mt-0.5"
-            onCheckedChange={(checked) => props.onReviewOnlyChange(checked === true)}
-          />
-          <span className="text-xs font-medium text-foreground">Only review</span>
-          <span className="col-start-2 text-[11px] leading-relaxed text-muted-foreground">
-            One browser review and the gap analysis that tickets what it finds, then stop. Nothing
-            is repaired.
-          </span>
-        </label>
-        {props.reviewOnly ? null : (
-          <label className="grid gap-1.5">
-            <span className="text-xs font-medium text-foreground">Cycles</span>
-            <Input
-              aria-label="App Review cycles"
-              className="h-8 text-xs"
-              max={APP_REVIEW_WORKFLOW_MAX_CYCLES}
-              min={1}
-              onChange={(event) => props.onCycleBudgetChange(Number(event.currentTarget.value))}
-              step={1}
-              type="number"
-              value={props.cycleBudget}
+      <PopoverPopup align="start" padding="compact" side="top" sideOffset={8} width="md">
+        <div className="grid gap-3">
+          <label className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-2 gap-y-1">
+            <Checkbox
+              checked={props.reviewOnly}
+              className="mt-0.5"
+              onCheckedChange={(checked) => props.onReviewOnlyChange(checked === true)}
             />
-            <span className="text-[11px] leading-relaxed text-muted-foreground">
-              1 to {APP_REVIEW_WORKFLOW_MAX_CYCLES}. Each cycle is one browser review, the repair
-              tickets its gap analysis writes, and the fix. A passing review ends the run early.
-              Settings uses {props.defaultCycleBudget} by default.
+            <span className="text-xs font-medium text-foreground">Only review</span>
+            <span className="col-start-2 text-[11px] leading-relaxed text-muted-foreground">
+              One browser review and the gap analysis that tickets what it finds, then stop. Nothing
+              is repaired.
             </span>
           </label>
-        )}
-        <label className="grid gap-1.5">
-          <span className="text-xs font-medium text-foreground">Review URL</span>
-          <Input
-            aria-label="App Review URL"
-            className="h-8 text-xs"
-            onChange={(event) => props.onReviewUrlChange(event.currentTarget.value)}
-            placeholder="localhost:5173"
-            type="text"
-            value={props.reviewUrl}
-          />
-          <span className="text-[11px] leading-relaxed text-muted-foreground">
-            {targetLabel === "App Stack"
-              ? "Empty reviews this worktree's App Stack."
-              : `Reviews ${targetLabel} as given, without resolving an App Stack.`}
-          </span>
-        </label>
+          {props.reviewOnly ? null : (
+            <label className="grid gap-1.5">
+              <span className="text-xs font-medium text-foreground">Cycles</span>
+              <Input
+                aria-label="App Review cycles"
+                className="h-8 text-xs"
+                max={APP_REVIEW_WORKFLOW_MAX_CYCLES}
+                min={1}
+                onChange={(event) => props.onCycleBudgetChange(Number(event.currentTarget.value))}
+                step={1}
+                type="number"
+                value={props.cycleBudget}
+              />
+              <span className="text-[11px] leading-relaxed text-muted-foreground">
+                1 to {APP_REVIEW_WORKFLOW_MAX_CYCLES}. Each cycle is one browser review, the repair
+                tickets its gap analysis writes, and the fix. A passing review ends the run early.
+                Settings uses {props.defaultCycleBudget} by default.
+              </span>
+            </label>
+          )}
+          <label className="grid gap-1.5">
+            <span className="text-xs font-medium text-foreground">Review URL</span>
+            <Input
+              aria-label="App Review URL"
+              className="h-8 text-xs"
+              onChange={(event) => props.onReviewUrlChange(event.currentTarget.value)}
+              placeholder="localhost:5173"
+              type="text"
+              value={props.reviewUrl}
+            />
+            <span className="text-[11px] leading-relaxed text-muted-foreground">
+              {targetLabel === "App Stack"
+                ? "Empty reviews this worktree's App Stack."
+                : `Reviews ${targetLabel} as given, without resolving an App Stack.`}
+            </span>
+          </label>
+        </div>
       </PopoverPopup>
     </Popover>
   );

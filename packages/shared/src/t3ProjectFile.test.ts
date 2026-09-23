@@ -48,6 +48,7 @@ describe("buildT3ProjectFileJsonSchema", () => {
       "iconPath",
       "scripts",
       "validationCommands",
+      "worktreeSubmodules",
     ]);
     const e2eCommands = JSON.stringify(schema.properties.e2eCommands);
     expect(e2eCommands).toContain('"minItems":1');

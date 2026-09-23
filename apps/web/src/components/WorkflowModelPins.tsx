@@ -120,7 +120,6 @@ export function WorkflowModelPinControls(props: {
             lockedProvider={null}
             instanceEntries={props.choices.instanceEntries}
             modelOptionsByInstance={props.choices.modelOptionsByInstance}
-            triggerVariant="outline"
             triggerClassName="w-full justify-between text-foreground/90 hover:text-foreground"
             triggerAriaLabel={`Model for ${props.label}`}
             onInstanceModelChange={(instanceId: ProviderInstanceId, model: string) => {
