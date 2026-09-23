@@ -2,7 +2,7 @@ import type { ProviderRuntimeEvent } from "@t3tools/contracts";
 import { ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts/settings";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { it, assert } from "@effect/vitest";
+import { afterEach, beforeEach, it, assert, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -25,6 +25,10 @@ import {
 } from "../src/provider/Services/ProviderService.ts";
 import * as ServerConfig from "../src/config.ts";
 import { ServerSettingsService } from "../src/serverSettings.ts";
+import {
+  stubGithubIdentityFetch,
+  TEST_WORKSPACE_USER,
+} from "../src/provider/testUtils/workspaceUserFixtures.ts";
 import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
 import { SqlitePersistenceMemory } from "../src/persistence/Layers/Sqlite.ts";
 import * as ProviderSessionRuntime from "../src/persistence/ProviderSessionRuntime.ts";
@@ -40,6 +44,9 @@ import {
   codexTurnToolFixture,
   codexTurnTextFixture,
 } from "./fixtures/providerRuntime.ts";
+
+beforeEach(stubGithubIdentityFetch);
+afterEach(() => vi.unstubAllGlobals());
 
 const codexInstanceId = ProviderInstanceId.make("codex");
 
@@ -96,7 +103,10 @@ const makeIntegrationFixture = (options?: { readonly analytics?: Layer.Layer<Ana
       directoryLayer,
       Layer.succeed(ProviderAdapterRegistry, registry),
       ServerConfig.layerTest(cwd, cwd).pipe(Layer.provide(NodeServices.layer)),
-      ServerSettingsService.layerTest(DEFAULT_SERVER_SETTINGS),
+      ServerSettingsService.layerTest({
+        ...DEFAULT_SERVER_SETTINGS,
+        workspaceUsers: [TEST_WORKSPACE_USER],
+      }),
       options?.analytics ?? AnalyticsService.layerTest,
       Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers),
     ).pipe(Layer.provide(SqlitePersistenceMemory));

@@ -18,7 +18,8 @@ import {
   ModelSelection,
   ProviderInstanceId,
 } from "@t3tools/contracts";
-import { assert, it } from "@effect/vitest";
+import { afterEach, assert, beforeEach, it, vi } from "@effect/vitest";
+import { stubGithubIdentityFetch } from "../src/provider/testUtils/workspaceUserFixtures.ts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -36,6 +37,9 @@ import type {
   TurnProcessingQuiescedReceipt,
 } from "../src/orchestration/Services/RuntimeReceiptBus.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+
+beforeEach(stubGithubIdentityFetch);
+afterEach(() => vi.unstubAllGlobals());
 
 const asMessageId = (value: string): MessageId => MessageId.make(value);
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);

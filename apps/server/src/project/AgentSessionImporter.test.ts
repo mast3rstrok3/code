@@ -2,7 +2,7 @@ import * as AppStackManager from "../appStack/AppStackManager.ts";
 import * as WorkflowUserInputBroker from "../mcp/WorkflowUserInputBroker.ts";
 import { DEFAULT_WORKSPACE_USER_ID } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { describe, expect, it, vi } from "@effect/vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "@effect/vitest";
 import {
   AgentSessionImportProjectChangedError,
   CommandId,
@@ -57,12 +57,19 @@ import * as ProviderSessionDirectory from "../provider/Services/ProviderSessionD
 import { makeAdapterRegistryMock } from "../provider/testUtils/providerAdapterRegistryMock.ts";
 import { makeProviderRegistryLayer } from "../provider/testUtils/providerRegistryMock.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import {
+  stubGithubIdentityFetch,
+  TEST_WORKSPACE_USER,
+} from "../provider/testUtils/workspaceUserFixtures.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
 import { VcsStatusBroadcaster } from "../vcs/VcsStatusBroadcaster.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 import { importRecentAgentThreads } from "./AgentSessionImporter.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
+
+beforeEach(stubGithubIdentityFetch);
+afterEach(() => vi.unstubAllGlobals());
 
 const PROJECT_ID = ProjectId.make("project-1");
 const WORKSPACE_ROOT = "/tmp/project-from-server";
@@ -781,6 +788,7 @@ it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
           },
         });
         const settingsLayer = ServerSettingsService.layerTest({
+          workspaceUsers: [TEST_WORKSPACE_USER],
           providers: {
             claudeAgent: { homePath: claudeHomePath },
             codex: { homePath: codexHomePath },
@@ -953,7 +961,7 @@ it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
           Layer.provide(Layer.mock(GitWorkflowService)({})),
           Layer.provide(Layer.mock(VcsStatusBroadcaster)({})),
           Layer.provide(Layer.mock(TextGeneration)({})),
-          Layer.provide(ServerSettingsService.layerTest()),
+          Layer.provide(ServerSettingsService.layerTest({ workspaceUsers: [TEST_WORKSPACE_USER] })),
         );
 
         yield* engine.dispatch({
