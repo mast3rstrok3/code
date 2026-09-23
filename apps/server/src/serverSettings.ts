@@ -146,6 +146,25 @@ function workspaceUserGithubPersonalAccessTokenSecretName(userId: string): strin
   return `workspace-user-github-pat-${Buffer.from(userId, "utf8").toString("base64url")}`;
 }
 
+/** base64url never contains ".", so the separator keeps user/owner pairs unambiguous. */
+function workspaceUserGithubOwnerTokenSecretName(userId: string, owner: string): string {
+  return `workspace-user-github-owner-pat-${Buffer.from(userId, "utf8").toString("base64url")}.${Buffer.from(owner.toLowerCase(), "utf8").toString("base64url")}`;
+}
+
+function workspaceUserGithubSecretNames(user: WorkspaceUser): ReadonlyArray<string> {
+  return [
+    workspaceUserGithubPersonalAccessTokenSecretName(user.id),
+    ...(user.github.ownerTokens ?? []).map((token) =>
+      workspaceUserGithubOwnerTokenSecretName(user.id, token.owner),
+    ),
+  ];
+}
+
+interface GithubTokenFields {
+  readonly personalAccessToken: string;
+  readonly personalAccessTokenRedacted?: boolean;
+}
+
 /**
  * On disk the hub key is replaced by this marker and the real value lives in
  * the secret store, mirroring provider environment secrets. A client that
@@ -171,14 +190,23 @@ function redactProviderEnvironmentVariable(
   };
 }
 
+function redactGithubToken<T extends GithubTokenFields>(token: T): T {
+  return {
+    ...token,
+    personalAccessToken: "",
+    ...(token.personalAccessToken.length > 0 || token.personalAccessTokenRedacted
+      ? { personalAccessTokenRedacted: true }
+      : {}),
+  };
+}
+
 function redactWorkspaceUserGithubPersonalAccessToken(user: WorkspaceUser): WorkspaceUser {
   return {
     ...user,
     github: {
-      ...user.github,
-      personalAccessToken: "",
-      ...(user.github.personalAccessToken.length > 0 || user.github.personalAccessTokenRedacted
-        ? { personalAccessTokenRedacted: true }
+      ...redactGithubToken(user.github),
+      ...(user.github.ownerTokens
+        ? { ownerTokens: user.github.ownerTokens.map(redactGithubToken) }
         : {}),
     },
   };
@@ -787,30 +815,39 @@ const make = Effect.gen(function* () {
           environment,
         } satisfies ProviderInstanceConfig;
       }
+      const materializeGithubToken = <T extends GithubTokenFields>(token: T, secretName: string) =>
+        Effect.gen(function* () {
+          if (!token.personalAccessTokenRedacted) return token;
+          const secret = yield* secretStore
+            .get(secretName)
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ServerSettingsError({ settingsPath, operation: "read-secret", cause }),
+              ),
+            );
+          return {
+            ...token,
+            personalAccessToken: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
+          };
+        });
       const workspaceUsers: WorkspaceUser[] = [];
       for (const user of settings.workspaceUsers) {
-        if (!user.github.personalAccessTokenRedacted) {
-          workspaceUsers.push(user);
-          continue;
-        }
-        const secret = yield* secretStore
-          .get(workspaceUserGithubPersonalAccessTokenSecretName(user.id))
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new ServerSettingsError({
-                  settingsPath,
-                  operation: "read-secret",
-                  cause,
-                }),
-            ),
-          );
+        const github = yield* materializeGithubToken(
+          user.github,
+          workspaceUserGithubPersonalAccessTokenSecretName(user.id),
+        );
+        const ownerTokens = user.github.ownerTokens
+          ? yield* Effect.forEach(user.github.ownerTokens, (token) =>
+              materializeGithubToken(
+                token,
+                workspaceUserGithubOwnerTokenSecretName(user.id, token.owner),
+              ),
+            )
+          : undefined;
         workspaceUsers.push({
           ...user,
-          github: {
-            ...user.github,
-            personalAccessToken: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
-          },
+          github: { ...github, ...(ownerTokens ? { ownerTokens } : {}) },
         });
       }
       const usageLimitSources: Record<string, UsageLimitSourceConfig> = {};
@@ -934,44 +971,35 @@ const make = Effect.gen(function* () {
         } satisfies ProviderInstanceConfig;
       }
 
-      const workspaceUsers: WorkspaceUser[] = [];
       const nextWorkspaceUserGithubSecretKeys = new Set<string>();
-      for (const user of next.workspaceUsers) {
-        const secretName = workspaceUserGithubPersonalAccessTokenSecretName(user.id);
-        if (user.github.personalAccessTokenRedacted) {
+      const persistGithubToken = <T extends GithubTokenFields>(token: T, secretName: string): T => {
+        if (token.personalAccessTokenRedacted) {
           nextWorkspaceUserGithubSecretKeys.add(secretName);
-          workspaceUsers.push(redactWorkspaceUserGithubPersonalAccessToken(user));
-          continue;
+          return redactGithubToken(token);
         }
-
-        if (user.github.personalAccessToken.length > 0) {
+        if (token.personalAccessToken.length > 0) {
           nextWorkspaceUserGithubSecretKeys.add(secretName);
           changes.push({
             kind: "write",
             secretName,
-            value: textEncoder.encode(user.github.personalAccessToken),
+            value: textEncoder.encode(token.personalAccessToken),
           });
-          workspaceUsers.push({
-            ...user,
-            github: {
-              ...user.github,
-              personalAccessToken: "",
-              personalAccessTokenRedacted: true,
-            },
-          });
-          continue;
+          return { ...token, personalAccessToken: "", personalAccessTokenRedacted: true };
         }
-
         changes.push({ kind: "remove", secretName, operation: "remove-secret" });
-        const { personalAccessTokenRedacted: _omit, ...github } = user.github;
-        workspaceUsers.push({
-          ...user,
-          github: {
-            ...github,
-            personalAccessToken: "",
-          },
-        });
-      }
+        const { personalAccessTokenRedacted: _omit, ...rest } = token;
+        return { ...rest, personalAccessToken: "" } as T;
+      };
+      const workspaceUsers: WorkspaceUser[] = next.workspaceUsers.map((user) => {
+        const github = persistGithubToken(
+          user.github,
+          workspaceUserGithubPersonalAccessTokenSecretName(user.id),
+        );
+        const ownerTokens = user.github.ownerTokens?.map((token) =>
+          persistGithubToken(token, workspaceUserGithubOwnerTokenSecretName(user.id, token.owner)),
+        );
+        return { ...user, github: { ...github, ...(ownerTokens ? { ownerTokens } : {}) } };
+      });
 
       for (const [instanceId, instance] of Object.entries(current.providerInstances)) {
         for (const variable of instance.environment ?? []) {
@@ -989,9 +1017,10 @@ const make = Effect.gen(function* () {
       }
 
       for (const user of current.workspaceUsers) {
-        const secretName = workspaceUserGithubPersonalAccessTokenSecretName(user.id);
-        if (nextWorkspaceUserGithubSecretKeys.has(secretName)) continue;
-        changes.push({ kind: "remove", secretName, operation: "remove-stale-secret" });
+        for (const secretName of workspaceUserGithubSecretNames(user)) {
+          if (nextWorkspaceUserGithubSecretKeys.has(secretName)) continue;
+          changes.push({ kind: "remove", secretName, operation: "remove-stale-secret" });
+        }
       }
       const usageLimitSources: Record<string, UsageLimitSourceConfig> = {};
       for (const [sourceId, source] of Object.entries(next.usageLimitSources)) {

@@ -180,6 +180,65 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("keeps owner GitHub tokens in the secret store across redacted round trips", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const fileSystem = yield* FileSystem.FileSystem;
+
+      const saved = yield* serverSettings.updateSettings({
+        workspaceUsers: [
+          {
+            id: DEFAULT_WORKSPACE_USER_ID,
+            displayName: "Nils",
+            github: {
+              personalAccessToken: "github_pat_personal",
+              ownerTokens: [{ owner: "Acme", personalAccessToken: "github_pat_acme" }],
+            },
+          },
+        ],
+      });
+      assert.deepStrictEqual(saved.workspaceUsers[0]?.github.ownerTokens, [
+        {
+          owner: "Acme",
+          personalAccessToken: "github_pat_acme",
+          personalAccessTokenRedacted: true,
+        },
+      ]);
+      const onDisk = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.notInclude(onDisk, "github_pat_acme");
+
+      // A client only ever holds the redacted view and sends it back unchanged.
+      const clientView = ServerSettingsModule.redactServerSettingsForClient(saved).workspaceUsers;
+      assert.strictEqual(clientView[0]?.github.ownerTokens?.[0]?.personalAccessToken, "");
+      const roundTripped = yield* serverSettings.updateSettings({
+        workspaceUsers: [...clientView],
+      });
+      assert.strictEqual(
+        roundTripped.workspaceUsers[0]?.github.personalAccessToken,
+        "github_pat_personal",
+      );
+      assert.strictEqual(
+        roundTripped.workspaceUsers[0]?.github.ownerTokens?.[0]?.personalAccessToken,
+        "github_pat_acme",
+      );
+
+      yield* serverSettings.updateSettings({
+        workspaceUsers: [
+          { ...clientView[0]!, github: { ...clientView[0]!.github, ownerTokens: [] } },
+        ],
+      });
+      // Re-sending the stale redacted entry must not resurrect the removed secret.
+      const resurrected = yield* serverSettings.updateSettings({
+        workspaceUsers: [...clientView],
+      });
+      assert.strictEqual(
+        resurrected.workspaceUsers[0]?.github.ownerTokens?.[0]?.personalAccessToken,
+        "",
+      );
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("identifies provider history query failures", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;

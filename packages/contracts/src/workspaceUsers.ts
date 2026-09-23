@@ -7,9 +7,25 @@ export type WorkspaceUserId = typeof WorkspaceUserId.Type;
 
 export const DEFAULT_WORKSPACE_USER_ID = WorkspaceUserId.make("nils");
 
-export const WorkspaceUserGithubSettings = Schema.Struct({
+const GithubPersonalAccessTokenFields = {
   personalAccessToken: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   personalAccessTokenRedacted: Schema.optionalKey(Schema.Boolean),
+};
+
+/**
+ * A token used only for repositories whose GitHub owner (user or organization)
+ * matches `owner`, case-insensitively. Fine-grained tokens cover one owner each.
+ */
+export const WorkspaceUserGithubOwnerToken = Schema.Struct({
+  owner: TrimmedNonEmptyString,
+  ...GithubPersonalAccessTokenFields,
+});
+export type WorkspaceUserGithubOwnerToken = typeof WorkspaceUserGithubOwnerToken.Type;
+
+/** `personalAccessToken` is the default for repositories no owner token matches. */
+export const WorkspaceUserGithubSettings = Schema.Struct({
+  ...GithubPersonalAccessTokenFields,
+  ownerTokens: Schema.optionalKey(Schema.Array(WorkspaceUserGithubOwnerToken)),
 });
 export type WorkspaceUserGithubSettings = typeof WorkspaceUserGithubSettings.Type;
 

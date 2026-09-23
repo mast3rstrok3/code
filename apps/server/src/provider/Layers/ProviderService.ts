@@ -46,6 +46,7 @@ import {
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { causeErrorTag } from "@t3tools/shared/observability";
+import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@t3tools/shared/git";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as DateTime from "effect/DateTime";
@@ -102,6 +103,7 @@ import {
 } from "../WorkflowPromptRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ProjectionSnapshotQuery from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
 const isModelSelection = Schema.is(ModelSelection);
 const WORKFLOW_PROVIDERS: ReadonlySet<ProviderDriverKind> = new Set([
   ProviderDriverKind.make("codex"),
@@ -504,6 +506,23 @@ const correlateRuntimeEventWithInstance = (
   return { ...event, providerInstanceId: source.instanceId };
 };
 
+function sameGithubTokens(
+  a: WorkspaceUser["github"],
+  b: WorkspaceUser["github"] | undefined,
+): boolean {
+  const aOwners = a.ownerTokens ?? [];
+  const bOwners = b?.ownerTokens ?? [];
+  return (
+    a.personalAccessToken === b?.personalAccessToken &&
+    aOwners.length === bOwners.length &&
+    aOwners.every(
+      (token, index) =>
+        token.owner === bOwners[index]?.owner &&
+        token.personalAccessToken === bOwners[index]?.personalAccessToken,
+    )
+  );
+}
+
 const makeProviderService = Effect.fn("makeProviderService")(function* (
   options?: ProviderServiceLiveOptions,
 ) {
@@ -555,11 +574,26 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       );
     return user;
   });
+  const gitVcsDriver = yield* Effect.serviceOption(GitVcsDriver.GitVcsDriver);
+  // Picks the owner-specific GitHub token; any lookup failure falls back to the default token.
+  const githubRepositoryOwner = (cwd: string | undefined) => {
+    if (cwd === undefined || Option.isNone(gitVcsDriver)) return Effect.succeed(null);
+    const git = gitVcsDriver.value;
+    return git.resolvePrimaryRemoteName(cwd).pipe(
+      Effect.flatMap((remote) => git.readConfigValue(cwd, `remote.${remote}.url`)),
+      Effect.map(
+        (url) => parseGitHubRepositoryNameWithOwnerFromRemoteUrl(url)?.split("/")[0] ?? null,
+      ),
+      Effect.orElseSucceed(() => null),
+    );
+  };
   const workspaceUserEnvironment = Effect.fn("ProviderService.workspaceUserEnvironment")(function* (
     threadId: ThreadId,
+    cwd: string | undefined,
   ) {
     const user = yield* workspaceUserForThread(threadId);
-    const credentials = yield* resolveWorkspaceUserCredentials(user).pipe(
+    const repositoryOwner = yield* githubRepositoryOwner(cwd);
+    const credentials = yield* resolveWorkspaceUserCredentials(user, repositoryOwner).pipe(
       Effect.mapError((error) => toValidationError("startSession", error.message)),
     );
     sessionOwners.set(threadId, user);
@@ -1414,7 +1448,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
 
-      const ownerEnvironment = yield* workspaceUserEnvironment(input.binding.threadId);
+      const ownerEnvironment = yield* workspaceUserEnvironment(
+        input.binding.threadId,
+        persistedCwd,
+      );
       yield* prepareMcpSession({
         threadId: input.binding.threadId,
         providerInstanceId: bindingInstanceId,
@@ -1652,7 +1689,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         }
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
         yield* clearTurnAnalyticsSession(resolvedInstanceId, threadId);
-        const ownerEnvironment = yield* workspaceUserEnvironment(threadId);
+        const ownerEnvironment = yield* workspaceUserEnvironment(threadId, effectiveCwd);
         yield* prepareMcpSession({
           threadId,
           providerInstanceId: resolvedInstanceId,
@@ -1878,7 +1915,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         routed.isActive &&
         (owner.id !== previousOwner?.id ||
           owner.displayName !== previousOwner?.displayName ||
-          owner.github.personalAccessToken !== previousOwner?.github.personalAccessToken)
+          !sameGithubTokens(owner.github, previousOwner?.github))
       ) {
         yield* stopSession({ threadId: input.threadId });
         routed = { ...routed, isActive: false };

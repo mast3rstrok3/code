@@ -1,5 +1,6 @@
 import {
   DEFAULT_SERVER_SETTINGS,
+  DEFAULT_WORKSPACE_USER_ID,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -853,4 +854,34 @@ it("clears saved workflow additions and review-part overrides", () => {
   expect(applyServerSettingsPatch(current, {}).workflowStepInstructions).toEqual(
     current.workflowStepInstructions,
   );
+});
+
+describe("workspace user GitHub patches", () => {
+  it("keeps owner tokens when a client patch omits them", () => {
+    const current = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      workspaceUsers: [
+        {
+          id: DEFAULT_WORKSPACE_USER_ID,
+          displayName: "Nils",
+          github: {
+            personalAccessToken: "",
+            ownerTokens: [{ owner: "acme", personalAccessToken: "acme-token" }],
+          },
+        },
+      ],
+    });
+    const renamed = applyServerSettingsPatch(current, {
+      workspaceUsers: [
+        {
+          id: DEFAULT_WORKSPACE_USER_ID,
+          displayName: "Nils B",
+          github: { personalAccessToken: "personal-token" },
+        },
+      ],
+    });
+    expect(renamed.workspaceUsers[0]?.github).toEqual({
+      personalAccessToken: "personal-token",
+      ownerTokens: [{ owner: "acme", personalAccessToken: "acme-token" }],
+    });
+  });
 });

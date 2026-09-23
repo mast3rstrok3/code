@@ -1491,6 +1491,15 @@ const OpenCodeSettingsPatch = Schema.Struct({
 const WorkspaceUserGithubSettingsPatch = Schema.Struct({
   personalAccessToken: Schema.optionalKey(TrimmedString),
   personalAccessTokenRedacted: Schema.optionalKey(Schema.Boolean),
+  ownerTokens: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        owner: TrimmedNonEmptyString,
+        personalAccessToken: Schema.optionalKey(TrimmedString),
+        personalAccessTokenRedacted: Schema.optionalKey(Schema.Boolean),
+      }),
+    ),
+  ),
 });
 
 const WorkspaceUserPatch = Schema.Struct({

@@ -194,6 +194,19 @@ function normalizeWorkspaceUsersPatch(
               ...(user.github.personalAccessTokenRedacted !== undefined
                 ? { personalAccessTokenRedacted: user.github.personalAccessTokenRedacted }
                 : {}),
+              ...(user.github.ownerTokens !== undefined
+                ? {
+                    ownerTokens: user.github.ownerTokens.map((token) => ({
+                      owner: token.owner,
+                      personalAccessToken: token.personalAccessToken ?? "",
+                      ...(token.personalAccessTokenRedacted !== undefined
+                        ? { personalAccessTokenRedacted: token.personalAccessTokenRedacted }
+                        : {}),
+                    })),
+                  }
+                : currentUser?.github.ownerTokens !== undefined
+                  ? { ownerTokens: currentUser.github.ownerTokens }
+                  : {}),
             },
     };
   });

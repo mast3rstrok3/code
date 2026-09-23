@@ -8,17 +8,34 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import {
+  addWorkspaceUserGithubOwnerToken,
   clearWorkspaceUserGithubPersonalAccessToken,
   createWorkspaceUser,
+  githubFineGrainedTokenUrl,
+  type GithubOwnerTokenValidation,
+  removeWorkspaceUserGithubOwnerToken,
   renameWorkspaceUser,
+  replaceWorkspaceUserGithubOwnerToken,
   replaceWorkspaceUserGithubPersonalAccessToken,
+  validateAddGithubOwnerToken,
   validateAddWorkspaceUser,
   validateRenameWorkspaceUser,
   type WorkspaceUserDisplayNameValidation,
 } from "./UsersSettings.logic";
 
-const GITHUB_PERSONAL_ACCESS_TOKEN_URL = "https://github.com/settings/tokens/new";
-const GITHUB_PERSONAL_ACCESS_TOKEN_DISPLAY_URL = "github.com/settings/tokens/new";
+function GithubTokenLink({ owner, children }: { owner?: string; children: string }) {
+  return (
+    <a
+      href={githubFineGrainedTokenUrl(owner)}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex min-w-0 items-center gap-1 rounded-sm text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+    >
+      <span className="truncate">{children}</span>
+      <ExternalLinkIcon className="size-3 shrink-0" aria-hidden />
+    </a>
+  );
+}
 
 function validationMessage(validation: WorkspaceUserDisplayNameValidation): string | null {
   if (validation.valid || validation.reason === "unchanged") {
@@ -28,6 +45,19 @@ function validationMessage(validation: WorkspaceUserDisplayNameValidation): stri
     return "Display name is required.";
   }
   return "Display name already exists.";
+}
+
+function ownerTokenValidationMessage(validation: GithubOwnerTokenValidation): string | null {
+  if (validation.valid || validation.reason === "blank-owner") {
+    return null;
+  }
+  if (validation.reason === "invalid-owner") {
+    return "Enter a GitHub user or organization name.";
+  }
+  if (validation.reason === "duplicate-owner") {
+    return "That owner already has a token.";
+  }
+  return null;
 }
 
 function updateWorkspaceUserArray(
@@ -49,38 +79,18 @@ function WorkspaceUserSettingsRow({
   readonly onWorkspaceUsersChange: (users: ReadonlyArray<WorkspaceUser>) => void;
 }) {
   const [displayName, setDisplayName] = useState(user.displayName);
-  const [tokenDraft, setTokenDraft] = useState("");
   const configured = Boolean(user.github.personalAccessTokenRedacted);
+  const ownerTokens = user.github.ownerTokens ?? [];
   const renameValidation = validateRenameWorkspaceUser({ user, displayName, workspaceUsers });
   const renameMessage = validationMessage(renameValidation);
-  const trimmedToken = tokenDraft.trim();
 
   useEffect(() => {
     setDisplayName(user.displayName);
-    setTokenDraft("");
-  }, [user.displayName, user.id, user.github.personalAccessTokenRedacted]);
+  }, [user.displayName, user.id]);
 
   const handleRename = () => {
     const nextUsers = renameWorkspaceUser(workspaceUsers, user.id, displayName);
     updateWorkspaceUserArray(nextUsers, onWorkspaceUsersChange);
-  };
-
-  const handleSaveToken = () => {
-    const nextUsers = replaceWorkspaceUserGithubPersonalAccessToken(
-      workspaceUsers,
-      user.id,
-      tokenDraft,
-    );
-    updateWorkspaceUserArray(nextUsers, onWorkspaceUsersChange);
-    if (nextUsers) {
-      setTokenDraft("");
-    }
-  };
-
-  const handleClearToken = () => {
-    const nextUsers = clearWorkspaceUserGithubPersonalAccessToken(workspaceUsers, user.id);
-    updateWorkspaceUserArray(nextUsers, onWorkspaceUsersChange);
-    setTokenDraft("");
   };
 
   return (
@@ -126,55 +136,201 @@ function WorkspaceUserSettingsRow({
         {renameMessage ? <p className="text-[11px] text-destructive">{renameMessage}</p> : null}
       </form>
 
-      <form
-        className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (trimmedToken.length > 0) {
-            handleSaveToken();
-          }
-        }}
+      <GithubTokenForm
+        label={`${user.displayName} default GitHub personal access token`}
+        placeholder={
+          configured
+            ? "Replace default GitHub token"
+            : "Default GitHub token, for repositories no owner token covers"
+        }
+        configured={configured}
+        clearLabel="Clear"
+        onSave={(token) =>
+          replaceWorkspaceUserGithubPersonalAccessToken(workspaceUsers, user.id, token)
+        }
+        onClear={() => clearWorkspaceUserGithubPersonalAccessToken(workspaceUsers, user.id)}
+        onWorkspaceUsersChange={onWorkspaceUsersChange}
+      />
+
+      {ownerTokens.map((token) => (
+        <div key={token.owner} className="grid gap-1.5">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="font-medium text-foreground">{token.owner}</span>
+            <span className="text-muted-foreground">repositories</span>
+          </div>
+          <GithubTokenForm
+            label={`${user.displayName} GitHub token for ${token.owner}`}
+            placeholder={`Replace token for ${token.owner}`}
+            configured={Boolean(token.personalAccessTokenRedacted)}
+            clearLabel="Remove"
+            onSave={(value) =>
+              replaceWorkspaceUserGithubOwnerToken(workspaceUsers, user.id, token.owner, value)
+            }
+            onClear={() =>
+              removeWorkspaceUserGithubOwnerToken(workspaceUsers, user.id, token.owner)
+            }
+            onWorkspaceUsersChange={onWorkspaceUsersChange}
+          />
+        </div>
+      ))}
+
+      <AddGithubOwnerTokenForm
+        user={user}
+        workspaceUsers={workspaceUsers}
+        onWorkspaceUsersChange={onWorkspaceUsersChange}
+      />
+
+      <div className="grid gap-1 text-[11px] text-muted-foreground">
+        <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+          <GithubTokenLink>Create a fine-grained GitHub token</GithubTokenLink>
+          <span>with the permissions below already selected.</span>
+        </p>
+        <p>
+          Contents and Pull requests: read and write. Commit statuses and Actions: read. Choose the
+          repositories yourself, since GitHub cannot pre-select them. Add Workflows (read and write)
+          if agents edit <code>.github/workflows</code>, and Issues if they work with issues. A
+          token covers one user or organization; the owner token form links to one for that owner.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function GithubTokenForm({
+  label,
+  placeholder,
+  configured,
+  clearLabel,
+  onSave,
+  onClear,
+  onWorkspaceUsersChange,
+}: {
+  readonly label: string;
+  readonly placeholder: string;
+  readonly configured: boolean;
+  readonly clearLabel: "Clear" | "Remove";
+  readonly onSave: (token: string) => ReadonlyArray<WorkspaceUser> | null;
+  readonly onClear: () => ReadonlyArray<WorkspaceUser> | null;
+  readonly onWorkspaceUsersChange: (users: ReadonlyArray<WorkspaceUser>) => void;
+}) {
+  const [tokenDraft, setTokenDraft] = useState("");
+  const trimmedToken = tokenDraft.trim();
+
+  const handleSave = () => {
+    const nextUsers = onSave(tokenDraft);
+    updateWorkspaceUserArray(nextUsers, onWorkspaceUsersChange);
+    if (nextUsers) {
+      setTokenDraft("");
+    }
+  };
+
+  const handleClear = () => {
+    updateWorkspaceUserArray(onClear(), onWorkspaceUsersChange);
+    setTokenDraft("");
+  };
+
+  return (
+    <form
+      className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (trimmedToken.length > 0) {
+          handleSave();
+        }
+      }}
+    >
+      <Input
+        size="sm"
+        type="password"
+        value={tokenDraft}
+        autoComplete="off"
+        aria-label={label}
+        placeholder={placeholder}
+        onChange={(event) => setTokenDraft(event.target.value)}
+      />
+      <Button type="submit" size="sm" variant="outline" disabled={trimmedToken.length === 0}>
+        <KeyRoundIcon className="size-3.5" />
+        {configured ? "Replace" : "Save"}
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        disabled={clearLabel === "Clear" && !configured && trimmedToken.length === 0}
+        onClick={handleClear}
       >
+        <XIcon className="size-3.5" />
+        {clearLabel}
+      </Button>
+    </form>
+  );
+}
+
+function AddGithubOwnerTokenForm({
+  user,
+  workspaceUsers,
+  onWorkspaceUsersChange,
+}: {
+  readonly user: WorkspaceUser;
+  readonly workspaceUsers: ReadonlyArray<WorkspaceUser>;
+  readonly onWorkspaceUsersChange: (users: ReadonlyArray<WorkspaceUser>) => void;
+}) {
+  const [owner, setOwner] = useState("");
+  const [tokenDraft, setTokenDraft] = useState("");
+  const validation = validateAddGithubOwnerToken(user, owner, tokenDraft);
+  const message = ownerTokenValidationMessage(validation);
+
+  const handleAdd = () => {
+    const nextUsers = addWorkspaceUserGithubOwnerToken(workspaceUsers, user.id, owner, tokenDraft);
+    updateWorkspaceUserArray(nextUsers, onWorkspaceUsersChange);
+    if (nextUsers) {
+      setOwner("");
+      setTokenDraft("");
+    }
+  };
+
+  return (
+    <form
+      className="grid gap-1.5"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (validation.valid) {
+          handleAdd();
+        }
+      }}
+    >
+      <div className="grid gap-2 sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)_auto]">
+        <Input
+          size="sm"
+          value={owner}
+          autoComplete="off"
+          aria-label={`${user.displayName} GitHub token owner`}
+          aria-invalid={message ? true : undefined}
+          placeholder="GitHub user or org"
+          onChange={(event) => setOwner(event.target.value)}
+        />
         <Input
           size="sm"
           type="password"
           value={tokenDraft}
           autoComplete="off"
-          aria-label={`${user.displayName} GitHub personal access token`}
-          placeholder={
-            configured ? "Replace GitHub personal access token" : "GitHub personal access token"
-          }
+          aria-label={`${user.displayName} GitHub token for owner`}
+          placeholder="Token for that owner's repositories"
           onChange={(event) => setTokenDraft(event.target.value)}
         />
-        <Button type="submit" size="sm" variant="outline" disabled={trimmedToken.length === 0}>
-          <KeyRoundIcon className="size-3.5" />
-          {configured ? "Replace" : "Save"}
+        <Button type="submit" size="sm" variant="outline" disabled={!validation.valid}>
+          <PlusIcon className="size-3.5" />
+          Add owner token
         </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          disabled={!configured && trimmedToken.length === 0}
-          onClick={handleClearToken}
-        >
-          <XIcon className="size-3.5" />
-          Clear
-        </Button>
-      </form>
-
-      <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-muted-foreground">
-        <span>Generate a GitHub token at</span>
-        <a
-          href={GITHUB_PERSONAL_ACCESS_TOKEN_URL}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex min-w-0 items-center gap-1 rounded-sm font-mono text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-        >
-          <span className="truncate">{GITHUB_PERSONAL_ACCESS_TOKEN_DISPLAY_URL}</span>
-          <ExternalLinkIcon className="size-3 shrink-0" aria-hidden />
-        </a>
-      </p>
-    </div>
+      </div>
+      {message ? (
+        <p className="text-[11px] text-destructive">{message}</p>
+      ) : validation.valid || validation.reason === "blank-token" ? (
+        <p className="text-[11px] text-muted-foreground">
+          <GithubTokenLink owner={owner}>{`Create a token for ${owner.trim()}`}</GithubTokenLink>
+        </p>
+      ) : null}
+    </form>
   );
 }
 
@@ -243,7 +399,9 @@ export function UsersSettingsPanel() {
         Choose your user in the sidebar before starting a thread. Each thread keeps its owner when
         you switch users or view someone else's threads. Every user, including the main user, needs
         a name and a valid GitHub token before running an agent. Commits use the name entered here.
-        Pushes and pull requests use that user's token.
+        Pushes and pull requests use that user's token. A fine-grained token covers one GitHub user
+        or organization, so add an owner token for each extra one. Threads use the token whose owner
+        matches the project's GitHub remote, and the default token otherwise.
       </p>
       <SettingsSection title="Users">
         {workspaceUsers.map((user) => (

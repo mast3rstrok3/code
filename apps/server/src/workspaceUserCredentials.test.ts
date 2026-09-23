@@ -25,7 +25,7 @@ describe("workspace user credentials", () => {
           email: "private@example.com",
         }),
       );
-      const credentials = yield* resolveWorkspaceUserCredentials(user, request);
+      const credentials = yield* resolveWorkspaceUserCredentials(user, null, request);
       expect(credentials).toEqual({
         githubPersonalAccessToken: "test-token",
         gitIdentity: { name: "Ada", email: "42+ada@users.noreply.github.com" },
@@ -54,13 +54,14 @@ describe("workspace user credentials", () => {
       });
       const [ada, grace] = yield* Effect.all(
         [
-          resolveWorkspaceUserCredentials(user, request),
+          resolveWorkspaceUserCredentials(user, null, request),
           resolveWorkspaceUserCredentials(
             {
               ...user,
               id: WorkspaceUserId.make("grace"),
               github: { personalAccessToken: "grace-token" },
             },
+            null,
             request,
           ),
         ],
@@ -77,12 +78,62 @@ describe("workspace user credentials", () => {
     }),
   );
 
+  it.effect("uses the token whose owner matches the repository, else the default", () =>
+    Effect.gen(function* () {
+      const request = vi
+        .fn<typeof fetch>()
+        .mockImplementation(async () => Response.json({ id: 42, login: "ada" }));
+      const multiOwnerUser: WorkspaceUser = {
+        ...user,
+        github: {
+          personalAccessToken: "personal-token",
+          ownerTokens: [
+            { owner: "Acme", personalAccessToken: "acme-token" },
+            { owner: "empty-org", personalAccessToken: "" },
+          ],
+        },
+      };
+      const tokenFor = (repositoryOwner: string | null) =>
+        resolveWorkspaceUserCredentials(multiOwnerUser, repositoryOwner, request).pipe(
+          Effect.map((credentials) => credentials.githubPersonalAccessToken),
+        );
+      expect(yield* tokenFor("acme")).toBe("acme-token");
+      expect(yield* tokenFor("ada")).toBe("personal-token");
+      expect(yield* tokenFor(null)).toBe("personal-token");
+      expect(yield* tokenFor("empty-org")).toBe("personal-token");
+    }),
+  );
+
+  it.effect("names the owner when no token covers the repository", () =>
+    Effect.gen(function* () {
+      const request = vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status: 500 }));
+      const ownerOnlyUser: WorkspaceUser = {
+        ...user,
+        github: {
+          personalAccessToken: "",
+          ownerTokens: [{ owner: "acme", personalAccessToken: "acme-token" }],
+        },
+      };
+      const missing = yield* resolveWorkspaceUserCredentials(ownerOnlyUser, "other", request).pipe(
+        Effect.flip,
+      );
+      expect(missing.message).toContain("Add a GitHub token for Ada that covers other");
+      expect(request).not.toHaveBeenCalled();
+      const rejected = yield* resolveWorkspaceUserCredentials(ownerOnlyUser, "acme", request).pipe(
+        Effect.flip,
+      );
+      expect(rejected.message).toContain("Could not verify the GitHub token for Ada (acme)");
+    }),
+  );
+
   it.effect("rejects the default user without a token before contacting GitHub", () =>
     Effect.gen(function* () {
       const request = vi.fn<typeof fetch>();
-      const error = yield* resolveWorkspaceUserCredentials(DEFAULT_WORKSPACE_USER, request).pipe(
-        Effect.flip,
-      );
+      const error = yield* resolveWorkspaceUserCredentials(
+        DEFAULT_WORKSPACE_USER,
+        null,
+        request,
+      ).pipe(Effect.flip);
       expect(error.message).toContain("Add a GitHub token for Nils in Settings > Users");
       expect(request).not.toHaveBeenCalled();
     }),
@@ -96,6 +147,7 @@ describe("workspace user credentials", () => {
         for (const owner of [DEFAULT_WORKSPACE_USER, user]) {
           const error = yield* resolveWorkspaceUserCredentials(
             { ...owner, displayName: "  ", github: { personalAccessToken: "test-token" } },
+            null,
             request,
           ).pipe(Effect.flip);
           expect(error.message).toContain("Add a name for the thread owner in Settings > Users");
@@ -109,14 +161,15 @@ describe("workspace user credentials", () => {
       const request = vi
         .fn<typeof fetch>()
         .mockResolvedValue(new Response("sensitive response", { status: 401 }));
-      const invalid = yield* resolveWorkspaceUserCredentials(user, request).pipe(Effect.flip);
+      const invalid = yield* resolveWorkspaceUserCredentials(user, null, request).pipe(Effect.flip);
       expect(invalid.message).toContain("Could not verify the GitHub token for Ada");
       const missingToken = yield* resolveWorkspaceUserCredentials(
         { ...user, github: { personalAccessToken: "" } },
+        null,
         request,
       ).pipe(Effect.flip);
       expect(missingToken.message).toContain("Add a GitHub token for Ada");
-      const missingOwner = yield* resolveWorkspaceUserCredentials(undefined, request).pipe(
+      const missingOwner = yield* resolveWorkspaceUserCredentials(undefined, null, request).pipe(
         Effect.flip,
       );
       expect(missingOwner.message).toContain("thread owner no longer exists");

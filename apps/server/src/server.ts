@@ -282,6 +282,8 @@ const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(
 // `ProviderService` and the per-instance drivers read the same logger pair.
 const ProviderLayerLive = ProviderServiceLive.pipe(
   Layer.provide(ProviderAdapterRegistryLive),
+  // Optional in ProviderService: reads the project's remote to pick an owner's GitHub token.
+  Layer.provide(GitVcsDriver.layer),
   Layer.provideMerge(ProviderSessionDirectoryLayerLive),
   // Shared with the MCP server: one broker holds the questions an MCP-side
   // tool call is parked on, and ProviderService settles them from the client's

@@ -2950,6 +2950,51 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("uses the owner token that matches the repository's GitHub remote", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-owner-token-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["remote", "add", "origin", "git@github.com:Acme/widgets.git"]);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "Ada's org change");
+      const request = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(Response.json({ id: 42, login: "ada", name: "Ada Lovelace" }));
+      yield* Effect.addFinalizer(() => Effect.sync(() => request.mockRestore()));
+      const thread = makeUserThread("ada");
+      const { manager } = yield* makeManager({
+        serverSettings: {
+          workspaceUsers: [
+            {
+              id: WorkspaceUserId.make("ada"),
+              displayName: "Ada",
+              github: {
+                personalAccessToken: "ada-token",
+                ownerTokens: [{ owner: "acme", personalAccessToken: "acme-token" }],
+              },
+            },
+          ],
+        },
+        projectionLayer: Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
+          getThreadShellById: (id) =>
+            Effect.succeed(id === thread.id ? Option.some(thread) : Option.none()),
+        }),
+      });
+      yield* manager.runStackedAction({
+        cwd: repoDir,
+        actionId: "owner-token-commit",
+        action: "commit",
+        threadId: thread.id,
+        commitMessage: "Ada's org change",
+      });
+      expect(request).toHaveBeenCalledWith(
+        "https://api.github.com/user",
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: "Bearer acme-token" }),
+        }),
+      );
+    }),
+  );
+
   it.effect("creates a commit when working tree is dirty", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");

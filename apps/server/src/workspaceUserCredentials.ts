@@ -22,8 +22,28 @@ const GithubIdentity = Schema.Struct({
 
 const decodeGithubIdentity = Schema.decodeUnknownEffect(GithubIdentity);
 
+/** The owner token whose owner matches the repository's, else the user's default token. */
+export function selectWorkspaceUserGithubToken(
+  user: WorkspaceUser,
+  repositoryOwner: string | null | undefined,
+): { readonly token: string; readonly owner?: string } {
+  const owner = repositoryOwner?.trim().toLowerCase();
+  const ownerToken = owner
+    ? user.github.ownerTokens?.find(
+        (token) => token.owner.toLowerCase() === owner && token.personalAccessToken.trim(),
+      )
+    : undefined;
+  return ownerToken
+    ? { token: ownerToken.personalAccessToken.trim(), owner: ownerToken.owner }
+    : { token: user.github.personalAccessToken.trim() };
+}
+
 export const resolveWorkspaceUserCredentials = Effect.fn("resolveWorkspaceUserCredentials")(
-  function* (user: WorkspaceUser | undefined, request: typeof fetch = fetch) {
+  function* (
+    user: WorkspaceUser | undefined,
+    repositoryOwner?: string | null,
+    request: typeof fetch = fetch,
+  ) {
     if (!user) {
       return yield* new WorkspaceUserCredentialsError({
         message: "The thread owner no longer exists. Restore the owner in Settings > Users.",
@@ -35,10 +55,12 @@ export const resolveWorkspaceUserCredentials = Effect.fn("resolveWorkspaceUserCr
         message: "Add a name for the thread owner in Settings > Users before running this thread.",
       });
     }
-    const token = user.github.personalAccessToken.trim();
+    const { token, owner } = selectWorkspaceUserGithubToken(user, repositoryOwner);
     if (!token) {
       return yield* new WorkspaceUserCredentialsError({
-        message: `Add a GitHub token for ${user.displayName} in Settings > Users before running this thread.`,
+        message: repositoryOwner
+          ? `Add a GitHub token for ${user.displayName} that covers ${repositoryOwner} in Settings > Users before running this thread.`
+          : `Add a GitHub token for ${user.displayName} in Settings > Users before running this thread.`,
       });
     }
     const identity = yield* Effect.tryPromise({
@@ -53,7 +75,7 @@ export const resolveWorkspaceUserCredentials = Effect.fn("resolveWorkspaceUserCr
       },
       catch: () =>
         new WorkspaceUserCredentialsError({
-          message: `Could not verify the GitHub token for ${user.displayName}. Check it in Settings > Users.`,
+          message: `Could not verify the GitHub token for ${user.displayName}${owner ? ` (${owner})` : ""}. Check it in Settings > Users.`,
         }),
     }).pipe(
       Effect.timeout("15 seconds"),

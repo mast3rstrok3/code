@@ -2834,8 +2834,20 @@ export const make = Effect.gen(function* () {
                 }),
             ),
           );
+          const repositoryRemoteName =
+            (initialStatus.branch
+              ? yield* readConfigValueNullable(input.cwd, `branch.${initialStatus.branch}.remote`)
+              : null) ??
+            (yield* gitCore
+              .resolvePrimaryRemoteName(input.cwd)
+              .pipe(Effect.orElseSucceed(() => null)));
+          const { ownerLogin } = yield* resolveRemoteRepositoryContext(
+            input.cwd,
+            repositoryRemoteName,
+          );
           credentials = yield* resolveWorkspaceUserCredentials(
             settings.workspaceUsers.find((user) => user.id === thread.value.ownerUserId),
+            ownerLogin,
           ).pipe(
             Effect.mapError(
               (error) =>
