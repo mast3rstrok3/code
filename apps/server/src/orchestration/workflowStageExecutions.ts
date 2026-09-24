@@ -710,7 +710,11 @@ export function reconcileWorkflowState(
 
     for (const ticket of run.ticketStates) {
       const dependencyState = ticketDependencyState(run, ticket);
-      if (dependencyState === "blocked" && ticket.status !== "blocked") {
+      // Only a ticket about to start is held back. A dependent the failure
+      // cascade already marked failed must stay failed: moving it back to
+      // blocked makes the recovery sweep fail it again, and the two sweeps
+      // then rewrite the whole run on every pass.
+      if (dependencyState === "blocked" && ticket.status === "ready") {
         actions.push({
           type: "derive-dependency-block",
           commandId: reconciliationCommandId(

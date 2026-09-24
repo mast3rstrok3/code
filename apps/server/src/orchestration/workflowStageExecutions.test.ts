@@ -12,6 +12,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { createEmptyReadModel } from "./projector.ts";
 import { queueImplementationRerun } from "./implementationRerun.ts";
+import { failImplementationTickets } from "./Layers/ImplementationWorkflowReactor.ts";
 import {
   reconcileWorkflowState,
   normalizeAppReviewPhaseExecution,
@@ -302,6 +303,29 @@ describe("workflow stage reconciliation", () => {
     expect(eligibleActions.some((action) => action.type === "derive-dependency-eligibility")).toBe(
       true,
     );
+  });
+
+  it("leaves dependents the failure cascade already failed", () => {
+    const cascaded = failImplementationTickets(
+      run({
+        tickets: [
+          ticket({ ticketId: "upstream", status: "running" }),
+          ticket({ ticketId: "child", status: "blocked", dependencies: ["upstream"] }),
+          ticket({ ticketId: "grandchild", status: "blocked", dependencies: ["child"] }),
+        ],
+      }),
+      new Map([["upstream", "Live acceptance could not run."]]),
+      now,
+    );
+    expect(cascaded.ticketStates.map((state) => state.status)).toEqual([
+      "failed",
+      "failed",
+      "failed",
+    ]);
+
+    const actions = reconcileWorkflowState(model(cascaded), now);
+
+    expect(actions.some((action) => action.type === "derive-dependency-block")).toBe(false);
   });
 
   it("does not let a stale halted execution block a succeeded dependency", () => {
