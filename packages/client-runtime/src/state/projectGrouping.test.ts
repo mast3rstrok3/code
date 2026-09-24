@@ -1,4 +1,4 @@
-import { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { DEFAULT_WORKSPACE_USER_ID, EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { EnvironmentProject } from "./models.ts";
@@ -97,6 +97,7 @@ function makeProject(
     id: ProjectId.make(id),
     title: id,
     workspaceRoot,
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     repositoryIdentity,
     defaultModelSelection: null,
     scripts: [],

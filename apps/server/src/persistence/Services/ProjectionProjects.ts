@@ -14,6 +14,7 @@ import {
   ProjectId,
   ProjectScript,
   ThreadEnvMode,
+  WorkspaceUserId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -24,6 +25,7 @@ import type { ProjectionRepositoryError } from "../Errors.ts";
 
 export const ProjectionProject = Schema.Struct({
   projectId: ProjectId,
+  ownerUserId: WorkspaceUserId,
   title: Schema.String,
   workspaceRoot: Schema.String,
   defaultModelSelection: Schema.NullOr(ModelSelection),

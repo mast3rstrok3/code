@@ -3,6 +3,7 @@ import {
   EnvironmentId,
   ProjectId,
   type ServerSettings,
+  DEFAULT_WORKSPACE_USER_ID,
 } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
@@ -61,6 +62,7 @@ const projectId = ProjectId.make("project");
 const laptopProjectId = ProjectId.make("laptop-project");
 const member = {
   id: projectId,
+  ownerUserId: DEFAULT_WORKSPACE_USER_ID,
   environmentId: server.environmentId,
   title: "Project",
   workspaceRoot: "/repo",

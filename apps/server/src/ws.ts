@@ -45,6 +45,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
+  type OrchestrationProjectShell,
   type OrchestrationThreadShell,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
@@ -1144,7 +1145,11 @@ const makeWsRpcLayer = (
         switch (event.type) {
           case "project.created":
           case "project.meta-updated":
-            return projectUpsertOrRemove(ProjectId.make(event.aggregateId), event.sequence);
+            return projectUpsertOrRemove(
+              ProjectId.make(event.aggregateId),
+              event.sequence,
+              userView,
+            );
           case "project.deleted":
             return Effect.succeed(
               Option.some({
@@ -1239,9 +1244,17 @@ const makeWsRpcLayer = (
           Effect.orElseSucceed(() => Option.none()),
         );
 
+      const projectMatchesWorkspaceUserView = (
+        project: OrchestrationProjectShell,
+        userView: WorkspaceUserView,
+      ): boolean => userView.kind === "all" || project.ownerUserId === userView.userId;
+
+      // A project whose owner no longer matches the view is removed from that
+      // view, mirroring how thread upserts turn into `thread-removed`.
       const projectUpsertOrRemove = (
         projectId: ProjectId,
         sequence: number,
+        userView: WorkspaceUserView,
       ): Effect.Effect<Option.Option<OrchestrationShellStreamEvent>, never, never> =>
         retryShellProjectionRead(
           "project",
@@ -1258,11 +1271,17 @@ const makeWsRpcLayer = (
                     projectId,
                   }),
                 onSome: (nextProject) =>
-                  Option.some<OrchestrationShellStreamEvent>({
-                    kind: "project-upserted" as const,
-                    sequence,
-                    project: nextProject,
-                  }),
+                  projectMatchesWorkspaceUserView(nextProject, userView)
+                    ? Option.some<OrchestrationShellStreamEvent>({
+                        kind: "project-upserted" as const,
+                        sequence,
+                        project: nextProject,
+                      })
+                    : Option.some<OrchestrationShellStreamEvent>({
+                        kind: "project-removed" as const,
+                        sequence,
+                        projectId,
+                      }),
               }),
             ),
           ),
@@ -3687,6 +3706,7 @@ const makeWsRpcLayer = (
                     type: "project.create",
                     commandId: yield* serverCommandId("project-clone-create"),
                     projectId: project.projectId,
+                    ownerUserId: project.ownerUserId,
                     title: project.title,
                     workspaceRoot: project.workspaceRoot,
                     createWorkspaceRootIfMissing: true,

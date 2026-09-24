@@ -1,6 +1,8 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { IsoDateTime, NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { DEFAULT_WORKSPACE_USER_ID, WorkspaceUserId } from "./workspaceUsers.ts";
 import {
   SourceControlCloneProtocol,
   SourceControlProviderKind,
@@ -59,6 +61,9 @@ export type ProjectCloneListEvent = typeof ProjectCloneListEvent.Type;
 
 export const ProjectCloneStartInput = Schema.Struct({
   projectId: ProjectId,
+  ownerUserId: WorkspaceUserId.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKSPACE_USER_ID)),
+  ),
   title: TrimmedNonEmptyString,
   createdAt: IsoDateTime,
   provider: Schema.optional(SourceControlProviderKind),

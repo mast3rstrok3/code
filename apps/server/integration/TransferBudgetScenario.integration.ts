@@ -65,6 +65,7 @@ export const seedTransferBudgetHistory = Effect.fn("TransferBudget.seedHistory")
     type: "project.create",
     commandId: CommandId.make(`transfer:${provider}:project-create`),
     projectId: TRANSFER_PROJECT_ID,
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     title: "Transfer Budget Project",
     workspaceRoot: harness.workspaceDir,
     defaultModelSelection: modelSelection,

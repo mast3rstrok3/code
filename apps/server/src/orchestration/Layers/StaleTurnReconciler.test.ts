@@ -561,6 +561,7 @@ function seedProject(system: ReconcilerSystem) {
     type: "project.create",
     commandId: commandId("project-create"),
     projectId,
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     title: "Stale Turn Reconciler",
     workspaceRoot: "/tmp/stale-turn-reconciler",
     createdAt: now,

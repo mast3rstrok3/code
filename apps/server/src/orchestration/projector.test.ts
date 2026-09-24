@@ -1151,6 +1151,7 @@ describe("orchestration projector", () => {
           projects: [
             {
               id: ProjectId.make("project-1"),
+              ownerUserId: DEFAULT_WORKSPACE_USER_ID,
               title: "T3 Code",
               workspaceRoot: "/repo",
               defaultModelSelection: null,

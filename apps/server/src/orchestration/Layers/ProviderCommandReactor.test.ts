@@ -577,6 +577,7 @@ describe("ProviderCommandReactor", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-project-create"),
         projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Provider Project",
         workspaceRoot: "/tmp/provider-project",
         defaultModelSelection: modelSelection,

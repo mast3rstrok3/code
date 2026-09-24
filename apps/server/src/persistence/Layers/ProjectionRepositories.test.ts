@@ -48,6 +48,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
 
       const row = {
         projectId,
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Recording mode project",
         workspaceRoot: "/tmp/project-recording-mode",
         defaultModelSelection: null,
@@ -329,6 +330,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
 
       yield* projects.upsert({
         projectId: ProjectId.make("project-null-options"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Null options project",
         workspaceRoot: "/tmp/project-null-options",
         defaultModelSelection: {

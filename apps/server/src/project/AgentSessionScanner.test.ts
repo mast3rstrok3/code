@@ -7,6 +7,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerSettings as ContractServerSettings,
+  DEFAULT_WORKSPACE_USER_ID,
 } from "@t3tools/contracts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import * as Effect from "effect/Effect";
@@ -25,6 +26,7 @@ import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 
 const makeProjectShell = (workspaceRoot: string): OrchestrationProjectShell => ({
   id: ProjectId.make("project-1"),
+  ownerUserId: DEFAULT_WORKSPACE_USER_ID,
   title: "Imported",
   workspaceRoot,
   defaultModelSelection: null,

@@ -353,6 +353,7 @@ const makeDefaultOrchestrationReadModel = () => {
     projects: [
       {
         id: defaultProjectId,
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Default Project",
         workspaceRoot: "/tmp/default-project",
         defaultModelSelection,
@@ -5635,6 +5636,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const projectId = ProjectId.make("agent-import-rpc-project");
       const project = {
         id: projectId,
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Agent import RPC",
         workspaceRoot,
         defaultModelSelection: null,
@@ -7387,6 +7389,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             type: "project.create",
             commandId: CommandId.make("cmd-project-create-missing-root"),
             projectId: ProjectId.make("project-create-missing-root"),
+            ownerUserId: DEFAULT_WORKSPACE_USER_ID,
             title: "New Project",
             workspaceRoot: missingWorkspaceRoot,
             createWorkspaceRootIfMissing: true,
@@ -7457,6 +7460,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           Effect.gen(function* () {
             const started = yield* client[WS_METHODS.projectCloneStart]({
               projectId,
+              ownerUserId: DEFAULT_WORKSPACE_USER_ID,
               title: "t3code",
               createdAt: "2026-01-01T00:00:00.000Z",
               remoteUrl: "git@github.com:octocat/t3code.git",
@@ -8525,6 +8529,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         projects: [
           {
             id: ProjectId.make("project-a"),
+            ownerUserId: DEFAULT_WORKSPACE_USER_ID,
             title: "Project A",
             workspaceRoot: "/tmp/project-a",
             defaultModelSelection,

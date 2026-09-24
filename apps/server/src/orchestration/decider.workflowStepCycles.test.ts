@@ -108,6 +108,7 @@ function readModel(input?: {
     projects: [
       {
         id: projectId,
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Step cycles",
         workspaceRoot: "/tmp/step-cycles",
         repositoryIdentity: null,

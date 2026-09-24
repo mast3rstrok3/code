@@ -16,7 +16,7 @@ import type {
   PullRequestReviewerCapabilities,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
-import { PullRequestOperationError } from "@t3tools/contracts";
+import { DEFAULT_WORKSPACE_USER_ID, PullRequestOperationError } from "@t3tools/contracts";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
@@ -52,6 +52,7 @@ function project(input: {
   const host = input.host ?? (input.provider === "gitlab" ? "gitlab.com" : "github.com");
   return {
     id: input.id as ProjectId,
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     title: input.title,
     workspaceRoot: input.workspaceRoot,
     ...(input.repository

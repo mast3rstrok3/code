@@ -31,6 +31,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
           type: "project.create",
           commandId: CommandId.make("cmd-project-create-scripts"),
           projectId: asProjectId("project-scripts"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Scripts",
           workspaceRoot: "/tmp/scripts",
           createdAt: now,
@@ -61,6 +62,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
         metadata: {},
         payload: {
           projectId: asProjectId("project-scripts"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Scripts",
           workspaceRoot: "/tmp/scripts",
           defaultModelSelection: null,
@@ -119,6 +121,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
       metadata: {},
       payload: {
         projectId: asProjectId("project-scripts"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Scripts",
         workspaceRoot: "/tmp/scripts",
         defaultModelSelection: null,
@@ -221,6 +224,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
         metadata: {},
         payload: {
           projectId: asProjectId("project-favicon"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Favicon",
           workspaceRoot: "/tmp/favicon",
           defaultModelSelection: null,
@@ -298,6 +302,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
         metadata: {},
         payload: {
           projectId: asProjectId("project-existing"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Project",
           workspaceRoot: "/tmp/project",
           defaultModelSelection: null,
@@ -313,6 +318,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
             type: "project.create",
             commandId: CommandId.make("cmd-project-create-duplicate-root"),
             projectId: asProjectId("project-duplicate-root"),
+            ownerUserId: DEFAULT_WORKSPACE_USER_ID,
             title: "Duplicate Project",
             workspaceRoot: "/tmp/project/",
             createdAt: now,
@@ -344,6 +350,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
         metadata: {},
         payload: {
           projectId: asProjectId("project-first"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "First",
           workspaceRoot: "/tmp/project-first",
           defaultModelSelection: null,
@@ -365,6 +372,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
         metadata: {},
         payload: {
           projectId: asProjectId("project-second"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Second",
           workspaceRoot: "/tmp/project-second",
           defaultModelSelection: null,
@@ -409,6 +417,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
         metadata: {},
         payload: {
           projectId: asProjectId("project-1"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Project",
           workspaceRoot: "/tmp/project",
           defaultModelSelection: null,
@@ -507,6 +516,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
         metadata: {},
         payload: {
           projectId: asProjectId("project-1"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Project",
           workspaceRoot: "/tmp/project",
           defaultModelSelection: null,
@@ -586,6 +596,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
         metadata: {},
         payload: {
           projectId: asProjectId("project-1"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Project",
           workspaceRoot: "/tmp/project",
           defaultModelSelection: null,

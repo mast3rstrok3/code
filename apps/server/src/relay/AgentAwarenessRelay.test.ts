@@ -480,6 +480,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
 
         const project = {
           id: projectId,
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "T3 Code",
           workspaceRoot: "/workspace",
           repositoryIdentity: null,
@@ -677,6 +678,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
 
         const project = {
           id: projectId,
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "T3 Code",
           workspaceRoot: "/workspace",
           repositoryIdentity: null,

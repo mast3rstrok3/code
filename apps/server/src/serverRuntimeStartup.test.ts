@@ -5,6 +5,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  DEFAULT_WORKSPACE_USER_ID,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
@@ -183,6 +184,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets returns existing project and threa
           Effect.succeed(
             Option.some({
               id: bootstrapProjectId,
+              ownerUserId: DEFAULT_WORKSPACE_USER_ID,
               title: "Startup Project",
               workspaceRoot: "/tmp/startup-project",
               defaultModelSelection: {
@@ -316,6 +318,7 @@ it.effect.each([
             existing
               ? Option.some({
                   id: ProjectId.make("existing-project"),
+                  ownerUserId: DEFAULT_WORKSPACE_USER_ID,
                   title: "Startup Project",
                   workspaceRoot: "/tmp/startup-project",
                   defaultModelSelection: null,

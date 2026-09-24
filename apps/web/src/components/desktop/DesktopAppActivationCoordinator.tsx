@@ -1,11 +1,13 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { DesktopAppActivationRequest } from "@t3tools/contracts";
-import { useEffect, useEffectEvent, useRef } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 
 import { handleDesktopAppActivationRequest } from "../../desktopAppActivation";
+import { useClientSettings, usePrimarySettings } from "../../hooks/useSettings";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { findProjectByPath, inferProjectTitleFromPath } from "../../lib/projectPaths";
 import { newProjectId } from "../../lib/utils";
+import { resolveDefaultThreadOwnerUserId } from "../../lib/workspaceUsers";
 import { readProjects, waitForProject } from "../../state/entities";
 import { usePrimaryEnvironment } from "../../state/environments";
 import { projectEnvironment } from "../../state/projects";
@@ -16,6 +18,12 @@ import { useAtomCommand } from "../../state/use-atom-command";
 export function DesktopAppActivationCoordinator() {
   const primaryEnvironment = usePrimaryEnvironment();
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
+  const activeWorkspaceUserId = useClientSettings((settings) => settings.activeWorkspaceUserId);
+  const workspaceUsers = usePrimarySettings((settings) => settings.workspaceUsers);
+  const ownerUserId = useMemo(
+    () => resolveDefaultThreadOwnerUserId({ activeWorkspaceUserId, workspaceUsers }),
+    [activeWorkspaceUserId, workspaceUsers],
+  );
   const openThread = useNewThreadHandler();
   const queueRef = useRef(Promise.resolve());
   const activation = window.desktopBridge?.appActivation;
@@ -55,6 +63,7 @@ export function DesktopAppActivationCoordinator() {
           environmentId,
           input: {
             projectId,
+            ownerUserId,
             title: inferProjectTitleFromPath(workspaceRoot),
             workspaceRoot,
             createWorkspaceRootIfMissing: false,

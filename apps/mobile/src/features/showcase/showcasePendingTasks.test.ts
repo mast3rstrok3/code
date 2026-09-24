@@ -1,5 +1,10 @@
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import { EnvironmentId, ProjectId, ProviderInstanceId } from "@t3tools/contracts";
+import {
+  DEFAULT_WORKSPACE_USER_ID,
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 
 import {
@@ -11,6 +16,7 @@ const projects: ReadonlyArray<EnvironmentProject> = [
   {
     environmentId: EnvironmentId.make("moonbase-terminal"),
     id: ProjectId.make("t3code"),
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     title: "T3 Code",
     workspaceRoot: "/workspace/t3code",
     repositoryIdentity: null,
@@ -22,6 +28,7 @@ const projects: ReadonlyArray<EnvironmentProject> = [
   {
     environmentId: EnvironmentId.make("suspense-station"),
     id: ProjectId.make("react"),
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     title: "React",
     workspaceRoot: "/workspace/react",
     repositoryIdentity: null,

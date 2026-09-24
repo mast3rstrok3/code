@@ -9,6 +9,7 @@ import type {
   SourceControlDiscoveryResult,
   SourceControlProviderKind,
   SourceControlRepositoryInfo,
+  WorkspaceUserId,
 } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -366,6 +367,7 @@ export function findExistingAddProject(input: {
 export function buildProjectCreateCommand(input: {
   readonly commandId: CommandId;
   readonly projectId: ProjectId;
+  readonly ownerUserId: WorkspaceUserId;
   readonly workspaceRoot: string;
   readonly createdAt: string;
 }): Extract<OrchestrationCommand, { type: "project.create" }> {
@@ -373,6 +375,7 @@ export function buildProjectCreateCommand(input: {
     type: "project.create",
     commandId: input.commandId,
     projectId: input.projectId,
+    ownerUserId: input.ownerUserId,
     title: inferProjectTitleFromPath(input.workspaceRoot),
     workspaceRoot: input.workspaceRoot,
     createWorkspaceRootIfMissing: true,

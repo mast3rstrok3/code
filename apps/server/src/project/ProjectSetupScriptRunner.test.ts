@@ -1,7 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as FileSystem from "effect/FileSystem";
 import { describe, expect, it, vi } from "@effect/vitest";
-import { type OrchestrationProject, ProjectId, type TerminalEvent } from "@t3tools/contracts";
+import {
+  DEFAULT_WORKSPACE_USER_ID,
+  type OrchestrationProject,
+  ProjectId,
+  type TerminalEvent,
+} from "@t3tools/contracts";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -19,6 +24,7 @@ const isProjectSetupScriptOperationError = Schema.is(
 
 const makeProject = (scripts: OrchestrationProject["scripts"]): OrchestrationProject => ({
   id: ProjectId.make("project-1"),
+  ownerUserId: DEFAULT_WORKSPACE_USER_ID,
   title: "Project",
   workspaceRoot: "/repo/project",
   defaultModelSelection: null,

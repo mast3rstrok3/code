@@ -54,6 +54,7 @@ const testCrypto = Crypto.make({
 function makeProject(id: ProjectId = PROJECT_ID): OrchestrationProjectShell {
   return {
     id,
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     title: `Project ${id}`,
     workspaceRoot: "/workspace/project",
     defaultModelSelection: null,

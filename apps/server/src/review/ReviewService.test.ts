@@ -50,6 +50,7 @@ function makeLayer(input: {
           Effect.succeed(
             (input.registeredWorkspaceRoots ?? []).map((project, index) => ({
               projectId: ProjectId.make(`project-${index}`),
+              ownerUserId: DEFAULT_WORKSPACE_USER_ID,
               title: `Project ${index}`,
               workspaceRoot: project.workspaceRoot,
               defaultModelSelection: null,

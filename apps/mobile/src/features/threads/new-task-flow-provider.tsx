@@ -17,6 +17,7 @@ import {
   MessageId,
   T3_PROJECT_FILE_NAME,
   ThreadId,
+  DEFAULT_WORKSPACE_USER_ID,
 } from "@t3tools/contracts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
@@ -305,6 +306,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     return {
       environmentId: editingPendingTask.environmentId,
       id: creation.projectId,
+      // The stand-in never reaches a filtered view; the real shell replaces it.
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
       title: creation.projectTitle ?? "Unknown project",
       // Deliberately empty when the snapshot has no cwd — downstream consumers
       // (branch queries, worktree bootstrap) must skip it, not receive a

@@ -60,6 +60,7 @@ layer("workflow step model projection", (it) => {
         type: "project.create",
         commandId: CommandId.make("cmd-project"),
         projectId: ProjectId.make("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Project",
         workspaceRoot: "/tmp/project-1",
         defaultModelSelection: CODEX_SELECTION,

@@ -152,6 +152,7 @@ describe("OrchestrationEngine", () => {
             type: "project.create",
             commandId: CommandId.make("async-project"),
             projectId,
+            ownerUserId: DEFAULT_WORKSPACE_USER_ID,
             title: "Async questions",
             workspaceRoot: "/tmp/async-questions",
             createdAt: now(),
@@ -369,6 +370,7 @@ describe("OrchestrationEngine", () => {
       projects: [
         {
           id: asProjectId("project-bootstrap"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Bootstrap Project",
           workspaceRoot: "/tmp/project-bootstrap",
           defaultModelSelection: {
@@ -525,6 +527,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-blocked-settle-project-create"),
         projectId,
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Project",
         workspaceRoot: "/tmp/project-blocked-settle",
         createdAt,
@@ -602,6 +605,7 @@ describe("OrchestrationEngine", () => {
           type: "project.create",
           commandId: CommandId.make("cmd-auto-settle-guard-project"),
           projectId,
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Project",
           workspaceRoot: "/tmp/project-auto-settle-guard",
           createdAt: now(),
@@ -728,6 +732,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-project-1-create"),
         projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Project 1",
         workspaceRoot: "/tmp/project-1",
         defaultModelSelection: {
@@ -789,6 +794,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-project-app-review-create"),
         projectId: asProjectId("project-app-review"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "App Review Project",
         workspaceRoot: "/tmp/project-app-review",
         defaultModelSelection: {
@@ -891,6 +897,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-project-paused-launch"),
         projectId: asProjectId("project-paused-launch"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Paused Launch Project",
         workspaceRoot: "/tmp/project-paused-launch",
         defaultModelSelection: {
@@ -987,6 +994,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-project-app-review-plan-create"),
         projectId: asProjectId("project-app-review-plan"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "App Review Plan Project",
         workspaceRoot: "/tmp/project-app-review-plan",
         defaultModelSelection: {
@@ -1077,6 +1085,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-project-app-review-evidence-create"),
         projectId: asProjectId("project-app-review-evidence"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "App Review Evidence Project",
         workspaceRoot: "/tmp/project-app-review-evidence",
         defaultModelSelection: {
@@ -1212,6 +1221,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-project-archive-create"),
         projectId: asProjectId("project-archive"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Project Archive",
         workspaceRoot: "/tmp/project-archive",
         defaultModelSelection: {
@@ -1371,6 +1381,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-project-replay-create"),
         projectId: asProjectId("project-replay"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Replay Project",
         workspaceRoot: "/tmp/project-replay",
         defaultModelSelection: {
@@ -1430,6 +1441,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-project-stream-create"),
         projectId: asProjectId("project-stream"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Stream Project",
         workspaceRoot: "/tmp/project-stream",
         defaultModelSelection: {
@@ -1492,6 +1504,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-branch-race-project-create"),
         projectId: asProjectId("project-branch-race"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Branch Race Project",
         workspaceRoot: "/tmp/project-branch-race",
         defaultModelSelection: {
@@ -1574,6 +1587,7 @@ describe("OrchestrationEngine", () => {
             type: "project.create",
             commandId: CommandId.make("pr-race-project-create"),
             projectId,
+            ownerUserId: DEFAULT_WORKSPACE_USER_ID,
             title: "PR race project",
             workspaceRoot: "/tmp/pr-race-project",
             defaultModelSelection: null,
@@ -1686,6 +1700,7 @@ describe("OrchestrationEngine", () => {
           type: "project.create",
           commandId: CommandId.make("pr-sync-project-create"),
           projectId,
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "PR sync project",
           workspaceRoot: "/tmp/pr-sync-project",
           defaultModelSelection: null,
@@ -1780,6 +1795,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-worktree-bootstrap-project-create"),
         projectId: asProjectId("project-worktree-bootstrap"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Worktree Bootstrap Project",
         workspaceRoot: "/tmp/project-worktree-bootstrap",
         defaultModelSelection: {
@@ -1834,6 +1850,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-project-ack-create"),
         projectId: asProjectId("project-ack"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Ack Project",
         workspaceRoot: "/tmp/project-ack",
         defaultModelSelection: {
@@ -1925,6 +1942,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-project-turn-diff-create"),
         projectId: asProjectId("project-turn-diff"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Turn Diff Project",
         workspaceRoot: "/tmp/project-turn-diff",
         defaultModelSelection: {
@@ -2048,6 +2066,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create" as const,
         commandId: CommandId.make(`cmd-priority-${suffix}`),
         projectId: asProjectId(`project-priority-${suffix}`),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: `Priority ${suffix}`,
         workspaceRoot: `/tmp/project-priority-${suffix}`,
         defaultModelSelection: {
@@ -2156,6 +2175,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-project-flaky-create"),
         projectId: asProjectId("project-flaky"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Flaky Project",
         workspaceRoot: "/tmp/project-flaky",
         defaultModelSelection: {
@@ -2266,6 +2286,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-project-atomic-create"),
         projectId: asProjectId("project-atomic"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Atomic Project",
         workspaceRoot: "/tmp/project-atomic",
         defaultModelSelection: {
@@ -2417,6 +2438,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-project-sync-create"),
         projectId: asProjectId("project-sync"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Sync Project",
         workspaceRoot: "/tmp/project-sync",
         defaultModelSelection: {
@@ -2505,6 +2527,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-project-duplicate-create"),
         projectId: asProjectId("project-duplicate"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Duplicate Project",
         workspaceRoot: "/tmp/project-duplicate",
         defaultModelSelection: {
@@ -2570,6 +2593,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-retry-project-create"),
         projectId: asProjectId("project-retry"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Retry Project",
         workspaceRoot: "/tmp/project-retry",
         defaultModelSelection: {
@@ -2635,6 +2659,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-rerun-rejection-project"),
         projectId: asProjectId("project-rerun-rejection"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Rerun rejection",
         workspaceRoot: "/tmp/project-rerun-rejection",
         defaultModelSelection: {
@@ -2696,6 +2721,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-conflict-project-create"),
         projectId: asProjectId("project-conflict"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Conflict Project",
         workspaceRoot: "/tmp/project-conflict",
         defaultModelSelection: {
@@ -2783,6 +2809,7 @@ describe("OrchestrationEngine", () => {
           type: "project.create",
           commandId: CommandId.make("cmd-origin-project-create"),
           projectId: asProjectId("project-origin"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Origin Project",
           workspaceRoot: "/tmp/project-origin",
           defaultModelSelection: {
@@ -2799,6 +2826,7 @@ describe("OrchestrationEngine", () => {
         type: "project.create",
         commandId: CommandId.make("cmd-no-origin-project-create"),
         projectId: asProjectId("project-no-origin"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "No Origin Project",
         workspaceRoot: "/tmp/project-no-origin",
         defaultModelSelection: {

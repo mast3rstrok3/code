@@ -63,6 +63,7 @@ function readModel(): OrchestrationReadModel {
     projects: [
       {
         id: projectId,
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "App Review",
         workspaceRoot: "/tmp/app-review",
         repositoryIdentity: null,

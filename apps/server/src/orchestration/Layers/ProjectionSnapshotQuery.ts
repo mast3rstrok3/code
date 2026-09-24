@@ -528,6 +528,7 @@ function mapProjectShellRow(
 ): OrchestrationProjectShell {
   return {
     id: row.projectId,
+    ownerUserId: row.ownerUserId,
     title: row.title,
     workspaceRoot: row.workspaceRoot,
     repositoryIdentity,
@@ -865,6 +866,14 @@ function threadMatchesWorkspaceUserView(
   return userView.kind === "all" || row.ownerUserId === userView.userId;
 }
 
+function projectMatchesWorkspaceUserView(
+  row: Schema.Schema.Type<typeof ProjectionProjectDbRowSchema>,
+  userView: WorkspaceUserView | undefined,
+): boolean {
+  const resolvedView = userView ?? DEFAULT_WORKSPACE_USER_VIEW;
+  return resolvedView.kind === "all" || row.ownerUserId === resolvedView.userId;
+}
+
 function filterThreadRowsForUserView(
   rows: ReadonlyArray<Schema.Schema.Type<typeof ProjectionThreadDbRowSchema>>,
   userView: WorkspaceUserView | undefined,
@@ -925,6 +934,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       sql`
         SELECT
           project_id AS "projectId",
+          owner_user_id AS "ownerUserId",
           title,
           workspace_root AS "workspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
@@ -1745,6 +1755,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       sql`
         SELECT
           project_id AS "projectId",
+          owner_user_id AS "ownerUserId",
           title,
           workspace_root AS "workspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
@@ -1772,6 +1783,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       sql`
         SELECT
           project_id AS "projectId",
+          owner_user_id AS "ownerUserId",
           title,
           workspace_root AS "workspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
@@ -3267,6 +3279,7 @@ pending_approval_requests AS (
 
               const projects: ReadonlyArray<OrchestrationProject> = projectRows.map((row) => ({
                 id: row.projectId,
+                ownerUserId: row.ownerUserId,
                 title: row.title,
                 workspaceRoot: row.workspaceRoot,
                 repositoryIdentity: repositoryIdentities.get(row.projectId) ?? null,
@@ -3563,6 +3576,7 @@ pending_approval_requests AS (
                 updatedAt = maxIso(updatedAt, row.updatedAt);
                 projects.push({
                   id: row.projectId,
+                  ownerUserId: row.ownerUserId,
                   title: row.title,
                   workspaceRoot: row.workspaceRoot,
                   repositoryIdentity: repositoryIdentities.get(row.projectId) ?? null,
@@ -4028,7 +4042,7 @@ pending_approval_requests AS (
               const snapshot = {
                 snapshotSequence: computeSnapshotSequence(stateRows),
                 projects: Arr.filterMap(projectRows, (row) =>
-                  row.deletedAt === null
+                  row.deletedAt === null && projectMatchesWorkspaceUserView(row, options?.userView)
                     ? Result.succeed(
                         mapProjectShellRow(row, repositoryIdentities.get(row.projectId) ?? null),
                       )
@@ -4367,6 +4381,7 @@ pending_approval_requests AS (
                 Effect.map((repositoryIdentity) =>
                   Option.some({
                     id: option.value.projectId,
+                    ownerUserId: option.value.ownerUserId,
                     title: option.value.title,
                     workspaceRoot: option.value.workspaceRoot,
                     repositoryIdentity,

@@ -1,4 +1,4 @@
-import { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { DEFAULT_WORKSPACE_USER_ID, EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
@@ -22,6 +22,7 @@ function makeProject(
   return {
     environmentId: EnvironmentId.make(environmentId),
     id: ProjectId.make(id),
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     title: options.title ?? id,
     workspaceRoot: options.workspaceRoot ?? `/work/${id}`,
     repositoryIdentity: options.repositoryKey

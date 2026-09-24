@@ -3,6 +3,7 @@ import {
   OrchestrationDispatchCommandError,
   ProjectId,
   SourceControlRepositoryError,
+  DEFAULT_WORKSPACE_USER_ID,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -18,6 +19,7 @@ import { parseGitCloneProgressLine } from "./gitCloneProgress.ts";
 const projectId = ProjectId.make("project-1");
 const startInput = {
   projectId,
+  ownerUserId: DEFAULT_WORKSPACE_USER_ID,
   title: "t3code",
   createdAt: "2026-01-01T00:00:00.000Z",
   remoteUrl: "git@github.com:octocat/t3code.git",

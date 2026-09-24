@@ -11,6 +11,7 @@ import {
   type PreviewRecordingMode,
   type EnvironmentId,
   type ProjectIconOverride,
+  WorkspaceUserId,
 } from "@t3tools/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import * as Cause from "effect/Cause";
@@ -18,6 +19,7 @@ import { InfoIcon, Trash2Icon } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
+import { usePrimarySettings } from "../../hooks/useSettings";
 import { releaseProjectDraftUploads } from "../../lib/composerDraftUploads";
 import { readLocalApi } from "../../localApi";
 import {
@@ -197,6 +199,7 @@ function ProjectDetail({
   const threads = useThreadShells();
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   const deleteProject = useAtomCommand(projectEnvironment.delete, { reportFailure: false });
+  const workspaceUsers = usePrimarySettings((settings) => settings.workspaceUsers);
   const projectNameEditedRef = useRef(false);
 
   const faviconPath = representative.faviconPath ?? null;
@@ -229,6 +232,7 @@ function ProjectDetail({
     async (
       input: Partial<{
         title: string;
+        ownerUserId: WorkspaceUserId;
         previewRecordingMode: PreviewRecordingMode | null;
         faviconPath: string | null;
         projectIcon: ProjectIconOverride | null;
@@ -471,6 +475,39 @@ function ProjectDetail({
               />
             }
           />
+          {workspaceUsers.length > 1 ? (
+            <SettingsRow
+              title="Owner"
+              description="Whose project this is. A filtered user view lists only that user's projects."
+              control={
+                <Select
+                  value={representative.ownerUserId}
+                  onValueChange={(value) => {
+                    if (value !== null && value !== representative.ownerUserId) {
+                      void updateAllMembers(
+                        { ownerUserId: WorkspaceUserId.make(value) },
+                        "Failed to change project owner",
+                      );
+                    }
+                  }}
+                >
+                  <SelectTrigger aria-label="Project owner">
+                    <SelectValue>
+                      {workspaceUsers.find((user) => user.id === representative.ownerUserId)
+                        ?.displayName ?? representative.ownerUserId}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup align="end" alignItemWithTrigger={false}>
+                    {workspaceUsers.map((user) => (
+                      <SelectItem key={user.id} value={user.id}>
+                        {user.displayName}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              }
+            />
+          ) : null}
           <SettingsRow
             title="Project icon"
             description={

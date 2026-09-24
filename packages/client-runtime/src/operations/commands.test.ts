@@ -6,6 +6,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   type ClientOrchestrationCommand,
+  DEFAULT_WORKSPACE_USER_ID,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
@@ -86,6 +87,7 @@ describe("environment commands", () => {
       const result = yield* createProject({
         projectId: ProjectId.make("project-1"),
         title: "Project",
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         workspaceRoot: "/workspace/project",
         createdAt: "2026-06-06T00:00:00.000Z",
       }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
@@ -96,6 +98,7 @@ describe("environment commands", () => {
           type: "project.create",
           commandId: "00000000-0000-4000-8000-000000000000",
           projectId: "project-1",
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Project",
           workspaceRoot: "/workspace/project",
           createdAt: "2026-06-06T00:00:00.000Z",

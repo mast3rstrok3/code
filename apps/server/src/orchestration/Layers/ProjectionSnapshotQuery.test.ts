@@ -13,6 +13,7 @@ import {
   TurnId,
   ProviderInstanceId,
   OrchestrationMessageContext,
+  WorkspaceUserId,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -422,6 +423,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.deepEqual(snapshot.projects, [
         {
           id: asProjectId("project-1"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Project 1",
           workspaceRoot: "/tmp/project-1",
           repositoryIdentity: null,
@@ -561,6 +563,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.deepEqual(shellSnapshot.projects, [
         {
           id: asProjectId("project-1"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Project 1",
           workspaceRoot: "/tmp/project-1",
           repositoryIdentity: null,
@@ -3557,4 +3560,46 @@ projectionSnapshotLayer("ProjectionSnapshotQuery activities by kind", (it) => {
       assert.deepEqual(yield* query.listActivitiesByKind("nope"), []);
     }),
   );
+});
+
+it.effect("filters shell projects by the workspace user view", () => {
+  const layer = OrchestrationProjectionSnapshotQueryLive.pipe(
+    Layer.provide(ThreadBackgroundLiveness.layer),
+    Layer.provide(ThreadPlanProgress.layer),
+    Layer.provide(
+      Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+        resolve: () => Effect.succeed(null),
+      }),
+    ),
+    Layer.provideMerge(SqlitePersistenceMemory),
+  );
+  return Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const query = yield* ProjectionSnapshotQuery;
+    yield* sql`INSERT INTO projection_projects
+      (project_id, owner_user_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at)
+      VALUES
+      ('p-nils', 'nils', 'Nils project', '/nils', '[]', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', NULL),
+      ('p-alex', 'alex', 'Alex project', '/alex', '[]', '2026-09-02T00:00:00Z', '2026-09-02T00:00:00Z', NULL)`;
+
+    const everyone = yield* query.getShellSnapshot({ userView: { kind: "all" } });
+    assert.deepStrictEqual(
+      everyone.projects.map((project) => [project.id, project.ownerUserId]),
+      [
+        ["p-nils", "nils"],
+        ["p-alex", "alex"],
+      ],
+    );
+
+    const alexOnly = yield* query.getShellSnapshot({
+      userView: { kind: "user", userId: WorkspaceUserId.make("alex") },
+    });
+    assert.deepStrictEqual(
+      alexOnly.projects.map((project) => project.id),
+      ["p-alex"],
+    );
+
+    const unfiltered = yield* query.getShellSnapshot();
+    assert.strictEqual(unfiltered.projects.length, 2);
+  }).pipe(Effect.provide(layer));
 });

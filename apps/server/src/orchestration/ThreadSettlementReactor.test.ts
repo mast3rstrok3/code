@@ -73,6 +73,7 @@ function makeProject(
 ): OrchestrationProjectShell {
   return {
     id,
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     title: `Project ${id}`,
     workspaceRoot,
     defaultModelSelection: null,

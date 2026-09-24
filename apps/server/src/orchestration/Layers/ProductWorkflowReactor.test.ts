@@ -267,6 +267,7 @@ function seedProjectAndThread(
         type: "project.create",
         commandId: commandId(`project-create-${threadId}`),
         projectId,
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Product Reactor",
         workspaceRoot: "/tmp/product-reactor",
         createdAt: now,

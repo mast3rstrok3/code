@@ -6,6 +6,7 @@ import {
   type OrchestrationReadModel,
   ProjectId,
   type ClientOrchestrationCommand,
+  DEFAULT_WORKSPACE_USER_ID,
 } from "@t3tools/contracts";
 import * as Console from "effect/Console";
 import * as Crypto from "effect/Crypto";
@@ -478,6 +479,7 @@ const projectAddCommand = Command.make("add", {
           type: "project.create",
           commandId: CommandId.make(yield* projectCommandUuid),
           projectId,
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title,
           workspaceRoot,
           createdAt: DateTime.formatIso(yield* DateTime.now),

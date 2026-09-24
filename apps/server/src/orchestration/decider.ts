@@ -1184,6 +1184,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "project.created",
         payload: {
           projectId: command.projectId,
+          ownerUserId: command.ownerUserId,
           title: command.title,
           workspaceRoot: command.workspaceRoot,
           defaultModelSelection: command.defaultModelSelection ?? null,
@@ -1243,6 +1244,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "project.meta-updated",
         payload: {
           projectId: command.projectId,
+          ...(command.ownerUserId !== undefined ? { ownerUserId: command.ownerUserId } : {}),
           ...(command.title !== undefined ? { title: command.title } : {}),
           ...(command.workspaceRoot !== undefined ? { workspaceRoot: command.workspaceRoot } : {}),
           ...(command.defaultModelSelection !== undefined

@@ -4,6 +4,7 @@ import {
   ProjectId,
   CommandId,
   SourceControlDiscoveryResult,
+  DEFAULT_WORKSPACE_USER_ID,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 
@@ -265,6 +266,7 @@ describe("add project shared logic", () => {
         id: ProjectId.make("same-path-other-env"),
         title: "Other",
         workspaceRoot: "/repo",
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         createdAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-01T00:00:00.000Z",
         repositoryIdentity: null,
@@ -276,6 +278,7 @@ describe("add project shared logic", () => {
         id: ProjectId.make("project"),
         title: "Repo",
         workspaceRoot: "/repo/",
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         createdAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-01T00:00:00.000Z",
         repositoryIdentity: null,
@@ -297,6 +300,7 @@ describe("add project shared logic", () => {
         id: ProjectId.make("project"),
         title: "Repo",
         workspaceRoot: "/home/nils/repo",
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         createdAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-01T00:00:00.000Z",
         repositoryIdentity: null,
@@ -320,6 +324,7 @@ describe("add project shared logic", () => {
       buildProjectCreateCommand({
         commandId: CommandId.make("command"),
         projectId: ProjectId.make("project"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         workspaceRoot: "/work/repo",
         createdAt: "2026-01-01T00:00:00.000Z",
       }),
@@ -327,6 +332,7 @@ describe("add project shared logic", () => {
       type: "project.create",
       commandId: "command",
       projectId: "project",
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
       title: "repo",
       workspaceRoot: "/work/repo",
       createWorkspaceRootIfMissing: true,

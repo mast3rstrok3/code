@@ -22,6 +22,7 @@ describe("canonicalizeClientCommandTimestamps", () => {
       type: "project.create",
       commandId: CommandId.make("command-1"),
       projectId: ProjectId.make("project-1"),
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
       title: "Clock-safe project",
       workspaceRoot: "/tmp/clock-safe-project",
       createdAt: clientCreatedAt,

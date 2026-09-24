@@ -620,6 +620,10 @@ export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  // Workspace user the project belongs to; filtered user views show only their own.
+  ownerUserId: WorkspaceUserId.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKSPACE_USER_ID)),
+  ),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   // Per-project override for where new threads start. Null/absent means
@@ -2129,6 +2133,9 @@ export const OrchestrationProjectShell = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  ownerUserId: WorkspaceUserId.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKSPACE_USER_ID)),
+  ),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
@@ -2411,6 +2418,9 @@ export const ProjectCreateCommand = Schema.Struct({
   type: Schema.Literal("project.create"),
   commandId: CommandId,
   projectId: ProjectId,
+  ownerUserId: WorkspaceUserId.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKSPACE_USER_ID)),
+  ),
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
   createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
@@ -2422,6 +2432,7 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   type: Schema.Literal("project.meta.update"),
   commandId: CommandId,
   projectId: ProjectId,
+  ownerUserId: Schema.optional(WorkspaceUserId),
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
@@ -3844,6 +3855,10 @@ export const OrchestrationActorKind = Schema.Literals(["client", "server", "prov
 
 export const ProjectCreatedPayload = Schema.Struct({
   projectId: ProjectId,
+  // Defaulted so events persisted before projects had owners still decode.
+  ownerUserId: WorkspaceUserId.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKSPACE_USER_ID)),
+  ),
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
@@ -3858,6 +3873,7 @@ export const ProjectCreatedPayload = Schema.Struct({
 
 export const ProjectMetaUpdatedPayload = Schema.Struct({
   projectId: ProjectId,
+  ownerUserId: Schema.optional(WorkspaceUserId),
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),

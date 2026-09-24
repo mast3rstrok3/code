@@ -1,4 +1,9 @@
-import { EnvironmentId, ProjectId, ProviderInstanceId } from "@t3tools/contracts";
+import {
+  DEFAULT_WORKSPACE_USER_ID,
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -40,6 +45,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     id: ProjectId.make("project-1"),
     environmentId: primaryEnvironmentId,
     title: "shared-repo",
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     workspaceRoot: "/tmp/shared-repo",
     repositoryIdentity: null,
     defaultModelSelection: {

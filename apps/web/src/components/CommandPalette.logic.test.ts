@@ -333,6 +333,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     id: PROJECT_ID,
     environmentId: LOCAL_ENVIRONMENT_ID,
     title: "Project",
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     workspaceRoot: "/workspace/project",
     defaultModelSelection: null,
     scripts: [],

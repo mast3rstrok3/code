@@ -33,6 +33,7 @@ it.layer(NodeServices.layer)("thread history import", (it) => {
         metadata: {},
         payload: {
           projectId,
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Project",
           workspaceRoot: "/tmp/project",
           defaultModelSelection: null,

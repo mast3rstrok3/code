@@ -114,6 +114,7 @@ function thread(
 
 const project = {
   id: PROJECT_ID,
+  ownerUserId: DEFAULT_WORKSPACE_USER_ID,
   title: "Project",
   workspaceRoot: "/workspace/project",
   repositoryIdentity: {

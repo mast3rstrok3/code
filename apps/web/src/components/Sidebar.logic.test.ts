@@ -2449,6 +2449,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     id: ProjectId.make("project-1"),
     environmentId: localEnvironmentId,
     title: "Project",
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     workspaceRoot: "/tmp/project",
     repositoryIdentity: null,
     defaultModelSelection: {

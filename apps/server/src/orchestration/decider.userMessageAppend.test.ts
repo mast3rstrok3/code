@@ -33,6 +33,7 @@ const readModelWithThread = Effect.gen(function* () {
     metadata: {},
     payload: {
       projectId,
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
       title: "Project",
       workspaceRoot: "/tmp/project",
       defaultModelSelection: null,

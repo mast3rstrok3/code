@@ -59,6 +59,7 @@ function makeReadModel(pullRequests: ReadonlyArray<ThreadPullRequestLink>): Orch
     projects: [
       {
         id: ProjectId.make("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Project",
         workspaceRoot: "/repo",
         defaultModelSelection: null,

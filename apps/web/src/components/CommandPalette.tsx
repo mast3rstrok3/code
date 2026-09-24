@@ -77,7 +77,8 @@ import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstra
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
-import { useClientSettings } from "../hooks/useSettings";
+import { useClientSettings, usePrimarySettings } from "../hooks/useSettings";
+import { resolveDefaultThreadOwnerUserId } from "../lib/workspaceUsers";
 import { useTheme } from "../hooks/useTheme";
 import { useCustomThemes } from "../hooks/useCustomThemes";
 import { useEnvironmentThemeDefinitions } from "../hooks/useEnvironmentTheme";
@@ -695,6 +696,16 @@ function OpenCommandPaletteDialog(props: {
   const isActionsOnly = deferredQuery.startsWith(">");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
   const clientSettings = useClientSettings();
+  const workspaceUsers = usePrimarySettings((settings) => settings.workspaceUsers);
+  // New projects belong to whoever the sidebar says we are acting as.
+  const newProjectOwnerUserId = useMemo(
+    () =>
+      resolveDefaultThreadOwnerUserId({
+        activeWorkspaceUserId: clientSettings.activeWorkspaceUserId,
+        workspaceUsers,
+      }),
+    [clientSettings.activeWorkspaceUserId, workspaceUsers],
+  );
   const createProject = useAtomCommand(projectEnvironment.create, {
     reportFailure: false,
   });
@@ -2225,6 +2236,7 @@ function OpenCommandPaletteDialog(props: {
         environmentId: input.environmentId,
         input: {
           projectId,
+          ownerUserId: newProjectOwnerUserId,
           title: inferProjectTitleFromPath(cwd),
           workspaceRoot: cwd,
           createWorkspaceRootIfMissing: true,
@@ -2453,6 +2465,7 @@ function OpenCommandPaletteDialog(props: {
       environmentId: addProjectCloneFlow.environmentId,
       input: {
         projectId,
+        ownerUserId: newProjectOwnerUserId,
         title: inferProjectTitleFromPath(destinationPath),
         createdAt: new Date().toISOString(),
         remoteUrl: addProjectCloneFlow.remoteUrl,

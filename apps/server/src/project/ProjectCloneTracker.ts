@@ -6,6 +6,7 @@ import type {
   ProjectCloneStartResult,
   ProjectId,
   SourceControlRepositoryInfo,
+  WorkspaceUserId,
 } from "@t3tools/contracts";
 import {
   OrchestrationDispatchCommandError,
@@ -80,6 +81,7 @@ export class ProjectCloneTracker extends Context.Service<
 export interface ProjectCloneHooks {
   readonly createProject: (input: {
     readonly projectId: ProjectId;
+    readonly ownerUserId: WorkspaceUserId;
     readonly title: string;
     readonly workspaceRoot: string;
     readonly createdAt: string;
@@ -316,6 +318,7 @@ export const make = Effect.gen(function* () {
           // thread.create or project.delete racing this call already sees it.
           yield* hooks.createProject({
             projectId: input.projectId,
+            ownerUserId: input.ownerUserId,
             title: input.title,
             workspaceRoot: prepared.destinationPath,
             createdAt: input.createdAt,

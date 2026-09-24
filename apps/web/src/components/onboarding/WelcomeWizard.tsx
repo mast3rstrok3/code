@@ -29,6 +29,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
+import { useClientSettings, usePrimarySettings } from "../../hooks/useSettings";
+import { resolveDefaultThreadOwnerUserId } from "../../lib/workspaceUsers";
 import { hasCloudPublicConfig } from "../../cloud/publicConfig";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { useCompleteOnboarding } from "../../onboarding/firstRun";
@@ -953,6 +955,12 @@ function ImportStep({
 }) {
   const { environments } = useEnvironments();
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
+  const activeWorkspaceUserId = useClientSettings((settings) => settings.activeWorkspaceUserId);
+  const workspaceUsers = usePrimarySettings((settings) => settings.workspaceUsers);
+  const ownerUserId = useMemo(
+    () => resolveDefaultThreadOwnerUserId({ activeWorkspaceUserId, workspaceUsers }),
+    [activeWorkspaceUserId, workspaceUsers],
+  );
   const importThreads = useAtomCommand(agentSessionImport, { reportFailure: false });
   const projects = useProjects();
   const [selectedPaths, setSelectedPaths] = useState<ReadonlySet<string> | null>(null);
@@ -1074,6 +1082,7 @@ function ImportStep({
           input: {
             projectId,
             commandId: attempt.commandId,
+            ownerUserId,
             title: candidate.title,
             workspaceRoot: candidate.path,
             createWorkspaceRootIfMissing: false,

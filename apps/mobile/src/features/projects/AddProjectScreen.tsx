@@ -41,6 +41,7 @@ import {
   type EnvironmentMachineKind,
   ProjectId,
   resolveEnvironmentMachineKind,
+  DEFAULT_WORKSPACE_USER_ID,
 } from "@t3tools/contracts";
 import { CommonActions, StackActions, useNavigation } from "@react-navigation/native";
 import { SymbolView } from "../../components/AppSymbol";
@@ -668,6 +669,8 @@ function useCreateProject(environment: EnvironmentOption | null) {
       const command = buildProjectCreateCommand({
         commandId: CommandId.make(uuidv4()),
         projectId,
+        // Mobile has no user switcher yet; new projects belong to the default user.
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         workspaceRoot,
         createdAt: new Date().toISOString(),
       });
@@ -1006,6 +1009,7 @@ export function AddProjectDestinationScreen(props: {
         environmentId: environment.environmentId,
         input: {
           projectId,
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title,
           createdAt: new Date().toISOString(),
           remoteUrl,
