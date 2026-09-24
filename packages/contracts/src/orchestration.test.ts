@@ -50,6 +50,7 @@ import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { DEFAULT_WORKSPACE_USER_ID } from "./workspaceUsers.ts";
 
 const decodeTurnDiffInput = Schema.decodeUnknownEffect(OrchestrationGetTurnDiffInput);
 const decodeFullThreadDiffInput = Schema.decodeUnknownEffect(OrchestrationGetFullThreadDiffInput);
@@ -2228,6 +2229,7 @@ it.effect("encodes compatible icons inside snapshots and client commands", () =>
       id: ProjectId.make("monogram"),
       title: "Monogram",
       workspaceRoot: "/tmp/monogram",
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
       defaultModelSelection: null,
       scripts: [],
       projectIcon,
