@@ -1,4 +1,8 @@
-import type { WorkspaceUser } from "@t3tools/contracts";
+import type {
+  GithubOwnerTokenVerification,
+  GithubOwnerTokenVerificationInput,
+  WorkspaceUser,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -21,6 +25,77 @@ const GithubIdentity = Schema.Struct({
 });
 
 const decodeGithubIdentity = Schema.decodeUnknownEffect(GithubIdentity);
+
+const GithubAccount = Schema.Struct({
+  login: Schema.NonEmptyString,
+  type: Schema.String,
+});
+
+const decodeGithubAccount = Schema.decodeUnknownEffect(GithubAccount);
+
+/**
+ * Checks an owner token before it is saved, so a mistyped owner or a dead token
+ * fails in Settings instead of as a 403 inside a thread. A fine-grained token
+ * reaches only its creator's repositories and those of organizations, so one
+ * saved for a different personal account is refused. Organization access
+ * cannot be read from the API and is left to GitHub at push time.
+ */
+export const verifyGithubOwnerToken = Effect.fn("verifyGithubOwnerToken")(function* (
+  input: GithubOwnerTokenVerificationInput,
+  request: typeof fetch = fetch,
+) {
+  const invalid = (message: string): GithubOwnerTokenVerification => ({ valid: false, message });
+  const get = (path: string) =>
+    Effect.tryPromise({
+      try: async (signal) => {
+        const response = await request(`https://api.github.com${path}`, {
+          headers: {
+            Authorization: `Bearer ${input.personalAccessToken}`,
+            Accept: "application/vnd.github+json",
+          },
+          signal,
+          redirect: "error",
+        });
+        return { status: response.status, body: response.ok ? await response.json() : null };
+      },
+      catch: () => new WorkspaceUserCredentialsError({ message: "GitHub request failed." }),
+    }).pipe(Effect.timeout("15 seconds"));
+
+  const verification = Effect.gen(function* () {
+    const tokenUser = yield* get("/user");
+    if (tokenUser.status === 401) {
+      return invalid("GitHub rejected this token. Check that it is complete and not expired.");
+    }
+    if (tokenUser.body === null) {
+      return invalid(`GitHub could not check this token (HTTP ${tokenUser.status}).`);
+    }
+    const ownerAccount = yield* get(`/users/${encodeURIComponent(input.owner)}`);
+    if (ownerAccount.status === 404) {
+      return invalid(`GitHub has no user or organization named ${input.owner}.`);
+    }
+    if (ownerAccount.body === null) {
+      return invalid(`GitHub could not look up ${input.owner} (HTTP ${ownerAccount.status}).`);
+    }
+    const [tokenAccount, owner] = yield* Effect.all([
+      decodeGithubAccount(tokenUser.body),
+      decodeGithubAccount(ownerAccount.body),
+    ]);
+    if (
+      input.personalAccessToken.startsWith("github_pat_") &&
+      owner.type === "User" &&
+      owner.login.toLowerCase() !== tokenAccount.login.toLowerCase()
+    ) {
+      return invalid(
+        `This token belongs to ${tokenAccount.login}, so it cannot reach repositories owned by ${owner.login}.`,
+      );
+    }
+    return { valid: true, owner: owner.login } satisfies GithubOwnerTokenVerification;
+  });
+
+  return yield* verification.pipe(
+    Effect.orElseSucceed(() => invalid("Could not reach GitHub to check the token. Try again.")),
+  );
+});
 
 /**
  * Picks the token for a repository: the owner token matching its GitHub owner,

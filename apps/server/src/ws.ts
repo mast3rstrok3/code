@@ -200,6 +200,7 @@ import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
+import { verifyGithubOwnerToken } from "./workspaceUserCredentials.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { collectHierarchyPostOrder } from "@t3tools/shared/threadHierarchy";
 
@@ -3308,6 +3309,10 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "server",
             },
           ),
+        [WS_METHODS.serverVerifyGithubOwnerToken]: (input) =>
+          observeRpcEffect(WS_METHODS.serverVerifyGithubOwnerToken, verifyGithubOwnerToken(input), {
+            "rpc.aggregate": "server",
+          }),
         [WS_METHODS.serverGetWorkflowPrompts]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverGetWorkflowPrompts,

@@ -30,6 +30,11 @@ needed permissions already selected; choose the repositories there yourself. Whe
 agents still start with one of the person's tokens, but push and pull request actions stop with an
 error naming the owner.
 
+Adding or replacing a token checks it with GitHub first. The token must be valid, the owner must
+exist on GitHub, and a fine-grained token for a personal account must belong to that account.
+GitHub does not report which organizations a token can reach, so a token created for the wrong
+organization is only caught when a push or pull request fails.
+
 Every user, including the main user, needs a name and a valid token before running agents. A missing
 name or a missing or invalid token produces an error before the agent starts or a thread Git action runs.
 These actions do not fall back to the server's GitHub CLI login. Changing a name, replacing a token, or

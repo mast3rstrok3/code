@@ -22,6 +22,20 @@ export const WorkspaceUserGithubOwnerToken = Schema.Struct({
 });
 export type WorkspaceUserGithubOwnerToken = typeof WorkspaceUserGithubOwnerToken.Type;
 
+/** Checked with GitHub before an owner token is saved. */
+export const GithubOwnerTokenVerificationInput = Schema.Struct({
+  owner: TrimmedNonEmptyString,
+  personalAccessToken: TrimmedNonEmptyString,
+});
+export type GithubOwnerTokenVerificationInput = typeof GithubOwnerTokenVerificationInput.Type;
+
+/** `owner` is GitHub's spelling of the login, which the saved token should use. */
+export const GithubOwnerTokenVerification = Schema.Union([
+  Schema.Struct({ valid: Schema.Literal(true), owner: TrimmedNonEmptyString }),
+  Schema.Struct({ valid: Schema.Literal(false), message: Schema.String }),
+]);
+export type GithubOwnerTokenVerification = typeof GithubOwnerTokenVerification.Type;
+
 /** `personalAccessToken` is the default for repositories no owner token matches. */
 export const WorkspaceUserGithubSettings = Schema.Struct({
   ...GithubPersonalAccessTokenFields,

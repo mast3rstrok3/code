@@ -1,8 +1,11 @@
 import { CheckIcon, ExternalLinkIcon, KeyRoundIcon, PlusIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import type { WorkspaceUser } from "@t3tools/contracts";
+import type { GithubOwnerTokenVerification, WorkspaceUser } from "@t3tools/contracts";
 
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
+import { usePrimaryEnvironmentId } from "../../state/environments";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -57,6 +60,26 @@ function ownerTokenValidationMessage(validation: GithubOwnerTokenValidation): st
     return "That owner already has a token.";
   }
   return null;
+}
+
+/** Asks the server to check an owner token with GitHub before it is saved. */
+function useVerifyGithubOwnerToken() {
+  const environmentId = usePrimaryEnvironmentId();
+  const verify = useAtomCommand(serverEnvironment.verifyGithubOwnerToken, {
+    reportFailure: false,
+  });
+  return useCallback(
+    async (owner: string, personalAccessToken: string): Promise<GithubOwnerTokenVerification> => {
+      if (!environmentId) {
+        return { valid: false, message: "Connect to the server to check the token." };
+      }
+      const result = await verify({ environmentId, input: { owner, personalAccessToken } });
+      return result._tag === "Success"
+        ? result.value
+        : { valid: false, message: "Could not check the token. Try again." };
+    },
+    [environmentId, verify],
+  );
 }
 
 function updateWorkspaceUserArray(
@@ -198,10 +221,20 @@ function OwnerTokenRow({
   readonly onWorkspaceUsersChange: (users: ReadonlyArray<WorkspaceUser>) => void;
 }) {
   const [tokenDraft, setTokenDraft] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const verifyToken = useVerifyGithubOwnerToken();
   const trimmedToken = tokenDraft.trim();
 
-  const handleReplace = () => {
-    const nextUsers = onReplace(tokenDraft);
+  const handleReplace = async () => {
+    setChecking(true);
+    const verification = await verifyToken(owner, trimmedToken);
+    setChecking(false);
+    if (!verification.valid) {
+      setError(verification.message);
+      return;
+    }
+    const nextUsers = onReplace(trimmedToken);
     updateWorkspaceUserArray(nextUsers, onWorkspaceUsersChange);
     if (nextUsers) {
       setTokenDraft("");
@@ -210,37 +243,49 @@ function OwnerTokenRow({
 
   return (
     <form
-      className="grid gap-2 sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)_auto_auto] sm:items-center"
+      className="grid gap-1.5"
       onSubmit={(event) => {
         event.preventDefault();
-        if (trimmedToken.length > 0) {
-          handleReplace();
+        if (trimmedToken.length > 0 && !checking) {
+          void handleReplace();
         }
       }}
     >
-      <span className="truncate text-xs font-medium text-foreground">{owner}</span>
-      <Input
-        size="sm"
-        type="password"
-        value={tokenDraft}
-        autoComplete="off"
-        aria-label={label}
-        placeholder="Paste a new token to replace it"
-        onChange={(event) => setTokenDraft(event.target.value)}
-      />
-      <Button type="submit" size="sm" variant="outline" disabled={trimmedToken.length === 0}>
-        <KeyRoundIcon className="size-3.5" />
-        Replace
-      </Button>
-      <Button
-        type="button"
-        size="sm"
-        variant="ghost"
-        onClick={() => updateWorkspaceUserArray(onRemove(), onWorkspaceUsersChange)}
-      >
-        <XIcon className="size-3.5" />
-        Remove
-      </Button>
+      <div className="grid gap-2 sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)_auto_auto] sm:items-center">
+        <span className="truncate text-xs font-medium text-foreground">{owner}</span>
+        <Input
+          size="sm"
+          type="password"
+          value={tokenDraft}
+          autoComplete="off"
+          aria-label={label}
+          placeholder="Paste a new token to replace it"
+          aria-invalid={error ? true : undefined}
+          onChange={(event) => {
+            setTokenDraft(event.target.value);
+            setError(null);
+          }}
+        />
+        <Button
+          type="submit"
+          size="sm"
+          variant="outline"
+          disabled={trimmedToken.length === 0 || checking}
+        >
+          <KeyRoundIcon className="size-3.5" />
+          {checking ? "Checking…" : "Replace"}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={() => updateWorkspaceUserArray(onRemove(), onWorkspaceUsersChange)}
+        >
+          <XIcon className="size-3.5" />
+          Remove
+        </Button>
+      </div>
+      {error ? <p className="text-[11px] text-destructive">{error}</p> : null}
     </form>
   );
 }
@@ -256,11 +301,26 @@ function AddGithubOwnerTokenForm({
 }) {
   const [owner, setOwner] = useState("");
   const [tokenDraft, setTokenDraft] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [verificationError, setVerificationError] = useState<string | null>(null);
+  const verifyToken = useVerifyGithubOwnerToken();
   const validation = validateAddGithubOwnerToken(user, owner, tokenDraft);
-  const message = ownerTokenValidationMessage(validation);
+  const message = ownerTokenValidationMessage(validation) ?? verificationError;
 
-  const handleAdd = () => {
-    const nextUsers = addWorkspaceUserGithubOwnerToken(workspaceUsers, user.id, owner, tokenDraft);
+  const handleAdd = async (candidate: { owner: string; personalAccessToken: string }) => {
+    setChecking(true);
+    const verification = await verifyToken(candidate.owner, candidate.personalAccessToken);
+    setChecking(false);
+    if (!verification.valid) {
+      setVerificationError(verification.message);
+      return;
+    }
+    const nextUsers = addWorkspaceUserGithubOwnerToken(
+      workspaceUsers,
+      user.id,
+      verification.owner,
+      candidate.personalAccessToken,
+    );
     updateWorkspaceUserArray(nextUsers, onWorkspaceUsersChange);
     if (nextUsers) {
       setOwner("");
@@ -273,8 +333,8 @@ function AddGithubOwnerTokenForm({
       className="grid gap-1.5"
       onSubmit={(event) => {
         event.preventDefault();
-        if (validation.valid) {
-          handleAdd();
+        if (validation.valid && !checking) {
+          void handleAdd(validation);
         }
       }}
     >
@@ -286,7 +346,10 @@ function AddGithubOwnerTokenForm({
           aria-label={`${user.displayName} GitHub token owner`}
           aria-invalid={message ? true : undefined}
           placeholder="GitHub user or organization"
-          onChange={(event) => setOwner(event.target.value)}
+          onChange={(event) => {
+            setOwner(event.target.value);
+            setVerificationError(null);
+          }}
         />
         <Input
           size="sm"
@@ -295,11 +358,14 @@ function AddGithubOwnerTokenForm({
           autoComplete="off"
           aria-label={`${user.displayName} GitHub token for owner`}
           placeholder="Token for its repositories"
-          onChange={(event) => setTokenDraft(event.target.value)}
+          onChange={(event) => {
+            setTokenDraft(event.target.value);
+            setVerificationError(null);
+          }}
         />
-        <Button type="submit" size="sm" variant="outline" disabled={!validation.valid}>
+        <Button type="submit" size="sm" variant="outline" disabled={!validation.valid || checking}>
           <PlusIcon className="size-3.5" />
-          Add token
+          {checking ? "Checking…" : "Add token"}
         </Button>
       </div>
       {message ? <p className="text-[11px] text-destructive">{message}</p> : null}

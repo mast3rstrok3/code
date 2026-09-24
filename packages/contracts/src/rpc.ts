@@ -287,6 +287,10 @@ import {
 import { UsagePricing, UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
 import {
+  GithubOwnerTokenVerification,
+  GithubOwnerTokenVerificationInput,
+} from "./workspaceUsers.ts";
+import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
   ProjectCloneListEvent,
@@ -432,6 +436,7 @@ export const WS_METHODS = {
   serverRemoveKeybinding: "server.removeKeybinding",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
+  serverVerifyGithubOwnerToken: "server.verifyGithubOwnerToken",
   serverGetWorkflowPrompts: "server.getWorkflowPrompts",
   serverGetWorkflowCatalog: "server.getWorkflowCatalog",
   serverDiscoverSourceControl: "server.discoverSourceControl",
@@ -654,6 +659,12 @@ const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
   payload: Schema.Struct({ patch: ServerSettingsPatch }),
   success: ServerSettings,
   error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
+});
+
+const WsServerVerifyGithubOwnerTokenRpc = Rpc.make(WS_METHODS.serverVerifyGithubOwnerToken, {
+  payload: GithubOwnerTokenVerificationInput,
+  success: GithubOwnerTokenVerification,
+  error: EnvironmentAuthorizationError,
 });
 
 export const WsServerGetWorkflowPromptsRpc = Rpc.make(WS_METHODS.serverGetWorkflowPrompts, {
@@ -1620,6 +1631,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRemoveKeybindingRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
+  WsServerVerifyGithubOwnerTokenRpc,
   WsServerGetWorkflowPromptsRpc,
   WsServerGetWorkflowCatalogRpc,
   WsServerDiscoverSourceControlRpc,

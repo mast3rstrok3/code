@@ -52,6 +52,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverRemoveKeybinding]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverGetSettings]: AuthOrchestrationReadScope,
   [WS_METHODS.serverUpdateSettings]: AuthOrchestrationOperateScope,
+  [WS_METHODS.serverVerifyGithubOwnerToken]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverGetWorkflowPrompts]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetWorkflowCatalog]: AuthOrchestrationReadScope,
   [WS_METHODS.serverDiscoverSourceControl]: AuthOrchestrationReadScope,

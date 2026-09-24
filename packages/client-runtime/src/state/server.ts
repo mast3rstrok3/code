@@ -1143,6 +1143,10 @@ export function createServerEnvironmentAtoms<R, E>(
       scheduler: configScheduler,
       concurrency: configConcurrency,
     }),
+    verifyGithubOwnerToken: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:verify-github-owner-token",
+      tag: WS_METHODS.serverVerifyGithubOwnerToken,
+    }),
     signalProcess: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,

@@ -4,6 +4,7 @@ import { it } from "@effect/vitest";
 import { describe, expect, vi } from "vite-plus/test";
 import {
   resolveWorkspaceUserCredentials,
+  verifyGithubOwnerToken,
   workspaceUserGitEnvironment,
   workspaceUserProviderEnvironment,
 } from "./workspaceUserCredentials.ts";
@@ -170,6 +171,79 @@ describe("workspace user credentials", () => {
         Effect.flip,
       );
       expect(missingOwner.message).toContain("thread owner no longer exists");
+    }),
+  );
+});
+
+describe("verifyGithubOwnerToken", () => {
+  const accounts: Record<string, { login: string; type: string }> = {
+    "/user": { login: "ada", type: "User" },
+    "/users/ada": { login: "ada", type: "User" },
+    "/users/grace": { login: "grace", type: "User" },
+    "/users/nightingale-ai": { login: "Nightingale-AI", type: "Organization" },
+  };
+  const github = vi.fn<typeof fetch>().mockImplementation(async (url) => {
+    const account = accounts[new URL(String(url)).pathname];
+    return account ? Response.json(account) : new Response(null, { status: 404 });
+  });
+
+  it.effect("accepts an organization and returns GitHub's spelling of it", () =>
+    Effect.gen(function* () {
+      const result = yield* verifyGithubOwnerToken(
+        { owner: "nightingale-ai", personalAccessToken: "github_pat_ada" },
+        github,
+      );
+      expect(result).toEqual({ valid: true, owner: "Nightingale-AI" });
+    }),
+  );
+
+  it.effect("refuses an owner GitHub does not know", () =>
+    Effect.gen(function* () {
+      const result = yield* verifyGithubOwnerToken(
+        { owner: "nightingale-a1", personalAccessToken: "github_pat_ada" },
+        github,
+      );
+      expect(result).toEqual({
+        valid: false,
+        message: "GitHub has no user or organization named nightingale-a1.",
+      });
+    }),
+  );
+
+  it.effect("refuses a fine-grained token saved for someone else's account", () =>
+    Effect.gen(function* () {
+      const fineGrained = yield* verifyGithubOwnerToken(
+        { owner: "grace", personalAccessToken: "github_pat_ada" },
+        github,
+      );
+      expect(fineGrained.valid).toBe(false);
+      // A classic token can reach repositories its owner collaborates on.
+      const classic = yield* verifyGithubOwnerToken(
+        { owner: "grace", personalAccessToken: "ghp_ada" },
+        github,
+      );
+      expect(classic).toEqual({ valid: true, owner: "grace" });
+    }),
+  );
+
+  it.effect("refuses a token GitHub rejects, and reports an unreachable GitHub", () =>
+    Effect.gen(function* () {
+      const rejected = yield* verifyGithubOwnerToken(
+        { owner: "ada", personalAccessToken: "github_pat_old" },
+        vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 401 })),
+      );
+      expect(rejected).toEqual({
+        valid: false,
+        message: "GitHub rejected this token. Check that it is complete and not expired.",
+      });
+      const offline = yield* verifyGithubOwnerToken(
+        { owner: "ada", personalAccessToken: "github_pat_ada" },
+        vi.fn<typeof fetch>().mockRejectedValue(new TypeError("fetch failed")),
+      );
+      expect(offline).toEqual({
+        valid: false,
+        message: "Could not reach GitHub to check the token. Try again.",
+      });
     }),
   );
 });
