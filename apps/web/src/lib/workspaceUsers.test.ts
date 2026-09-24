@@ -4,7 +4,7 @@ import {
   WorkspaceUserId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-import { resolveDefaultThreadOwnerUserId } from "./workspaceUsers";
+import { isProjectGroupOwnedBy, resolveDefaultThreadOwnerUserId } from "./workspaceUsers";
 
 describe("new thread ownership", () => {
   const ada = { ...DEFAULT_WORKSPACE_USER, id: WorkspaceUserId.make("ada"), displayName: "Ada" };
@@ -28,5 +28,18 @@ describe("new thread ownership", () => {
         workspaceUsers: [DEFAULT_WORKSPACE_USER],
       }),
     ).toBe(DEFAULT_WORKSPACE_USER_ID);
+  });
+});
+
+describe("project picker ownership", () => {
+  const ada = WorkspaceUserId.make("ada");
+  const nils = DEFAULT_WORKSPACE_USER_ID;
+  it("offers a project group when any of its checkouts belongs to the acting user", () => {
+    const adasCheckout = { ownerUserId: ada };
+    const nilsCheckout = { ownerUserId: nils };
+    expect(isProjectGroupOwnedBy({ memberProjects: [adasCheckout] }, nils)).toBe(false);
+    expect(isProjectGroupOwnedBy({ memberProjects: [adasCheckout, nilsCheckout] }, nils)).toBe(
+      true,
+    );
   });
 });

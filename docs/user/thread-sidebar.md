@@ -13,7 +13,9 @@ The selection stays in that browser, so people on different devices can choose d
 
 Projects belong to a user too. A project you add while acting as someone belongs to them, and a
 filtered **Show threads** view lists only that user's projects. Choose **Everyone** to see all
-projects, and change a project's owner in **Settings > Projects**.
+projects, and change a project's owner in **Settings > Projects**. The new thread picker and the
+sidebar's project search offer only the projects of the user you are acting as, even while you view
+everyone's threads.
 
 Threads keep their owner when you switch users. Their agents and Git actions use the owner's
 GitHub account. You can change a thread's owner in its header. Workspace users share access

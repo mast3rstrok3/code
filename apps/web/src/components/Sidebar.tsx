@@ -126,6 +126,7 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings, usePrimarySettings } from "../hooks/useSettings";
+import { isProjectGroupOwnedBy, resolveDefaultThreadOwnerUserId } from "../lib/workspaceUsers";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
@@ -2221,6 +2222,9 @@ export default function Sidebar() {
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
+  const activeWorkspaceUserId = useClientSettings((s) => s.activeWorkspaceUserId);
+  const workspaceUsers = usePrimarySettings((s) => s.workspaceUsers);
+  const actingUserId = resolveDefaultThreadOwnerUserId({ activeWorkspaceUserId, workspaceUsers });
   const {
     settleThread,
     unsettleThread,
@@ -2452,12 +2456,18 @@ export default function Sidebar() {
   const projectScopeItems = useMemo(
     () => [
       { value: "all", label: "All projects" },
-      ...projectGroups.map((project) => ({
-        value: project.projectKey,
-        label: project.displayName,
-      })),
+      // A thread's project badge can scope to another user's project; keep it listed.
+      ...projectGroups
+        .filter(
+          (project) =>
+            isProjectGroupOwnedBy(project, actingUserId) || project.projectKey === projectScopeKey,
+        )
+        .map((project) => ({
+          value: project.projectKey,
+          label: project.displayName,
+        })),
     ],
-    [projectGroups],
+    [actingUserId, projectGroups, projectScopeKey],
   );
   // Same-named projects on two machines are only told apart by where they
   // live, so rows on another machine carry its icon once the catalog spans

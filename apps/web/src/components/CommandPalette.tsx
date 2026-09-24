@@ -78,7 +78,7 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { useClientSettings, usePrimarySettings } from "../hooks/useSettings";
-import { resolveDefaultThreadOwnerUserId } from "../lib/workspaceUsers";
+import { isProjectGroupOwnedBy, resolveDefaultThreadOwnerUserId } from "../lib/workspaceUsers";
 import { useTheme } from "../hooks/useTheme";
 import { useCustomThemes } from "../hooks/useCustomThemes";
 import { useEnvironmentThemeDefinitions } from "../hooks/useEnvironmentTheme";
@@ -939,10 +939,12 @@ function OpenCommandPaletteDialog(props: {
   const projectPickerEntries = useMemo(
     () =>
       buildSidebarProjectPickerEntries({
-        groups: projectGroups,
+        groups: projectGroups.filter((group) =>
+          isProjectGroupOwnedBy(group, newProjectOwnerUserId),
+        ),
         preferredProjectRef: contextualProjectRef,
       }),
-    [contextualProjectRef, projectGroups],
+    [contextualProjectRef, newProjectOwnerUserId, projectGroups],
   );
   const pickerProjects = useMemo(
     () =>

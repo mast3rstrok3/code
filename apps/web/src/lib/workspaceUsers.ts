@@ -14,3 +14,14 @@ export function resolveDefaultThreadOwnerUserId(input: {
   }
   return DEFAULT_WORKSPACE_USER_ID;
 }
+
+/**
+ * Project pickers offer only the acting user's projects, whatever the thread
+ * view shows: a new thread belongs to the acting user, so it starts in their project.
+ */
+export function isProjectGroupOwnedBy(
+  group: { readonly memberProjects: ReadonlyArray<{ readonly ownerUserId: WorkspaceUserId }> },
+  ownerUserId: WorkspaceUserId,
+): boolean {
+  return group.memberProjects.some((project) => project.ownerUserId === ownerUserId);
+}
