@@ -11997,6 +11997,47 @@ it.effect("resumes native handoffs from persisted state without accepting late L
         (value) => value.id === run.id,
       )!;
       expect(current.ticketStates[0]?.status).toBe("awaiting-native-verification");
+      yield* TestClock.adjust(Duration.minutes(25));
+      yield* system.reactor.recoverIncompleteStages();
+      yield* system.reactor.drain;
+      current = (yield* system.query.getSnapshot()).implementationRuns.find(
+        (value) => value.id === run.id,
+      )!;
+      expect(current.status).toBe("running");
+      expect(current.automationHalt).toBeNull();
+      const recoveryTime = DateTime.formatIso(yield* DateTime.now);
+      const stallDetail = `This run has been \`running\` since ${now} with no agent working on it, no stage queued, and no reported failure. Automation cannot tell what it was waiting for, so it stops here rather than looking busy. Re-run the stage it should be in.`;
+      for (const [tag, detail] of [
+        ["unrelated", "The implementation lost its required branch."],
+        ["idle-handoff", stallDetail],
+      ] as const) {
+        const automationHalt = {
+          stage: "implementation" as const,
+          category: "structural-invariant" as const,
+          detail,
+          haltedAt: recoveryTime,
+        };
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId(`native-halt-${tag}`),
+          threadId: sourceThreadId,
+          run: {
+            ...current,
+            status: "needs-human-attention",
+            automationHalt,
+            updatedAt: recoveryTime,
+          },
+          createdAt: recoveryTime,
+        });
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+        current = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (value) => value.id === run.id,
+        )!;
+        expect(current.status).toBe(tag === "idle-handoff" ? "running" : "needs-human-attention");
+        expect(current.automationHalt).toEqual(tag === "idle-handoff" ? null : automationHalt);
+        expect(current.ticketStates[0]?.nativeVerification?.status).toBe("ready");
+      }
       const stale = yield* system.engine
         .dispatch({
           type: "thread.implementation-run.update",
@@ -12044,6 +12085,15 @@ it.effect("resumes native handoffs from persisted state without accepting late L
         0,
         "claim",
       );
+      yield* TestClock.adjust(Duration.minutes(25));
+      yield* system.reactor.recoverIncompleteStages();
+      yield* system.reactor.drain;
+      current = (yield* system.query.getSnapshot()).implementationRuns.find(
+        (value) => value.id === run.id,
+      )!;
+      expect(current.status).toBe("running");
+      expect(current.automationHalt).toBeNull();
+      expect(current.ticketStates[0]?.nativeVerification?.status).toBe("claimed");
       const duplicate = yield* change(
         { type: "release", claimId: "claim-1" },
         0,

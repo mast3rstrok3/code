@@ -6,7 +6,10 @@ import {
   invalidateRegressionChecks,
 } from "../finalRegression.ts";
 import { appStackServiceBlocksReadiness } from "@t3tools/shared/appStack";
-import { nativeVerificationEvidenceMarkdown } from "../nativeVerification.ts";
+import {
+  nativeVerificationEvidenceMarkdown,
+  nativeVerificationIsOpen,
+} from "../nativeVerification.ts";
 import { parseWorkflowDirectiveFromMarkdown } from "../workflowDirectives.ts";
 import {
   deferredTicketValidationCommands,
@@ -1816,6 +1819,8 @@ const INTEGRATION_STALL_GRACE_MS = 5 * 60 * 1_000;
  * window, so a stage still settling is never mistaken for a stalled run.
  */
 const RUN_STALL_GRACE_MS = 20 * 60 * 1_000;
+const RUN_STALL_DETAIL =
+  "with no agent working on it, no stage queued, and no reported failure. Automation cannot tell what it was waiting for, so it stops here rather than looking busy. Re-run the stage it should be in.";
 
 /**
  * The statuses that promise an agent is working.
@@ -11370,6 +11375,30 @@ const make = Effect.gen(function* () {
           }
         }
       }
+      const awaitingNativeVerification = run.ticketStates.some(
+        (ticket) =>
+          ticket.status === "awaiting-native-verification" &&
+          nativeVerificationIsOpen(ticket.nativeVerification),
+      );
+      // Older sweeps mistook a remote native handoff for an abandoned run.
+      // Recover only that halt; a handoff does not excuse other failures.
+      if (
+        awaitingNativeVerification &&
+        run.status === "needs-human-attention" &&
+        run.retryableFailure === null &&
+        run.automationHalt?.category === "structural-invariant" &&
+        run.automationHalt.stage === "implementation" &&
+        run.automationHalt.ticketId === undefined &&
+        run.automationHalt.detail.startsWith("This run has been `running` since ") &&
+        run.automationHalt.detail.endsWith(RUN_STALL_DETAIL)
+      ) {
+        yield* updateRun({
+          sourceThreadId,
+          run: { ...run, status: "running", automationHalt: null, updatedAt: createdAt },
+          createdAt,
+        });
+        continue;
+      }
       if (run.automationHalt !== null) continue;
       const childThreads = readModel.threads.filter(
         (thread) => thread.parentThreadId === run.orchestratorThreadId && thread.deletedAt === null,
@@ -11946,6 +11975,7 @@ const make = Effect.gen(function* () {
       // the halt carry it into someone's queue.
       if (
         WORKING_RUN_STATUSES.has(run.status) &&
+        !(run.status === "running" && awaitingNativeVerification) &&
         nowMs - Date.parse(run.updatedAt) >= RUN_STALL_GRACE_MS &&
         // Proposed-plan workflows run Build in the orchestrator thread itself.
         !(
@@ -11970,7 +12000,7 @@ const make = Effect.gen(function* () {
           blockRun({
             sourceThreadId,
             run,
-            reasonMarkdown: `This run has been \`${run.status}\` since ${run.updatedAt} with no agent working on it, no stage queued, and no reported failure. Automation cannot tell what it was waiting for, so it stops here rather than looking busy. Re-run the stage it should be in.`,
+            reasonMarkdown: `This run has been \`${run.status}\` since ${run.updatedAt} ${RUN_STALL_DETAIL}`,
             updatedAt: createdAt,
             haltCategory: "structural-invariant",
             haltStage: stalledRunHaltStage(run),
