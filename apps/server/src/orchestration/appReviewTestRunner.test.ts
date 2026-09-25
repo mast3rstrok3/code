@@ -210,6 +210,8 @@ for (const [code, timedOut, status] of [
         cwd: "/assigned",
         previewUrl: "https://assigned.example",
         executionId: "cycle-2",
+        testPlatforms: ["web", "android"],
+        env: { APP_REVIEW_TEST_PLATFORMS: "ios" },
       }).pipe(
         Effect.provideService(ProcessRunner, {
           run: (input) => {
@@ -238,6 +240,7 @@ for (const [code, timedOut, status] of [
         env: {
           APP_REVIEW_PREVIEW_URL: "https://assigned.example",
           APP_REVIEW_EXECUTION_ID: "cycle-2",
+          APP_REVIEW_TEST_PLATFORMS: "web,android",
         },
         timeout: "45 minutes",
         maxOutputBytes: 8192,
@@ -295,6 +298,7 @@ it.effect("collects what the suite recorded under server-chosen names", () =>
             const incoming = input.env?.APP_REVIEW_RECORDING_DIR ?? "";
             expect(input.env).toMatchObject({
               APP_DEV_STACK_API_TOKEN: "token",
+              APP_REVIEW_TEST_PLATFORMS: "web",
               APP_REVIEW_RECORDER_BINDING: "__t3DomRecorderEmit",
             });
             expect(yield* fileSystem.exists(input.env?.APP_REVIEW_RECORDER_SCRIPT ?? "")).toBe(

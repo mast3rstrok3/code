@@ -19,6 +19,7 @@ for (const [code, timedOut, expected] of [
         command: "node check.mjs",
         cwd: "/assigned/worktree",
         previewUrl: "https://assigned.example",
+        testPlatforms: ["web", "android"],
       }).pipe(
         Effect.provideService(ProcessRunner, {
           run: (input) => {
@@ -39,7 +40,10 @@ for (const [code, timedOut, expected] of [
       expect(result).toBe(expected);
       expect(calls[0]).toMatchObject({
         cwd: "/assigned/worktree",
-        env: { APP_REVIEW_PREVIEW_URL: "https://assigned.example" },
+        env: {
+          APP_REVIEW_PREVIEW_URL: "https://assigned.example",
+          APP_REVIEW_TEST_PLATFORMS: "web,android",
+        },
         timeout: 10_000,
         timeoutBehavior: "timedOutResult",
         maxOutputBytes: 1024,
@@ -58,6 +62,7 @@ it.effect("does not persist process errors or inherit an unrelated preview URL",
       Effect.provideService(ProcessRunner, {
         run: (input) => {
           expect(input.env?.APP_REVIEW_PREVIEW_URL).toBe("");
+          expect(input.env?.APP_REVIEW_TEST_PLATFORMS).toBe("web");
           return Effect.fail(
             new ProcessSpawnError({ command: "sh", argumentCount: 2, cause: "secret" }),
           );

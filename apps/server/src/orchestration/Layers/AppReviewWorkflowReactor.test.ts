@@ -3499,6 +3499,7 @@ for (const mode of ["e2e", "fixing", "fixing-existing", "validation"] as const) 
         storedRun = {
           ...storedRun,
           appReviewScope: "e2e",
+          testPlatforms: ["web", "android"],
           activePhase: phase,
           activeThreadId: ThreadId.make(phase === "e2e" ? "tester" : "fixer"),
           cycles: storedRun.cycles.map((cycle) => ({
@@ -3670,6 +3671,7 @@ for (const mode of ["e2e", "fixing", "fixing-existing", "validation"] as const) 
             const reactor = yield* AppReviewWorkflowReactor;
             yield* reactor.reconcile();
             expect(probes).toHaveLength(1);
+            expect(probes[0]?.env?.APP_REVIEW_TEST_PLATFORMS).toBe("web,android");
             expect(storedRun.status).toBe("running");
             expect(storedRun.prerequisiteCheck).toMatchObject({
               phase,
@@ -3738,6 +3740,7 @@ for (const mode of ["e2e", "fixing", "fixing-existing", "validation"] as const) 
                     phase === "e2e" ? { reviewThreadId: "tester" } : { threadId: "fixer" },
                   );
                   expect(probes).toHaveLength(2);
+                  expect(probes[1]?.env?.APP_REVIEW_TEST_PLATFORMS).toBe("web,android");
                   if (mode === "fixing") {
                     expect(
                       commands.find(
@@ -4130,6 +4133,7 @@ for (const testExit of [0, 1] as const)
               cyclesUsed: exhausted ? 5 : 1,
               cycleBudget: 5,
               appReviewScope: "e2e",
+              testPlatforms: ["web", "android"],
               cycles: [
                 {
                   ...carryCycle(1, AppReviewId.make("programmatic-review")),
@@ -4273,6 +4277,9 @@ for (const testExit of [0, 1] as const)
                 yield* reactor.reconcile();
                 yield* Deferred.await(finished);
                 yield* reactor.reconcile();
+                for (const process of processes) {
+                  expect(process.env?.APP_REVIEW_TEST_PLATFORMS).toBe("web,android");
+                }
                 expect(processes.map((entry) => entry.args.at(-1))).toEqual([
                   ...(recovered === "stale" ? ["passed-suite"] : []),
                   "suite --filter booking",

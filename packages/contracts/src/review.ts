@@ -25,6 +25,9 @@ export type AppReviewId = typeof AppReviewId.Type;
  */
 export const APP_REVIEW_PREVIEW_URL_ENV = "APP_REVIEW_PREVIEW_URL";
 
+/** Comma-separated workflow platforms passed to E2E commands and readiness checks. */
+export const APP_REVIEW_TEST_PLATFORMS_ENV = "APP_REVIEW_TEST_PLATFORMS";
+
 /**
  * Recording contract for `e2eCommands`. The suite launches its own browsers, so
  * the server cannot attach a recorder to them. A suite that wants its tests

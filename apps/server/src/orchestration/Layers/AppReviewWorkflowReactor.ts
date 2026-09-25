@@ -2,6 +2,7 @@ import { appStackServiceBlocksReadiness } from "@t3tools/shared/appStack";
 import {
   type AppStackStatus,
   APP_REVIEW_PREVIEW_URL_ENV,
+  APP_REVIEW_TEST_PLATFORMS_ENV,
   type AppReviewScope,
   CommandId,
   AppReviewId,
@@ -1436,6 +1437,7 @@ export function buildE2eReviewPrompt(input: {
         ? []
         : ["", "Supporting source context:", input.run.supportingContextMarkdown]),
       "",
+      `Set ${APP_REVIEW_TEST_PLATFORMS_ENV}=${(input.run.testPlatforms ?? ["web"]).join(",")} for acceptance commands. Require evidence for every selected platform; report omitted platforms as unrun.`,
       `Use ${APP_REVIEW_PREVIEW_URL_ENV}=${input.run.previewTargets[0] ?? "the-authoritative-preview-target"} in the selected worktree.`,
       "Before acceptance commands, check the selected tests' required services, provider routes, deployment approvals, and managed credential availability in the assigned App Stack. Check presence and readiness without exposing secret values. A running stack alone does not establish provider readiness.",
       "Reuse the worker's recorded test commands and non-secret setup after checking that they still apply to these tests. For isolated tests, configuration needed only to import application settings can use the repository's test fixtures or documented non-routable values. Missing test setup that can be repaired in this worktree is an actionable finding. Request real service credentials only when the selected test actually connects to that service.",
@@ -1578,6 +1580,7 @@ export function buildAppReviewFixPrompt(input: {
       "For product defects, write the test each ticket names, watch it fail, then repair. For coverage gaps, add the missing executable test or assertion and run it; it may pass immediately when the product already works. Repair any defects it exposes. Missing test code is repair work, not an external prerequisite. Address every actionable finding together, preserve unrelated work, and run focused validation. Do not ask the user questions.",
       APP_REVIEW_FIXER_IMPLEMENTATION_ONLY_INSTRUCTION,
       WORKFLOW_PARALLEL_VALIDATION_INSTRUCTION,
+      `Set ${APP_REVIEW_TEST_PLATFORMS_ENV}=${(input.run.testPlatforms ?? ["web"]).join(",")} for repair validation commands. Require evidence for every selected platform; report omitted platforms as unrun.`,
       "Before declaring a test prerequisite unavailable, inspect this worktree's supported test setup and assigned App Stack. Use an existing authorized test service when available, verify its identity and required permissions, and pass its configuration only to the test processes. A missing environment variable alone does not establish that the service is unavailable. Never use another worktree's database, expose credentials, or provision services without authorization. Record reusable setup instructions without secret values so the next reviewer can recover the same environment.",
       ...(isImplementationAppReview(input.run) && !input.cycle.e2eExecution
         ? [
@@ -2012,6 +2015,7 @@ const make = Effect.gen(function* () {
       command: config.command,
       cwd,
       previewUrl: run.previewTargets[0] ?? null,
+      testPlatforms: run.testPlatforms,
     });
     const workspaceRevision =
       result === "waiting" ? yield* computeWorkspaceRevision(cwd) : run.workspaceRevision;
@@ -2319,6 +2323,7 @@ const make = Effect.gen(function* () {
               ...selection,
               cwd: target.cwd,
               previewUrl: run.previewTargets[0] ?? null,
+              testPlatforms: run.testPlatforms,
               executionId: execution.id,
               recordingsDir:
                 serverConfig === undefined
@@ -4578,6 +4583,7 @@ ${result.outputMarkdown}`,
         command: config.command,
         cwd: target.cwd,
         previewUrl: check.previewUrl,
+        testPlatforms: run.testPlatforms,
       });
       const workspaceRevision =
         result === "ready" ? yield* computeWorkspaceRevision(target.cwd) : null;

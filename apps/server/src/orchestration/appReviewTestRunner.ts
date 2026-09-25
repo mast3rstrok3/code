@@ -3,9 +3,11 @@ import type {
   AppReviewTestResult,
   AppReviewWorkflowCycle,
   AppReviewWorkflowFixResult,
+  ReviewTestPlatforms,
 } from "@t3tools/contracts";
 import {
   APP_REVIEW_PREVIEW_URL_ENV,
+  APP_REVIEW_TEST_PLATFORMS_ENV,
   APP_REVIEW_RECORDER_BINDING_ENV,
   APP_REVIEW_RECORDER_SCRIPT_ENV,
   APP_REVIEW_RECORDING_DIR_ENV,
@@ -150,6 +152,7 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
   readonly retryCommand: string;
   readonly cwd: string;
   readonly previewUrl: string | null;
+  readonly testPlatforms?: typeof ReviewTestPlatforms.Type | undefined;
   readonly executionId: string;
   /** Directory for this run's test recordings; omitted where the server has no state dir. */
   readonly recordingsDir?: string | undefined;
@@ -175,6 +178,7 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
       env: {
         ...input.env,
         [APP_REVIEW_PREVIEW_URL_ENV]: input.previewUrl ?? "",
+        [APP_REVIEW_TEST_PLATFORMS_ENV]: (input.testPlatforms ?? ["web"]).join(","),
         APP_REVIEW_EXECUTION_ID: input.executionId,
         ...(recording === null
           ? {}
