@@ -6805,6 +6805,80 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("gives a clean ticket review with a red focused check another cycle", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          completeTicketReview: false,
+        });
+        let snapshot = yield* system.query.getSnapshot();
+        const state = snapshot.implementationRuns.find((entry) => entry.id === run.id)
+          ?.ticketStates[0];
+        if (!state?.codeReviewThreadId) throw new Error("Ticket reviewer missing.");
+        const mixedLint = "pnpm exec eslint scripts/review.mjs apps/mobile/harness.ts";
+        yield* appendCodeReviewResult(system, {
+          run,
+          threadId: state.codeReviewThreadId,
+          ticketId: state.ticketId,
+          status: "clean",
+          tag: "clean-with-red-lint",
+          validations: [
+            {
+              command: mixedLint,
+              status: "failed",
+              outputMarkdown: "Multiple candidate TSConfigRootDirs.",
+              completedAt: "2026-01-01T00:00:02.000Z",
+            },
+            {
+              command: "pnpm exec eslint scripts/review.mjs",
+              status: "passed",
+              outputMarkdown: "Clean.",
+              completedAt: "2026-01-01T00:00:03.000Z",
+            },
+          ],
+        });
+        snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(current?.automationHalt).toBeNull();
+        expect(current?.ticketStates[0]).toMatchObject({
+          status: "code-reviewing",
+          codeReviewPassCount: 1,
+        });
+        const nextReviewer = current?.ticketStates[0]?.codeReviewThreadId;
+        if (!nextReviewer) throw new Error("Next reviewer missing.");
+        expect(nextReviewer).not.toBe(state.codeReviewThreadId);
+        expect(
+          snapshot.threads.find((thread) => thread.id === nextReviewer)?.messages.at(-1)?.text,
+        ).toContain(`- \`${mixedLint}\``);
+
+        yield* appendCodeReviewResult(system, {
+          run,
+          threadId: nextReviewer,
+          ticketId: state.ticketId,
+          status: "clean",
+          tag: "clean-with-corrected-lint",
+          validations: [
+            {
+              command: "pnpm --dir apps/mobile exec eslint harness.ts",
+              supersedesCommand: mixedLint,
+              status: "passed",
+              outputMarkdown: "Clean when run from the package that owns the file.",
+              completedAt: "2026-01-01T00:00:05.000Z",
+            },
+          ],
+        });
+        const finished = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        );
+        expect(finished?.automationHalt).toBeNull();
+        expect(finished?.ticketStates[0]?.status).toBe("succeeded");
+      }),
+    ),
+  );
+
   for (const purpose of ["reproduction", "verification", undefined] as const) {
     it.effect(`handles ${purpose ?? "legacy"} red evidence in ticket Code Review`, () =>
       withSystem(
@@ -6892,6 +6966,7 @@ describe("ImplementationWorkflowReactor", () => {
               );
               expect(unresolved?.status).toBe("needs-human-attention");
               expect(unresolved?.automationHalt?.detail).toContain("valid focused validation");
+              expect(unresolved?.automationHalt?.detail).toContain("- `test writing.test.ts`");
               expect(unresolved?.automationHalt?.category).toBe("validation-failed");
               expect(unresolved?.ticketStates[0]?.status).not.toBe("succeeded");
             }
@@ -6914,60 +6989,74 @@ describe("ImplementationWorkflowReactor", () => {
   it.effect(
     "retries a ticket validation halt in Code Review without repeating implementation",
     () =>
-      withSystem((system) =>
-        Effect.gen(function* () {
-          const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
-          yield* appendWorkerResult(system, {
-            run,
-            status: "succeeded",
-            completeTicketReview: false,
-          });
-          let snapshot = yield* system.query.getSnapshot();
-          const state = snapshot.implementationRuns.find((entry) => entry.id === run.id)
-            ?.ticketStates[0];
-          if (!state?.codeReviewThreadId) throw new Error("Ticket reviewer missing.");
-          yield* appendCodeReviewResult(system, {
-            run,
-            threadId: state.codeReviewThreadId,
-            ticketId: state.ticketId,
-            status: "clean",
-            tag: "retry-invalid-validation",
-            validations: [
+      withSystem(
+        (system) =>
+          Effect.gen(function* () {
+            const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+            yield* appendWorkerResult(system, {
+              run,
+              status: "succeeded",
+              completeTicketReview: false,
+            });
+            let snapshot = yield* system.query.getSnapshot();
+            const state = snapshot.implementationRuns.find((entry) => entry.id === run.id)
+              ?.ticketStates[0];
+            if (!state?.codeReviewThreadId) throw new Error("Ticket reviewer missing.");
+            yield* appendCodeReviewResult(system, {
+              run,
+              threadId: state.codeReviewThreadId,
+              ticketId: state.ticketId,
+              status: "clean",
+              tag: "retry-invalid-validation",
+              validations: [
+                {
+                  command: "test focused",
+                  status: "failed",
+                  outputMarkdown: "Historical RED without its purpose.",
+                  completedAt: "2026-01-01T00:00:03.000Z",
+                },
+              ],
+            });
+            yield* system.engine.dispatch({
+              type: "thread.implementation-run.retry",
+              commandId: commandId("retry-ticket-review-validation"),
+              threadId: sourceThreadId,
+              runId: run.id,
+              createdAt: "2026-01-01T00:05:00.000Z",
+            });
+            yield* system.reactor.drain;
+            snapshot = yield* system.query.getSnapshot();
+            const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+            expect(current?.automationHalt).toBeNull();
+            expect(current?.ticketStates[0]).toMatchObject({
+              status: "code-reviewing",
+              workerThreadId: state.workerThreadId,
+              workerResult: state.workerResult,
+              branch: state.branch,
+              worktreePath: state.worktreePath,
+            });
+            expect(current?.ticketStates[0]?.appReviewWorkflowRunId).toBe(
+              state.appReviewWorkflowRunId,
+            );
+            expect(current?.ticketStates[0]?.codeReviewThreadId).not.toBe(state.codeReviewThreadId);
+            expect(current?.activeCodeReviewThreadId).toBeNull();
+            expect(
+              snapshot.threads.filter((thread) => thread.workflowRole === "implementation-worker"),
+            ).toHaveLength(1);
+          }),
+        {
+          // With cycles left, a red check gets another review pass on its own.
+          // One cycle makes it halt so the manual retry path is what runs.
+          serverSettings: {
+            workflowStepCycles: [
               {
-                command: "test focused",
-                status: "failed",
-                outputMarkdown: "Historical RED without its purpose.",
-                completedAt: "2026-01-01T00:00:03.000Z",
+                workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+                stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+                maxCycles: 1,
               },
             ],
-          });
-          yield* system.engine.dispatch({
-            type: "thread.implementation-run.retry",
-            commandId: commandId("retry-ticket-review-validation"),
-            threadId: sourceThreadId,
-            runId: run.id,
-            createdAt: "2026-01-01T00:05:00.000Z",
-          });
-          yield* system.reactor.drain;
-          snapshot = yield* system.query.getSnapshot();
-          const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-          expect(current?.automationHalt).toBeNull();
-          expect(current?.ticketStates[0]).toMatchObject({
-            status: "code-reviewing",
-            workerThreadId: state.workerThreadId,
-            workerResult: state.workerResult,
-            branch: state.branch,
-            worktreePath: state.worktreePath,
-          });
-          expect(current?.ticketStates[0]?.appReviewWorkflowRunId).toBe(
-            state.appReviewWorkflowRunId,
-          );
-          expect(current?.ticketStates[0]?.codeReviewThreadId).not.toBe(state.codeReviewThreadId);
-          expect(current?.activeCodeReviewThreadId).toBeNull();
-          expect(
-            snapshot.threads.filter((thread) => thread.workflowRole === "implementation-worker"),
-          ).toHaveLength(1);
-        }),
+          },
+        },
       ),
   );
 

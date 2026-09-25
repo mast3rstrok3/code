@@ -1129,19 +1129,42 @@ function completeValidationsPassedExactlyOnce(input: {
   );
 }
 
+function currentFocusedValidations(input: {
+  readonly finalCommands: ReadonlyArray<string>;
+  readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
+}) {
+  const finalCommands = new Set(input.finalCommands.map((command) => command.trim()));
+  return currentWorkflowValidations(input.validations).filter(
+    (validation) => !finalCommands.has(validation.command.trim()),
+  );
+}
+
 function focusedRepairValidationsPassed(input: {
   readonly finalCommands: ReadonlyArray<string>;
   readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
 }): boolean {
-  const finalCommands = new Set(input.finalCommands.map((command) => command.trim()));
-  const focusedValidations = currentWorkflowValidations(input.validations).filter(
-    (validation) => !finalCommands.has(validation.command.trim()),
-  );
+  const focusedValidations = currentFocusedValidations(input);
   return (
     focusedValidations.length > 0 &&
     focusedValidations.every((validation) => validation.status === "passed") &&
     hasPostRepairVerification(input.validations)
   );
+}
+
+/** Say which focused checks are still red, so a reviewer or human knows what to rerun. */
+function focusedValidationProblemMarkdown(input: {
+  readonly finalCommands: ReadonlyArray<string>;
+  readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
+}): string {
+  const failing = currentFocusedValidations(input).filter(
+    (validation) => validation.status !== "passed",
+  );
+  return [
+    "Ticket Code Review did not include valid focused validation.",
+    failing.length > 0
+      ? `These focused checks last ran red and no passing rerun or correction superseded them:\n${failing.map((validation) => `- \`${validation.command.trim()}\``).join("\n")}\n\nRerun each at the current HEAD. If a command was invoked wrongly, report the corrected passing command with supersedesCommand set to the failed one.`
+      : "Report at least one focused check that passed after the last reproduction.",
+  ].join("\n\n");
 }
 
 function validationSummary(
@@ -8169,6 +8192,12 @@ const make = Effect.gen(function* () {
             finalCommands: focusedValidationCommands,
             validations: reportedValidations,
           });
+        const validationProblem = validationValid
+          ? null
+          : focusedValidationProblemMarkdown({
+              finalCommands: focusedValidationCommands,
+              validations: reportedValidations,
+            });
         const warningParts = [state.warningMarkdown ?? ""];
         if (directive.status === "blocked") warningParts.push(directive.reportMarkdown);
         if (!identityValid)
@@ -8177,8 +8206,7 @@ const make = Effect.gen(function* () {
           );
         if (!findingsCommitValid)
           warningParts.push("Ticket Code Review findings did not identify the resulting HEAD.");
-        if (!validationValid)
-          warningParts.push("Ticket Code Review did not include valid focused validation.");
+        if (validationProblem !== null) warningParts.push(validationProblem);
         yield* appendActivity({
           threadId: run.orchestratorThreadId,
           tone:
@@ -8212,8 +8240,10 @@ const make = Effect.gen(function* () {
           ),
           updatedAt,
         };
+        // A clean review can inherit a red check it never ran, so it gets the
+        // same next cycle as findings rather than going straight to a human.
         const canRepairValidation =
-          directive.status === "findings" && state.codeReviewPassCount + 1 < cycleBudget;
+          directive.status !== "blocked" && state.codeReviewPassCount + 1 < cycleBudget;
         if (!identityValid || !findingsCommitValid || (!validationValid && !canRepairValidation)) {
           yield* blockRun({
             sourceThreadId,
@@ -8231,7 +8261,11 @@ const make = Effect.gen(function* () {
           });
           return;
         }
-        if (directive.status === "findings" || directive.status === "blocked") {
+        if (
+          directive.status === "findings" ||
+          directive.status === "blocked" ||
+          validationProblem !== null
+        ) {
           const nextPassCount = state.codeReviewPassCount + 1;
           const findingsWarning =
             nextPassCount >= cycleBudget
@@ -8281,7 +8315,9 @@ const make = Effect.gen(function* () {
               sourceThreadId,
               run: nextCycleRun,
               ticketId: state.ticketId,
-              warningMarkdown: directive.reportMarkdown,
+              warningMarkdown: [validationProblem ?? "", directive.reportMarkdown]
+                .filter(Boolean)
+                .join("\n\n"),
               createdAt: updatedAt,
             });
             return;
