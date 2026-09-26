@@ -56,9 +56,10 @@ export const WORKFLOW_NUDGE_INTERVAL_MS = 10 * 60 * 1000;
 
 /**
  * Retry ceiling per thread: roughly eight hours at the ten-minute cadence.
- * Comfortably outlasts a five-hour usage window, and still converges on a human
- * within a working day when the thread is broken rather than blocked (revoked
- * credentials, a provider that fails every start).
+ * Comfortably outlasts a five-hour usage window or an expired provider login,
+ * and still converges on a human within a working day when the thread is broken
+ * rather than blocked (credentials nobody renews, a provider that fails every
+ * start).
  */
 export const WORKFLOW_NUDGE_MAX_ATTEMPTS = 48;
 export const WORKFLOW_RECOVERY_WINDOW_MS = 8 * 60 * 60 * 1000;
@@ -93,11 +94,19 @@ export function workflowAutomaticRetryLimit(
   return configuredLimit;
 }
 
+/**
+ * How many nudges a failure earns. An authentication failure is terminal for
+ * the turn but not for the workflow: the fix is signing the provider in again,
+ * which happens outside the thread, so it waits out the recovery window like
+ * any other outage. Configuration failures need a changed thread or step, and
+ * no amount of waiting fixes them.
+ */
 export function workflowRecoveryAttemptLimit(
   recovery: ProviderFailureRecovery,
   configuredLimit: number,
 ): number {
   if (recovery.reason === "rate-limit") return Number.POSITIVE_INFINITY;
+  if (recovery.reason === "authentication") return configuredLimit;
   if (recovery.disposition === "terminal") return 0;
   if (recovery.disposition === "unknown") {
     return Math.min(WORKFLOW_RECOVERY_UNKNOWN_MAX_ATTEMPTS, configuredLimit);

@@ -3504,11 +3504,17 @@ ${result.outputMarkdown}`,
     const turn = planner.latestTurn;
     if (turn === null) return;
     if (turn.state === "error" || turn.state === "interrupted") {
+      // A failed turn captures a checkpoint too, so the nudge wait above does
+      // not cover it: without this, a provider outage spends a planning launch
+      // in seconds instead of waiting for the nudge to resume the planner.
+      if ((yield* phaseThreadState(planner)) === "nudging") return;
       yield* failCycle({
         run,
         reason: "plan-missing",
         retryable: true,
-        detailMarkdown: "The non-interactive planning turn did not complete successfully.",
+        detailMarkdown:
+          planner.session?.lastError ??
+          "The non-interactive planning turn did not complete successfully.",
         occurredAt,
       });
       return;

@@ -1809,7 +1809,46 @@ describe("StaleTurnReconciler", () => {
     ),
   );
 
-  it.live("hands terminal authentication failures to the stage owner without retrying", () =>
+  it.live("waits out an authentication failure with nudges instead of halting the stage", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const workerThreadId = requireWorkerThreadId(run);
+          const blockedAt = DateTime.formatIso(
+            DateTime.subtract(yield* DateTime.now, { minutes: 5 }),
+          );
+          const failedTurnId = TurnId.make("turn-auth-nudge");
+          yield* blockThreadOnFailedTurn(system, {
+            threadId: workerThreadId,
+            turnId: failedTurnId,
+            tag: "auth-nudge",
+            blockedAt,
+          });
+          yield* appendProviderTurnFailure(system, {
+            threadId: workerThreadId,
+            turnId: failedTurnId,
+            tag: "auth-nudge",
+            createdAt: blockedAt,
+            disposition: "terminal",
+            reason: "authentication",
+          });
+
+          yield* system.reconciler.start();
+
+          expect(yield* nudgeActivities(system, workerThreadId)).toHaveLength(1);
+          const current = yield* getRun(system, run.id);
+          expect(
+            current?.ticketStates[0]?.stageExecutions.some(
+              (execution) => execution.state === "halted",
+            ),
+          ).toBe(false);
+        }),
+      { reconciler: bootOnlyOptions },
+    ),
+  );
+
+  it.live("hands terminal configuration failures to the stage owner without retrying", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -1829,19 +1868,19 @@ describe("StaleTurnReconciler", () => {
           });
           yield* system.engine.dispatch({
             type: "thread.activity.append",
-            commandId: commandId("terminal-auth-failure"),
+            commandId: commandId("terminal-config-failure"),
             threadId: workerThreadId,
             activity: {
-              id: eventId("terminal-auth-failure"),
+              id: eventId("terminal-config-failure"),
               tone: "error",
               kind: "provider.turn.failed",
-              summary: "Provider turn failed: authentication",
+              summary: "Provider turn failed: configuration",
               payload: {
                 turnId: failedTurnId,
                 recovery: {
                   disposition: "terminal",
-                  reason: "authentication",
-                  statusCode: 401,
+                  reason: "configuration",
+                  statusCode: 400,
                 },
               },
               turnId: failedTurnId,
@@ -1858,11 +1897,11 @@ describe("StaleTurnReconciler", () => {
                   entry?.ticketStates[0]?.stageExecutions.some(
                     (execution) =>
                       execution.state === "halted" &&
-                      execution.failure?.nextAction === "fix-authentication",
+                      execution.failure?.nextAction === "fix-configuration",
                   ) === true,
               ),
             ),
-            "authentication stage halt",
+            "configuration stage halt",
           );
 
           expect(yield* nudgeActivities(system, workerThreadId)).toHaveLength(0);

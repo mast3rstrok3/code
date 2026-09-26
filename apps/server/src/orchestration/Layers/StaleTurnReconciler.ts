@@ -1288,9 +1288,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
               ));
         const recoveryDeadlineAtMs = Date.parse(recoveryDeadlineAt);
         const rateLimited = failure.recovery.reason === "rate-limit";
-        const requiresConfiguration =
-          failure.recovery.reason === "authentication" ||
-          failure.recovery.reason === "configuration";
+        const requiresConfiguration = failure.recovery.reason === "configuration";
         if (requiresConfiguration) {
           yield* propagateWorkflowFailure({
             readModel,

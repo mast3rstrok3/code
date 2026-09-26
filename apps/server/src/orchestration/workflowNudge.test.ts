@@ -26,13 +26,16 @@ it("keeps interrupted-session resumes inside their existing stage budgets", () =
   expect(workflowAutomaticRetryLimit("planning-reviewer", 48)).toBe(48);
 });
 
-it("limits unknown failures and rejects terminal failures", () => {
+it("limits unknown failures, waits out authentication, and rejects configuration", () => {
   expect(workflowRecoveryAttemptLimit({ disposition: "retryable", reason: "overloaded" }, 48)).toBe(
     48,
   );
   expect(workflowRecoveryAttemptLimit({ disposition: "unknown", reason: "unknown" }, 48)).toBe(2);
   expect(
     workflowRecoveryAttemptLimit({ disposition: "terminal", reason: "authentication" }, 48),
+  ).toBe(48);
+  expect(
+    workflowRecoveryAttemptLimit({ disposition: "terminal", reason: "configuration" }, 48),
   ).toBe(0);
 });
 
