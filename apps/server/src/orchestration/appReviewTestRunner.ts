@@ -7,6 +7,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   APP_REVIEW_PREVIEW_URL_ENV,
+  APP_REVIEW_STACK_ID_ENV,
   APP_REVIEW_TEST_PLATFORMS_ENV,
   APP_REVIEW_RECORDER_BINDING_ENV,
   APP_REVIEW_RECORDER_SCRIPT_ENV,
@@ -152,6 +153,8 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
   readonly retryCommand: string;
   readonly cwd: string;
   readonly previewUrl: string | null;
+  /** The App Stack serving `previewUrl`, when the reviewed worktree has one. */
+  readonly stackId?: string | null | undefined;
   readonly testPlatforms?: typeof ReviewTestPlatforms.Type | undefined;
   readonly executionId: string;
   /** Directory for this run's test recordings; omitted where the server has no state dir. */
@@ -180,6 +183,7 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
         [APP_REVIEW_PREVIEW_URL_ENV]: input.previewUrl ?? "",
         [APP_REVIEW_TEST_PLATFORMS_ENV]: (input.testPlatforms ?? ["web"]).join(","),
         APP_REVIEW_EXECUTION_ID: input.executionId,
+        ...(input.stackId == null ? {} : { [APP_REVIEW_STACK_ID_ENV]: input.stackId }),
         ...(recording === null
           ? {}
           : {

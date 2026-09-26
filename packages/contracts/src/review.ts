@@ -29,6 +29,14 @@ export const APP_REVIEW_PREVIEW_URL_ENV = "APP_REVIEW_PREVIEW_URL";
 export const APP_REVIEW_TEST_PLATFORMS_ENV = "APP_REVIEW_TEST_PLATFORMS";
 
 /**
+ * Stacks controller ID of the App Stack serving `APP_REVIEW_PREVIEW_URL`, set
+ * for E2E commands when the reviewed worktree has one. Suites that drive the
+ * stack itself (test fleets, native executors) read it with the
+ * `APP_DEV_STACK_API_*` credentials instead of guessing which stack is theirs.
+ */
+export const APP_REVIEW_STACK_ID_ENV = "APP_REVIEW_STACK_ID";
+
+/**
  * Recording contract for `e2eCommands`. The suite launches its own browsers, so
  * the server cannot attach a recorder to them. A suite that wants its tests
  * replayable adds the script at `APP_REVIEW_RECORDER_SCRIPT` to each browser

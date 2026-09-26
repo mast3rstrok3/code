@@ -210,6 +210,7 @@ for (const [code, timedOut, status] of [
         cwd: "/assigned",
         previewUrl: "https://assigned.example",
         executionId: "cycle-2",
+        stackId: "stack-assigned",
         testPlatforms: ["web", "android"],
         env: { APP_REVIEW_TEST_PLATFORMS: "ios" },
       }).pipe(
@@ -240,6 +241,7 @@ for (const [code, timedOut, status] of [
         env: {
           APP_REVIEW_PREVIEW_URL: "https://assigned.example",
           APP_REVIEW_EXECUTION_ID: "cycle-2",
+          APP_REVIEW_STACK_ID: "stack-assigned",
           APP_REVIEW_TEST_PLATFORMS: "web,android",
         },
         timeout: "45 minutes",

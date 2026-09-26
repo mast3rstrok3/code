@@ -82,6 +82,7 @@ import {
   appReviewPhaseTurnPending,
   appReviewRecoveryEvidenceIsCurrent,
   appReviewPhaseThreadState,
+  appReviewStackIdForTarget,
   buildAppReviewFixPrompt,
   buildAppReviewFixResultContinuationPrompt,
   buildE2eReviewPrompt,
@@ -545,7 +546,7 @@ effectIt.effect(
               Effect.succeed(id === fixer.id ? Option.some(fixer) : Option.none()),
           }),
           Layer.mock(GitWorkflowService)({}),
-          Layer.mock(AppStackManager)({}),
+          Layer.mock(AppStackManager)(noAppStacks),
           Layer.mock(ReviewService)({}),
           Layer.mock(ServerSettingsService)({}),
           Layer.mock(T3ProjectFileLoader)({}),
@@ -1735,6 +1736,27 @@ it("resolves standalone previews while cluster test guests are stopped or queued
   ).toEqual({ _tag: "Resolved", previewTargets: ["https://feature.example.test"] });
 });
 
+it("gives E2E suites the stack ID only while that stack serves the reviewed target", () => {
+  const lookup = {
+    stack: { id: "stack-1", displayName: null, status: "running" as const, services: null },
+    frontendUrl: "https://ticket.example.test",
+  };
+  expect(appReviewStackIdForTarget({ lookup, previewUrl: "https://ticket.example.test" })).toBe(
+    "stack-1",
+  );
+  // A stack recreated behind another frontend is not the one under review.
+  expect(
+    appReviewStackIdForTarget({ lookup, previewUrl: "https://other.example.test" }),
+  ).toBeNull();
+  expect(
+    appReviewStackIdForTarget({
+      lookup: { stack: null, frontendUrl: null },
+      previewUrl: "https://ticket.example.test",
+    }),
+  ).toBeNull();
+  expect(appReviewStackIdForTarget({ lookup: null, previewUrl: null })).toBeNull();
+});
+
 it("keeps manual preview targets as a fallback when no App Stack matches", () => {
   expect(
     selectStandalonePreviewTargets({
@@ -2716,6 +2738,12 @@ it("still finds the reviewed ticket when the workflow root does not own it", () 
   expect(findAppReviewParentTicket(threads, "planning-ticket-missing", undefined)).toBeUndefined();
 });
 
+/** E2E runs look up the reviewed worktree's stack; these tests have none. */
+const noAppStacks = {
+  getByWorktree: () =>
+    Effect.succeed({ stack: null, frontendUrl: null, frontendServiceName: null }),
+};
+
 const blockedAt = "2026-01-01T00:00:00.000Z";
 const nudgeNowMs = Date.parse(blockedAt) + 60_000;
 
@@ -3429,7 +3457,7 @@ for (const verdict of ["passed", "failed", "rejected"] as const) {
                 })),
               }),
           }),
-          Layer.mock(AppStackManager)({}),
+          Layer.mock(AppStackManager)(noAppStacks),
           Layer.mock(ServerSettingsService)({
             getSettings: Effect.succeed(decodeServerSettings({})),
           }),
@@ -3646,7 +3674,7 @@ for (const mode of ["e2e", "fixing", "fixing-existing", "validation"] as const) 
                     })),
                   }),
               }),
-              Layer.mock(AppStackManager)({}),
+              Layer.mock(AppStackManager)(noAppStacks),
               Layer.mock(ServerSettingsService)({
                 getSettings: Effect.succeed(decodeServerSettings({})),
               }),
@@ -3946,7 +3974,7 @@ effectIt.effect(
               getCommandReadModel: () => Effect.succeed(createEmptyReadModel(now)),
             }),
             Layer.mock(GitWorkflowService)({}),
-            Layer.mock(AppStackManager)({}),
+            Layer.mock(AppStackManager)(noAppStacks),
             Layer.mock(ReviewService)({}),
             Layer.mock(ServerSettingsService)({}),
             Layer.mock(T3ProjectFileLoader)({}),
@@ -4261,7 +4289,7 @@ for (const testExit of [0, 1] as const)
                         })),
                       }),
                   }),
-                  Layer.mock(AppStackManager)({}),
+                  Layer.mock(AppStackManager)(noAppStacks),
                   Layer.mock(ServerSettingsService)({
                     getSettings: Effect.succeed(decodeServerSettings({})),
                   }),
@@ -4555,7 +4583,7 @@ for (const scenario of [
                   })),
                 }),
             }),
-            Layer.mock(AppStackManager)({}),
+            Layer.mock(AppStackManager)(noAppStacks),
             Layer.mock(ServerSettingsService)({
               getSettings: Effect.succeed(decodeServerSettings({})),
             }),

@@ -344,6 +344,20 @@ interface AppStackPreviewLookup {
   readonly frontendUrl: string | null;
 }
 
+/**
+ * The App Stack an E2E suite may drive: the worktree's stack, but only while it
+ * still serves the target under review. A stack recreated with another
+ * frontend is not the one this review was pointed at.
+ */
+export function appReviewStackIdForTarget(input: {
+  readonly lookup: AppStackPreviewLookup | null;
+  readonly previewUrl: string | null;
+}): string | null {
+  const stack = input.lookup?.stack ?? null;
+  if (stack === null || input.previewUrl === null) return null;
+  return input.lookup?.frontendUrl === input.previewUrl ? stack.id : null;
+}
+
 export type StandalonePreviewTargetResolution =
   | { readonly _tag: "Resolved"; readonly previewTargets: ReadonlyArray<string> }
   | { readonly _tag: "Blocked"; readonly detailMarkdown: string };
@@ -2315,6 +2329,12 @@ const make = Effect.gen(function* () {
       if (remaining.length === 0) return;
       const config = yield* projectFileLoader.loadStrict(target.cwd);
       const concurrency = Option.getOrUndefined(config)?.e2eConcurrency ?? 1;
+      const previewUrl = run.previewTargets[0] ?? null;
+      // A lookup failure only costs the suite its stack ID, never the test run.
+      const stackLookup = yield* appStackManager
+        .getByWorktree({ worktreePath: target.cwd })
+        .pipe(Effect.orElseSucceed(() => null));
+      const stackId = appReviewStackIdForTarget({ lookup: stackLookup, previewUrl });
       const fiber = yield* Effect.forkIn(
         Effect.forEach(
           remaining,
@@ -2322,7 +2342,8 @@ const make = Effect.gen(function* () {
             runAppReviewTest({
               ...selection,
               cwd: target.cwd,
-              previewUrl: run.previewTargets[0] ?? null,
+              previewUrl,
+              stackId,
               testPlatforms: run.testPlatforms,
               executionId: execution.id,
               recordingsDir:
