@@ -719,6 +719,8 @@ interface ImplementationCalls {
   readonly orchestratorHead: Ref.Ref<string | null>;
   readonly advancedBranchRefs: Ref.Ref<ReadonlySet<string>>;
   readonly frontendProbeUrls: Ref.Ref<ReadonlyArray<string>>;
+  /** Runs once, inside the next ticket-worktree status check, to land a write mid-handler. */
+  readonly beforeTicketLocalStatus: Ref.Ref<Effect.Effect<void> | null>;
 }
 
 /**
@@ -1022,12 +1024,17 @@ function makeTestLayer(
             }),
           localStatus: (input) =>
             Effect.all([
+              input.cwd.includes("-ticket-")
+                ? Ref.getAndSet(calls.beforeTicketLocalStatus, null).pipe(
+                    Effect.flatMap((hook) => hook ?? Effect.void),
+                  )
+                : Effect.void,
               Ref.get(calls.createWorktreeInputs),
               Ref.updateAndGet(calls.localStatusCount, (count) => count + 1),
               Ref.get(calls.dirtyWorkerWorktrees),
               Ref.get(calls.dirtyOrchestratorWorktree),
             ]).pipe(
-              Effect.map(([created, statusCheck, dirtyWorkerWorktrees, dirtyOrchestrator]) => ({
+              Effect.map(([, created, statusCheck, dirtyWorkerWorktrees, dirtyOrchestrator]) => ({
                 isRepo: true,
                 hasPrimaryRemote: true,
                 isDefaultRef: input.cwd === "/tmp/implementation-reactor",
@@ -1437,6 +1444,7 @@ function withSystem<A, E>(
     const orchestratorHead = yield* Ref.make<string | null>(null);
     const advancedBranchRefs = yield* Ref.make<ReadonlySet<string>>(new Set());
     const frontendProbeUrls = yield* Ref.make<ReadonlyArray<string>>([]);
+    const beforeTicketLocalStatus = yield* Ref.make<Effect.Effect<void> | null>(null);
     const calls = {
       autoCreateInputs,
       workflowTeardownInputs,
@@ -1461,6 +1469,7 @@ function withSystem<A, E>(
       orchestratorHead,
       advancedBranchRefs,
       frontendProbeUrls,
+      beforeTicketLocalStatus,
     } satisfies ImplementationCalls;
 
     return yield* Effect.scoped(
@@ -6745,6 +6754,140 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("launches no next ticket reviewer when a concurrent write drops the result", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, tickets } = yield* launchRun(system, {
+          appReviewStrategy: "nested-workflow",
+          tickets: [planningTicket("TICKET-1"), planningTicket("TICKET-2")],
+        });
+        const [reviewed, other] = tickets;
+        if (reviewed === undefined || other === undefined) throw new Error("Tickets missing.");
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          ticketId: reviewed.id,
+          completeTicketReview: false,
+        });
+        const state = (yield* system.query.getSnapshot()).implementationRuns
+          .find((entry) => entry.id === run.id)
+          ?.ticketStates.find((entry) => entry.ticketId === reviewed.id);
+        const firstReviewerId = state?.codeReviewThreadId;
+        const branch = state?.branch;
+        if (!firstReviewerId || !branch) throw new Error("Ticket Code Review missing.");
+        yield* Ref.update(system.advancedBranchRefs, (refs) => new Set([...refs, branch]));
+        // Another stage writes the other ticket while this result is being handled.
+        yield* Ref.set(
+          system.beforeTicketLocalStatus,
+          Effect.gen(function* () {
+            const current = (yield* system.query.getSnapshot()).implementationRuns.find(
+              (entry) => entry.id === run.id,
+            );
+            if (current === undefined) throw new Error("Implementation run missing.");
+            yield* system.engine.dispatch({
+              type: "thread.implementation-run.update",
+              commandId: commandId("concurrent-other-ticket-write"),
+              threadId: sourceThreadId,
+              run: {
+                ...current,
+                ticketStates: current.ticketStates.map((candidate) =>
+                  candidate.ticketId === other.id
+                    ? { ...candidate, updatedAt: "2026-01-01T00:06:30.000Z" }
+                    : candidate,
+                ),
+              },
+              createdAt: "2026-01-01T00:06:30.000Z",
+            });
+          }).pipe(Effect.orDie),
+        );
+        yield* appendCodeReviewResult(system, {
+          run,
+          threadId: firstReviewerId,
+          ticketId: reviewed.id,
+          status: "findings",
+          commitSha: branch,
+          tag: "ticket-findings-dropped",
+          validations: [],
+        });
+
+        const snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns
+          .find((entry) => entry.id === run.id)
+          ?.ticketStates.find((entry) => entry.ticketId === reviewed.id);
+        expect(current).toMatchObject({
+          status: "code-reviewing",
+          codeReviewThreadId: firstReviewerId,
+          codeReviewPassCount: 0,
+        });
+        expect(
+          snapshot.threads
+            .filter((thread) => thread.workflowRole === "implementation-code-reviewer")
+            .map((thread) => thread.id),
+        ).toEqual([firstReviewerId]);
+      }),
+    ),
+  );
+
+  it.effect("lands a ticket Code Review result handled after a later write to its ticket", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          completeTicketReview: false,
+        });
+        const current = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        );
+        const state = current?.ticketStates[0];
+        const firstReviewerId = state?.codeReviewThreadId;
+        const branch = state?.branch;
+        if (current === undefined || !firstReviewerId || !branch) {
+          throw new Error("Ticket Code Review missing.");
+        }
+        yield* Ref.update(system.advancedBranchRefs, (refs) => new Set([...refs, branch]));
+        // The result below is reported at 00:00:04; this write lands before it is handled.
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("ticket-write-before-result-handled"),
+          threadId: sourceThreadId,
+          run: {
+            ...current,
+            ticketStates: current.ticketStates.map((candidate) => ({
+              ...candidate,
+              updatedAt: "2026-01-01T00:05:00.000Z",
+            })),
+          },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* appendCodeReviewResult(system, {
+          run,
+          threadId: firstReviewerId,
+          ticketId: state.ticketId,
+          status: "findings",
+          commitSha: branch,
+          tag: "ticket-findings-late",
+          validations: [],
+        });
+
+        const snapshot = yield* system.query.getSnapshot();
+        const reviewed = snapshot.implementationRuns.find((entry) => entry.id === run.id)
+          ?.ticketStates[0];
+        expect(reviewed?.codeReviewPassCount).toBe(1);
+        expect(reviewed?.updatedAt).toBe(testClockStart);
+        const secondReviewerId = reviewed?.codeReviewThreadId;
+        expect(secondReviewerId).not.toBe(firstReviewerId);
+        expect(
+          snapshot.threads
+            .filter((thread) => thread.workflowRole === "implementation-code-reviewer")
+            .map((thread) => thread.id)
+            .toSorted(),
+        ).toEqual([firstReviewerId, secondReviewerId].toSorted());
+      }),
+    ),
+  );
+
   it.effect("continues ticket Code Review after an explicit setup correction", () =>
     withSystem((system) =>
       Effect.gen(function* () {
@@ -7022,7 +7165,8 @@ describe("ImplementationWorkflowReactor", () => {
               commandId: commandId("retry-ticket-review-validation"),
               threadId: sourceThreadId,
               runId: run.id,
-              createdAt: "2026-01-01T00:05:00.000Z",
+              // Ticket Code Review stamps its writes from the clock.
+              createdAt: testClockStart,
             });
             yield* system.reactor.drain;
             snapshot = yield* system.query.getSnapshot();

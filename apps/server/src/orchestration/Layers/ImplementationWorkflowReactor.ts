@@ -2246,6 +2246,10 @@ const make = Effect.gen(function* () {
       readonly activeBabysitterThreadId: ThreadId | null;
     };
   }) {
+    // Returns whether the write was dispatched. A caller that claims a stage
+    // must not launch its thread when this is false: the run does not name that
+    // thread, so nothing would own it and recovery would launch another.
+    //
     // `canceled` is terminal. In-flight stage work (a late build directive, a
     // recovery sweep already past its guard) must not resurrect a run the user
     // stopped, so drop any write that would move it out of `canceled`.
@@ -2258,10 +2262,14 @@ const make = Effect.gen(function* () {
       input.run.status !== "canceled" &&
       !resumesCanceledFinalCodeReview
     ) {
-      return;
+      return false;
     }
     if (currentRun !== null && runUpdateWouldOverwriteNewerTicketState(currentRun, input.run)) {
-      return;
+      yield* Effect.logInfo("implementation run update dropped over newer ticket state", {
+        runId: input.run.id,
+        status: input.run.status,
+      });
+      return false;
     }
     const run = { ...input.run, automationHalt: summarizeTicketAppReviewHalt(input.run) };
     yield* orchestrationEngine.dispatch({
@@ -2287,7 +2295,16 @@ const make = Effect.gen(function* () {
       run,
       writtenAtMs: yield* Clock.currentTimeMillis,
     });
+    return true;
   });
+
+  /** A stage whose claim `updateRun` dropped is left for recovery to re-derive from fresh state. */
+  const logSkippedLaunch = (input: {
+    readonly runId: OrchestrationImplementationRun["id"];
+    readonly stage: string;
+    readonly ticketIds?: ReadonlyArray<string>;
+  }) =>
+    Effect.logInfo("implementation stage launch skipped because its claim was not written", input);
 
   const appendActivity = Effect.fn("ImplementationWorkflowReactor.appendActivity")(
     function* (input: {
@@ -3227,7 +3244,7 @@ const make = Effect.gen(function* () {
           updatedAt: input.createdAt,
         };
         if (workerThreadIds.size > 0) {
-          yield* updateRun({
+          const claimed = yield* updateRun({
             sourceThreadId: input.sourceThreadId,
             run: claimedRun,
             createdAt: input.createdAt,
@@ -3248,6 +3265,14 @@ const make = Effect.gen(function* () {
                   ];
             }),
           });
+          if (!claimed) {
+            yield* logSkippedLaunch({
+              runId: input.run.id,
+              stage: "implementation",
+              ticketIds: [...workerThreadIds.keys()],
+            });
+            break;
+          }
         }
         workingRun = claimedRun;
         const passResults = yield* Effect.forEach(
@@ -3419,11 +3444,12 @@ const make = Effect.gen(function* () {
       },
       createdAt: input.createdAt,
     });
-    yield* updateRun({
+    const resumed = yield* updateRun({
       sourceThreadId: input.sourceThreadId,
       run: resumedRun,
       createdAt: input.createdAt,
     });
+    if (!resumed) return;
     yield* startReadyWorkers({
       sourceThreadId: input.sourceThreadId,
       run: resumedRun,
@@ -4047,7 +4073,7 @@ const make = Effect.gen(function* () {
         ),
         updatedAt: input.createdAt,
       };
-      yield* updateRun({
+      const claimed = yield* updateRun({
         sourceThreadId: input.sourceThreadId,
         run: reviewingRun,
         createdAt: input.createdAt,
@@ -4061,6 +4087,14 @@ const make = Effect.gen(function* () {
           },
         ],
       });
+      if (!claimed) {
+        yield* logSkippedLaunch({
+          runId: input.run.id,
+          stage: "code-review",
+          ticketIds: [input.ticketId],
+        });
+        return;
+      }
       if (existingReviewer === null) {
         yield* orchestrationEngine.dispatch({
           type: "thread.create",
@@ -4320,7 +4354,7 @@ const make = Effect.gen(function* () {
       ),
       updatedAt: input.createdAt,
     };
-    yield* updateRun({
+    const claimed = yield* updateRun({
       sourceThreadId: input.sourceThreadId,
       run: claimedRun,
       createdAt: input.createdAt,
@@ -4334,6 +4368,14 @@ const make = Effect.gen(function* () {
         },
       ],
     });
+    if (!claimed) {
+      yield* logSkippedLaunch({
+        runId: currentRun.id,
+        stage: "app-review",
+        ticketIds: [input.ticketId],
+      });
+      return;
+    }
     yield* orchestrationEngine.dispatch({
       type: "thread.app-review-workflow.launch",
       commandId: yield* serverCommandId("implementation-ticket-app-review-launch"),
@@ -4776,11 +4818,15 @@ const make = Effect.gen(function* () {
         changeRequestFailure: null,
         updatedAt: input.createdAt,
       };
-      yield* updateRun({
+      const claimed = yield* updateRun({
         sourceThreadId: input.sourceThreadId,
         run: validatingRun,
         createdAt: input.createdAt,
       });
+      if (!claimed) {
+        yield* logSkippedLaunch({ runId: input.run.id, stage: "merge-gate" });
+        return;
+      }
 
       yield* orchestrationEngine.dispatch({
         type: "thread.create",
@@ -5496,11 +5542,15 @@ const make = Effect.gen(function* () {
           yield* continueWithoutBrowserReview(readyRun);
           return;
         }
-        yield* updateRun({
+        const claimed = yield* updateRun({
           sourceThreadId: input.sourceThreadId,
           run: readyRun,
           createdAt: input.createdAt,
         });
+        if (!claimed) {
+          yield* logSkippedLaunch({ runId: cycleRun.id, stage: "app-review" });
+          return;
+        }
         const controllerThreadId = yield* serverThreadId("app-review-orchestrator");
         yield* orchestrationEngine.dispatch({
           type: "thread.app-review-workflow.launch",
@@ -5573,11 +5623,15 @@ const make = Effect.gen(function* () {
         updatedAt: input.createdAt,
       };
 
-      yield* updateRun({
+      const claimed = yield* updateRun({
         sourceThreadId: input.sourceThreadId,
         run: reviewRun,
         createdAt: input.createdAt,
       });
+      if (!claimed) {
+        yield* logSkippedLaunch({ runId: cycleRun.id, stage: "app-review" });
+        return;
+      }
 
       const reviewModelSelection = yield* modelForStep({
         workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
@@ -5827,7 +5881,7 @@ const make = Effect.gen(function* () {
           : input.run.finalCodeReviewLaunchCount,
         updatedAt: input.createdAt,
       };
-      yield* updateRun({
+      const claimed = yield* updateRun({
         sourceThreadId: input.sourceThreadId,
         run: reviewingRun,
         createdAt: input.createdAt,
@@ -5842,6 +5896,10 @@ const make = Effect.gen(function* () {
             : {}),
         },
       });
+      if (!claimed) {
+        yield* logSkippedLaunch({ runId: input.run.id, stage: "code-review" });
+        return;
+      }
 
       if (existingReviewer === null) {
         yield* orchestrationEngine.dispatch({
@@ -6082,7 +6140,7 @@ const make = Effect.gen(function* () {
       activeChangeRequestBabysitterThreadId: babysitterThreadId,
       updatedAt: input.createdAt,
     };
-    yield* updateRun({
+    const claimed = yield* updateRun({
       sourceThreadId: input.sourceThreadId,
       run: babysittingRun,
       createdAt: input.createdAt,
@@ -6092,6 +6150,10 @@ const make = Effect.gen(function* () {
         activeBabysitterThreadId: input.run.activeChangeRequestBabysitterThreadId,
       },
     });
+    if (!claimed) {
+      yield* logSkippedLaunch({ runId: input.run.id, stage: "change-request-babysit" });
+      return;
+    }
     if (existingBabysitter === null) {
       yield* orchestrationEngine.dispatch({
         type: "thread.create",
@@ -7858,11 +7920,15 @@ const make = Effect.gen(function* () {
         : {}),
       updatedAt: input.createdAt,
     };
-    yield* updateRun({
+    const claimed = yield* updateRun({
       sourceThreadId: input.sourceThreadId,
       run: fixingRun,
       createdAt: input.createdAt,
     });
+    if (!claimed) {
+      yield* logSkippedLaunch({ runId: input.run.id, stage: "fixer" });
+      return;
+    }
 
     yield* orchestrationEngine.dispatch({
       type: "thread.create",
@@ -8140,7 +8206,11 @@ const make = Effect.gen(function* () {
           state.status !== "code-reviewing"
         )
           return;
-        const updatedAt = input.createdAt;
+        // Stamp writes with when they happen, not when the result was reported.
+        // A result handled late (a queue backlog, a recovery replay) is older
+        // than what other stages wrote to this ticket meanwhile, and
+        // `runUpdateWouldOverwriteNewerTicketState` drops such a write.
+        const updatedAt = DateTime.formatIso(yield* DateTime.now);
         if (
           directive.status === "blocked" &&
           directive.reportMarkdown === WORKFLOW_INTERRUPTION_ERROR_MESSAGE
@@ -8338,11 +8408,12 @@ const make = Effect.gen(function* () {
             updatedAt,
           };
           if (nextPassCount < cycleBudget) {
-            yield* updateRun({
+            const written = yield* updateRun({
               sourceThreadId,
               run: nextCycleRun,
               createdAt: updatedAt,
             });
+            if (!written) return;
             yield* startTicketCodeReview({
               sourceThreadId,
               run: nextCycleRun,
@@ -8626,7 +8697,12 @@ const make = Effect.gen(function* () {
             status: "qa-reviewing" as const,
             appReviewedHeadSha: null,
           };
-          yield* updateRun({ sourceThreadId, run: retestRun, createdAt: updatedAt });
+          const written = yield* updateRun({
+            sourceThreadId,
+            run: retestRun,
+            createdAt: updatedAt,
+          });
+          if (!written) return;
           yield* startBrowserReview({ sourceThreadId, run: retestRun, createdAt: updatedAt });
           return;
         }
@@ -8721,7 +8797,12 @@ const make = Effect.gen(function* () {
             ].join("\n\n"),
             updatedAt,
           };
-          yield* updateRun({ sourceThreadId, run: nextCycleRun, createdAt: updatedAt });
+          const written = yield* updateRun({
+            sourceThreadId,
+            run: nextCycleRun,
+            createdAt: updatedAt,
+          });
+          if (!written) return;
           yield* startCodeReview({
             sourceThreadId,
             run: nextCycleRun,
@@ -8937,7 +9018,8 @@ const make = Effect.gen(function* () {
           updatedAt,
         };
         if (!exhausted) {
-          yield* updateRun({ sourceThreadId, run: cycleRun, createdAt: updatedAt });
+          const written = yield* updateRun({ sourceThreadId, run: cycleRun, createdAt: updatedAt });
+          if (!written) return;
           yield* startCodeReview({
             sourceThreadId,
             run: cycleRun,
