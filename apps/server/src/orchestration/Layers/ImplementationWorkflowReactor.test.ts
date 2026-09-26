@@ -6218,6 +6218,77 @@ describe("ImplementationWorkflowReactor", () => {
     );
   }
 
+  it.effect("waits on an idle worker until the background task it started has ended", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        const started = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        )!.ticketStates[0]!;
+        const threadId = started.workerThreadId!;
+        const taskActivity = (kind: "task.started" | "task.completed", createdAt: string) =>
+          system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId(`worker-background-${kind}`),
+            threadId,
+            activity: {
+              id: eventId(`worker-background-${kind}`),
+              tone: "info",
+              kind,
+              summary: kind,
+              payload: {
+                taskId: "e2e-run",
+                ...(kind === "task.started"
+                  ? { agentKind: "background" }
+                  : { status: "completed" }),
+              },
+              turnId: null,
+              createdAt,
+            },
+            createdAt,
+          });
+        const clockNow = () => Effect.map(DateTime.now, DateTime.formatIso);
+        const quietAt = yield* clockNow();
+        yield* taskActivity("task.started", quietAt);
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("worker-background-ready"),
+          threadId,
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: quietAt,
+          },
+          createdAt: quietAt,
+        });
+        yield* system.reactor.drain;
+        const workerState = () =>
+          Effect.map(
+            system.query.getSnapshot(),
+            (snapshot) =>
+              snapshot.implementationRuns.find((entry) => entry.id === run.id)!.ticketStates[0]!,
+          );
+
+        yield* TestClock.adjust(Duration.minutes(25));
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+        expect((yield* workerState()).attemptCount).toBe(started.attemptCount);
+        expect((yield* workerState()).status).toBe("running");
+
+        yield* taskActivity("task.completed", yield* clockNow());
+        yield* system.reactor.drain;
+        yield* TestClock.adjust(Duration.minutes(11));
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+        expect((yield* workerState()).attemptCount).toBe(started.attemptCount + 1);
+      }),
+    ),
+  );
+
   it.effect("replays a completed worker result after clearing a legacy dirty-worktree halt", () =>
     withSystem((system) =>
       Effect.gen(function* () {

@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 
 import {
+  STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS,
   STAGE_CLAIM_GRACE_MS,
   stageClaimBlocksRestart,
   stageClaimIsReleased,
@@ -98,4 +99,48 @@ it("keeps a re-run available on an owner recovery still has to wait out", () => 
   expect(stageClaimIsReleased("settling")).toBe(false);
   expect(stageClaimBlocksRestart("awaiting-nudge")).toBe(false);
   expect(stageClaimIsReleased("awaiting-nudge")).toBe(false);
+});
+
+const task = (kind: string, taskId: string, offsetMs: number, payload: object = {}) => ({
+  kind,
+  payload: { taskId, ...payload },
+  createdAt: at(offsetMs),
+});
+
+it("waits on a quiet owner while a background task it started is still open", () => {
+  const waiting = thread({
+    session: session({ status: "ready", updatedAt: at(-STAGE_CLAIM_GRACE_MS * 2) }),
+    activities: [
+      task("task.started", "e2e", -STAGE_CLAIM_GRACE_MS * 3),
+      task("task.started", "probe", -STAGE_CLAIM_GRACE_MS * 3),
+      task("task.completed", "probe", -STAGE_CLAIM_GRACE_MS * 2, { status: "completed" }),
+    ],
+  });
+  expect(stateOf(waiting)).toBe("settling");
+  expect(stageClaimIsReleased(stateOf(waiting))).toBe(false);
+  expect(stageClaimBlocksRestart(stateOf(waiting))).toBe(false);
+});
+
+it("releases a quiet owner once its background tasks have ended", () => {
+  const ended = thread({
+    session: session({ status: "ready", updatedAt: at(-STAGE_CLAIM_GRACE_MS * 2) }),
+    activities: [
+      task("task.started", "e2e", -STAGE_CLAIM_GRACE_MS * 3),
+      task("task.updated", "e2e", -STAGE_CLAIM_GRACE_MS * 2, {
+        endedAt: at(-STAGE_CLAIM_GRACE_MS * 2),
+      }),
+    ],
+  });
+  expect(stateOf(ended)).toBe("released");
+});
+
+it("stops waiting on a background task that never reports its end", () => {
+  const hung = thread({
+    session: session({
+      status: "ready",
+      updatedAt: at(-STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS),
+    }),
+    activities: [task("task.started", "e2e", -STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS)],
+  });
+  expect(stateOf(hung)).toBe("released");
 });

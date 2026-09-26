@@ -2510,6 +2510,43 @@ pending_approval_requests AS (
       ),
     );
 
+  const listRecentTaskActivityRows = SqlSchema.findAll({
+    Request: Schema.Struct({ threadIds: Schema.Array(ThreadId), since: Schema.String }),
+    Result: ProjectionThreadActivityDbRowSchema,
+    execute: ({ threadIds, since }) => sql`
+      SELECT
+        a.activity_id AS "activityId",
+        a.thread_id AS "threadId",
+        a.turn_id AS "turnId",
+        a.tone,
+        a.kind,
+        a.summary,
+        a.payload_json AS "payload",
+        a.sequence,
+        a.created_at AS "createdAt"
+      FROM projection_thread_activities a
+      WHERE a.kind LIKE 'task.%'
+        AND a.created_at >= ${since}
+        AND ${sql.in("a.thread_id", threadIds)}
+      ORDER BY a.created_at ASC, a.activity_id ASC
+    `,
+  });
+
+  const listRecentTaskActivities: NonNullable<
+    ProjectionSnapshotQueryShape["listRecentTaskActivities"]
+  > = (input) =>
+    listRecentTaskActivityRows(input).pipe(
+      Effect.map((rows) =>
+        rows.map((row) => ({ threadId: row.threadId, activity: mapThreadActivityRow(row) })),
+      ),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.listRecentTaskActivities:query",
+          "ProjectionSnapshotQuery.listRecentTaskActivities:decodeRow",
+        ),
+      ),
+    );
+
   const getThreadSessionRowByThread = SqlSchema.findOneOption({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadSessionDbRowSchema,
@@ -5230,6 +5267,7 @@ pending_approval_requests AS (
     getCommandReadModel,
     getUserInputActivity,
     listActivitiesByKind,
+    listRecentTaskActivities,
     getSnapshot,
     getShellSnapshot,
     getArchivedShellSnapshot,

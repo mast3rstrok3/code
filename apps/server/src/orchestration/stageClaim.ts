@@ -42,6 +42,42 @@ import { isAwaitingWorkflowNudge, type WorkflowNudgeThread } from "./workflowNud
  */
 export const STAGE_CLAIM_GRACE_MS = 10 * 60 * 1_000;
 
+/**
+ * How long recovery keeps waiting on a quiet owner that still has background
+ * tasks open, measured from the last task activity.
+ *
+ * An agent can start a long command in the background (an E2E suite, a device
+ * lease) and end its turn; the provider re-invokes it when the task finishes.
+ * Between those turns the thread is `ready` and silent for as long as the task
+ * runs, which easily outlasts {@link STAGE_CLAIM_GRACE_MS}. Recovering then
+ * relaunches a worker that was only waiting and burns its launch budget. The
+ * ceiling sits above the 45 minute E2E command limit and stops a task that never
+ * reports its end from holding the stage forever.
+ */
+export const STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS = 60 * 60 * 1_000;
+
+/**
+ * When the thread last touched a background task that is still open, or null
+ * when every task it started has ended.
+ */
+export function openBackgroundTaskActivityAt(thread: WorkflowNudgeThread): number | null {
+  const open = new Set<string>();
+  let lastActivityMs: number | null = null;
+  for (const activity of thread.activities ?? []) {
+    if (!activity.kind.startsWith("task.")) continue;
+    const payload = activity.payload as { taskId?: unknown; endedAt?: unknown } | null;
+    const taskId = typeof payload?.taskId === "string" ? payload.taskId : null;
+    if (taskId === null) continue;
+    if (activity.kind === "task.started") open.add(taskId);
+    else if (activity.kind === "task.completed" || typeof payload?.endedAt === "string") {
+      open.delete(taskId);
+    }
+    const createdAtMs = Date.parse(activity.createdAt);
+    if (Number.isFinite(createdAtMs)) lastActivityMs = Math.max(lastActivityMs ?? 0, createdAtMs);
+  }
+  return open.size === 0 ? null : lastActivityMs;
+}
+
 export interface StageClaimThread extends WorkflowNudgeThread {
   readonly createdAt: string;
 }
@@ -91,7 +127,12 @@ export function stageClaimState(input: {
   // `stopped`, `error` and `interrupted` say the session is actually over and
   // are released at once; only silence has to prove itself by lasting.
   if (quietSince === null) return "released";
-  return nowMs - quietSince >= graceMs ? "released" : "settling";
+  if (nowMs - quietSince < graceMs) return "settling";
+  const backgroundTaskAt = openBackgroundTaskActivityAt(thread);
+  return backgroundTaskAt !== null &&
+    nowMs - backgroundTaskAt < STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS
+    ? "settling"
+    : "released";
 }
 
 /**

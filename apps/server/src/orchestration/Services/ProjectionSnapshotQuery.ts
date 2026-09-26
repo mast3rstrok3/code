@@ -94,6 +94,19 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<ReadonlyArray<OrchestrationThreadActivity>, ProjectionRepositoryError>;
 
   /**
+   * Read the `task.*` activities of the given threads created since `since`.
+   * The command snapshot carries no activities, so stage recovery uses this to
+   * see background tasks an idle agent is still waiting on.
+   */
+  readonly listRecentTaskActivities?: (input: {
+    readonly threadIds: ReadonlyArray<ThreadId>;
+    readonly since: string;
+  }) => Effect.Effect<
+    ReadonlyArray<{ readonly threadId: ThreadId; readonly activity: OrchestrationThreadActivity }>,
+    ProjectionRepositoryError
+  >;
+
+  /**
    * Read the lightweight command snapshot used to bootstrap the in-memory
    * orchestration engine without hydrating message/activity/checkpoint bodies.
    */

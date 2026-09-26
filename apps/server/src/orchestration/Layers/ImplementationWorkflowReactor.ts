@@ -47,6 +47,7 @@ import {
   type OrchestrationPlanningTicket,
   type OrchestrationReadModel,
   type OrchestrationThread,
+  type OrchestrationThreadActivity,
   type OrchestrationThreadWorkflowRole,
   type WorkflowStageExecution,
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
@@ -112,7 +113,13 @@ import {
 } from "@t3tools/shared/workflowStepCycles";
 import { isWorkflowThreadPaused } from "../workflowPause.ts";
 import { isAwaitingWorkflowNudge, WORKFLOW_INTERRUPTION_ERROR_MESSAGE } from "../workflowNudge.ts";
-import { stageClaimBlocksRestart, stageClaimIsReleased, stageClaimState } from "../stageClaim.ts";
+import {
+  STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS,
+  STAGE_CLAIM_GRACE_MS,
+  stageClaimBlocksRestart,
+  stageClaimIsReleased,
+  stageClaimState,
+} from "../stageClaim.ts";
 import { ServerActivation } from "../../serverActivation.ts";
 import { implementationRerunTargetMatchesHalt } from "../implementationRerun.ts";
 import { runUpdateWouldOverwriteNewerTicketState } from "../implementationRunConcurrency.ts";
@@ -11251,6 +11258,47 @@ const make = Effect.gen(function* () {
     });
   });
 
+  /**
+   * The command snapshot carries no activities, so read the background tasks of
+   * the threads recovery could release this sweep: quiet past the stage grace
+   * window, but recently enough that an open task still holds them. Most sweeps
+   * have none and read nothing.
+   */
+  const loadBackgroundTaskActivities = Effect.fn(
+    "ImplementationWorkflowReactor.loadBackgroundTaskActivities",
+  )(function* (threads: ReadonlyArray<OrchestrationThread>, nowMs: number) {
+    const byThread = new Map<ThreadId, OrchestrationThreadActivity[]>();
+    const threadIds = threads.flatMap((thread) => {
+      if (thread.deletedAt !== null || thread.session?.status !== "ready") return [];
+      const quietMs = nowMs - Date.parse(thread.session.updatedAt);
+      return quietMs >= STAGE_CLAIM_GRACE_MS && quietMs < STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS
+        ? [thread.id]
+        : [];
+    });
+    if (threadIds.length === 0 || projectionSnapshotQuery.listRecentTaskActivities === undefined) {
+      return byThread;
+    }
+    const activities = yield* projectionSnapshotQuery
+      .listRecentTaskActivities({
+        threadIds,
+        since: DateTime.formatIso(
+          DateTime.makeUnsafe(nowMs - 2 * STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS),
+        ),
+      })
+      .pipe(
+        Effect.tapError((error) =>
+          Effect.logWarning("stage recovery could not read background tasks", error),
+        ),
+        Effect.orElseSucceed(() => []),
+      );
+    for (const { threadId, activity } of activities) {
+      const entries = byThread.get(threadId) ?? [];
+      entries.push(activity);
+      byThread.set(threadId, entries);
+    }
+    return byThread;
+  });
+
   const recoverIncompleteStages = Effect.fn(
     "ImplementationWorkflowReactor.recoverIncompleteStages",
   )(function* (recoverPersistedLaunchFallout = false) {
@@ -11267,6 +11315,7 @@ const make = Effect.gen(function* () {
       createdAt = DateTime.formatIso(yield* DateTime.now);
     }
     const nowMs = Date.parse(createdAt);
+    const taskActivitiesByThread = yield* loadBackgroundTaskActivities(readModel.threads, nowMs);
     for (const persistedRun of readModel.implementationRuns) {
       const run = yield* cleanupTicketResources({ run: persistedRun, createdAt });
       if (run.status === "completed" || run.status === "canceled") {
@@ -11566,7 +11615,14 @@ const make = Effect.gen(function* () {
         thread !== undefined &&
         isAwaitingWorkflowNudge({ threads: readModel.threads, thread, nowMs });
       const stageThreadFinished = (thread: OrchestrationThread | undefined) =>
-        stageThreadIsFinished({ thread, threads: readModel.threads, nowMs });
+        stageThreadIsFinished({
+          thread:
+            thread === undefined
+              ? undefined
+              : { ...thread, activities: taskActivitiesByThread.get(thread.id) ?? [] },
+          threads: readModel.threads,
+          nowMs,
+        });
       const hasActiveChild = (input: {
         readonly threadId: ThreadId | null;
         readonly role:
