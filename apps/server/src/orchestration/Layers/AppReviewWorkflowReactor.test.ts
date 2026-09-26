@@ -105,6 +105,7 @@ import {
   isAppReviewProviderProgressActivityKind,
   isAppReviewWorkflowSessionStatus,
   nextAppReviewWorkflowAction,
+  phaseAwaitingBackgroundTask,
   phaseTurnCompleted,
   renewAppReviewPhaseExecutionLease,
   retryE2ePhaseInCycle,
@@ -712,6 +713,52 @@ it("treats a completed one-turn phase as terminal once its session is idle", () 
   expect(phaseTurnCompleted({ latestTurn: { state: "error" }, session: { status: "error" } })).toBe(
     false,
   );
+});
+
+it("keeps a completed phase waiting while a background task it started is open", () => {
+  const nowMs = Date.parse("2026-01-01T12:00:00.000Z");
+  const at = (minutesAgo: number) =>
+    DateTime.formatIso(DateTime.makeUnsafe(nowMs - minutesAgo * 60_000));
+  const fixer = (
+    activities: ReadonlyArray<{ kind: string; taskId: string; minutesAgo: number }>,
+  ) => ({
+    id: ThreadId.make("thread-fixer-background"),
+    parentThreadId: null,
+    workflowRole: "app-review-fixer" as const,
+    deletedAt: null,
+    session: { status: "ready", activeTurnId: null, lastError: null, updatedAt: at(1) },
+    latestTurn: { state: "completed" },
+    activities: activities.map((entry) => ({
+      kind: entry.kind,
+      payload: {
+        taskId: entry.taskId,
+        ...(entry.kind === "task.completed" ? { status: "completed" } : {}),
+      },
+      createdAt: at(entry.minutesAgo),
+    })),
+  });
+
+  expect(
+    phaseAwaitingBackgroundTask(
+      fixer([{ kind: "task.started", taskId: "e2e", minutesAgo: 5 }]),
+      nowMs,
+    ),
+  ).toBe(true);
+  expect(
+    phaseAwaitingBackgroundTask(
+      fixer([
+        { kind: "task.started", taskId: "e2e", minutesAgo: 5 },
+        { kind: "task.completed", taskId: "e2e", minutesAgo: 2 },
+      ]),
+      nowMs,
+    ),
+  ).toBe(false);
+  expect(
+    phaseAwaitingBackgroundTask(
+      fixer([{ kind: "task.started", taskId: "e2e", minutesAgo: 90 }]),
+      nowMs,
+    ),
+  ).toBe(false);
 });
 
 it("identifies phase workers that restart after their cycle was superseded", () => {

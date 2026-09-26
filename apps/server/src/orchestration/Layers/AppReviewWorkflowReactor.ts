@@ -94,6 +94,10 @@ import {
   isAwaitingWorkflowNudge,
   type WorkflowNudgeThread,
 } from "../workflowNudge.ts";
+import {
+  openBackgroundTaskActivityAt,
+  STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS,
+} from "../stageClaim.ts";
 import { WORKFLOW_PROVIDER_LEASE_MS } from "../workflowStageExecutions.ts";
 import { isWorkflowThreadPaused } from "../workflowPause.ts";
 import { parseWorkflowDirectiveFromMarkdown } from "../workflowDirectives.ts";
@@ -529,6 +533,20 @@ export function phaseTurnCompleted(thread: {
 }): boolean {
   if (thread.session?.status === "starting" || thread.session?.status === "running") return false;
   return thread.latestTurn?.state === "completed";
+}
+
+/**
+ * A phase agent that ended its turn with a background task still open (an E2E
+ * run, a device lease) is waiting for that task: the provider re-invokes it
+ * when the task ends. Treating that turn as final re-prompts and interrupts the
+ * agent, which stops the task it was waiting on. The wait is capped so a task
+ * that never reports its end still lets the phase fail.
+ */
+export function phaseAwaitingBackgroundTask(thread: WorkflowNudgeThread, nowMs: number): boolean {
+  const lastTaskActivityMs = openBackgroundTaskActivityAt(thread);
+  return (
+    lastTaskActivityMs !== null && nowMs - lastTaskActivityMs < STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS
+  );
 }
 
 /**
@@ -3196,7 +3214,10 @@ ${result.outputMarkdown}`,
       }
       if (appReviewPhaseTurnPending(run, cycle, tester)) return;
       const failed = threadTurnFailed(tester);
-      const completedWithoutReview = phaseTurnCompleted(tester) && hasSettledCheckpoint(tester);
+      const completedWithoutReview =
+        phaseTurnCompleted(tester) &&
+        hasSettledCheckpoint(tester) &&
+        !phaseAwaitingBackgroundTask(tester, Date.parse(occurredAt));
       if (!failed && !completedWithoutReview) return;
       if (failed && (yield* phaseThreadState(tester)) === "nudging") return;
       yield* failCycle({
@@ -3292,7 +3313,10 @@ ${result.outputMarkdown}`,
       }
       if (appReviewPhaseTurnPending(run, cycle, reviewer)) return;
       const failed = threadTurnFailed(reviewer);
-      const completedWithoutReview = phaseTurnCompleted(reviewer) && hasSettledCheckpoint(reviewer);
+      const completedWithoutReview =
+        phaseTurnCompleted(reviewer) &&
+        hasSettledCheckpoint(reviewer) &&
+        !phaseAwaitingBackgroundTask(reviewer, Date.parse(occurredAt));
       if (!failed && !completedWithoutReview) return;
       if (failed && (yield* phaseThreadState(reviewer)) === "nudging") return;
       yield* failCycle({
@@ -3847,7 +3871,10 @@ ${result.outputMarkdown}`,
       }
       if (appReviewPhaseTurnPending(run, cycle, fixer)) return;
       const failed = threadTurnFailed(fixer);
-      const completedWithoutResult = phaseTurnCompleted(fixer) && hasSettledCheckpoint(fixer);
+      const completedWithoutResult =
+        phaseTurnCompleted(fixer) &&
+        hasSettledCheckpoint(fixer) &&
+        !phaseAwaitingBackgroundTask(fixer, Date.parse(occurredAt));
       if (!failed && !completedWithoutResult) return;
       if (failed && (yield* phaseThreadState(fixer)) === "nudging") return;
       if (completedWithoutResult) {
