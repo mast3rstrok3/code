@@ -49,6 +49,7 @@ import {
   appReviewTestCommands,
   appReviewTestRecordingsDir,
   completedAppReviewTests,
+  restoreAppReviewTestWrites,
   runAppReviewTest,
 } from "../appReviewTestRunner.ts";
 import * as Layer from "effect/Layer";
@@ -1939,24 +1940,74 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const computeWorkspaceRevision = Effect.fn("AppReviewWorkflowReactor.computeWorkspaceRevision")(
-    function* (cwd: string) {
-      const [head, preview] = yield* Effect.all([
-        gitWorkflow.resolveCommit({ cwd, ref: "HEAD" }),
-        reviewService.getDiffPreview({ cwd }),
-      ]);
-      const workingTreeDiffHash =
-        preview.sources.find((source) => source.kind === "working-tree")?.diffHash ?? "missing";
-      const branchDiffHash =
-        preview.sources.find((source) => source.kind === "branch-range")?.diffHash ?? "missing";
-      return {
+  /** The revision App Review pins, plus the worktree-root paths that differ from HEAD. */
+  const readWorkspace = Effect.fn("AppReviewWorkflowReactor.readWorkspace")(function* (
+    cwd: string,
+  ) {
+    const [head, preview] = yield* Effect.all([
+      gitWorkflow.resolveCommit({ cwd, ref: "HEAD" }),
+      reviewService.getDiffPreview({ cwd }),
+    ]);
+    const workingTree = preview.sources.find((source) => source.kind === "working-tree");
+    const workingTreeDiffHash = workingTree?.diffHash ?? "missing";
+    const branchDiffHash =
+      preview.sources.find((source) => source.kind === "branch-range")?.diffHash ?? "missing";
+    return {
+      revision: {
         headSha: head.commitSha,
         workingTreeDiffHash,
         branchDiffHash,
         fingerprint: `${head.commitSha}:${workingTreeDiffHash}:${branchDiffHash}`,
-      } satisfies AppReviewWorkflowWorkspaceRevision;
+      } satisfies AppReviewWorkflowWorkspaceRevision,
+      dirtyPaths:
+        workingTree?.files === undefined
+          ? null
+          : new Set(
+              workingTree.files.flatMap((file) =>
+                file.previousPath === null ? [file.path] : [file.path, file.previousPath],
+              ),
+            ),
+    };
+  });
+
+  const computeWorkspaceRevision = Effect.fn("AppReviewWorkflowReactor.computeWorkspaceRevision")(
+    function* (cwd: string) {
+      return (yield* readWorkspace(cwd)).revision;
     },
   );
+
+  /**
+   * An E2E command tests the worktree; it does not change the work under
+   * review. Undo files it wrote that were clean before it ran, and say so, so
+   * the project can fix its suite. Anything else stays for the stale check.
+   */
+  const restoreE2eWrites = Effect.fn("AppReviewWorkflowReactor.restoreE2eWrites")(function* (
+    cwd: string,
+    before: Effect.Success<ReturnType<typeof readWorkspace>> | null,
+  ) {
+    if (before === null || before.dirtyPaths === null) return null;
+    const beforePaths = before.dirtyPaths;
+    const after = yield* readWorkspace(cwd);
+    if (
+      after.dirtyPaths === null ||
+      after.revision.fingerprint === before.revision.fingerprint ||
+      after.revision.headSha !== before.revision.headSha
+    )
+      return null;
+    const paths = [...after.dirtyPaths].filter((path) => !beforePaths.has(path)).toSorted();
+    if (paths.length === 0) return null;
+    const { restored, removed } = yield* restoreAppReviewTestWrites({ cwd, paths });
+    const list = (entries: readonly string[]) => entries.map((path) => `\`${path}\``).join(", ");
+    const notes = [
+      restored.length === 0
+        ? null
+        : `The E2E command modified tracked files, restored after the run: ${list(restored)}`,
+      removed.length === 0
+        ? null
+        : `The E2E command created untracked files, removed after the run: ${list(removed)}`,
+    ].filter(Predicate.isNotNull);
+    return notes.length === 0 ? null : notes.join("\n");
+  });
 
   const failRun = Effect.fn("AppReviewWorkflowReactor.failRun")(function* (input: {
     readonly run: AppReviewWorkflowRun;
@@ -2110,8 +2161,7 @@ const make = Effect.gen(function* () {
         yield* failRun({
           run,
           reason: "workspace-stale",
-          detailMarkdown:
-            "The worktree changed outside the active App Review phase. Start a fresh run against the new workspace revision.",
+          detailMarkdown: `The worktree no longer matches the revision this App Review recorded: ${workspaceRevisionChanges(run.workspaceRevision, current)}. Start a fresh run against the new workspace revision.`,
           occurredAt,
         });
         return null;
@@ -2335,6 +2385,11 @@ const make = Effect.gen(function* () {
         .getByWorktree({ worktreePath: target.cwd })
         .pipe(Effect.orElseSucceed(() => null));
       const stackId = appReviewStackIdForTarget({ lookup: stackLookup, previewUrl });
+      // Without a baseline nothing is restored, and the stale check judges the writes.
+      const before = yield* readWorkspace(target.cwd).pipe(
+        Effect.tapError((error) => Effect.logWarning("E2E workspace baseline unavailable", error)),
+        Effect.orElseSucceed(() => null),
+      );
       const fiber = yield* Effect.forkIn(
         Effect.forEach(
           remaining,
@@ -2352,6 +2407,19 @@ const make = Effect.gen(function* () {
                   : appReviewTestRecordingsDir(path, serverConfig.stateDir, run.id),
               env: e2eEnvironment,
             }).pipe(
+              Effect.flatMap((result) =>
+                restoreE2eWrites(target.cwd, before).pipe(
+                  Effect.tapError((error) =>
+                    Effect.logWarning("E2E worktree writes not restored", error),
+                  ),
+                  Effect.orElseSucceed(() => null),
+                  Effect.map((note) =>
+                    note === null
+                      ? result
+                      : { ...result, outputMarkdown: `${note}\n\n${result.outputMarkdown}` },
+                  ),
+                ),
+              ),
               Effect.flatMap((result) =>
                 worker.enqueue({
                   kind: "test-result",
@@ -4866,6 +4934,25 @@ ${result.outputMarkdown}`,
     reconcile,
   } satisfies AppReviewWorkflowReactorShape;
 });
+
+/** Name what moved between two workspace revisions, for a stale-run failure. */
+export const workspaceRevisionChanges = (
+  recorded: AppReviewWorkflowWorkspaceRevision,
+  current: AppReviewWorkflowWorkspaceRevision,
+) =>
+  [
+    recorded.headSha === current.headSha
+      ? null
+      : `HEAD moved from ${recorded.headSha.slice(0, 12)} to ${current.headSha.slice(0, 12)}`,
+    recorded.workingTreeDiffHash === current.workingTreeDiffHash
+      ? null
+      : "uncommitted changes differ",
+    recorded.headSha !== current.headSha || recorded.branchDiffHash === current.branchDiffHash
+      ? null
+      : "the diff against the base branch changed",
+  ]
+    .filter(Predicate.isNotNull)
+    .join("; ");
 
 export const programmaticReviewRecord = (
   run: AppReviewWorkflowRun,

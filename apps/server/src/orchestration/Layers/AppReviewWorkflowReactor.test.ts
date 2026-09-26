@@ -4335,6 +4335,178 @@ for (const testExit of [0, 1] as const)
       );
     }
 
+for (const change of ["suite-writes-tracked-file", "head-moves"] as const) {
+  effectIt.effect(`judges worktree changes made during an E2E command: ${change}`, () =>
+    Effect.gen(function* () {
+      const finished = yield* Deferred.make<void>();
+      const written = "product-knowledge/apps/web/verification.json";
+      let head = "abc123";
+      let dirty: string[] = [];
+      const initial = run();
+      let storedRun = run({
+        activePhase: "e2e",
+        activeThreadId: null,
+        cyclesUsed: 1,
+        cycleBudget: 5,
+        appReviewScope: "e2e",
+        cycles: [
+          {
+            ...carryCycle(1, AppReviewId.make("programmatic-review")),
+            status: "e2e-testing",
+            appReviewScope: "e2e",
+            e2eThreadId: null,
+            reviewerThreadId: initial.controllerThreadId,
+            e2eExecution: {
+              id: "execution-1",
+              commands: [{ command: "pnpm e2e", retryCommand: "pnpm e2e" }],
+              results: [],
+            },
+          },
+        ],
+      });
+      const thread = (id: ThreadId) =>
+        decodeThread({
+          id,
+          projectId: "project",
+          title: "Automated review",
+          modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
+          runtimeMode: "full-access",
+          branch: "dev",
+          worktreePath: "/assigned/worktree",
+          createdAt: now,
+          updatedAt: now,
+          deletedAt: null,
+          messages: [],
+          activities: [],
+          latestTurn: null,
+          session: null,
+          checkpoints: [],
+        });
+      const threads = [thread(storedRun.targetThreadId), thread(storedRun.controllerThreadId)];
+      const gitCalls: string[][] = [];
+      const output = (stdout: string) => ({
+        code: ChildProcessSpawner.ExitCode(0),
+        timedOut: false,
+        stdout,
+        stderr: "",
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        stdoutInvalidUtf8: false,
+        stderrInvalidUtf8: false,
+      });
+      const layer = AppReviewWorkflowReactorLive.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            Layer.mock(ProcessRunner)({
+              run: (input) =>
+                Effect.sync(() => {
+                  if (input.command !== "git") {
+                    if (change === "head-moves") head = "def456";
+                    else dirty = [written];
+                    return output("suite passed");
+                  }
+                  const args = input.args.slice(1);
+                  gitCalls.push(args);
+                  if (args[0] === "rev-parse") return output("/assigned/worktree\n");
+                  if (args[0] === "ls-tree") return output(`${written}\0`);
+                  if (args[0] === "restore") dirty = [];
+                  return output("");
+                }),
+            }),
+            Layer.mock(OrchestrationEngineService)({
+              dispatch: (command) =>
+                Effect.gen(function* () {
+                  if (command.type === "thread.app-review-workflow.update") {
+                    storedRun = command.run;
+                    if (storedRun.status === "passed" || storedRun.status === "failed")
+                      yield* Deferred.succeed(finished, undefined);
+                  }
+                  return { sequence: 1 };
+                }),
+            }),
+            Layer.mock(ProjectionSnapshotQuery)({
+              getCommandReadModel: () =>
+                Effect.sync(() => ({
+                  snapshotSequence: 1,
+                  projects: [],
+                  threads,
+                  implementationRuns: [],
+                  appReviewWorkflowRuns: [storedRun],
+                  updatedAt: now,
+                })),
+              getThreadDetailById: (id) =>
+                Effect.succeed(Option.fromUndefinedOr(threads.find((entry) => entry.id === id))),
+            }),
+            Layer.mock(GitWorkflowService)({
+              resolveCommit: () => Effect.sync(() => ({ commitSha: head })),
+            }),
+            Layer.mock(ReviewService)({
+              getDiffPreview: ({ cwd }) =>
+                Effect.sync(() => ({
+                  cwd,
+                  generatedAt: DateTime.makeUnsafe(now),
+                  sources: (["working-tree", "branch-range"] as const).map((kind) => ({
+                    id: kind,
+                    kind,
+                    title: kind,
+                    baseRef: null,
+                    headRef: null,
+                    diff: "",
+                    diffHash: kind === "branch-range" ? "branch" : ["working", ...dirty].join(":"),
+                    truncated: false,
+                    files:
+                      kind === "branch-range"
+                        ? []
+                        : dirty.map((path) => ({
+                            path,
+                            previousPath: null,
+                            additions: 1,
+                            deletions: 1,
+                          })),
+                  })),
+                })),
+            }),
+            Layer.mock(AppStackManager)(noAppStacks),
+            Layer.mock(ServerSettingsService)({
+              getSettings: Effect.succeed(decodeServerSettings({})),
+            }),
+            Layer.mock(T3ProjectFileLoader)({
+              loadStrict: () => Effect.succeed(Option.some({ e2eCommands: ["pnpm e2e"] })),
+            }),
+          ),
+        ),
+      );
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const reactor = yield* AppReviewWorkflowReactor;
+          yield* reactor.reconcile();
+          yield* Deferred.await(finished);
+          if (change === "suite-writes-tracked-file") {
+            expect(storedRun.status).toBe("passed");
+            expect(dirty).toEqual([]);
+            expect(gitCalls).toContainEqual([
+              "restore",
+              "--source=HEAD",
+              "--staged",
+              "--worktree",
+              "--",
+              written,
+            ]);
+            expect(storedRun.cycles[0]?.e2eExecution?.results[0]?.outputMarkdown).toContain(
+              `The E2E command modified tracked files, restored after the run: \`${written}\``,
+            );
+          } else {
+            expect(gitCalls).toEqual([]);
+            expect(storedRun.failure).toMatchObject({ reason: "workspace-stale" });
+            expect(storedRun.failure?.detailMarkdown).toContain("HEAD moved from abc123 to def456");
+          }
+        }).pipe(Effect.provide(layer)),
+      );
+    }),
+  );
+}
+
 it("preserves programmatic check identities across completion order and narrowed cycles", () => {
   const results = ["calendar", "lists"].map((command) => ({
     command,

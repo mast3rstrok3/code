@@ -5,13 +5,19 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import { ChildProcessSpawner } from "effect/unstable/process";
-import { ProcessRunner, type ProcessRunInput } from "../processRunner.ts";
+import {
+  layer as processRunnerLayer,
+  ProcessRunner,
+  type ProcessRunInput,
+} from "../processRunner.ts";
 import {
   appReviewRetryCommandsFailure,
   appReviewTestCommands,
   completedAppReviewTests,
+  restoreAppReviewTestWrites,
   runAppReviewTest,
 } from "./appReviewTestRunner.ts";
 
@@ -335,4 +341,49 @@ it.effect("collects what the suite recorded under server-chosen names", () =>
       (yield* fileSystem.readDirectory(recordingsDir)).some((name) => name.endsWith(".incoming")),
     ).toBe(false);
   }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("restores only what the suite wrote and leaves earlier edits alone", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const runner = yield* ProcessRunner;
+    const repo = yield* fileSystem.makeTempDirectoryScoped();
+    const git = (...args: string[]) =>
+      runner.run({
+        command: "git",
+        args: ["-c", "user.name=T3", "-c", "user.email=t3@example.com", ...args],
+        cwd: repo,
+      });
+    yield* git("init", "-q");
+    yield* fileSystem.makeDirectory(path.join(repo, "knowledge"));
+    yield* fileSystem.writeFileString(path.join(repo, "knowledge", "verification.json"), "{}\n");
+    yield* fileSystem.writeFileString(path.join(repo, "work.ts"), "base\n");
+    yield* git("add", ".");
+    yield* git("commit", "-q", "-m", "base");
+    yield* fileSystem.writeFileString(path.join(repo, "work.ts"), "in progress\n");
+    yield* fileSystem.writeFileString(path.join(repo, "notes.md"), "mine\n");
+    // What the suite wrote while it ran.
+    yield* fileSystem.writeFileString(
+      path.join(repo, "knowledge", "verification.json"),
+      '{"passed":true}\n',
+    );
+    yield* fileSystem.writeFileString(path.join(repo, "report.html"), "<html/>\n");
+
+    const result = yield* restoreAppReviewTestWrites({
+      cwd: path.join(repo, "knowledge"),
+      paths: ["knowledge/verification.json", "report.html"],
+    });
+
+    expect(result).toEqual({
+      restored: ["knowledge/verification.json"],
+      removed: ["report.html"],
+    });
+    expect(
+      yield* fileSystem.readFileString(path.join(repo, "knowledge", "verification.json")),
+    ).toBe("{}\n");
+    expect(yield* fileSystem.exists(path.join(repo, "report.html"))).toBe(false);
+    expect(yield* fileSystem.readFileString(path.join(repo, "work.ts"))).toBe("in progress\n");
+    expect(yield* fileSystem.readFileString(path.join(repo, "notes.md"))).toBe("mine\n");
+  }).pipe(Effect.provide(processRunnerLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );

@@ -16,6 +16,7 @@ import {
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Crypto from "effect/Crypto";
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -146,6 +147,63 @@ export function appReviewTestCommands(
     ];
   });
 }
+
+class AppReviewTestRestoreError extends Data.TaggedError("AppReviewTestRestoreError")<{
+  readonly message: string;
+}> {}
+
+/**
+ * Undo what an E2E command wrote to the reviewed worktree. `paths` are relative
+ * to the worktree root and were clean before the command ran: files HEAD tracks
+ * are restored from HEAD, the rest are removed only while they are untracked.
+ */
+export const restoreAppReviewTestWrites = Effect.fn("restoreAppReviewTestWrites")(
+  function* (input: { readonly cwd: string; readonly paths: readonly string[] }) {
+    const runner = yield* ProcessRunner;
+    const git = Effect.fn("restoreAppReviewTestWrites.git")(function* (
+      cwd: string,
+      args: readonly string[],
+    ) {
+      const output = yield* runner.run({
+        command: "git",
+        args: ["--literal-pathspecs", ...args],
+        cwd,
+      });
+      if (output.code !== 0) {
+        return yield* new AppReviewTestRestoreError({
+          message: `git ${args[0]} failed: ${output.stderr.trim()}`,
+        });
+      }
+      return output.stdout;
+    });
+    const nulSeparated = (stdout: string) => new Set(stdout.split("\0").filter(Boolean));
+    const root = (yield* git(input.cwd, ["rev-parse", "--show-toplevel"])).trim();
+    const inHead = nulSeparated(
+      yield* git(root, ["ls-tree", "-r", "-z", "--name-only", "HEAD", "--", ...input.paths]),
+    );
+    const restored = input.paths.filter((path) => inHead.has(path));
+    if (restored.length > 0) {
+      yield* git(root, ["restore", "--source=HEAD", "--staged", "--worktree", "--", ...restored]);
+    }
+    const candidates = input.paths.filter((path) => !inHead.has(path));
+    const untracked =
+      candidates.length === 0
+        ? new Set<string>()
+        : nulSeparated(
+            yield* git(root, [
+              "ls-files",
+              "-z",
+              "--others",
+              "--exclude-standard",
+              "--",
+              ...candidates,
+            ]),
+          );
+    const removed = candidates.filter((path) => untracked.has(path));
+    if (removed.length > 0) yield* git(root, ["clean", "-f", "-q", "--", ...removed]);
+    return { restored, removed };
+  },
+);
 
 /** Cancellation closes ProcessRunner's scope and terminates its child process. */
 export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: {
