@@ -586,6 +586,38 @@ export function automationHaltMatchesTicketRerun(input: {
   });
 }
 
+/**
+ * Tickets one ticket App Review re-run restarts under a review-blocked App
+ * Review halt. The halt names one ticket but speaks for every sibling whose
+ * review failed alongside it (see `summarizeTicketAppReviewHalt`), so
+ * re-running any of them restarts the whole group. Otherwise each re-run only
+ * surfaces the next sibling once it lands. Empty when the halt is not such a
+ * group or the ticket is not part of it.
+ */
+export function haltedTicketAppReviewGroup(input: {
+  readonly run: Pick<OrchestrationImplementationRun, "automationHalt" | "skips" | "ticketStates">;
+  readonly ticketId: string;
+}): ReadonlyArray<string> {
+  const halt = input.run.automationHalt;
+  if (
+    halt?.stage !== "app-review" ||
+    halt.category !== "review-blocked" ||
+    halt.ticketId === undefined
+  )
+    return [];
+  const siblings = input.run.ticketStates
+    .filter(
+      (state) =>
+        state.ticketId !== halt.ticketId &&
+        state.status === "app-reviewing" &&
+        state.appReviewOutcome === "failed" &&
+        !isTicketStageSkipped(input.run.skips ?? [], state.ticketId, "app-review"),
+    )
+    .map((state) => state.ticketId);
+  const group = [halt.ticketId, ...siblings];
+  return group.includes(input.ticketId) ? group : [];
+}
+
 export function isLegacyDirtyWorkerLaunchHalt(
   halt: NonNullable<OrchestrationImplementationRun["automationHalt"]>,
 ): boolean {
@@ -9577,10 +9609,15 @@ const make = Effect.gen(function* () {
         return;
       }
 
+      const appReviewGroup =
+        target.kind === "ticket" && target.stage === "app-review"
+          ? haltedTicketAppReviewGroup({ run, ticketId: target.ticketId })
+          : [];
       if (
         run.automationHalt !== null &&
         (target.kind === "ticket"
-          ? !automationHaltMatchesTicketRerun({
+          ? appReviewGroup.length === 0 &&
+            !automationHaltMatchesTicketRerun({
               halt: run.automationHalt,
               ticketId: target.ticketId,
               stage: target.stage,
@@ -9675,35 +9712,42 @@ const make = Effect.gen(function* () {
         }
       }
 
-      if (target.stage !== "code-review") {
-        yield* cancelTicketAppReview({
-          run,
-          ticketId: target.ticketId,
-          reason: "The ticket was sent back to an earlier stage.",
-          createdAt,
+      const ticketIds = [
+        target.ticketId,
+        ...appReviewGroup.filter((ticketId) => ticketId !== target.ticketId),
+      ];
+      let rerunRun = run;
+      for (const ticketId of ticketIds) {
+        if (target.stage !== "code-review") {
+          yield* cancelTicketAppReview({
+            run,
+            ticketId,
+            reason: "The ticket was sent back to an earlier stage.",
+            createdAt,
+          });
+        }
+        const ticketState = run.ticketStates.find((state) => state.ticketId === ticketId);
+        const priorAppReviewRun =
+          ticketState?.appReviewWorkflowRunId == null
+            ? undefined
+            : (readModel.appReviewWorkflowRuns ?? []).find(
+                (candidate) => candidate.id === ticketState.appReviewWorkflowRunId,
+              );
+        rerunRun = reopenTicketForRerun({
+          run: rerunRun,
+          ticketId,
+          stage: target.stage,
+          updatedAt: createdAt,
+          continuationMarkdown:
+            target.stage === "app-review"
+              ? ((priorAppReviewRun === undefined
+                  ? null
+                  : appReviewFailureContinuationMarkdown(priorAppReviewRun)) ??
+                ticketState?.warningMarkdown ??
+                null)
+              : null,
         });
       }
-      const ticketState = run.ticketStates.find((state) => state.ticketId === target.ticketId);
-      const priorAppReviewRun =
-        ticketState?.appReviewWorkflowRunId == null
-          ? undefined
-          : (readModel.appReviewWorkflowRuns ?? []).find(
-              (candidate) => candidate.id === ticketState.appReviewWorkflowRunId,
-            );
-      const rerunRun = reopenTicketForRerun({
-        run,
-        ticketId: target.ticketId,
-        stage: target.stage,
-        updatedAt: createdAt,
-        continuationMarkdown:
-          target.stage === "app-review"
-            ? ((priorAppReviewRun === undefined
-                ? null
-                : appReviewFailureContinuationMarkdown(priorAppReviewRun)) ??
-              ticketState?.warningMarkdown ??
-              null)
-            : null,
-      });
       yield* updateRun({
         sourceThreadId,
         run: rerunRun,
@@ -9717,12 +9761,9 @@ const make = Effect.gen(function* () {
           yield* startReadyWorkers({ sourceThreadId, run: rerunRun, createdAt });
           return;
         case "app-review":
-          yield* startTicketAppReview({
-            sourceThreadId,
-            run: rerunRun,
-            ticketId: target.ticketId,
-            createdAt,
-          });
+          for (const ticketId of ticketIds) {
+            yield* startTicketAppReview({ sourceThreadId, run: rerunRun, ticketId, createdAt });
+          }
           return;
         case "code-review":
           yield* startTicketCodeReview({

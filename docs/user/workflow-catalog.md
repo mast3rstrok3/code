@@ -172,6 +172,8 @@ An App Review repair cycle is different. It contains review, gap analysis, and r
 
 When automation stops, the panel shows **Needs human attention** with the ticket, stage, reason, and next action. Independent sibling tickets may keep running and record results. Dependent tickets and Integration wait. **Start step again** creates a new generation only after the server confirms ownership is free. The panel reports whether the request started, was redirected to the stage that owns the failure, or was rejected with the action that must happen first.
 
+Re-running App Review for a ticket that stopped the run also re-runs the other tickets whose App Review failed alongside it.
+
 Re-running a ticket's implementation also reopens the tickets that failed only because that one did. Those carried no work of their own, so they go back to waiting and run in dependency order once the re-run lands. Tickets that already succeeded are left alone, which is why a wave has no single re-run of its own.
 
 An interrupted Implementation worker leaves its ticket branch and worktree in place. A continuation turn in the same thread sees its tracked changes, untracked files, commits, and conversation. Server restarts and lost provider sessions do not spend another thread ID. The same recovery applies to active App Review phases, Code Review cycles, the merge gate, and pull-request babysitting. Already reported results are replayed instead of discarded or rerun. Automatic cleanup preserves every thread with messages, activities, sessions, checkpoints, children, pending commands, or unfinished-workflow references. A workflow you deliberately paused remains paused.

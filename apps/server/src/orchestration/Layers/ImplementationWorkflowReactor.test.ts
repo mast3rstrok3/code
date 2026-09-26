@@ -10076,6 +10076,109 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect(
+    "re-running one ticket of a grouped App Review halt restarts every failed sibling",
+    () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run, tickets } = yield* launchRun(system, {
+            appReviewStrategy: "nested-workflow",
+            tickets: [
+              {
+                ...planningTicket("TICKET-1"),
+                appReviewEligible: true,
+                appReviewPlanMarkdown: "Review the first page.",
+              },
+              {
+                ...planningTicket("TICKET-2"),
+                appReviewEligible: true,
+                appReviewPlanMarkdown: "Review the second page.",
+              },
+            ],
+          });
+          for (const ticket of tickets) {
+            yield* appendWorkerResult(system, {
+              run,
+              status: "succeeded",
+              ticketId: ticket.id,
+              completeTicketReview: false,
+            });
+          }
+          let snapshot = yield* system.query.getSnapshot();
+          const oldReviewIds = new Map(
+            snapshot.implementationRuns
+              .find((entry) => entry.id === run.id)
+              ?.ticketStates.map(
+                (state) => [state.ticketId, state.appReviewWorkflowRunId] as const,
+              ),
+          );
+          for (const ticket of tickets) {
+            const nested = (snapshot.appReviewWorkflowRuns ?? []).find(
+              (entry) => entry.id === oldReviewIds.get(ticket.id),
+            );
+            if (nested === undefined) throw new Error(`Nested review missing for ${ticket.id}.`);
+            yield* system.engine.dispatch({
+              type: "thread.app-review-workflow.update",
+              commandId: commandId(`fail-grouped-review-${ticket.id}`),
+              threadId: nested.controllerThreadId,
+              run: {
+                ...nested,
+                status: "failed",
+                outcome: "failed",
+                activePhase: null,
+                activeThreadId: null,
+                failure: {
+                  reason: "plan-missing",
+                  phase: "planning",
+                  cycleNumber: 1,
+                  detailMarkdown: "planning exhausted its 2 phase launches.",
+                  failedAt: "2026-01-01T00:04:00.000Z",
+                },
+                updatedAt: "2026-01-01T00:04:00.000Z",
+                completedAt: "2026-01-01T00:04:00.000Z",
+              },
+              createdAt: "2026-01-01T00:04:00.000Z",
+            });
+          }
+          yield* system.reactor.drain;
+
+          snapshot = yield* system.query.getSnapshot();
+          const halted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(halted?.status).toBe("needs-human-attention");
+          const haltedTicketId = halted?.automationHalt?.ticketId;
+          // Re-run the sibling the halt does not name: it still speaks for the group.
+          const sibling = tickets.find((ticket) => ticket.id !== haltedTicketId);
+          if (haltedTicketId === undefined || sibling === undefined) {
+            throw new Error("Expected a ticket App Review halt naming one of two tickets.");
+          }
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.rerun",
+            commandId: commandId("rerun-grouped-review"),
+            threadId: sourceThreadId,
+            runId: run.id,
+            target: { kind: "ticket", ticketId: sibling.id, stage: "app-review" },
+            createdAt: "2026-01-01T00:05:00.000Z",
+          });
+          yield* system.reactor.drain;
+
+          snapshot = yield* system.query.getSnapshot();
+          const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(current?.status).toBe("running");
+          expect(current?.automationHalt).toBeNull();
+          for (const ticket of tickets) {
+            const state = current?.ticketStates.find((entry) => entry.ticketId === ticket.id);
+            expect(state?.status).toBe("app-reviewing");
+            expect(state?.appReviewWorkflowRunId).not.toBe(oldReviewIds.get(ticket.id));
+            expect(
+              (snapshot.appReviewWorkflowRuns ?? []).find(
+                (entry) => entry.id === state?.appReviewWorkflowRunId,
+              )?.status,
+            ).toBe("running");
+          }
+        }),
+      ),
+  );
+
   it.effect("hands unfinished App Review repairs to the replacement worker", () =>
     withSystem((system) =>
       Effect.gen(function* () {
