@@ -3249,7 +3249,11 @@ const make = Effect.gen(function* () {
         return;
       const thread = yield* resolveThreadDetail(input.threadId);
       if (!thread) return;
-      const synthesizeFailure = input.synthesizeMissingDirectiveFailure === true;
+      // Providers can finish a turn while a background build or subagent still runs.
+      // Its completion starts another turn that can supply the workflow result.
+      const synthesizeFailure =
+        input.synthesizeMissingDirectiveFailure === true &&
+        threadBackgroundLiveness.getThreadBackgroundLiveness(input.threadId) === null;
       const failureInput = { ...input, dedupeScope: input.turnId ?? input.messageId };
 
       if (parseResult.kind === "none") {

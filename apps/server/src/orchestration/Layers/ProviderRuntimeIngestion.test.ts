@@ -7375,6 +7375,90 @@ describe("ProviderRuntimeIngestion", () => {
     expect(fastBuildResults(afterDrain!)).toHaveLength(0);
   });
 
+  it.each(["local_bash", "local_agent"])(
+    "waits for a background %s before requiring a Build directive",
+    async (taskType) => {
+      const harness = await createHarness();
+      const { implementerThreadId } = await seedFastFeatureRun(harness);
+      const base = {
+        provider: ProviderDriverKind.make("claudeAgent"),
+        threadId: implementerThreadId,
+        turnId: asTurnId("turn-background-build"),
+        createdAt: "2026-01-01T00:00:02.000Z",
+      };
+      await harness.emitAndDrain([
+        { ...base, type: "turn.started", eventId: asEventId("background-turn-start") },
+        {
+          ...base,
+          type: "task.started",
+          eventId: asEventId("background-task-start"),
+          payload: { taskId: "build-task", taskType },
+        },
+        {
+          ...base,
+          type: "item.completed",
+          eventId: asEventId("background-wait-message"),
+          itemId: asItemId("background-wait-message"),
+          payload: {
+            itemType: "assistant_message",
+            status: "completed",
+            detail: "Waiting for the build's completion notification.",
+          },
+        },
+        {
+          ...base,
+          type: "turn.completed",
+          eventId: asEventId("background-turn-complete"),
+          payload: { state: "completed" },
+        },
+      ]);
+      const waiting = (await harness.readModel()).threads.find(
+        (thread) => thread.id === implementerThreadId,
+      );
+      expect(waiting?.latestTurn?.state).toBe("completed");
+      expect(fastBuildResults(waiting!)).toHaveLength(0);
+
+      await harness.emitAndDrain([
+        {
+          ...base,
+          type: "task.completed",
+          eventId: asEventId("background-task-complete"),
+          payload: { taskId: "build-task", status: "completed" },
+        },
+        {
+          ...base,
+          turnId: asTurnId("turn-after-background-build"),
+          type: "turn.started",
+          eventId: asEventId("after-background-turn-start"),
+        },
+        {
+          ...base,
+          turnId: asTurnId("turn-after-background-build"),
+          type: "item.completed",
+          eventId: asEventId("after-background-message"),
+          itemId: asItemId("after-background-message"),
+          payload: {
+            itemType: "assistant_message",
+            status: "completed",
+            detail: "The build finished, but I forgot the directive.",
+          },
+        },
+        {
+          ...base,
+          turnId: asTurnId("turn-after-background-build"),
+          type: "turn.completed",
+          eventId: asEventId("after-background-turn-complete"),
+          payload: { state: "completed" },
+        },
+      ]);
+      const settled = (await harness.readModel()).threads.find(
+        (thread) => thread.id === implementerThreadId,
+      );
+      expect(fastBuildResults(settled!)).toHaveLength(1);
+      expect(fastBuildResults(settled!)[0]?.payload).toMatchObject({ status: "blocked" });
+    },
+  );
+
   it("reports a missing Build directive once the turn completes, exactly once", async () => {
     const harness = await createHarness();
     const { implementerThreadId, runId } = await seedFastFeatureRun(harness);
