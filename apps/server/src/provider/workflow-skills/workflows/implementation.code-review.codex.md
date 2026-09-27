@@ -16,4 +16,6 @@ Return the skill's Standards and Spec reports in `reportMarkdown`. Finish with o
 }
 ```
 
-Include `ticketId` when the launch message provides it. Use `clean` when the review required no code changes and leave HEAD untouched. Use `findings` when you made fixes, and include `commitSha` naming the resulting HEAD. Use `blocked` when the review could not be completed and explain why in `reportMarkdown`. `validations` may be empty; if you ran checks, report their actual results and completion times.
+Include `ticketId` when the launch message provides it. Use `clean` when the review required no code changes and leave HEAD untouched. Use `findings` when you made fixes, and include `commitSha` naming the resulting HEAD. Use `blocked` when the review could not be completed and explain why in `reportMarkdown`.
+
+Leave `validations` empty when you ran no checks. Each check you ran uses an object with `command`, `status` set to `passed` or `failed`, `outputMarkdown` containing the observed result, and `completedAt` containing its actual completion time as an ISO 8601 timestamp. Describe checks that could not run in `reportMarkdown`.
