@@ -1094,9 +1094,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       `;
       yield* sql`
         INSERT INTO projection_thread_messages (
-          message_id, thread_id, role, text, attachments_json, context_json, is_streaming, created_at, updated_at
+          message_id, thread_id, role, text, attachments_json, context_json, workflow_prompt_id, is_streaming, created_at, updated_at
         ) VALUES (${messageId}, ${threadId}, 'user', 'Read these notes',
-          ${attachmentsJson}, ${contextJson}, 0, ${createdAt}, ${createdAt})
+          ${attachmentsJson}, ${contextJson}, 'implementation.tdd.codex', 0, ${createdAt}, ${createdAt})
       `;
       yield* sql`
         INSERT INTO projection_thread_messages (
@@ -1123,6 +1123,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             updatedAt: createdAt,
             attachments,
             context: messageContext,
+            workflowPromptId: "implementation.tdd.codex",
           },
           hasOtherUserMessages: false,
         }),
