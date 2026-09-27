@@ -66,6 +66,7 @@ import {
 } from "@t3tools/contracts";
 import { legacyLinkedPullRequestOf } from "@t3tools/shared/threadPullRequests";
 import * as Arr from "effect/Array";
+import * as Cache from "effect/Cache";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -234,6 +235,10 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     branchPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
   }),
 );
+const decodeStoredThreadRow = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ProjectionThreadDbRowSchema),
+);
+const encodeStoredThreadRow = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const ProjectionWorkflowSubagentBatchDbRowSchema = Schema.Struct({
   batchId: WorkflowSubagentBatchId,
   parentThreadId: ThreadId,
@@ -954,11 +959,15 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
-  const listThreadRows = SqlSchema.findAll({
-    Request: Schema.Void,
-    Result: ProjectionThreadDbRowSchema,
-    execute: () =>
-      sql`
+  // Full snapshots repeatedly read historical threads while holding the SQLite
+  // transaction. Revalidate only rows whose complete stored contents changed.
+  const decodedThreadRows = yield* Cache.make({
+    capacity: 4096,
+    timeToLive: "5 minutes",
+    lookup: (row: string) => decodeStoredThreadRow(row),
+  });
+  const listThreadRows = () =>
+    sql`
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
@@ -1009,8 +1018,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
-      `,
-  });
+      `.pipe(
+      Effect.flatMap((rows) =>
+        Effect.forEach(rows, (row) => Cache.get(decodedThreadRows, encodeStoredThreadRow(row))),
+      ),
+    );
 
   const listActiveThreadRows = SqlSchema.findAll({
     Request: Schema.Void,
@@ -3018,7 +3030,7 @@ pending_approval_requests AS (
               ),
             ),
           ),
-          listThreadRows(undefined).pipe(
+          listThreadRows().pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
                 "ProjectionSnapshotQuery.getSnapshot:listThreads:query",
@@ -3519,7 +3531,7 @@ pending_approval_requests AS (
               ),
             ),
           ),
-          listThreadRows(undefined).pipe(
+          listThreadRows().pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
                 "ProjectionSnapshotQuery.getCommandReadModel:listThreads:query",

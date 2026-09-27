@@ -12,6 +12,7 @@ import {
   ThreadLinkedPullRequest,
   TurnId,
   ProviderInstanceId,
+  ModelSelection,
   OrchestrationMessageContext,
   WorkspaceUserId,
 } from "@t3tools/contracts";
@@ -47,6 +48,7 @@ const encodeThreadLinkedPullRequest = Schema.encodeSync(
 const encodeMessageContext = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationMessageContext),
 );
+const encodeModelSelection = Schema.encodeEffect(Schema.fromJsonString(ModelSelection));
 
 it.effect("reads project shells without loading threads or resolving excluded projects", () => {
   const resolved: string[] = [];
@@ -107,6 +109,55 @@ const projectionSnapshotLayer = it.layer(
     Layer.provideMerge(RepositoryIdentityResolver.layer),
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+it.effect("refreshes cached thread rows without relying on updated_at", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const query = yield* ProjectionSnapshotQuery;
+    const selection = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-6-astra",
+      options: [{ id: "reasoningEffort", value: "high" }],
+    };
+    const selectionJson = yield* encodeModelSelection(selection);
+    yield* sql`INSERT INTO projection_projects
+      (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+      VALUES ('cache-project', 'Project', '/tmp/cache-project', '[]', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')`;
+    yield* sql`INSERT INTO projection_threads
+      (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode, created_at, updated_at)
+      VALUES ('cache-thread', 'cache-project', 'Before', '{"instanceId":"codex","model":"gpt-5-codex"}', 'full-access', 'default', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')`;
+    const initial = yield* query.getCommandReadModel();
+    assert.strictEqual(initial.threads[0]?.title, "Before");
+    yield* query.getSnapshot();
+
+    yield* sql`UPDATE projection_threads SET title = 'After', model_selection_json = ${selectionJson} WHERE thread_id = 'cache-thread'`;
+    const changed = yield* query.getCommandReadModel();
+    assert.strictEqual(changed.threads[0]?.title, "After");
+    assert.deepStrictEqual(changed.threads[0]?.modelSelection, selection);
+    assert.strictEqual(changed.threads[0]?.updatedAt, initial.threads[0]?.updatedAt);
+    assert.deepStrictEqual((yield* query.getSnapshot()).threads[0]?.modelSelection, selection);
+
+    yield* sql`UPDATE projection_threads SET model_selection_json = 'invalid-json' WHERE thread_id = 'cache-thread'`;
+    assert.strictEqual((yield* query.getCommandReadModel().pipe(Effect.result))._tag, "Failure");
+    yield* sql`UPDATE projection_threads SET model_selection_json = ${selectionJson} WHERE thread_id = 'cache-thread'`;
+    assert.deepStrictEqual(
+      (yield* query.getCommandReadModel()).threads[0]?.modelSelection,
+      selection,
+    );
+    yield* sql`DELETE FROM projection_threads WHERE thread_id = 'cache-thread'`;
+    assert.deepStrictEqual((yield* query.getCommandReadModel()).threads, []);
+  }).pipe(
+    Effect.provide(
+      OrchestrationProjectionSnapshotQueryLive.pipe(
+        Layer.provide(ThreadBackgroundLiveness.layer),
+        Layer.provide(ThreadPlanProgress.layer),
+        Layer.provide(RepositoryIdentityResolver.layer),
+        Layer.provideMerge(SqlitePersistenceMemory),
+        Layer.provide(NodeServices.layer),
+      ),
+    ),
   ),
 );
 
