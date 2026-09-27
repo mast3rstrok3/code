@@ -77,6 +77,10 @@ import { ServerActivation } from "../../serverActivation.ts";
 import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { makeSqlStatementCounter } from "../../../integration/SqlStatementCounter.integration.ts";
+import {
+  layer as ProviderIngestionBacklogLayer,
+  ProviderIngestionBacklog,
+} from "../ProviderIngestionBacklog.ts";
 
 function makeTestServerSettingsLayer(overrides: DeepPartial<ServerSettings> = {}) {
   return ServerSettingsService.layerTest(overrides);
@@ -377,6 +381,7 @@ describe("ProviderRuntimeIngestion", () => {
       // engine, and the snapshot query (reader).
       Layer.provideMerge(ThreadBackgroundLiveness.layer),
       Layer.provideMerge(ThreadPlanProgress.layer),
+      Layer.provideMerge(ProviderIngestionBacklogLayer),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(makeTestServerSettingsLayer(options?.serverSettings)),
@@ -469,6 +474,10 @@ describe("ProviderRuntimeIngestion", () => {
       engine,
       dispatch,
       readModel: () => testRuntime.runPromise(snapshotQuery.getSnapshot()),
+      pendingIngestionThreadIds: () =>
+        testRuntime.runPromise(
+          Effect.flatMap(ProviderIngestionBacklog, (backlog) => backlog.pendingThreadIds),
+        ),
       readTurn: (turnId: TurnId) =>
         testRuntime.runPromise(
           Effect.flatMap(ProjectionTurnRepository, (turns) =>
@@ -629,6 +638,37 @@ describe("ProviderRuntimeIngestion", () => {
     ]);
   });
 
+  it("clears a thread's ingestion backlog once its queued events are processed", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("backlog-turn");
+    const base = {
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      turnId,
+      createdAt: "2026-01-01T00:00:01.000Z",
+    };
+    await harness.emitAndDrain([
+      { ...base, type: "turn.started", eventId: asEventId("backlog-started") },
+      {
+        ...base,
+        type: "content.delta",
+        eventId: asEventId("backlog-delta"),
+        itemId: asItemId("backlog-message"),
+        payload: { streamKind: "assistant_text", delta: "Done." },
+      },
+      {
+        ...base,
+        type: "turn.completed",
+        eventId: asEventId("backlog-completed"),
+        payload: { state: "completed" },
+      },
+    ]);
+
+    // A count left behind would hold this thread out of stale-turn and stage
+    // recovery for good.
+    expect(await harness.pendingIngestionThreadIds()).toEqual(new Set());
+  });
   it.each(["turn.completed", "turn.aborted"] as const)(
     "finalizes old buffered text on late %s without stopping the newer turn",
     async (terminalType) => {

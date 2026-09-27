@@ -61,6 +61,10 @@ import {
   normalizeAppReviewPhaseExecution,
   normalizeImplementationRunExecutions,
 } from "../workflowStageExecutions.ts";
+import {
+  pendingIngestionThreadIds,
+  ProviderIngestionBacklog,
+} from "../ProviderIngestionBacklog.ts";
 
 const DEFAULT_SWEEP_INTERVAL_MS = 60 * 1000;
 const DEFAULT_GRACE_MS = 60 * 1000;
@@ -637,6 +641,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
     const providerService = yield* ProviderService;
     const directory = yield* ProviderSessionDirectory;
     const serverSettingsService = yield* ServerSettingsService;
+    const ingestionBacklog = yield* Effect.serviceOption(ProviderIngestionBacklog);
     const crypto = yield* Crypto.Crypto;
 
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
@@ -1539,9 +1544,14 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
             .map((session) => session.threadId),
         );
 
+        // A thread whose events are still queued for ingestion is not stale: its
+        // turn completion is in the queue, and settling it would read a finished
+        // agent as a lost one.
+        const pendingIngestion = yield* pendingIngestionThreadIds(ingestionBacklog);
         const candidates: StaleTurnCandidate[] = [];
         for (const thread of readModel.threads) {
           if (thread.deletedAt !== null) continue;
+          if (pendingIngestion.has(thread.id)) continue;
 
           const sessionLost = !liveProviderThreadIds.has(thread.id);
           const running =
@@ -1677,10 +1687,12 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
             ),
           );
 
+        const confirmedPendingIngestion = yield* pendingIngestionThreadIds(ingestionBacklog);
         let settledCount = 0;
         for (const candidate of candidates) {
           const thread = confirmedModel.threads.find((entry) => entry.id === candidate.threadId);
           if (thread === undefined || thread.deletedAt !== null) continue;
+          if (confirmedPendingIngestion.has(thread.id)) continue;
           if (
             candidate.kind === "nudge"
               ? confirmedLiveWorkingThreadIds.has(thread.id)

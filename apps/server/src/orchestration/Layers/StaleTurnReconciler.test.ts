@@ -82,6 +82,10 @@ import {
   StaleTurnReconciler,
   type StaleTurnReconcilerShape,
 } from "../Services/StaleTurnReconciler.ts";
+import {
+  layer as ProviderIngestionBacklogLayer,
+  ProviderIngestionBacklog,
+} from "../ProviderIngestionBacklog.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
 const projectId = ProjectId.make("project-stale-turn-reconciler");
@@ -97,6 +101,7 @@ interface ReconcilerSystem {
   readonly directory: ProviderSessionDirectory["Service"];
   readonly turns: ProjectionTurnRepository["Service"];
   readonly liveSessions: Ref.Ref<ReadonlyArray<ProviderSession>>;
+  readonly ingestionBacklog: ProviderIngestionBacklog["Service"];
 }
 
 function commandId(value: string) {
@@ -293,7 +298,9 @@ function makeTestLayer(
       Layer.provide(NodeServices.layer),
     ),
     reactorLayer,
+    ProviderIngestionBacklogLayer,
     makeStaleTurnReconcilerLive(reconcilerOptions).pipe(
+      Layer.provide(ProviderIngestionBacklogLayer),
       Layer.provide(coreLayer),
       Layer.provide(directoryLayer),
       Layer.provide(providerServiceLayer),
@@ -320,6 +327,7 @@ function withSystem<A, E>(
         const reconciler = yield* StaleTurnReconciler;
         const directory = yield* ProviderSessionDirectory;
         const turns = yield* ProjectionTurnRepository;
+        const ingestionBacklog = yield* ProviderIngestionBacklog;
         yield* reactor.start();
         return yield* use({
           engine,
@@ -329,6 +337,7 @@ function withSystem<A, E>(
           directory,
           turns,
           liveSessions,
+          ingestionBacklog,
         });
       }),
     ).pipe(Effect.provide(makeTestLayer(liveSessions, options?.reconciler, options?.settings)));
@@ -1175,6 +1184,43 @@ describe("StaleTurnReconciler", () => {
             sessionStatus(system, threadId).pipe(Effect.map((status) => status === "error")),
             "ready session past its ingestion grace to settle",
           );
+        }),
+      { reconciler: { ...bootOnlyOptions, readyProviderIngestionGraceMs: 0 } },
+    ),
+  );
+
+  it.live("leaves a thread alone while its provider events are still queued for ingestion", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const queuedThreadId = ThreadId.make("thread-stale-queued");
+          const orphanThreadId = ThreadId.make("thread-stale-queued-orphan");
+          yield* seedProject(system);
+          yield* createPlainThread(system, queuedThreadId, "queued");
+          yield* createPlainThread(system, orphanThreadId, "orphan");
+          yield* setThreadSession(system, {
+            threadId: queuedThreadId,
+            status: "running",
+            activeTurnId: TurnId.make("turn-stale-queued"),
+            tag: "queued",
+          });
+          yield* setThreadSession(system, {
+            threadId: orphanThreadId,
+            status: "running",
+            activeTurnId: TurnId.make("turn-stale-queued-orphan"),
+            tag: "orphan",
+          });
+          // The provider finished, but the turn completion is still waiting in
+          // ingestion, so the projection shows a running turn with no session.
+          yield* system.ingestionBacklog.track(queuedThreadId);
+
+          yield* system.reconciler.start();
+          yield* waitUntil(
+            sessionStatus(system, orphanThreadId).pipe(Effect.map((status) => status === "error")),
+            "orphaned sentinel to settle",
+          );
+
+          expect(yield* sessionStatus(system, queuedThreadId)).toBe("running");
         }),
       { reconciler: { ...bootOnlyOptions, readyProviderIngestionGraceMs: 0 } },
     ),

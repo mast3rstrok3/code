@@ -96,6 +96,7 @@ import { ProductWorkflowReactorLive } from "./orchestration/Layers/ProductWorkfl
 import { ImplementationWorkflowReactorLive } from "./orchestration/Layers/ImplementationWorkflowReactor.ts";
 import { AppReviewWorkflowReactorLive } from "./orchestration/Layers/AppReviewWorkflowReactor.ts";
 import * as WorkflowDrainCoordinator from "./orchestration/WorkflowDrainCoordinator.ts";
+import * as ProviderIngestionBacklog from "./orchestration/ProviderIngestionBacklog.ts";
 import * as ThreadSettlementReactor from "./orchestration/ThreadSettlementReactor.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.ts";
@@ -593,6 +594,7 @@ const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   Layer.provideMerge(
     WorkflowDrainCoordinator.layer.pipe(Layer.provideMerge(ServerLifecycleEvents.layer)),
   ),
+  Layer.provideMerge(ProviderIngestionBacklog.layer),
   Layer.provide(NetService.layer),
 );
 

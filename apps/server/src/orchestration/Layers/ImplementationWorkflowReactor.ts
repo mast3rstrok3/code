@@ -137,6 +137,10 @@ import {
   workflowStaleLeasesTotal,
   workflowWatchdogFindingsTotal,
 } from "../../observability/Metrics.ts";
+import {
+  pendingIngestionThreadIds,
+  ProviderIngestionBacklog,
+} from "../ProviderIngestionBacklog.ts";
 
 // Code Review owns its fixes; the final gate owns complete validation.
 
@@ -2030,6 +2034,24 @@ export function workerReportedCurrentAttempt(
   );
 }
 
+/**
+ * Whether the run is halted on this ticket's Implementation because its worker
+ * spent the launch budget without a result being recorded. A successful result
+ * from the ticket's worker answers that halt.
+ */
+export function workerHaltAwaitsResult(
+  run: OrchestrationImplementationRun,
+  ticketId: string,
+): boolean {
+  const halt = run.automationHalt;
+  return (
+    halt !== null &&
+    halt.stage === "implementation" &&
+    halt.ticketId === ticketId &&
+    halt.category === "retry-exhausted"
+  );
+}
+
 function discardedWorkerResult(
   run: OrchestrationImplementationRun,
   state: OrchestrationImplementationTicketState,
@@ -2073,6 +2095,7 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const gitWorkflow = yield* GitWorkflowService;
+  const ingestionBacklog = yield* Effect.serviceOption(ProviderIngestionBacklog);
   const appStackManager = yield* AppStackManager;
   const serverSettingsService = yield* ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
@@ -6895,13 +6918,23 @@ const make = Effect.gen(function* () {
       // stale write and drops it. The ticket then sits at `running` with its
       // result recorded and nothing to move it. The directive keeps its own
       // `reportedAt`, so what the worker said is still what gets stored.
-      const writeAt = writeStampedAt ?? directive.reportedAt;
+      const reportStampedAt = writeStampedAt ?? directive.reportedAt;
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const run = findRunByWorkerThreadId(readModel, threadId);
       if (run === null) return;
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) return;
       const currentState = run.ticketStates.find((state) => state.workerThreadId === threadId);
+      // When ingestion runs behind, recovery can halt the ticket for a missing
+      // result before the result is written, and the halt write dates the
+      // ticket after it. The run is waiting for exactly this report, so it
+      // lands on top of the halt rather than behind it.
+      const writeAt =
+        currentState !== undefined &&
+        workerHaltAwaitsResult(run, currentState.ticketId) &&
+        currentState.updatedAt > reportStampedAt
+          ? currentState.updatedAt
+          : reportStampedAt;
       if (
         currentState === undefined ||
         currentState.status === "awaiting-native-verification" ||
@@ -7052,9 +7085,17 @@ const make = Effect.gen(function* () {
       );
       if (acceptedDirective === null) return;
 
+      // A halt that says this worker never reported is answered by the report.
+      // Ingestion lag produces exactly that: recovery reads the thread as
+      // stopped, finds the launch budget spent and halts, and the result it was
+      // waiting for lands afterwards.
+      const resolvesOwnHalt = workerHaltAwaitsResult(run, directive.ticketId);
+      const resolvedRun: OrchestrationImplementationRun = resolvesOwnHalt
+        ? { ...run, status: "running", automationHalt: null, retryableFailure: null }
+        : run;
       const succeededRun: OrchestrationImplementationRun = {
-        ...run,
-        ticketStates: run.ticketStates.map((state) =>
+        ...resolvedRun,
+        ticketStates: resolvedRun.ticketStates.map((state) =>
           state.workerThreadId === threadId
             ? {
                 ...state,
@@ -7067,20 +7108,20 @@ const make = Effect.gen(function* () {
             : state,
         ),
         workerResults: [
-          ...run.workerResults.filter((result) => result.workerThreadId !== threadId),
+          ...resolvedRun.workerResults.filter((result) => result.workerThreadId !== threadId),
           acceptedDirective,
         ],
         retryableFailure:
-          run.automationHalt === null &&
-          (run.retryableFailure?.stage === "worker-setup" ||
-            run.retryableFailure?.stage === "worker-execution") &&
-          run.retryableFailure.ticketId === directive.ticketId
+          resolvedRun.automationHalt === null &&
+          (resolvedRun.retryableFailure?.stage === "worker-setup" ||
+            resolvedRun.retryableFailure?.stage === "worker-execution") &&
+          resolvedRun.retryableFailure.ticketId === directive.ticketId
             ? null
-            : run.retryableFailure,
+            : resolvedRun.retryableFailure,
         updatedAt: writeAt,
       };
 
-      if (run.automationHalt !== null) {
+      if (resolvedRun.automationHalt !== null) {
         const recordedRun: OrchestrationImplementationRun = {
           ...succeededRun,
           ticketStates: succeededRun.ticketStates.map((state) =>
@@ -10980,6 +11021,66 @@ const make = Effect.gen(function* () {
     }
   });
 
+  /**
+   * The result a finished worker left in its latest turn, or the parse problem
+   * that kept it from counting. Only the current turn is read, so a prior
+   * attempt cannot overwrite a newer assignment.
+   *
+   * A ticket halted for want of this result was moved to `ready`, and the halt
+   * write moved its `updatedAt` past a report that was only late, so for that
+   * ticket the report is not required to postdate the ticket state.
+   */
+  const readWorkerTurnReport = Effect.fn("ImplementationWorkflowReactor.readWorkerTurnReport")(
+    function* (input: {
+      readonly readModel: OrchestrationReadModel;
+      readonly run: OrchestrationImplementationRun;
+      readonly state: OrchestrationImplementationTicketState;
+    }) {
+      const { readModel, run, state } = input;
+      const haltAwaitsResult = workerHaltAwaitsResult(run, state.ticketId);
+      if (
+        (state.status !== "running" && !(haltAwaitsResult && state.status === "ready")) ||
+        state.workerResult !== null ||
+        !state.workerThreadId
+      )
+        return null;
+      if (isWorkflowThreadPaused(readModel.threads, state.workerThreadId)) return null;
+      const worker = findThread(readModel, state.workerThreadId);
+      if (
+        !worker ||
+        worker.deletedAt !== null ||
+        worker.latestTurn?.state !== "completed" ||
+        worker.session?.activeTurnId != null ||
+        worker.session?.status === "running" ||
+        worker.session?.status === "starting"
+      )
+        return null;
+      const detail = yield* projectionSnapshotQuery
+        .getThreadDetailById(worker.id)
+        .pipe(Effect.map(Option.getOrUndefined));
+      const message = detail?.messages.findLast(
+        (candidate) =>
+          candidate.role === "assistant" &&
+          !candidate.streaming &&
+          candidate.turnId === worker.latestTurn?.turnId &&
+          (haltAwaitsResult || candidate.createdAt >= state.updatedAt),
+      );
+      if (!message) return null;
+      const parsed = parseWorkflowDirectiveFromMarkdown(message.text);
+      if (parsed.kind === "error") return { _tag: "problem" as const, message: parsed.message };
+      if (parsed.kind !== "parsed" || parsed.directive.type !== "implementation-worker-result")
+        return null;
+      if (
+        parsed.directive.workerThreadId !== worker.id ||
+        parsed.directive.ticketId !== state.ticketId ||
+        parsed.directive.branch !== state.branch ||
+        parsed.directive.worktreePath !== state.worktreePath
+      )
+        return null;
+      return { _tag: "report" as const, directive: parsed.directive };
+    },
+  );
+
   const recoverInterruptedWorktreeHalts = Effect.fn(
     "ImplementationWorkflowReactor.recoverInterruptedWorktreeHalts",
   )(function* (input: {
@@ -11010,6 +11111,18 @@ const make = Effect.gen(function* () {
         halt === null ||
         (!isRecoverableInterruptedWorktreeHalt(halt) && !persistedLaunchFallout) ||
         isWorkflowThreadPaused(readModel.threads, run.orchestratorThreadId)
+      ) {
+        continue;
+      }
+      // The worker this halt gave up on did report; recording that report
+      // answers the halt without relaunching anyone.
+      const haltedState =
+        halt.ticketId === undefined || !workerHaltAwaitsResult(run, halt.ticketId)
+          ? undefined
+          : run.ticketStates.find((state) => state.ticketId === halt.ticketId);
+      if (
+        haltedState !== undefined &&
+        (yield* readWorkerTurnReport({ readModel, run, state: haltedState }))?._tag === "report"
       ) {
         continue;
       }
@@ -11316,6 +11429,7 @@ const make = Effect.gen(function* () {
     }
     const nowMs = Date.parse(createdAt);
     const taskActivitiesByThread = yield* loadBackgroundTaskActivities(readModel.threads, nowMs);
+    const pendingIngestion = yield* pendingIngestionThreadIds(ingestionBacklog);
     for (const persistedRun of readModel.implementationRuns) {
       const run = yield* cleanupTicketResources({ run: persistedRun, createdAt });
       if (run.status === "completed" || run.status === "canceled") {
@@ -11362,51 +11476,19 @@ const make = Effect.gen(function* () {
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) continue;
       // Completed workers still need their result recorded when another ticket halts automation.
-      // Read the current turn only, so a prior attempt cannot overwrite a newer assignment.
       let recoveredWorker = false;
       const workerResultProblems = new Map<string, string>();
       for (const state of run.ticketStates) {
-        if (state.status !== "running" || state.workerResult !== null || !state.workerThreadId)
+        const report = yield* readWorkerTurnReport({ readModel, run, state });
+        if (report === null) continue;
+        if (report._tag === "problem") {
+          workerResultProblems.set(state.ticketId, report.message);
           continue;
-        if (isWorkflowThreadPaused(readModel.threads, state.workerThreadId)) continue;
-        const worker = findThread(readModel, state.workerThreadId);
-        if (
-          !worker ||
-          worker.deletedAt !== null ||
-          worker.latestTurn?.state !== "completed" ||
-          worker.session?.activeTurnId != null ||
-          worker.session?.status === "running" ||
-          worker.session?.status === "starting"
-        )
-          continue;
-        const detail = yield* projectionSnapshotQuery
-          .getThreadDetailById(worker.id)
-          .pipe(Effect.map(Option.getOrUndefined));
-        const message = detail?.messages.findLast(
-          (candidate) =>
-            candidate.role === "assistant" &&
-            !candidate.streaming &&
-            candidate.turnId === worker.latestTurn?.turnId &&
-            candidate.createdAt >= state.updatedAt,
-        );
-        if (!message) continue;
-        const parsed = parseWorkflowDirectiveFromMarkdown(message.text);
-        if (parsed.kind === "error") {
-          workerResultProblems.set(state.ticketId, parsed.message);
         }
-        if (parsed.kind !== "parsed" || parsed.directive.type !== "implementation-worker-result")
-          continue;
-        if (
-          parsed.directive.workerThreadId !== worker.id ||
-          parsed.directive.ticketId !== state.ticketId ||
-          parsed.directive.branch !== state.branch ||
-          parsed.directive.worktreePath !== state.worktreePath
-        )
-          continue;
         yield* recoverRunStage(
           run.id,
           "completed-worker-result",
-          handleWorkerResult(worker.id, parsed.directive, createdAt),
+          handleWorkerResult(report.directive.workerThreadId, report.directive, createdAt),
         );
         recoveredWorker = true;
         break;
@@ -11614,7 +11696,10 @@ const make = Effect.gen(function* () {
       const awaitingNudge = (thread: OrchestrationThread | undefined) =>
         thread !== undefined &&
         isAwaitingWorkflowNudge({ threads: readModel.threads, thread, nowMs });
+      // A thread with events still queued for ingestion has not been heard in
+      // full; its result may be in that queue.
       const stageThreadFinished = (thread: OrchestrationThread | undefined) =>
+        (thread === undefined || !pendingIngestion.has(thread.id)) &&
         stageThreadIsFinished({
           thread:
             thread === undefined

@@ -36,6 +36,7 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker, makeKeyedDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { ProviderIngestionBacklog } from "../ProviderIngestionBacklog.ts";
 import {
   expectedIntentKindForWorkflowPreset,
   isProductWorkflowRoot,
@@ -4948,12 +4949,29 @@ const make = Effect.gen(function* () {
         }),
       );
 
-  const worker = yield* makeKeyedDrainableWorker({
-    key: (input: RuntimeIngestionInput) =>
-      String(input.source === "domain" ? input.event.aggregateId : input.event.threadId),
+  const ingestionBacklog = yield* Effect.serviceOption(ProviderIngestionBacklog);
+  const ingestionKey = (input: RuntimeIngestionInput) =>
+    String(input.source === "domain" ? input.event.aggregateId : input.event.threadId);
+  const keyedWorker = yield* makeKeyedDrainableWorker({
+    key: ingestionKey,
     process: (input: RuntimeIngestionInput) =>
-      processInput(input).pipe(logIngestionFailure(input.source, input.event)),
+      processInput(input).pipe(
+        logIngestionFailure(input.source, input.event),
+        Effect.ensuring(
+          Option.isSome(ingestionBacklog)
+            ? ingestionBacklog.value.settle(ingestionKey(input))
+            : Effect.void,
+        ),
+      ),
   });
+  const worker = {
+    ...keyedWorker,
+    enqueue: (input: RuntimeIngestionInput) =>
+      (Option.isSome(ingestionBacklog)
+        ? ingestionBacklog.value.track(ingestionKey(input))
+        : Effect.void
+      ).pipe(Effect.andThen(keyedWorker.enqueue(input))),
+  };
 
   // Repository detection for a diff goes through VCS subprocesses, which can
   // stall behind slow or hung git. It runs on its own worker so a stuck diff

@@ -118,6 +118,10 @@ import {
   ProjectionSnapshotQuery,
   type ProjectionSnapshotQueryShape,
 } from "../Services/ProjectionSnapshotQuery.ts";
+import {
+  layer as ProviderIngestionBacklogLayer,
+  ProviderIngestionBacklog,
+} from "../ProviderIngestionBacklog.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
 
@@ -743,6 +747,7 @@ interface ImplementationSystem extends ImplementationCalls {
   readonly engine: OrchestrationEngineShape;
   readonly query: ProjectionSnapshotQueryShape;
   readonly reactor: ImplementationWorkflowReactorShape;
+  readonly ingestionBacklog: ProviderIngestionBacklog["Service"];
 }
 
 function commandId(value: string) {
@@ -837,7 +842,9 @@ function makeTestLayer(
 
   return Layer.mergeAll(
     coreLayer,
+    ProviderIngestionBacklogLayer,
     ImplementationWorkflowReactorLive.pipe(
+      Layer.provide(ProviderIngestionBacklogLayer),
       Layer.provide(coreLayer),
       Layer.provide(serverSettingsLayerTest(serverSettings)),
       Layer.provide(
@@ -1478,12 +1485,14 @@ function withSystem<A, E>(
         const engine = yield* OrchestrationEngineService;
         const query = yield* ProjectionSnapshotQuery;
         const reactor = yield* ImplementationWorkflowReactor;
+        const ingestionBacklog = yield* ProviderIngestionBacklog;
         if (options?.startReactor !== false) yield* reactor.start();
         return yield* use({
           ...calls,
           engine,
           query,
           reactor,
+          ingestionBacklog,
         });
       }),
     ).pipe(
@@ -6282,6 +6291,53 @@ describe("ImplementationWorkflowReactor", () => {
         yield* taskActivity("task.completed", yield* clockNow());
         yield* system.reactor.drain;
         yield* TestClock.adjust(Duration.minutes(11));
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+        expect((yield* workerState()).attemptCount).toBe(started.attemptCount + 1);
+      }),
+    ),
+  );
+
+  it.effect("waits on a quiet worker whose provider events are still queued for ingestion", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        const started = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        )!.ticketStates[0]!;
+        const threadId = started.workerThreadId!;
+        const quietAt = DateTime.formatIso(yield* DateTime.now);
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("worker-queued-ready"),
+          threadId,
+          session: {
+            threadId,
+            status: "stopped",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: quietAt,
+          },
+          createdAt: quietAt,
+        });
+        yield* system.reactor.drain;
+        const workerState = () =>
+          Effect.map(
+            system.query.getSnapshot(),
+            (snapshot) =>
+              snapshot.implementationRuns.find((entry) => entry.id === run.id)!.ticketStates[0]!,
+          );
+
+        // The session reads as over, but its result may be in the queue.
+        yield* system.ingestionBacklog.track(threadId);
+        yield* TestClock.adjust(Duration.minutes(11));
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+        expect((yield* workerState()).attemptCount).toBe(started.attemptCount);
+
+        yield* system.ingestionBacklog.settle(threadId);
         yield* system.reactor.recoverIncompleteStages();
         yield* system.reactor.drain;
         expect((yield* workerState()).attemptCount).toBe(started.attemptCount + 1);
@@ -11757,6 +11813,202 @@ describe("ImplementationWorkflowReactor", () => {
           ?.ticketStates.find((entry) => entry.ticketId === state.ticketId);
         expect(recorded?.workerResult?.status).toBe("succeeded");
         expect(recorded?.status).not.toBe("running");
+      }),
+    ),
+  );
+
+  /**
+   * When ingestion runs behind the engine, recovery reads a worker whose result
+   * is still queued as one that stopped without reporting, finds the launch
+   * budget spent, and halts. The result then lands dated before that halt.
+   */
+  it.effect("accepts a late worker result that its own exhaustion halt was waiting for", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        const launched = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        )!;
+        const state = launched.ticketStates[0]!;
+        if (!state.workerThreadId) throw new Error("Worker was not started.");
+        const haltedAt = "2026-01-01T00:10:00.000Z";
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("late-result-exhaustion-halt"),
+          threadId: sourceThreadId,
+          run: {
+            ...launched,
+            status: "needs-human-attention",
+            automationHalt: {
+              stage: "implementation",
+              category: "retry-exhausted",
+              ticketId: state.ticketId,
+              detail: "Implementation launch budget exhausted.",
+              haltedAt,
+            },
+            ticketStates: launched.ticketStates.map((entry) => ({
+              ...entry,
+              status: "ready" as const,
+              attemptCount: 2,
+              warningMarkdown:
+                "Recovery continued the existing Implementation thread after its provider session stopped.",
+              updatedAt: haltedAt,
+            })),
+            updatedAt: haltedAt,
+          },
+          createdAt: haltedAt,
+        });
+        yield* system.reactor.drain;
+
+        const reportedAt = "2026-01-01T00:05:00.000Z";
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("late-worker-result"),
+          threadId: state.workerThreadId,
+          activity: {
+            id: eventId("late-worker-result"),
+            tone: "info",
+            kind: "implementation-worker-result",
+            summary: "Worker succeeded",
+            payload: {
+              type: "implementation-worker-result",
+              ticketId: state.ticketId,
+              workerThreadId: state.workerThreadId,
+              branch: state.branch,
+              worktreePath: state.worktreePath,
+              status: "succeeded",
+              commitSha: `${state.branch}@commit`,
+              validations: requiredValidations(),
+              notesMarkdown: "succeeded",
+              reportedAt,
+            },
+            turnId: null,
+            createdAt: reportedAt,
+          },
+          createdAt: reportedAt,
+        });
+        yield* system.reactor.drain;
+
+        const recorded = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        )!;
+        expect(recorded.automationHalt).toBeNull();
+        expect(recorded.ticketStates[0]?.workerResult?.status).toBe("succeeded");
+        expect(recorded.ticketStates[0]?.status).not.toBe("ready");
+      }),
+    ),
+  );
+
+  it.effect("recovers a worker report that arrived after its ticket was halted for it", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        const state = run.ticketStates[0]!;
+        const threadId = state.workerThreadId!;
+        const reportedAt = DateTime.formatIso(yield* DateTime.now);
+        const turnId = TurnId.make("late-report-turn");
+        const messageId = MessageId.make("late-report-message");
+        const session = (status: "running" | "ready") => ({
+          threadId,
+          status,
+          providerName: "codex",
+          runtimeMode: "full-access" as const,
+          activeTurnId: status === "running" ? turnId : null,
+          lastError: null,
+          updatedAt: reportedAt,
+        });
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("late-report-running"),
+          threadId,
+          session: session("running"),
+          createdAt: reportedAt,
+        });
+        yield* system.engine.dispatch({
+          type: "thread.message.assistant.delta",
+          commandId: commandId("late-report-text"),
+          threadId,
+          turnId,
+          messageId,
+          delta: `\`\`\`json\n${yield* encodeJson({
+            type: "implementation-worker-result",
+            ticketId: state.ticketId,
+            workerThreadId: threadId,
+            branch: state.branch,
+            worktreePath: state.worktreePath,
+            status: "succeeded",
+            commitSha: `${state.branch}@commit`,
+            validations: requiredValidations(),
+            notesMarkdown: "succeeded",
+            reportedAt,
+          })}\n\`\`\``,
+          createdAt: reportedAt,
+        });
+        yield* system.engine.dispatch({
+          type: "thread.message.assistant.complete",
+          commandId: commandId("late-report-complete"),
+          threadId,
+          turnId,
+          messageId,
+          createdAt: reportedAt,
+        });
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("late-report-ready"),
+          threadId,
+          session: session("ready"),
+          createdAt: reportedAt,
+        });
+        yield* system.reactor.drain;
+
+        // The halt is written after the report, as it is when the report was
+        // still queued in ingestion while recovery gave up on the worker.
+        yield* TestClock.adjust(Duration.minutes(1));
+        const haltedAt = DateTime.formatIso(yield* DateTime.now);
+        const current = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        )!;
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("late-report-exhaustion-halt"),
+          threadId: sourceThreadId,
+          run: {
+            ...current,
+            // The report was never recorded: it was still queued when the
+            // halt was written.
+            workerResults: [],
+            status: "needs-human-attention",
+            automationHalt: {
+              stage: "implementation",
+              category: "retry-exhausted",
+              ticketId: state.ticketId,
+              detail: "Implementation launch budget exhausted.",
+              haltedAt,
+            },
+            ticketStates: current.ticketStates.map((entry) => ({
+              ...entry,
+              status: "ready" as const,
+              attemptCount: 2,
+              workerResult: null,
+              warningMarkdown:
+                "Recovery continued the existing Implementation thread after its provider session stopped.",
+              updatedAt: haltedAt,
+            })),
+            updatedAt: haltedAt,
+          },
+          createdAt: haltedAt,
+        });
+        yield* system.reactor.drain;
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
+        expect(recovered.automationHalt).toBeNull();
+        expect(recovered.ticketStates[0]?.workerResult?.commitSha).toBe(`${state.branch}@commit`);
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-worker"),
+        ).toHaveLength(1);
       }),
     ),
   );
