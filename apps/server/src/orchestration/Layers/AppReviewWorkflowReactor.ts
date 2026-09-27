@@ -366,6 +366,7 @@ export function appReviewStackIdForTarget(input: {
 
 export type AppReviewPreviewTargetResolution =
   | { readonly _tag: "Resolved"; readonly previewTargets: ReadonlyArray<string> }
+  | { readonly _tag: "Waiting" }
   | { readonly _tag: "Blocked"; readonly detailMarkdown: string };
 
 export function selectAppReviewPreviewTargets(input: {
@@ -388,6 +389,9 @@ export function selectAppReviewPreviewTargets(input: {
   const stackMatched = input.lookup?.stack !== null || input.lookup?.frontendUrl !== null;
   if (input.lookup !== null && stackMatched) {
     const stack = input.lookup.stack;
+    if (stack?.status === "pending" || stack?.status === "starting") {
+      return { _tag: "Waiting" };
+    }
     if (stack !== null && stack.status !== "running") {
       return {
         _tag: "Blocked",
@@ -2222,6 +2226,9 @@ const make = Effect.gen(function* () {
       fallbackTargets: [...extractPreviewUrls(run.briefMarkdown), ...run.previewTargets],
       ...(run.previewTargetsPinned === true ? { pinnedTargets: run.previewTargets } : {}),
     });
+    // Reconciliation retries idle runs, and Implementation refreshes repaired
+    // ticket previews. Leave the cycle budget intact while the stack starts.
+    if (resolution._tag === "Waiting") return null;
     if (resolution._tag === "Blocked") {
       yield* failRun({
         run,

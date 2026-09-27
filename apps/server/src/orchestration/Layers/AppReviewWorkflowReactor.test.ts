@@ -1878,13 +1878,13 @@ it("keeps a pinned target usable while the worktree's App Stack is unhealthy", (
   ).toEqual({ _tag: "Resolved", previewTargets: ["https://staging.example.test"] });
 });
 
-it("blocks before launching a reviewer when the matching App Stack is not ready", () => {
+it.each(["pending", "starting"] as const)("waits while the matching App Stack is %s", (status) => {
   const resolution = selectAppReviewPreviewTargets({
     lookup: {
       stack: {
         id: "stack-1",
         displayName: "feature checkout",
-        status: "starting",
+        status,
         services: null,
       },
       frontendUrl: "https://feature.example.test",
@@ -1892,10 +1892,7 @@ it("blocks before launching a reviewer when the matching App Stack is not ready"
     lookupError: null,
     fallbackTargets: ["http://localhost:3000"],
   });
-  expect(resolution._tag).toBe("Blocked");
-  if (resolution._tag === "Blocked") {
-    expect(resolution.detailMarkdown).toContain("'starting', not 'running'");
-  }
+  expect(resolution._tag).toBe("Waiting");
 });
 
 it("blocks with an actionable message when neither App Stack nor fallback exists", () => {
@@ -4659,6 +4656,7 @@ for (const scenario of [
   "ticket",
   "ticket-replaced-stack",
   "ticket-startup-retry",
+  "ticket-starting-stack",
   "ticket-unhealthy-stack",
   "ticket-dirty-stack",
   "combined",
@@ -4760,6 +4758,7 @@ for (const scenario of [
       const executions: string[] = [];
       const executionEnvironments: Array<ProcessRunInput["env"]> = [];
       const events = yield* PubSub.unbounded<typeof OrchestrationEvent.Type>();
+      let stackStarting = scenario === "ticket-starting-stack";
       let settled = yield* Deferred.make<void>();
       const completePhase = (payload: Record<string, unknown>) => {
         const index = threads.findIndex((entry) => entry.id === storedRun.activeThreadId);
@@ -4915,9 +4914,10 @@ for (const scenario of [
                         composePath: "compose.yml",
                         displayName: "Replacement",
                         description: null,
-                        status:
-                          scenario === "ticket-unhealthy-stack"
-                            ? ("starting" as const)
+                        status: stackStarting
+                          ? ("starting" as const)
+                          : scenario === "ticket-unhealthy-stack"
+                            ? ("error" as const)
                             : ("running" as const),
                         services: null,
                         serviceCount: 1,
@@ -4971,6 +4971,15 @@ for (const scenario of [
           } else {
             yield* reactor.reconcile();
           }
+          if (scenario === "ticket-starting-stack") {
+            yield* reactor.drain;
+            expect(storedRun.status).toBe("running");
+            expect(storedRun.failure).toBeNull();
+            expect(storedRun.cyclesUsed).toBe(0);
+            expect(executions).toEqual([]);
+            stackStarting = false;
+            yield* reactor.reconcile();
+          }
           yield* Deferred.await(settled);
           yield* reactor.drain;
           if (scenario === "ticket-dirty-stack") {
@@ -4982,7 +4991,7 @@ for (const scenario of [
           }
           if (scenario === "ticket-unhealthy-stack") {
             expect(storedRun.failure).toMatchObject({ reason: "preview-unavailable" });
-            expect(storedRun.failure?.detailMarkdown).toContain("starting");
+            expect(storedRun.failure?.detailMarkdown).toContain("error");
             expect(executions).toEqual([]);
             expect(storedRun.cyclesUsed).toBe(0);
             return;
@@ -4995,7 +5004,11 @@ for (const scenario of [
           }
           if (embedded) {
             expect(executions).toEqual(ticket ? ticketCommands : ["suite-a", "suite-b"]);
-            if (scenario === "ticket-replaced-stack" || scenario === "ticket-startup-retry") {
+            if (
+              scenario === "ticket-replaced-stack" ||
+              scenario === "ticket-startup-retry" ||
+              scenario === "ticket-starting-stack"
+            ) {
               expect(storedRun.previewTargets).toEqual(["https://replacement.example.test"]);
               expect(
                 commands.find(
@@ -5004,7 +5017,7 @@ for (const scenario of [
                     command.run.previewTargets[0] === "https://replacement.example.test",
                 ),
               ).toMatchObject({
-                run: { cyclesUsed: scenario === "ticket-startup-retry" ? 1 : 2 },
+                run: { cyclesUsed: scenario === "ticket-replaced-stack" ? 2 : 1 },
               });
               expect(executionEnvironments[0]).toMatchObject({
                 APP_REVIEW_PREVIEW_URL: "https://replacement.example.test",
