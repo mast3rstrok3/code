@@ -79,7 +79,6 @@ import { AppStackManager } from "../../appStack/AppStackManager.ts";
 import {
   appendWorkflowStepInstructions,
   resolveWorkflowPromptId,
-  isAppReviewMcpWorkflowPromptId,
 } from "../../provider/WorkflowPromptRegistry.ts";
 import { buildWorktreeRuntimeContext } from "../worktreeRuntimeContext.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
@@ -965,9 +964,7 @@ const make = Effect.gen(function* () {
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
       const previousWorkflowPromptId = threadWorkflowPromptIds.get(threadId);
-      const appReviewMcpScopeChanged =
-        isAppReviewMcpWorkflowPromptId(previousWorkflowPromptId) !==
-        isAppReviewMcpWorkflowPromptId(desiredWorkflowPromptId);
+      const workflowPromptChanged = previousWorkflowPromptId !== desiredWorkflowPromptId;
 
       if (
         !runtimeModeChanged &&
@@ -975,7 +972,7 @@ const make = Effect.gen(function* () {
         !instanceChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
-        !appReviewMcpScopeChanged
+        !workflowPromptChanged
       ) {
         return existingSessionThreadId;
       }
@@ -1000,7 +997,7 @@ const make = Effect.gen(function* () {
         instanceChanged,
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
-        appReviewMcpScopeChanged,
+        workflowPromptChanged,
         previousWorkflowPromptId,
         desiredWorkflowPromptId,
         hasResumeCursor: resumeCursor !== undefined,

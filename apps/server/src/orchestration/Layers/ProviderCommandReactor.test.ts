@@ -3507,6 +3507,55 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex_work"));
   });
 
+  it("refreshes workflow permissions when entering, changing, and leaving a workflow", async () => {
+    const harness = await createHarness();
+    const prompts = [
+      undefined,
+      WORKFLOW_PROMPT_IDS.implementationTddCodex,
+      WORKFLOW_PROMPT_IDS.implementationTddCodex,
+      WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
+      undefined,
+    ];
+    const expectedStarts = [1, 2, 2, 3, 4];
+
+    for (const [index, workflowPromptId] of prompts.entries()) {
+      const sent = Effect.runSync(Deferred.make<void>());
+      harness.sendTurn.mockImplementationOnce(() =>
+        Deferred.succeed(sent, undefined).pipe(
+          Effect.as({ threadId: ThreadId.make("thread-1"), turnId: asTurnId(`turn-${index}`) }),
+        ),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(`cmd-workflow-permissions-${index}`),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId(`message-workflow-permissions-${index}`),
+            role: "user",
+            text: "Continue the task",
+            attachments: [],
+          },
+          ...(workflowPromptId ? { workflowPromptId } : {}),
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      );
+      await Effect.runPromise(Deferred.await(sent));
+      await harness.drain();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(index + 1);
+      expect(harness.startSession).toHaveBeenCalledTimes(expectedStarts[index]!);
+      expect(harness.startSession.mock.lastCall?.[1]).toMatchObject({
+        ...(workflowPromptId ? { workflowPromptId } : {}),
+        ...(index > 0 ? { resumeCursor: { opaque: "resume-1" } } : {}),
+      });
+      if (!workflowPromptId) {
+        expect(harness.startSession.mock.lastCall?.[1]).not.toHaveProperty("workflowPromptId");
+      }
+    }
+  });
+
   it("restarts the provider session when the thread workspace changes", async () => {
     const harness = await createHarness({
       threadModelSelection: {
