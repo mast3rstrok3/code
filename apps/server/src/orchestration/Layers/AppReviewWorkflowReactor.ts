@@ -364,11 +364,11 @@ export function appReviewStackIdForTarget(input: {
   return input.lookup?.frontendUrl === input.previewUrl ? stack.id : null;
 }
 
-export type StandalonePreviewTargetResolution =
+export type AppReviewPreviewTargetResolution =
   | { readonly _tag: "Resolved"; readonly previewTargets: ReadonlyArray<string> }
   | { readonly _tag: "Blocked"; readonly detailMarkdown: string };
 
-export function selectStandalonePreviewTargets(input: {
+export function selectAppReviewPreviewTargets(input: {
   readonly lookup: AppStackPreviewLookup | null;
   readonly lookupError: string | null;
   readonly fallbackTargets: ReadonlyArray<string>;
@@ -377,7 +377,7 @@ export function selectStandalonePreviewTargets(input: {
    * so a matching App Stack does not get to substitute its own frontend.
    */
   readonly pinnedTargets?: ReadonlyArray<string>;
-}): StandalonePreviewTargetResolution {
+}): AppReviewPreviewTargetResolution {
   const pinnedTargets = Array.from(
     new Set((input.pinnedTargets ?? []).map((target) => target.trim()).filter(Boolean)),
   );
@@ -2199,17 +2199,19 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const resolveStandalonePreviewTargetsForRun = Effect.fn(
-    "AppReviewWorkflowReactor.resolveStandalonePreviewTargetsForRun",
+  const resolvePreviewTargetsForRun = Effect.fn(
+    "AppReviewWorkflowReactor.resolvePreviewTargetsForRun",
   )(function* (run: AppReviewWorkflowRun, cwd: string, occurredAt: string) {
-    if (run.caller.type !== "standalone") return run;
+    // Ticket stack recovery can replace the frontend URL. Combined reviews keep
+    // the integrated targets selected by their implementation workflow.
+    if (run.caller.type === "implementation" && run.caller.ticketId === undefined) return run;
     // A pinned run already knows its target, so it never pays for the stack
     // lookup — and an unhealthy stack it was never pointed at cannot block it.
     const lookupResult =
       run.previewTargetsPinned === true
         ? null
         : yield* appStackManager.getByWorktree({ worktreePath: cwd }).pipe(Effect.result);
-    const resolution = selectStandalonePreviewTargets({
+    const resolution = selectAppReviewPreviewTargets({
       lookup: lookupResult?._tag === "Success" ? lookupResult.success : null,
       lookupError:
         lookupResult?._tag === "Failure"
@@ -2240,7 +2242,8 @@ const make = Effect.gen(function* () {
       previewTargets: [...resolution.previewTargets],
       updatedAt: occurredAt,
     } satisfies AppReviewWorkflowRun;
-    yield* updateRun(updatedRun);
+    // Persist the replacement target with its new cycle, so a restart cannot
+    // reuse old results after only the target update has landed.
     return updatedRun;
   });
 
@@ -2607,12 +2610,10 @@ const make = Effect.gen(function* () {
     const cwd = target.cwd;
     const stableRun = yield* assertStableRevision(currentRun, cwd, occurredAt);
     if (stableRun === null) return;
-    const previewRun = yield* resolveStandalonePreviewTargetsForRun(stableRun, cwd, occurredAt);
-    if (previewRun === null) return;
-    const reviewSettings = yield* reviewSettingsForRun(previewRun);
+    const reviewSettings = yield* reviewSettingsForRun(stableRun);
     const run = {
-      ...previewRun,
-      testPlatforms: previewRun.testPlatforms ?? reviewSettings.testPlatforms,
+      ...stableRun,
+      testPlatforms: stableRun.testPlatforms ?? reviewSettings.testPlatforms,
     };
     if (run.caller.type === "implementation") {
       const status = yield* gitWorkflow.localStatus({ cwd });
@@ -2658,9 +2659,13 @@ const make = Effect.gen(function* () {
       });
       return;
     }
+    const previewRun = yield* resolvePreviewTargetsForRun(run, cwd, occurredAt);
+    if (previewRun === null) return;
+    // Results from the old stack do not verify its replacement.
+    const rerunAllTests = forceFullTests || previewRun !== run;
     const previousCycle = run.cycles.at(-1);
     const retryFailure =
-      !forceFullTests && previousCycle?.fixResult
+      !rerunAllTests && previousCycle?.fixResult
         ? appReviewRetryCommandsFailure(previousCycle, previousCycle.fixResult)
         : null;
     if (retryFailure !== null) {
@@ -2685,7 +2690,7 @@ const make = Effect.gen(function* () {
         ? {
             e2eExecution: {
               id: yield* crypto.randomUUIDv4,
-              commands: forceFullTests
+              commands: rerunAllTests
                 ? appReviewTestCommands({ cycles: [] }, e2eCommands)
                 : appReviewTestCommands(run, e2eCommands),
               results: [],
@@ -2714,7 +2719,7 @@ const make = Effect.gen(function* () {
       completedAt: null,
     };
     const reviewingRun: AppReviewWorkflowRun = {
-      ...run,
+      ...previewRun,
       cycleBudget: includesE2e ? Math.min(run.cycleBudget, 5) : run.cycleBudget,
       cyclesUsed: cycleNumber,
       cycles: [...run.cycles, cycle],

@@ -113,7 +113,7 @@ import {
   retryE2ePhaseInCycle,
   retryReviewPhaseInCycle,
   selectReviewRunToStart,
-  selectStandalonePreviewTargets,
+  selectAppReviewPreviewTargets,
   successfulFixAction,
   terminalReviewAction,
   terminalReviewEvidenceFailure,
@@ -1794,7 +1794,7 @@ it("selects only the latest idle run for a new review cycle", () => {
 
 it("resolves standalone previews while cluster test guests are stopped or queued", () => {
   expect(
-    selectStandalonePreviewTargets({
+    selectAppReviewPreviewTargets({
       lookup: {
         stack: {
           id: "stack-1",
@@ -1837,7 +1837,7 @@ it("gives E2E suites the stack ID only while that stack serves the reviewed targ
 
 it("keeps manual preview targets as a fallback when no App Stack matches", () => {
   expect(
-    selectStandalonePreviewTargets({
+    selectAppReviewPreviewTargets({
       lookup: { stack: null, frontendUrl: null },
       lookupError: null,
       fallbackTargets: [" http://localhost:3000 ", "http://localhost:3000"],
@@ -1847,7 +1847,7 @@ it("keeps manual preview targets as a fallback when no App Stack matches", () =>
 
 it("reviews a pinned target instead of the worktree's App Stack", () => {
   expect(
-    selectStandalonePreviewTargets({
+    selectAppReviewPreviewTargets({
       lookup: {
         stack: {
           id: "stack-1",
@@ -1866,7 +1866,7 @@ it("reviews a pinned target instead of the worktree's App Stack", () => {
 
 it("keeps a pinned target usable while the worktree's App Stack is unhealthy", () => {
   expect(
-    selectStandalonePreviewTargets({
+    selectAppReviewPreviewTargets({
       lookup: {
         stack: { id: "stack-1", displayName: null, status: "starting", services: null },
         frontendUrl: null,
@@ -1879,7 +1879,7 @@ it("keeps a pinned target usable while the worktree's App Stack is unhealthy", (
 });
 
 it("blocks before launching a reviewer when the matching App Stack is not ready", () => {
-  const resolution = selectStandalonePreviewTargets({
+  const resolution = selectAppReviewPreviewTargets({
     lookup: {
       stack: {
         id: "stack-1",
@@ -1899,7 +1899,7 @@ it("blocks before launching a reviewer when the matching App Stack is not ready"
 });
 
 it("blocks with an actionable message when neither App Stack nor fallback exists", () => {
-  const resolution = selectStandalonePreviewTargets({
+  const resolution = selectAppReviewPreviewTargets({
     lookup: { stack: null, frontendUrl: null },
     lookupError: null,
     fallbackTargets: [],
@@ -4657,6 +4657,9 @@ for (const scenario of [
   "invalid-retry",
   "blocked",
   "ticket",
+  "ticket-replaced-stack",
+  "ticket-unhealthy-stack",
+  "ticket-dirty-stack",
   "combined",
   "empty",
 ] as const) {
@@ -4664,9 +4667,14 @@ for (const scenario of [
     Effect.gen(function* () {
       yield* TestClock.setTime(Date.parse(now));
       const initial = run();
-      const embedded = scenario === "ticket" || scenario === "combined";
+      const ticket = scenario.startsWith("ticket");
+      const embedded = ticket || scenario === "combined";
+      const ticketCommands =
+        scenario === "ticket-replaced-stack"
+          ? ["suite-a", "suite-b --grep ticket"]
+          : ["suite-b --grep ticket"];
       let storedRun = run({
-        previewTargetsPinned: true,
+        previewTargetsPinned: !embedded || scenario === "ticket",
         ...(scenario === "empty"
           ? {
               activePhase: "e2e" as const,
@@ -4687,9 +4695,30 @@ for (const scenario of [
                 type: "implementation" as const,
                 implementationRunId: "implementation-1",
                 orchestratorThreadId: initial.targetThreadId,
-                ...(scenario === "ticket" ? { ticketId: "ticket-1" } : {}),
+                ...(ticket ? { ticketId: "ticket-1" } : {}),
               },
-              e2eCommands: ["suite-b --grep ticket"],
+              e2eCommands: ticketCommands,
+            }
+          : {}),
+        ...(scenario === "ticket-replaced-stack"
+          ? {
+              cyclesUsed: 1,
+              cycles: [
+                {
+                  ...carryCycle(1, AppReviewId.make("old-stack-review")),
+                  e2eExecution: {
+                    id: "old-stack-execution",
+                    commands: ticketCommands.map((command) => ({ command, retryCommand: command })),
+                    results: ticketCommands.map((command, index) => ({
+                      command,
+                      executedCommand: command,
+                      status: index === 0 ? ("passed" as const) : ("failed" as const),
+                      outputMarkdown: "Result from the replaced stack",
+                      completedAt: now,
+                    })),
+                  },
+                },
+              ],
             }
           : {}),
       });
@@ -4714,6 +4743,7 @@ for (const scenario of [
       const threads = [thread(storedRun.targetThreadId), thread(storedRun.controllerThreadId)];
       const commands: OrchestrationCommand[] = [];
       const executions: string[] = [];
+      const executionEnvironments: Array<ProcessRunInput["env"]> = [];
       let settled = yield* Deferred.make<void>();
       const completePhase = (payload: Record<string, unknown>) => {
         const index = threads.findIndex((entry) => entry.id === storedRun.activeThreadId);
@@ -4761,6 +4791,7 @@ for (const scenario of [
                     ),
                   ).toBe(true);
                   executions.push(command);
+                  executionEnvironments.push(input.env);
                   return {
                     code: ChildProcessSpawner.ExitCode(
                       !embedded && command.startsWith("suite-b") && cycle.cycleNumber < 3 ? 1 : 0,
@@ -4828,7 +4859,7 @@ for (const scenario of [
               localStatus: () =>
                 Effect.succeed({
                   isRepo: true,
-                  hasWorkingTreeChanges: false,
+                  hasWorkingTreeChanges: scenario === "ticket-dirty-stack",
                   refName: "dev",
                   hasPrimaryRemote: true,
                   isDefaultRef: true,
@@ -4852,7 +4883,36 @@ for (const scenario of [
                   })),
                 }),
             }),
-            Layer.mock(AppStackManager)(noAppStacks),
+            Layer.mock(AppStackManager)({
+              getByWorktree: ({ worktreePath }) => {
+                expect(worktreePath).toBe("/assigned/worktree");
+                return embedded
+                  ? Effect.succeed({
+                      stack: {
+                        id: "replacement-stack",
+                        uuid: "replacement-stack",
+                        userId: "user",
+                        worktreePath,
+                        composePath: "compose.yml",
+                        displayName: "Replacement",
+                        description: null,
+                        status:
+                          scenario === "ticket-unhealthy-stack"
+                            ? ("starting" as const)
+                            : ("running" as const),
+                        services: null,
+                        serviceCount: 1,
+                        lastError: null,
+                        errorCount: 0,
+                        createdAt: now,
+                        updatedAt: now,
+                      },
+                      frontendUrl: "https://replacement.example.test",
+                      frontendServiceName: "frontend",
+                    })
+                  : noAppStacks.getByWorktree();
+              },
+            }),
             Layer.mock(ServerSettingsService)({
               getSettings: Effect.succeed(decodeServerSettings({})),
             }),
@@ -4869,6 +4929,20 @@ for (const scenario of [
           yield* reactor.reconcile();
           yield* Deferred.await(settled);
           yield* reactor.drain;
+          if (scenario === "ticket-dirty-stack") {
+            expect(storedRun.failure).toMatchObject({ reason: "embedded-worktree-dirty" });
+            expect(storedRun.previewTargets).toEqual(initial.previewTargets);
+            expect(executions).toEqual([]);
+            expect(storedRun.cyclesUsed).toBe(0);
+            return;
+          }
+          if (scenario === "ticket-unhealthy-stack") {
+            expect(storedRun.failure).toMatchObject({ reason: "preview-unavailable" });
+            expect(storedRun.failure?.detailMarkdown).toContain("starting");
+            expect(executions).toEqual([]);
+            expect(storedRun.cyclesUsed).toBe(0);
+            return;
+          }
           if (scenario === "empty") {
             expect(storedRun.status).toBe("failed");
             expect(storedRun.failure?.reason).toBe("automation-unavailable");
@@ -4876,9 +4950,26 @@ for (const scenario of [
             return;
           }
           if (embedded) {
-            expect(executions).toEqual(
-              scenario === "ticket" ? ["suite-b --grep ticket"] : ["suite-a", "suite-b"],
-            );
+            expect(executions).toEqual(ticket ? ticketCommands : ["suite-a", "suite-b"]);
+            if (scenario === "ticket-replaced-stack") {
+              expect(storedRun.previewTargets).toEqual(["https://replacement.example.test"]);
+              expect(
+                commands.find(
+                  (command) =>
+                    command.type === "thread.app-review-workflow.update" &&
+                    command.run.previewTargets[0] === "https://replacement.example.test",
+                ),
+              ).toMatchObject({ run: { cyclesUsed: 2 } });
+              expect(executionEnvironments[0]).toMatchObject({
+                APP_REVIEW_PREVIEW_URL: "https://replacement.example.test",
+                APP_REVIEW_STACK_ID: "replacement-stack",
+              });
+            } else {
+              expect(storedRun.previewTargets).toEqual(initial.previewTargets);
+              expect(executionEnvironments[0]?.APP_REVIEW_PREVIEW_URL).toBe(
+                "http://localhost:3000",
+              );
+            }
             expect(storedRun.status).toBe("passed");
             expect(commands.some((command) => command.type === "thread.create")).toBe(false);
             return;
