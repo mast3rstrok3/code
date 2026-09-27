@@ -4704,7 +4704,7 @@ describe("ImplementationWorkflowReactor", () => {
             .find((entry) => entry.id === run.id)
             ?.ticketStates.find((entry) => entry.ticketId === ticket.id)?.resourceCleanupRetention,
         ).toBeNull();
-        expect(yield* Ref.get(system.stopStackIds)).toEqual([]);
+        expect(yield* Ref.get(system.stopStackIds)).toEqual(["stack-ticket"]);
         expect(yield* Ref.get(system.deleteStackIds)).toHaveLength(1);
       }),
     ),
@@ -10978,6 +10978,56 @@ describe("ImplementationWorkflowReactor", () => {
         }),
       ),
   );
+
+  for (const stackOwnership of ["workflow", "protected", "other-workflow"] as const) {
+    it.effect(
+      `releases only its unprotected ticket stack before Code Review: ${stackOwnership}`,
+      () =>
+        withSystem((system) =>
+          Effect.gen(function* () {
+            const { run, ticket, nestedRun } = yield* launchTicketAppReview(system);
+            if (stackOwnership === "protected") {
+              yield* Ref.update(system.protectionInputs, (inputs) => [
+                ...inputs,
+                { stackId: "stack-ticket", protected: true },
+              ]);
+            } else if (stackOwnership === "other-workflow") {
+              yield* Ref.update(system.autoCreateInputs, (inputs) =>
+                inputs.map((input) => ({ ...input, workflowId: "another-workflow" })),
+              );
+            }
+            const completedAt = "2026-01-01T00:05:00.000Z";
+            yield* system.engine.dispatch({
+              type: "thread.app-review-workflow.update",
+              commandId: commandId("pass-ticket-review-and-release-stack"),
+              threadId: nestedRun.controllerThreadId,
+              run: {
+                ...nestedRun,
+                status: "passed",
+                activePhase: null,
+                activeThreadId: null,
+                outcome: "passed",
+                updatedAt: completedAt,
+                completedAt,
+              },
+              createdAt: completedAt,
+            });
+            yield* system.reactor.drain;
+            const snapshot = yield* system.query.getSnapshot();
+            const state = snapshot.implementationRuns
+              .find((candidate) => candidate.id === run.id)
+              ?.ticketStates.find((candidate) => candidate.ticketId === ticket.id);
+            expect(state?.status).toBe("code-reviewing");
+            expect(state?.codeReviewThreadId).not.toBeNull();
+            expect(yield* Ref.get(system.stopStackIds)).toEqual(
+              stackOwnership === "workflow" ? ["stack-ticket"] : [],
+            );
+            expect(yield* Ref.get(system.deleteStackIds)).toEqual([]);
+            expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([]);
+          }),
+        ),
+    );
+  }
 
   it.effect(
     "stage recovery applies a terminal ticket App Review whose update was interrupted",

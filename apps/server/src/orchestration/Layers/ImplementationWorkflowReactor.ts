@@ -4167,6 +4167,43 @@ const make = Effect.gen(function* () {
         });
         return;
       }
+      // Code Review works from the ticket branch. Stop its services after App
+      // Review; a rerun can restart the preserved stack.
+      if (
+        state.status === "app-reviewing" &&
+        !readModel.appReviewWorkflowRuns?.some(
+          (review) =>
+            review.status === "running" &&
+            review.caller.type === "implementation" &&
+            review.caller.implementationRunId === input.run.id &&
+            review.caller.ticketId === input.ticketId,
+        )
+      ) {
+        const worktreePath = state.worktreePath;
+        yield* Effect.gen(function* () {
+          const { stack } = yield* appStackManager.getByWorktree({
+            worktreePath,
+          });
+          if (
+            stack === null ||
+            stack.protected === true ||
+            stack.workflowId == null ||
+            !workflowIdsForRun(readModel, input.run).includes(stack.workflowId) ||
+            stack.status === "stopped" ||
+            stack.status === "stopping"
+          )
+            return;
+          yield* appStackManager.stop({ stackId: stack.id });
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Could not stop ticket App Stack after App Review", {
+              runId: input.run.id,
+              ticketId: input.ticketId,
+              detail: errorDetail(error),
+            }),
+          ),
+        );
+      }
       if (existingReviewer === null) {
         yield* orchestrationEngine.dispatch({
           type: "thread.create",
