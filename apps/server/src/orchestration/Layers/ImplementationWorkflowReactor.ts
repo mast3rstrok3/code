@@ -10371,8 +10371,9 @@ const make = Effect.gen(function* () {
       // would carry every other ticket along with it, from the pre-rewind
       // snapshot this update was built on.
       if (!ticketAwaitsAppReviewRun(ticketState, nestedRun.id)) return;
+      const ownsActivePhase = nestedAppReviewOwnsActivePhase(nestedRun);
       const recoveredContinuation =
-        nestedAppReviewOwnsActivePhase(nestedRun) &&
+        ownsActivePhase &&
         run.status === "needs-human-attention" &&
         run.automationHalt?.stage === "app-review" &&
         run.automationHalt.ticketId === ticketId;
@@ -10387,7 +10388,7 @@ const make = Effect.gen(function* () {
                 ...state,
                 status: "app-reviewing" as const,
                 appReviewWorkflowRunId: nestedRun.id,
-                ...(recoveredContinuation ? { appReviewOutcome: null, warningMarkdown: null } : {}),
+                ...(ownsActivePhase ? { appReviewOutcome: null, warningMarkdown: null } : {}),
                 updatedAt: event.occurredAt,
               }
             : state,

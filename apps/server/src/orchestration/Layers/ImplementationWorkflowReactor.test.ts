@@ -10402,94 +10402,114 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("reconnects a halted ticket to its manually rerun App Review thread", () =>
-    withSystem((system) =>
-      Effect.gen(function* () {
-        const { run, ticket, nestedRun } = yield* launchTicketAppReview(system);
-        const failedAt = "2026-01-01T00:04:00.000Z";
-        const { cycle, failure } = failedReviewRecoveryState(nestedRun, failedAt, "ticket");
-        const failedRun = {
-          ...nestedRun,
-          status: "failed" as const,
-          outcome: "failed" as const,
-          activePhase: null,
-          activeThreadId: null,
-          failure,
-          cycles: [
-            {
-              ...cycle,
-              status: "failed" as const,
-              reviewLaunchCount: 2,
-              failure,
-              completedAt: failedAt,
-            },
-          ],
-          updatedAt: failedAt,
-          completedAt: failedAt,
-        };
-        yield* system.engine.dispatch({
-          type: "thread.app-review-workflow.update",
-          commandId: commandId("fail-ticket-review-before-recovery"),
-          threadId: nestedRun.controllerThreadId,
-          run: failedRun,
-          createdAt: failedAt,
-        });
-        yield* system.reactor.drain;
-
-        let current = (yield* system.query.getSnapshot()).implementationRuns.find(
-          (candidate) => candidate.id === run.id,
-        );
-        expect(current?.status).toBe("needs-human-attention");
-        expect(current?.automationHalt).toMatchObject({
-          stage: "app-review",
-          category: "review-blocked",
-          ticketId: ticket.id,
-        });
-        const failedState = current?.ticketStates.find(
-          (candidate) => candidate.ticketId === ticket.id,
-        );
-        expect(failedState?.appReviewOutcome).toBe("failed");
-        expect(failedState?.warningMarkdown).toContain("exhausted its 2 phase launches");
-
-        yield* system.engine.dispatch({
-          type: "thread.app-review-workflow.update",
-          commandId: commandId("recover-ticket-review-in-place"),
-          threadId: nestedRun.controllerThreadId,
-          run: {
-            ...failedRun,
-            status: "running",
-            outcome: null,
-            activePhase: "review",
-            activeThreadId: cycle.reviewerThreadId,
-            failure: null,
+  it.effect.each([false, true])(
+    "reconnects a failed ticket to its manually rerun App Review thread (already running=%s)",
+    (alreadyRunning) =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run, ticket, nestedRun } = yield* launchTicketAppReview(system);
+          const failedAt = "2026-01-01T00:04:00.000Z";
+          const { cycle, failure } = failedReviewRecoveryState(nestedRun, failedAt, "ticket");
+          const failedRun = {
+            ...nestedRun,
+            status: "failed" as const,
+            outcome: "failed" as const,
+            activePhase: null,
+            activeThreadId: null,
+            failure,
             cycles: [
               {
                 ...cycle,
-                status: "reviewing",
-                recoveryContinuationCount: 0,
-                failure: null,
-                completedAt: null,
+                status: "failed" as const,
+                reviewLaunchCount: 2,
+                failure,
+                completedAt: failedAt,
               },
             ],
-            updatedAt: "2026-01-01T00:05:00.000Z",
-            completedAt: null,
-          },
-          createdAt: "2026-01-01T00:05:00.000Z",
-        });
-        yield* system.reactor.drain;
+            updatedAt: failedAt,
+            completedAt: failedAt,
+          };
+          yield* system.engine.dispatch({
+            type: "thread.app-review-workflow.update",
+            commandId: commandId("fail-ticket-review-before-recovery"),
+            threadId: nestedRun.controllerThreadId,
+            run: failedRun,
+            createdAt: failedAt,
+          });
+          yield* system.reactor.drain;
 
-        current = (yield* system.query.getSnapshot()).implementationRuns.find(
-          (candidate) => candidate.id === run.id,
-        );
-        const state = current?.ticketStates.find((candidate) => candidate.ticketId === ticket.id);
-        expect(current?.status).toBe("running");
-        expect(current?.automationHalt).toBeNull();
-        expect(state?.status).toBe("app-reviewing");
-        expect(state?.appReviewWorkflowRunId).toBe(nestedRun.id);
-        expect(state?.appReviewOutcome).toBeNull();
-        expect(state?.warningMarkdown).toBeNull();
-      }),
-    ),
+          let current = (yield* system.query.getSnapshot()).implementationRuns.find(
+            (candidate) => candidate.id === run.id,
+          );
+          expect(current?.status).toBe("needs-human-attention");
+          expect(current?.automationHalt).toMatchObject({
+            stage: "app-review",
+            category: "review-blocked",
+            ticketId: ticket.id,
+          });
+          const failedState = current?.ticketStates.find(
+            (candidate) => candidate.ticketId === ticket.id,
+          );
+          expect(failedState?.appReviewOutcome).toBe("failed");
+          expect(failedState?.warningMarkdown).toContain("exhausted its 2 phase launches");
+
+          if (alreadyRunning) {
+            if (current === undefined) throw new Error("Implementation run missing.");
+            yield* system.engine.dispatch({
+              type: "thread.implementation-run.update",
+              commandId: commandId("resume-run-before-ticket-review"),
+              threadId: sourceThreadId,
+              run: {
+                ...current,
+                status: "running",
+                automationHalt: null,
+                retryableFailure: null,
+                updatedAt: "2026-01-01T00:04:30.000Z",
+              },
+              createdAt: "2026-01-01T00:04:30.000Z",
+            });
+            yield* system.reactor.drain;
+          }
+
+          yield* system.engine.dispatch({
+            type: "thread.app-review-workflow.update",
+            commandId: commandId("recover-ticket-review-in-place"),
+            threadId: nestedRun.controllerThreadId,
+            run: {
+              ...failedRun,
+              status: "running",
+              outcome: null,
+              activePhase: "review",
+              activeThreadId: cycle.reviewerThreadId,
+              failure: null,
+              cycles: [
+                {
+                  ...cycle,
+                  status: "reviewing",
+                  recoveryContinuationCount: 0,
+                  failure: null,
+                  completedAt: null,
+                },
+              ],
+              updatedAt: "2026-01-01T00:05:00.000Z",
+              completedAt: null,
+            },
+            createdAt: "2026-01-01T00:05:00.000Z",
+          });
+          yield* system.reactor.drain;
+
+          current = (yield* system.query.getSnapshot()).implementationRuns.find(
+            (candidate) => candidate.id === run.id,
+          );
+          const state = current?.ticketStates.find((candidate) => candidate.ticketId === ticket.id);
+          expect(current?.status).toBe("running");
+          expect(current?.automationHalt).toBeNull();
+          expect(state?.status).toBe("app-reviewing");
+          expect(state?.appReviewWorkflowRunId).toBe(nestedRun.id);
+          expect(state?.appReviewOutcome).toBeNull();
+          expect(state?.warningMarkdown).toBeNull();
+        }),
+      ),
   );
 
   it.effect("keeps back-to-back ticket App Review reruns in the same run", () =>
