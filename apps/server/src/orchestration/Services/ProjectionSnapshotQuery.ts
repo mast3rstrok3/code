@@ -82,7 +82,9 @@ export interface ProjectionFullThreadDiffContext {
 export interface ProjectionSnapshotQueryShape {
   /** Find the owning review without loading unrelated threads or workflow runs. */
   readonly getAppReviewWorkflowRun: (
-    input: { readonly threadId: ThreadId } | { readonly reviewId: AppReviewId },
+    input: ({ readonly threadId: ThreadId } | { readonly reviewId: AppReviewId }) & {
+      readonly excludePaused?: boolean;
+    },
   ) => Effect.Effect<Option.Option<AppReviewWorkflowRun>, ProjectionRepositoryError>;
   /** Read the latest request or resolution without loading the thread history. */
   readonly getUserInputActivity: (input: {

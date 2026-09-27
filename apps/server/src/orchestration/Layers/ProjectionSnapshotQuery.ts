@@ -1449,13 +1449,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
   const getAppReviewWorkflowRunRow = SqlSchema.findOneOption({
     Request: Schema.Union([
-      Schema.Struct({ threadId: ThreadId }),
-      Schema.Struct({ reviewId: AppReviewId }),
+      Schema.Struct({ threadId: ThreadId, excludePaused: Schema.optional(Schema.Boolean) }),
+      Schema.Struct({ reviewId: AppReviewId, excludePaused: Schema.optional(Schema.Boolean) }),
     ]),
     Result: ProjectionAppReviewWorkflowRunDbRowSchema,
     execute: (input) => sql`
       SELECT run_id AS "runId", target_thread_id AS "sourceThreadId", run_json AS "run"
-      FROM projection_app_review_workflow_runs
+      FROM projection_app_review_workflow_runs AS runs
       WHERE ${
         "reviewId" in input
           ? sql`EXISTS (
@@ -1474,6 +1474,21 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                    OR json_extract(cycle.value, '$.fixerThreadId') = ${input.threadId}
               )
             )`
+      }
+      AND ${
+        input.excludePaused
+          ? sql`NOT EXISTS (
+              WITH RECURSIVE ancestors AS (
+                SELECT thread_id, parent_thread_id, workflow_paused_at
+                FROM projection_threads WHERE thread_id = runs.controller_thread_id
+                UNION
+                SELECT parent.thread_id, parent.parent_thread_id, parent.workflow_paused_at
+                FROM projection_threads AS parent
+                JOIN ancestors ON parent.thread_id = ancestors.parent_thread_id
+              )
+              SELECT 1 FROM ancestors WHERE workflow_paused_at IS NOT NULL
+            )`
+          : sql`1 = 1`
       }
       ORDER BY created_at ASC, run_id ASC
       LIMIT 1

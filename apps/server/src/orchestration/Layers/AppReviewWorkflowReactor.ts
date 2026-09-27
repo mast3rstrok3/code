@@ -4258,8 +4258,8 @@ ${result.outputMarkdown}`,
     return yield* projectionSnapshotQuery
       .getAppReviewWorkflowRun(
         event.type === "thread.app-review-updated"
-          ? { reviewId: event.payload.reviewId }
-          : { threadId: event.payload.threadId },
+          ? { reviewId: event.payload.reviewId, excludePaused: true }
+          : { threadId: event.payload.threadId, excludePaused: true },
       )
       .pipe(Effect.map(Option.getOrNull));
   });

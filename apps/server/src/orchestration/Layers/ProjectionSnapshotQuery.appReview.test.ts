@@ -101,6 +101,43 @@ it.effect("looks up review ownership without decoding unrelated snapshot data", 
       ),
     );
 
+    yield* sql`INSERT INTO projection_projects
+      (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+      VALUES ('project', 'Project', '/tmp/project', '[]', ${now}, ${now})`;
+    yield* sql`INSERT INTO projection_threads
+      (thread_id, project_id, title, parent_thread_id, model_selection_json, created_at, updated_at)
+      VALUES
+      ('root', 'project', 'Root', NULL, 'invalid-json', ${now}, ${now}),
+      ('controller', 'project', 'Controller', 'root', 'invalid-json', ${now}, ${now}),
+      ('unrelated-paused', 'project', 'Other', NULL, 'invalid-json', ${now}, ${now})`;
+    yield* sql`UPDATE projection_threads SET workflow_paused_at = ${now}
+      WHERE thread_id = 'unrelated-paused'`;
+
+    for (const pausedThreadId of ["root", "controller"]) {
+      yield* sql`UPDATE projection_threads SET workflow_paused_at = ${now}
+        WHERE thread_id = ${pausedThreadId}`;
+      for (const owner of [
+        { threadId: ThreadId.make("fixer-2") },
+        { reviewId: AppReviewId.make("review-2") },
+      ]) {
+        assert.isTrue(
+          Option.isNone(yield* query.getAppReviewWorkflowRun({ ...owner, excludePaused: true })),
+        );
+        assert.equal(Option.getOrThrow(yield* query.getAppReviewWorkflowRun(owner)).id, run.id);
+      }
+      yield* sql`UPDATE projection_threads SET workflow_paused_at = NULL
+        WHERE thread_id = ${pausedThreadId}`;
+      assert.equal(
+        Option.getOrThrow(
+          yield* query.getAppReviewWorkflowRun({
+            threadId: ThreadId.make("fixer-2"),
+            excludePaused: true,
+          }),
+        ).id,
+        run.id,
+      );
+    }
+
     const completed = { ...run, status: "passed" as const, activeThreadId: null, completedAt: now };
     yield* sql`UPDATE projection_app_review_workflow_runs
       SET status = 'passed', run_json = ${encodeRun(completed)} WHERE run_id = ${run.id}`;
