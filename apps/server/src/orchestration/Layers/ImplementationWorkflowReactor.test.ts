@@ -560,7 +560,6 @@ it("classifies unsafe ticket worktrees before cleanup", () => {
       hasWorkingTreeChanges: true,
       worktreeHead: "abc123",
       acceptedHead: "abc123",
-      merged: true,
       retainedAt: now,
     }),
   ).toEqual({
@@ -4670,7 +4669,10 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("deletes the stack at ticket success and the worktree only after integration", () =>
+  // A long run must not hold every finished worktree until it integrates: the
+  // ticket branch keeps the accepted commit, which is all dependents and
+  // integration read.
+  it.effect("deletes the stack and then the worktree once a ticket succeeds", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run, ticket } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
@@ -4678,24 +4680,14 @@ describe("ImplementationWorkflowReactor", () => {
         yield* appendWorkerResult(system, { run, status: "succeeded" });
 
         let snapshot = yield* system.query.getSnapshot();
-        let state = snapshot.implementationRuns
+        const state = snapshot.implementationRuns
           .find((entry) => entry.id === run.id)
           ?.ticketStates.find((entry) => entry.ticketId === ticket.id);
         expect(state?.status).toBe("succeeded");
         expect(state?.appDevStackTierDownAt).not.toBeNull();
-        expect(state?.resourceCleanupAt).toBeNull();
         expect(yield* Ref.get(system.deleteStackIds)).toEqual(["stack-ticket"]);
-        expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([]);
 
-        yield* passMergeGate(system, run);
-
-        snapshot = yield* system.query.getSnapshot();
-        state = snapshot.implementationRuns
-          .find((entry) => entry.id === run.id)
-          ?.ticketStates.find((entry) => entry.ticketId === ticket.id);
-        expect(state?.resourceCleanupAt).toBe("2026-01-01T00:00:02.000Z");
-        expect(yield* Ref.get(system.stopStackIds)).toEqual([]);
-        expect(yield* Ref.get(system.deleteStackIds)).toEqual(["stack-ticket"]);
+        yield* system.reactor.recoverIncompleteStages();
         expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([
           {
             cwd: run.orchestratorWorktreePath,
@@ -4703,10 +4695,15 @@ describe("ImplementationWorkflowReactor", () => {
           },
         ]);
 
-        yield* system.reactor.recoverIncompleteStages();
+        yield* passMergeGate(system, run);
+        snapshot = yield* system.query.getSnapshot();
+        expect(
+          snapshot.implementationRuns
+            .find((entry) => entry.id === run.id)
+            ?.ticketStates.find((entry) => entry.ticketId === ticket.id)?.resourceCleanupRetention,
+        ).toBeNull();
         expect(yield* Ref.get(system.stopStackIds)).toEqual([]);
         expect(yield* Ref.get(system.deleteStackIds)).toHaveLength(1);
-        expect(yield* Ref.get(system.removeWorktreeInputs)).toHaveLength(1);
       }),
     ),
   );
@@ -4732,7 +4729,7 @@ describe("ImplementationWorkflowReactor", () => {
           current = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
           expect(current.ticketStates[0]?.appDevStackTierDownAt).not.toBeNull();
           expect(yield* Ref.get(system.deleteStackIds)).toEqual(["stack-ticket", "stack-ticket"]);
-          expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([]);
+          expect(yield* Ref.get(system.removeWorktreeInputs)).toHaveLength(1);
           yield* system.reactor.recoverIncompleteStages();
           expect(yield* Ref.get(system.deleteStackIds)).toHaveLength(2);
         }),
@@ -4764,7 +4761,7 @@ describe("ImplementationWorkflowReactor", () => {
         yield* seedTicketStack(system, { run, ticketId: ticket.id });
         yield* system.reactor.recoverIncompleteStages();
         expect(yield* Ref.get(system.deleteStackIds)).toEqual(["stack-ticket"]);
-        expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([]);
+        expect(yield* Ref.get(system.removeWorktreeInputs)).toHaveLength(1);
       }),
     ),
   );

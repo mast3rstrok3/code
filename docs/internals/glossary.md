@@ -148,7 +148,7 @@ The server shutdown state used for updates and signals. It writes a planned-rest
 
 #### Implementation run
 
-One orchestrated execution of a Spec's tickets: a dedicated worktree, dependency-chained TDD workers, programmatic merges, App Review, and Code Review, driven by [ImplementationWorkflowReactor.ts][29]. Each ticket allocates one durable Implementation thread. Recovery adds continuation turns to that thread. An explicit rerun creates a new stage generation. Cleanup removes a ticket worktree only when its branch, accepted commit, integration ancestry, and clean status agree. Otherwise the ticket records a terminal retention reason and leaves the worktree for manual inspection. The recovery sweep also cancels ticket and run-level App Reviews that the implementation no longer owns.
+One orchestrated execution of a Spec's tickets: a dedicated worktree, dependency-chained TDD workers, programmatic merges, App Review, and Code Review, driven by [ImplementationWorkflowReactor.ts][29]. Each ticket allocates one durable Implementation thread. Recovery adds continuation turns to that thread. An explicit rerun creates a new stage generation. Once a succeeded ticket's App Stack is gone, cleanup removes its worktree when its branch, accepted commit, and clean status agree; the branch keeps the commit that dependents and integration read. Otherwise the ticket records a terminal retention reason and leaves the worktree for manual inspection. The recovery sweep also cancels ticket and run-level App Reviews that the implementation no longer owns.
 
 #### Workflow nudge
 

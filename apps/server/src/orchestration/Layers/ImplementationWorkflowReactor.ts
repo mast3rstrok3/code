@@ -443,7 +443,6 @@ export function unsafeTicketWorktreeRetention(input: {
   readonly hasWorkingTreeChanges: boolean;
   readonly worktreeHead: string;
   readonly acceptedHead: string;
-  readonly merged: boolean;
   readonly retainedAt: string;
 }): ResourceCleanupRetention | null {
   if (!input.isRepo) {
@@ -472,13 +471,6 @@ export function unsafeTicketWorktreeRetention(input: {
     return {
       reason: "head-mismatch",
       detailMarkdown: `Cleanup kept the worktree because HEAD '${input.worktreeHead}' differs from accepted commit '${input.acceptedHead}'.`,
-      retainedAt: input.retainedAt,
-    };
-  }
-  if (!input.merged) {
-    return {
-      reason: "commit-not-integrated",
-      detailMarkdown: `Cleanup kept the worktree because accepted commit '${input.acceptedHead}' is not in the integrated branch.`,
       retainedAt: input.retainedAt,
     };
   }
@@ -3614,7 +3606,13 @@ const make = Effect.gen(function* () {
     },
   );
 
-  /** Deletes resources for tickets whose commits reached the integrated branch. */
+  /**
+   * Deletes a succeeded ticket's worktree once its App Stack is gone. The ticket
+   * branch keeps the accepted commit, which is all dependents and integration
+   * read, so a long run does not hold every finished worktree until it ends. A
+   * worktree that is dirty, off its branch, or ahead of the accepted commit is
+   * retained with its reason instead.
+   */
   const cleanupTicketResources = Effect.fn("ImplementationWorkflowReactor.cleanupTicketResources")(
     function* (input: {
       readonly run: OrchestrationImplementationRun;
@@ -3628,7 +3626,6 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             if (
               state.status !== "succeeded" ||
-              state.resourceCleanupAt === null ||
               state.appDevStackTierDownAt === null ||
               state.worktreePath === null ||
               state.worktreePath === run.orchestratorWorktreePath
@@ -3656,13 +3653,7 @@ const make = Effect.gen(function* () {
               return null;
             }
             const [status, accepted] = cleanupSafety.success;
-            const merged = yield* gitWorkflow
-              .isAncestor({
-                cwd: run.orchestratorWorktreePath,
-                ancestorRef: accepted.commitSha,
-                descendantRef: "HEAD",
-              })
-              .pipe(Effect.orElseSucceed(() => false));
+            const cleanupRequestedAt = state.resourceCleanupAt ?? input.createdAt;
             const retention = unsafeTicketWorktreeRetention({
               isRepo: status.isRepo,
               expectedBranch: state.branch,
@@ -3670,7 +3661,6 @@ const make = Effect.gen(function* () {
               hasWorkingTreeChanges: status.hasWorkingTreeChanges,
               worktreeHead: worktreeHead.value.commitSha,
               acceptedHead: accepted.commitSha,
-              merged,
               retainedAt: input.createdAt,
             });
             if (retention !== null) {
@@ -3683,7 +3673,7 @@ const make = Effect.gen(function* () {
                   runId: run.id,
                   ticketId: state.ticketId,
                   worktreePath: state.worktreePath,
-                  cleanupRequestedAt: state.resourceCleanupAt,
+                  cleanupRequestedAt,
                   ...retention,
                 },
                 createdAt: input.createdAt,
@@ -3714,7 +3704,7 @@ const make = Effect.gen(function* () {
                 runId: run.id,
                 ticketId: state.ticketId,
                 worktreePath: state.worktreePath,
-                cleanupRequestedAt: state.resourceCleanupAt,
+                cleanupRequestedAt,
               },
               createdAt: input.createdAt,
             });
