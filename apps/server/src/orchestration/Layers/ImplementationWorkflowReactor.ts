@@ -11457,6 +11457,7 @@ const make = Effect.gen(function* () {
     readonly run: OrchestrationImplementationRun;
     readonly ticketId: string;
     readonly warningMarkdown?: string;
+    readonly onlyReportedResult?: boolean;
     readonly createdAt: string;
   }) {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
@@ -11488,17 +11489,19 @@ const make = Effect.gen(function* () {
           { threadId: existingReviewer.id, createdAt: input.createdAt },
           parsed.directive,
         );
-        return;
+        return true;
       }
       resultProblem =
         parsed.kind === "error"
           ? parsed.message
           : "The completed turn did not report an implementation-code-review-result for this run and ticket.";
     }
+    if (input.onlyReportedResult) return false;
     yield* startTicketCodeReview({
       ...input,
       ...(resultProblem === null ? {} : { resultProblem }),
     });
+    return true;
   });
 
   /**
@@ -12121,33 +12124,42 @@ const make = Effect.gen(function* () {
           );
           continue;
         }
-        const interruptedTicketCodeReview = run.ticketStates.find((state) => {
-          if (state.status !== "code-reviewing" || ticketStagePaused(state)) return false;
+        let recoveredTicketCodeReview = false;
+        for (const state of run.ticketStates) {
+          if (state.status !== "code-reviewing" || ticketStagePaused(state)) continue;
           const thread =
             state.codeReviewThreadId == null
               ? undefined
               : readModel.threads.find((candidate) => candidate.id === state.codeReviewThreadId);
-          return stageThreadFinished(thread);
-        });
-        if (interruptedTicketCodeReview !== undefined) {
+          const finished = stageThreadFinished(thread);
+          // A completed result can settle a review while idle sub-agent records remain open.
+          const canReadResult =
+            thread?.latestTurn?.state === "completed" &&
+            thread.session?.activeTurnId == null &&
+            thread.session?.status !== "running" &&
+            thread.session?.status !== "starting" &&
+            !pendingIngestion.has(thread.id);
+          if (!finished && !canReadResult) continue;
           const launches = yield* SynchronizedRef.get(ticketReviewLocks);
-          if (launches.has(`code-review:${run.id}:${interruptedTicketCodeReview.ticketId}`))
-            continue;
-          yield* recoverRunStage(
+          if (launches.has(`code-review:${run.id}:${state.ticketId}`)) continue;
+          const recovered = yield* recoverRunStage(
             run.id,
             "ticket-code-review",
             recoverTicketCodeReview({
               sourceThreadId,
               run,
-              ticketId: interruptedTicketCodeReview.ticketId,
-              ...(interruptedTicketCodeReview.warningMarkdown == null
-                ? {}
-                : { warningMarkdown: interruptedTicketCodeReview.warningMarkdown }),
+              ticketId: state.ticketId,
+              onlyReportedResult: !finished,
+              ...(state.warningMarkdown == null ? {} : { warningMarkdown: state.warningMarkdown }),
               createdAt,
             }),
           );
-          continue;
+          if (recovered) {
+            recoveredTicketCodeReview = true;
+            break;
+          }
         }
+        if (recoveredTicketCodeReview) continue;
         const interruptedWorkerIds = new Set(
           run.ticketStates
             .filter((state) => {
