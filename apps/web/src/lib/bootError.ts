@@ -1,3 +1,5 @@
+import { reloadApp } from "./reloadApp";
+
 /** Shows startup failures before React can replace the boot splash. */
 export function showBootError(error: unknown) {
   console.error("T3 Code failed to start.", error);
@@ -21,7 +23,7 @@ export function showBootError(error: unknown) {
   const reload = document.createElement("button");
   reload.type = "button";
   reload.textContent = "Reload";
-  reload.addEventListener("click", () => window.location.reload());
+  reload.addEventListener("click", () => void reloadApp());
   content.append(reload);
   bootShell.replaceChildren(content);
 }

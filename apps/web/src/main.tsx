@@ -26,8 +26,7 @@ if (isElectron) {
 
 const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
 
-// A failed split-chunk fetch usually means the hashed assets went stale under
-// a deploy; one guarded reload picks up the fresh index.html.
+// Refresh cached chunks before one guarded reload of the current index.
 let chunkLoadFailed = false;
 let reloadScheduled = false;
 window.addEventListener("vite:preloadError", (event) => {

@@ -21,6 +21,16 @@ function createStorageStub(): Storage {
 }
 
 describe("reloadOnceForChunkLoadError", () => {
+  it("allows cache repair after an older build already tried a plain reload", () => {
+    const storage = createStorageStub();
+    storage.setItem("t3code:chunk-load-reloaded", "1");
+    const reload = vi.fn();
+
+    expect(reloadOnceForChunkLoadError(() => storage, reload)).toBe(true);
+    expect(reloadOnceForChunkLoadError(() => storage, reload)).toBe(false);
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
   it("reloads on the first failure and lets the second one surface", () => {
     const storage = createStorageStub();
     const reload = vi.fn();

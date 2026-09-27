@@ -34,11 +34,13 @@ describe("app startup failures", () => {
     vi.stubGlobal("document", {
       getElementById: () => bootShell,
       createElement: (tagName: string) => new BootElement(tagName),
+      querySelectorAll: () => [],
     });
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
   it("shows failures from asynchronous app startup", async () => {
+    vi.stubEnv("DEV", true);
     vi.doMock("./main", () => ({ startup: Promise.reject(new Error("Startup chunks failed")) }));
 
     await import("./bootstrap");
@@ -70,6 +72,7 @@ describe("app startup failures", () => {
     );
     expect(reloadButton?.text).toBe("Reload");
     reloadButton?.dispatchEvent(new Event("click"));
+    await Promise.resolve();
     expect(reload).toHaveBeenCalledOnce();
   });
 

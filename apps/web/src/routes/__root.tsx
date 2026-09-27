@@ -15,6 +15,7 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
 import { APP_BASE_NAME, APP_DISPLAY_NAME, APP_STAGE_LABEL, APP_VERSION } from "../branding";
+import { reloadApp } from "../lib/reloadApp";
 import { resolveServerBackedAppDisplayName } from "../branding.logic";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
@@ -380,7 +381,7 @@ function RootRouteErrorView({ error }: ErrorComponentProps) {
         <Button size="sm" onClick={() => void router.invalidate()}>
           Try again
         </Button>
-        <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
+        <Button size="sm" variant="outline" onClick={() => void reloadApp()}>
           Reload app
         </Button>
         <CopyErrorButton report={report} />
