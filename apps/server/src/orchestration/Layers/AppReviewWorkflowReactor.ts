@@ -4394,6 +4394,8 @@ ${result.outputMarkdown}`,
               if (yield* isDraining) return;
               const run = yield* runForEvent(event).pipe(Effect.orElseSucceed(() => null));
               if (run !== null && run.status === "running") {
+                const latest = yield* projectionSnapshotQuery.getCommandReadModel();
+                if (isWorkflowThreadPaused(latest.threads, run.controllerThreadId)) return;
                 yield* failRun({
                   run,
                   reason: "automation-unavailable",
@@ -4799,6 +4801,8 @@ ${result.outputMarkdown}`,
             ? Effect.failCause(cause)
             : Effect.gen(function* () {
                 if (yield* isDraining) return;
+                const latest = yield* projectionSnapshotQuery.getCommandReadModel();
+                if (isWorkflowThreadPaused(latest.threads, run.controllerThreadId)) return;
                 yield* failRun({
                   run,
                   reason: "automation-unavailable",

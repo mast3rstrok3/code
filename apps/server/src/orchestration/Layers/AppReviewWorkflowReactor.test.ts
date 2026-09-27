@@ -25,6 +25,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   AppReviewId,
   EventId,
+  GitCommandError,
   AppReviewWorkflowCycleBudget,
   AppReviewWorkflowRunId,
   AppReviewWorkflowRun as AppReviewWorkflowRunSchema,
@@ -4651,6 +4652,10 @@ it("preserves programmatic check identities across completion order and narrowed
 
 for (const scenario of [
   "repair",
+  "paused-diff-error",
+  "active-diff-error",
+  "paused-recovery-diff-error",
+  "active-recovery-diff-error",
   "invalid-retry",
   "blocked",
   "ticket",
@@ -4666,6 +4671,11 @@ for (const scenario of [
     Effect.gen(function* () {
       yield* TestClock.setTime(Date.parse(now));
       const initial = run();
+      const diffError = scenario.endsWith("diff-error");
+      let runVisible = !diffError;
+      let failDiff = diffError;
+      const diffStarted = yield* Deferred.make<void>();
+      const releaseDiff = yield* Deferred.make<void>();
       const ticket = scenario.startsWith("ticket");
       const embedded = ticket || scenario === "combined";
       const ticketCommands =
@@ -4866,7 +4876,7 @@ for (const scenario of [
                   projects: [],
                   threads,
                   implementationRuns: [],
-                  appReviewWorkflowRuns: [storedRun],
+                  appReviewWorkflowRuns: runVisible ? [storedRun] : [],
                   updatedAt: now,
                 })),
               getThreadDetailById: (id) =>
@@ -4886,19 +4896,32 @@ for (const scenario of [
             }),
             Layer.mock(ReviewService)({
               getDiffPreview: ({ cwd }) =>
-                Effect.succeed({
-                  cwd,
-                  generatedAt: DateTime.makeUnsafe(now),
-                  sources: (["working-tree", "branch-range"] as const).map((kind) => ({
-                    id: kind,
-                    kind,
-                    title: kind,
-                    baseRef: null,
-                    headRef: null,
-                    diff: "",
-                    diffHash: kind === "working-tree" ? "working" : "branch",
-                    truncated: false,
-                  })),
+                Effect.gen(function* () {
+                  if (failDiff) {
+                    failDiff = false;
+                    yield* Deferred.succeed(diffStarted, undefined);
+                    yield* Deferred.await(releaseDiff);
+                    return yield* new GitCommandError({
+                      operation: "GitVcsDriver.getReviewDiffPreview.patch",
+                      command: "git diff",
+                      cwd,
+                      detail: "Git command timed out.",
+                    });
+                  }
+                  return {
+                    cwd,
+                    generatedAt: DateTime.makeUnsafe(now),
+                    sources: (["working-tree", "branch-range"] as const).map((kind) => ({
+                      id: kind,
+                      kind,
+                      title: kind,
+                      baseRef: null,
+                      headRef: null,
+                      diff: "",
+                      diffHash: kind === "working-tree" ? "working" : "branch",
+                      truncated: false,
+                    })),
+                  };
                 }),
             }),
             Layer.mock(AppStackManager)({
@@ -4945,7 +4968,58 @@ for (const scenario of [
       yield* Effect.scoped(
         Effect.gen(function* () {
           const reactor = yield* AppReviewWorkflowReactor;
-          if (scenario === "ticket-startup-retry") {
+          if (diffError) {
+            yield* reactor.start();
+            runVisible = true;
+            if (scenario.includes("recovery")) {
+              yield* Effect.forkScoped(reactor.reconcile());
+            } else {
+              yield* PubSub.publish(
+                events,
+                yield* decodeEvent({
+                  sequence: 1,
+                  eventId: "launch-diff-error",
+                  aggregateKind: "thread",
+                  aggregateId: storedRun.controllerThreadId,
+                  occurredAt: now,
+                  commandId: null,
+                  causationEventId: null,
+                  correlationId: null,
+                  metadata: {},
+                  type: "thread.app-review-workflow-launched",
+                  payload: { sourceThreadId: storedRun.targetThreadId, run: storedRun },
+                }),
+              );
+            }
+            yield* Deferred.await(diffStarted);
+            const controllerIndex = threads.findIndex(
+              (entry) => entry.id === storedRun.controllerThreadId,
+            );
+            if (scenario.startsWith("paused")) {
+              threads[controllerIndex] = decodeThread({
+                ...threads[controllerIndex],
+                workflowPausedAt: now,
+              });
+            }
+            yield* Deferred.succeed(releaseDiff, undefined);
+            yield* reactor.flush!;
+            if (scenario.startsWith("active")) {
+              expect(storedRun.status).toBe("failed");
+              expect(storedRun.failure?.reason).toBe("automation-unavailable");
+              expect(storedRun.failure?.detailMarkdown).toContain("Git command timed out");
+              expect(executions).toEqual([]);
+              return;
+            }
+            expect(storedRun.status).toBe("running");
+            expect(storedRun.failure).toBeNull();
+            expect(storedRun.cyclesUsed).toBe(0);
+            expect(executions).toEqual([]);
+            threads[controllerIndex] = decodeThread({
+              ...threads[controllerIndex],
+              workflowPausedAt: null,
+            });
+            yield* reactor.reconcile();
+          } else if (scenario === "ticket-startup-retry") {
             yield* reactor.start();
             expect(executions).toEqual([]);
             yield* PubSub.publish(
@@ -5098,7 +5172,7 @@ for (const scenario of [
             yield* reactor.reconcile();
             yield* Deferred.await(settled);
             yield* reactor.drain;
-            if (scenario !== "repair") {
+            if (scenario === "blocked" || scenario === "invalid-retry") {
               expect(storedRun.status).toBe("failed");
               expect(storedRun.failure?.reason).toBe(
                 scenario === "blocked" ? "review-blocked" : "fixer-failed",
