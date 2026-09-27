@@ -2,6 +2,7 @@ import {
   CommandId,
   DEFAULT_WORKSPACE_USER_ID,
   ProjectId,
+  OrchestrationImplementationTicketState,
   ProviderInstanceId,
   ThreadId,
   type OrchestrationReadModel,
@@ -9,8 +10,12 @@ import {
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import { decideOrchestrationCommand } from "./decider.ts";
+import { queueImplementationRerun } from "./implementationRerun.ts";
+
+const decodeTicket = Schema.decodeUnknownEffect(OrchestrationImplementationTicketState);
 
 const now = "2026-01-01T00:00:00.000Z";
 const sourceThreadId = ThreadId.make("thread-source");
@@ -99,3 +104,56 @@ it.layer(NodeServices.layer)("Implementation retry decider", (it) => {
     }),
   );
 });
+
+for (const stage of ["implementation", "app-review", "code-review"] as const) {
+  it.layer(NodeServices.layer)(`Concurrent ${stage} rerun`, (it) => {
+    it.effect("rejects an older snapshot after accepting a ticket rerun", () =>
+      Effect.gen(function* () {
+        const ticket = yield* decodeTicket({
+          ticketId: "ticket-a",
+          status: "failed",
+          updatedAt: now,
+        });
+        const oldRun = {
+          ...readModel.implementationRuns[0]!,
+          ticketStates: [ticket],
+          updatedAt: now,
+        };
+        const queued = queueImplementationRerun({
+          run: oldRun,
+          target: { kind: "ticket", ticketId: ticket.ticketId, stage },
+          executionId: "manual-ticket-rerun",
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+        const error = yield* decideOrchestrationCommand({
+          command: {
+            type: "thread.implementation-run.update",
+            commandId: CommandId.make("stale-update"),
+            threadId: sourceThreadId,
+            run: oldRun,
+            createdAt: "2026-01-01T00:00:01.000Z",
+          },
+          readModel: { ...readModel, implementationRuns: [queued.run] },
+        }).pipe(Effect.flip);
+        expect(error._tag).toBe("OrchestrationCommandInvariantError");
+        expect(String(error)).toContain("overwrite newer ticket state");
+
+        const result = yield* decideOrchestrationCommand({
+          command: {
+            type: "thread.implementation-run.update",
+            commandId: CommandId.make("fresh-update"),
+            threadId: sourceThreadId,
+            run: { ...queued.run, updatedAt: "2026-01-01T00:00:03.000Z" },
+            createdAt: "2026-01-01T00:00:03.000Z",
+          },
+          readModel: { ...readModel, implementationRuns: [queued.run] },
+        });
+        const event = Array.isArray(result) ? result[0] : result;
+        expect(event).toMatchObject({
+          type: "thread.implementation-run-updated",
+          payload: { run: { ticketStates: [{ stageExecutions: [queued.execution] }] } },
+        });
+      }),
+    );
+  });
+}

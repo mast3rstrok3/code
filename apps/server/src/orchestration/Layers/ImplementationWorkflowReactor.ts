@@ -122,7 +122,10 @@ import {
 } from "../stageClaim.ts";
 import { ServerActivation } from "../../serverActivation.ts";
 import { implementationRerunTargetMatchesHalt } from "../implementationRerun.ts";
-import { runUpdateWouldOverwriteNewerTicketState } from "../implementationRunConcurrency.ts";
+import {
+  runUpdateWouldOverwriteNewerTicketState,
+  STALE_IMPLEMENTATION_TICKET_STATE_DETAIL,
+} from "../implementationRunConcurrency.ts";
 import {
   reconcileWorkflowState,
   ticketDependencyState,
@@ -2311,25 +2314,35 @@ const make = Effect.gen(function* () {
       return false;
     }
     const run = { ...input.run, automationHalt: summarizeTicketAppReviewHalt(input.run) };
-    yield* orchestrationEngine.dispatch({
-      type: "thread.implementation-run.update",
-      commandId: yield* serverCommandId("implementation-run-update"),
-      threadId: input.sourceThreadId,
-      run,
-      ...(input.expectedStageExecutionTransition === undefined
-        ? {}
-        : { expectedStageExecutionTransition: input.expectedStageExecutionTransition }),
-      ...(input.expectedCodeReviewClaim === undefined
-        ? {}
-        : { expectedCodeReviewClaim: input.expectedCodeReviewClaim }),
-      ...(input.expectedTicketStageClaims === undefined
-        ? {}
-        : { expectedTicketStageClaims: input.expectedTicketStageClaims }),
-      ...(input.expectedChangeRequestClaim === undefined
-        ? {}
-        : { expectedChangeRequestClaim: input.expectedChangeRequestClaim }),
-      createdAt: input.createdAt,
-    });
+    const written = yield* orchestrationEngine
+      .dispatch({
+        type: "thread.implementation-run.update",
+        commandId: yield* serverCommandId("implementation-run-update"),
+        threadId: input.sourceThreadId,
+        run,
+        ...(input.expectedStageExecutionTransition === undefined
+          ? {}
+          : { expectedStageExecutionTransition: input.expectedStageExecutionTransition }),
+        ...(input.expectedCodeReviewClaim === undefined
+          ? {}
+          : { expectedCodeReviewClaim: input.expectedCodeReviewClaim }),
+        ...(input.expectedTicketStageClaims === undefined
+          ? {}
+          : { expectedTicketStageClaims: input.expectedTicketStageClaims }),
+        ...(input.expectedChangeRequestClaim === undefined
+          ? {}
+          : { expectedChangeRequestClaim: input.expectedChangeRequestClaim }),
+        createdAt: input.createdAt,
+      })
+      .pipe(
+        Effect.as(true),
+        Effect.catchTag("OrchestrationCommandInvariantError", (error) =>
+          error.detail === STALE_IMPLEMENTATION_TICKET_STATE_DETAIL
+            ? Effect.succeed(false)
+            : Effect.fail(error),
+        ),
+      );
+    if (!written) return false;
     locallyUpdatedRuns.set(input.run.id, {
       run,
       writtenAtMs: yield* Clock.currentTimeMillis,

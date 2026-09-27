@@ -84,6 +84,10 @@ import {
   queueImplementationRerun,
 } from "./implementationRerun.ts";
 import { workflowStageTargetKey } from "./workflowStageExecutions.ts";
+import {
+  runUpdateWouldOverwriteNewerTicketState,
+  STALE_IMPLEMENTATION_TICKET_STATE_DETAIL,
+} from "./implementationRunConcurrency.ts";
 import { buildPlanImplementationThreadTitle } from "@t3tools/shared/orchestrationPlanning";
 import { APP_REVIEW_PARTS_TARGETS } from "@t3tools/shared/appReviewParts";
 import { resolveImplementationValidationCommands } from "@t3tools/shared/t3ProjectFile";
@@ -4186,6 +4190,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Implementation Run '${command.run.id}' does not exist.`,
+        });
+      }
+      if (runUpdateWouldOverwriteNewerTicketState(existingRun, command.run)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: STALE_IMPLEMENTATION_TICKET_STATE_DETAIL,
         });
       }
       for (const ticket of existingRun.ticketStates) {

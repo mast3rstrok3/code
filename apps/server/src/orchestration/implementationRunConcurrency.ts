@@ -3,6 +3,9 @@ type TicketStateRevision = {
   readonly updatedAt: string;
 };
 
+export const STALE_IMPLEMENTATION_TICKET_STATE_DETAIL =
+  "Implementation run update would overwrite newer ticket state.";
+
 /**
  * Full-run updates may be computed before a newer ticket reset is projected.
  * Reject the old write instead of restoring an earlier ticket state.

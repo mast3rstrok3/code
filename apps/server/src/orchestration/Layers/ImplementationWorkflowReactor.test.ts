@@ -54,6 +54,8 @@ import { describe } from "vite-plus/test";
 
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../../vcs/VcsProcess.ts";
+import { OrchestrationCommandInvariantError } from "../Errors.ts";
+import { STALE_IMPLEMENTATION_TICKET_STATE_DETAIL } from "../implementationRunConcurrency.ts";
 import { executeNativeVerification } from "../nativeVerificationService.ts";
 import { AppStackManager } from "../../appStack/AppStackManager.ts";
 import { ServerConfig } from "../../config.ts";
@@ -5568,7 +5570,7 @@ describe("ImplementationWorkflowReactor", () => {
           "blocked",
         );
 
-        const prematurelyReadyAt = "2026-01-01T00:04:59.000Z";
+        const prematurelyReadyAt = testClockStart;
         yield* system.engine.dispatch({
           type: "thread.implementation-run.update",
           commandId: commandId("premature-dependent-ready"),
@@ -5604,7 +5606,7 @@ describe("ImplementationWorkflowReactor", () => {
           },
         );
 
-        const failedAt = "2026-01-01T00:05:00.000Z";
+        const failedAt = testClockStart;
         yield* system.engine.dispatch({
           type: "thread.implementation-run.update",
           commandId: commandId("premature-dependent-setup-failure"),
@@ -5642,7 +5644,7 @@ describe("ImplementationWorkflowReactor", () => {
           commandId: commandId("retry-premature-dependent"),
           threadId: sourceThreadId,
           runId: run.id,
-          createdAt: "2026-01-01T00:05:01.000Z",
+          createdAt: testClockStart,
         });
         yield* system.reactor.drain;
 
@@ -8427,6 +8429,49 @@ describe("ImplementationWorkflowReactor", () => {
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
         ).toHaveLength(2);
+      }),
+    ),
+  );
+
+  it.effect("does not launch a reviewer when a concurrent ticket update rejects its claim", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+        const dispatch = system.engine.dispatch;
+        let rejectedClaims = 0;
+        const concurrentUpdate = vi
+          .spyOn(system.engine, "dispatch")
+          .mockImplementation((command) => {
+            if (
+              command.type === "thread.implementation-run.update" &&
+              command.expectedTicketStageClaims?.some((claim) => claim.stage === "code-review")
+            ) {
+              rejectedClaims += 1;
+              return Effect.fail(
+                new OrchestrationCommandInvariantError({
+                  commandType: command.type,
+                  detail: STALE_IMPLEMENTATION_TICKET_STATE_DETAIL,
+                }),
+              );
+            }
+            return dispatch(command);
+          });
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          completeTicketReview: false,
+        }).pipe(Effect.ensuring(Effect.sync(() => concurrentUpdate.mockRestore())));
+        const snapshot = yield* system.query.getSnapshot();
+        expect(rejectedClaims).toBeGreaterThan(0);
+        expect(
+          snapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-code-reviewer",
+          ),
+        ).toHaveLength(0);
+        const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(current?.automationHalt).toBeNull();
+        expect(current?.ticketStates[0]).toBeDefined();
+        expect(current?.ticketStates[0]?.codeReviewThreadId).toBeFalsy();
       }),
     ),
   );
