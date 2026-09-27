@@ -2097,7 +2097,7 @@ const make = Effect.gen(function* () {
   const changeRequestLocks = yield* SynchronizedRef.make(
     new Map<string, { readonly semaphore: Semaphore.Semaphore; readonly users: number }>(),
   );
-  const ticketAppReviewLocks = yield* SynchronizedRef.make(
+  const ticketReviewLocks = yield* SynchronizedRef.make(
     new Map<string, { readonly semaphore: Semaphore.Semaphore; readonly users: number }>(),
   );
   const ticketAppReviewAdmission = yield* Semaphore.make(1);
@@ -3913,7 +3913,7 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const startTicketCodeReview = Effect.fn("ImplementationWorkflowReactor.startTicketCodeReview")(
+  const launchTicketCodeReview = Effect.fn("ImplementationWorkflowReactor.launchTicketCodeReview")(
     function* (input: {
       readonly sourceThreadId: ThreadId;
       readonly run: OrchestrationImplementationRun;
@@ -3935,6 +3935,28 @@ const make = Effect.gen(function* () {
         state.branch == null ||
         state.workerThreadId === null ||
         (state.status !== "app-reviewing" && state.status !== "code-reviewing")
+      )
+        return;
+      const currentRun = currentRunForQueuedRerun(
+        readModel,
+        input.run.id,
+        input.run,
+        yield* Clock.currentTimeMillis,
+      );
+      const currentState = currentRun.ticketStates.find(
+        (candidate) => candidate.ticketId === input.ticketId,
+      );
+      // A queued launch must not replace the reviewer another caller already claimed.
+      if (
+        currentRun.status === "canceled" ||
+        currentRun.status === "completed" ||
+        currentRun.automationHalt !== null ||
+        currentState === undefined ||
+        currentState.codeReviewGeneration !== state.codeReviewGeneration ||
+        currentState.codeReviewLaunchCount !== state.codeReviewLaunchCount ||
+        currentState.codeReviewThreadId !== state.codeReviewThreadId ||
+        (currentState.status !== "app-reviewing" && currentState.status !== "code-reviewing") ||
+        isWorkflowThreadPaused(readModel.threads, state.workerThreadId)
       )
         return;
       yield* restoreTicketWorktreeIfMissing({ run: input.run, ticketId: input.ticketId });
@@ -4182,6 +4204,16 @@ const make = Effect.gen(function* () {
         interactionMode: "implementation-workflow",
         createdAt: input.createdAt,
       });
+    },
+  );
+
+  const startTicketCodeReview = Effect.fn("ImplementationWorkflowReactor.startTicketCodeReview")(
+    function* (input: Parameters<typeof launchTicketCodeReview>[0]) {
+      const key = `code-review:${input.run.id}:${input.ticketId}`;
+      const semaphore = yield* getTicketReviewSemaphore(key);
+      return yield* semaphore
+        .withPermit(launchTicketCodeReview(input))
+        .pipe(Effect.ensuring(releaseTicketReviewSemaphore(key)));
     },
   );
 
@@ -4437,8 +4469,8 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const getTicketAppReviewSemaphore = (key: string) =>
-    SynchronizedRef.modifyEffect(ticketAppReviewLocks, (current) => {
+  const getTicketReviewSemaphore = (key: string) =>
+    SynchronizedRef.modifyEffect(ticketReviewLocks, (current) => {
       const existing = current.get(key);
       if (existing !== undefined) {
         const next = new Map(current);
@@ -4454,8 +4486,8 @@ const make = Effect.gen(function* () {
       );
     });
 
-  const releaseTicketAppReviewSemaphore = (key: string) =>
-    SynchronizedRef.update(ticketAppReviewLocks, (current) => {
+  const releaseTicketReviewSemaphore = (key: string) =>
+    SynchronizedRef.update(ticketReviewLocks, (current) => {
       const existing = current.get(key);
       if (existing === undefined) return current;
       const next = new Map(current);
@@ -4472,10 +4504,10 @@ const make = Effect.gen(function* () {
       readonly createdAt: string;
     }) {
       const key = `${input.run.id}:${input.ticketId}`;
-      const semaphore = yield* getTicketAppReviewSemaphore(key);
+      const semaphore = yield* getTicketReviewSemaphore(key);
       return yield* ticketAppReviewAdmission
         .withPermit(semaphore.withPermit(startTicketAppReviewUnlocked(input)))
-        .pipe(Effect.ensuring(releaseTicketAppReviewSemaphore(key)));
+        .pipe(Effect.ensuring(releaseTicketReviewSemaphore(key)));
     },
   );
 
@@ -11926,7 +11958,7 @@ const make = Effect.gen(function* () {
             !ticketStagePaused(state),
         );
         if (pendingTicketReview !== undefined) {
-          const launches = yield* SynchronizedRef.get(ticketAppReviewLocks);
+          const launches = yield* SynchronizedRef.get(ticketReviewLocks);
           if (launches.has(`${run.id}:${pendingTicketReview.ticketId}`)) continue;
           if (pendingTicketReview.appReviewWorkflowRunId != null) {
             // A locally cached ticket claim can be newer than this sweep's projection.
@@ -11980,6 +12012,9 @@ const make = Effect.gen(function* () {
           return stageThreadFinished(thread);
         });
         if (interruptedTicketCodeReview !== undefined) {
+          const launches = yield* SynchronizedRef.get(ticketReviewLocks);
+          if (launches.has(`code-review:${run.id}:${interruptedTicketCodeReview.ticketId}`))
+            continue;
           yield* recoverRunStage(
             run.id,
             "ticket-code-review",

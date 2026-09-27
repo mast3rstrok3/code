@@ -8431,6 +8431,111 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("leaves a reserved ticket Code Review alone while its thread is being created", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const dispatch = system.engine.dispatch;
+        let reviewerCreates = 0;
+        const launchGate = vi.spyOn(system.engine, "dispatch").mockImplementation((command) => {
+          if (
+            command.type === "thread.create" &&
+            command.workflowRole === "implementation-code-reviewer"
+          ) {
+            reviewerCreates += 1;
+            if (reviewerCreates === 1) {
+              return Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(dispatch(command)),
+              );
+            }
+          }
+          return dispatch(command);
+        });
+        const launching = yield* Effect.forkChild(
+          appendWorkerResult(system, {
+            run,
+            status: "succeeded",
+            completeTicketReview: false,
+          }),
+        );
+        yield* Deferred.await(entered);
+        yield* system.reactor
+          .recoverIncompleteStages()
+          .pipe(Effect.ensuring(Deferred.succeed(release, undefined)));
+        yield* Fiber.join(launching).pipe(
+          Effect.ensuring(Effect.sync(() => launchGate.mockRestore())),
+        );
+        const snapshot = yield* system.query.getSnapshot();
+        const state = snapshot.implementationRuns.find((entry) => entry.id === run.id)
+          ?.ticketStates[0];
+        expect(reviewerCreates).toBe(1);
+        expect(state?.codeReviewLaunchCount).toBe(1);
+        const reviewer = snapshot.threads.find((thread) => thread.id === state?.codeReviewThreadId);
+        expect(reviewer?.messages.filter((message) => message.role === "user")).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("keeps a launched ticket Code Review when recovery reads older ticket state", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          completeTicketReview: false,
+        });
+        const snapshot = yield* system.query.getCommandReadModel();
+        const state = snapshot.implementationRuns.find((entry) => entry.id === run.id)
+          ?.ticketStates[0];
+        if (!state?.codeReviewThreadId) throw new Error("Ticket reviewer missing.");
+        const staleSnapshot: OrchestrationReadModel = {
+          ...snapshot,
+          implementationRuns: snapshot.implementationRuns.map((entry) =>
+            entry.id === run.id
+              ? {
+                  ...entry,
+                  ticketStates: entry.ticketStates.map((candidate) =>
+                    candidate.ticketId === state.ticketId
+                      ? {
+                          ...candidate,
+                          codeReviewThreadId: null,
+                          codeReviewLaunchCount: 0,
+                        }
+                      : candidate,
+                  ),
+                }
+              : entry,
+          ),
+        };
+        const staleRead = vi
+          .spyOn(system.query, "getCommandReadModel")
+          .mockReturnValueOnce(Effect.succeed(staleSnapshot));
+        const dispatch = vi.spyOn(system.engine, "dispatch");
+        yield* system.reactor
+          .recoverIncompleteStages()
+          .pipe(Effect.ensuring(Effect.sync(() => staleRead.mockRestore())));
+        const reviewClaims = dispatch.mock.calls.filter(
+          ([command]) =>
+            command.type === "thread.implementation-run.update" &&
+            command.expectedTicketStageClaims?.some((claim) => claim.stage === "code-review"),
+        );
+        dispatch.mockRestore();
+        expect(reviewClaims).toHaveLength(0);
+        const recovered = yield* system.query.getSnapshot();
+        expect(
+          recovered.implementationRuns.find((entry) => entry.id === run.id)?.ticketStates[0],
+        ).toMatchObject({
+          codeReviewThreadId: state.codeReviewThreadId,
+          codeReviewLaunchCount: 1,
+        });
+      }),
+    ),
+  );
+
   it.effect("leaves a reserved ticket App Review alone while its launch is in flight", () =>
     withSystem((system) =>
       Effect.gen(function* () {
@@ -11494,6 +11599,8 @@ describe("ImplementationWorkflowReactor", () => {
         // A reviewer that is gone plus a spent budget is what a lost provider
         // session leaves behind. Starting the stage would claim a third launch,
         // which the decider refuses, so the sweep used to ask forever.
+        yield* TestClock.adjust("1 second");
+        const exhaustedAt = DateTime.formatIso(yield* DateTime.now);
         yield* system.engine.dispatch({
           type: "thread.implementation-run.update",
           commandId: commandId("spent-code-review-budget"),
@@ -11508,13 +11615,13 @@ describe("ImplementationWorkflowReactor", () => {
                     status: "code-reviewing" as const,
                     codeReviewThreadId: null,
                     codeReviewLaunchCount: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
-                    updatedAt: now,
+                    updatedAt: exhaustedAt,
                   }
                 : state,
             ),
-            updatedAt: now,
+            updatedAt: exhaustedAt,
           },
-          createdAt: now,
+          createdAt: exhaustedAt,
         });
 
         yield* system.reactor.recoverIncompleteStages();
