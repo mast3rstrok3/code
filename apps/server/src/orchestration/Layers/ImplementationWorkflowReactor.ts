@@ -686,6 +686,20 @@ export function ticketAwaitsAppReviewRun(
   );
 }
 
+function unlaunchedTicketReviewController(
+  readModel: OrchestrationReadModel,
+  reviewId: string | null,
+): ThreadId | undefined {
+  if (!reviewId?.startsWith("app-review-workflow-thread-app-review-orchestrator-")) return;
+  const controllerThreadId = ThreadId.make(reviewId.slice("app-review-workflow-".length));
+  if (
+    readModel.threads.some((thread) => thread.id === controllerThreadId) ||
+    readModel.appReviewWorkflowRuns?.some((run) => run.id === reviewId)
+  )
+    return;
+  return controllerThreadId;
+}
+
 /** Whether the implementation still owns this running nested App Review. */
 export function implementationAwaitsAppReviewRun(
   run: Pick<OrchestrationImplementationRun, "status" | "ticketStates" | "appReviewWorkflowRunIds">,
@@ -4243,17 +4257,24 @@ const make = Effect.gen(function* () {
     const state = currentRun.ticketStates.find(
       (candidate) => candidate.ticketId === input.ticketId,
     );
+    const claimedControllerThreadId = unlaunchedTicketReviewController(
+      readModel,
+      state?.appReviewWorkflowRunId ?? null,
+    );
     if (
       orchestratorThread === null ||
       state?.worktreePath == null ||
       state.branch == null ||
       state.workerThreadId == null ||
       state.status !== "app-reviewing" ||
-      state.appReviewWorkflowRunId != null
+      (state.appReviewWorkflowRunId != null && claimedControllerThreadId === undefined)
     )
       return;
     yield* restoreTicketWorktreeIfMissing({ run: currentRun, ticketId: input.ticketId });
-    if (state.appReviewLaunchCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES) {
+    if (
+      claimedControllerThreadId === undefined &&
+      state.appReviewLaunchCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES
+    ) {
       yield* startTicketCodeReview({
         sourceThreadId: input.sourceThreadId,
         run: currentRun,
@@ -4391,7 +4412,8 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    const controllerThreadId = yield* serverThreadId("app-review-orchestrator");
+    const controllerThreadId =
+      claimedControllerThreadId ?? (yield* serverThreadId("app-review-orchestrator"));
     const appReviewWorkflowRunId = AppReviewWorkflowRunId.make(
       `app-review-workflow-${controllerThreadId}`,
     );
@@ -4409,20 +4431,24 @@ const make = Effect.gen(function* () {
       ),
       updatedAt: input.createdAt,
     };
-    const claimed = yield* updateRun({
-      sourceThreadId: input.sourceThreadId,
-      run: claimedRun,
-      createdAt: input.createdAt,
-      expectedTicketStageClaims: [
-        {
-          ticketId: state.ticketId,
-          stage: "app-review",
-          generation: state.appReviewGeneration,
-          launchCount: state.appReviewLaunchCount,
-          activeExecutionId: state.appReviewWorkflowRunId ?? null,
-        },
-      ],
-    });
+    // A restart can land after the claim but before the launch command. Finish
+    // that claim with its original controller ID without charging another launch.
+    const claimed =
+      claimedControllerThreadId !== undefined ||
+      (yield* updateRun({
+        sourceThreadId: input.sourceThreadId,
+        run: claimedRun,
+        createdAt: input.createdAt,
+        expectedTicketStageClaims: [
+          {
+            ticketId: state.ticketId,
+            stage: "app-review",
+            generation: state.appReviewGeneration,
+            launchCount: state.appReviewLaunchCount,
+            activeExecutionId: state.appReviewWorkflowRunId ?? null,
+          },
+        ],
+      }));
     if (!claimed) {
       yield* logSkippedLaunch({
         runId: currentRun.id,
@@ -11978,6 +12004,24 @@ const make = Effect.gen(function* () {
               )
             )
               continue;
+            if (
+              unlaunchedTicketReviewController(
+                latestReadModel,
+                latestTicket.appReviewWorkflowRunId,
+              ) !== undefined
+            ) {
+              yield* recoverRunStage(
+                run.id,
+                "ticket-app-review-launch",
+                startTicketAppReview({
+                  sourceThreadId,
+                  run: latestRun,
+                  ticketId: pendingTicketReview.ticketId,
+                  createdAt,
+                }),
+              );
+              continue;
+            }
             yield* blockRun({
               sourceThreadId,
               run: latestRun,

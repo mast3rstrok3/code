@@ -10836,6 +10836,104 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect.each([false, true])(
+    "recovers an App Review claim only when its controller was never created (existing=%s)",
+    (existingController) =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run, ticket } = yield* launchRun(system, {
+            appReviewStrategy: "nested-workflow",
+            tickets: [
+              {
+                ...planningTicket("TICKET-1"),
+                appReviewEligible: true,
+                appReviewPlanMarkdown: "Check the page.",
+              },
+            ],
+          });
+          const state = run.ticketStates[0]!;
+          const controllerThreadId = ThreadId.make("thread-app-review-orchestrator-interrupted");
+          const reviewId = AppReviewWorkflowRunId.make(`app-review-workflow-${controllerThreadId}`);
+          const claimedAt = "2026-01-01T00:04:00.000Z";
+          if (existingController) {
+            yield* system.engine.dispatch({
+              type: "thread.create",
+              commandId: commandId("existing-review-controller"),
+              threadId: controllerThreadId,
+              projectId,
+              ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+              title: "Existing controller",
+              modelSelection: {
+                instanceId: ProviderInstanceId.make("codex"),
+                model: "gpt-6-astra",
+              },
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: null,
+              createdAt: now,
+            });
+          }
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.update",
+            commandId: commandId("interrupted-review-claim"),
+            threadId: sourceThreadId,
+            run: {
+              ...run,
+              updatedAt: claimedAt,
+              ticketStates: [
+                {
+                  ...state,
+                  status: "app-reviewing",
+                  appReviewWorkflowRunId: reviewId,
+                  appReviewLaunchCount: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+                  updatedAt: claimedAt,
+                  workerResult: {
+                    ticketId: ticket.id,
+                    workerThreadId: state.workerThreadId!,
+                    branch: state.branch!,
+                    worktreePath: state.worktreePath!,
+                    status: "succeeded",
+                    commitSha: `${state.branch}@commit`,
+                    validations: requiredValidations(),
+                    notesMarkdown: "Ready for review.",
+                    reportedAt: now,
+                  },
+                },
+              ],
+            },
+            createdAt: claimedAt,
+          });
+          yield* system.reactor.drain;
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
+          const snapshot = yield* system.query.getSnapshot();
+          const recovered = snapshot.implementationRuns.find(
+            (candidate) => candidate.id === run.id,
+          )!;
+          expect(recovered.ticketStates[0]?.appReviewLaunchCount).toBe(
+            IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+          );
+          expect(recovered.ticketStates[0]?.appReviewWorkflowRunId).toBe(reviewId);
+          if (existingController) {
+            expect(recovered.automationHalt?.detail).toContain("durable run");
+            expect(snapshot.appReviewWorkflowRuns).toHaveLength(0);
+          } else {
+            expect(recovered.status).toBe("running");
+            expect(recovered.automationHalt).toBeNull();
+            expect(snapshot.appReviewWorkflowRuns).toMatchObject([
+              { id: reviewId, controllerThreadId, status: "running" },
+            ]);
+            expect(
+              snapshot.threads.filter((thread) => thread.id === controllerThreadId),
+            ).toHaveLength(1);
+          }
+        }),
+      ),
+  );
+
   it.effect(
     "stage recovery applies a terminal ticket App Review whose update was interrupted",
     () =>
