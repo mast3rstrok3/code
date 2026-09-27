@@ -81,7 +81,7 @@ const lookupStack = Effect.fn("AppStackToolkit.lookupStack")(function* (
 ) {
   const manager = yield* AppStackManager;
   const result = yield* manager.getByWorktree({ worktreePath, variant }).pipe(
-    Effect.timeout("5 seconds"),
+    Effect.timeout("30 seconds"),
     Effect.mapError(
       (cause) =>
         new AppStackError({

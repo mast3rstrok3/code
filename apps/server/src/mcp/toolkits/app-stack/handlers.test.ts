@@ -10,9 +10,12 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import { McpServer, McpSchema } from "effect/unstable/ai";
 
 import { AppStackManager } from "../../../appStack/AppStackManager.ts";
@@ -104,6 +107,7 @@ function harness(
     createdStack?: AppStack;
     reserved?: boolean;
     failMutation?: boolean;
+    lookupWait?: Effect.Effect<void>;
   } = {},
 ) {
   const calls: Array<{ worktreePath: string; variant?: string | undefined }> = [];
@@ -164,9 +168,13 @@ function harness(
       status: Effect.succeed({ enabled: input.enabled ?? true, backendUrl: null }),
       getByWorktree: (request) => {
         calls.push(request);
-        return input.fail
-          ? Effect.fail(new AppStackError({ operation: "getByWorktree", message: "offline" }))
-          : Effect.succeed({ ...emptyStack, stack: currentStack });
+        return (input.lookupWait ?? Effect.void).pipe(
+          Effect.andThen(() =>
+            input.fail
+              ? Effect.fail(new AppStackError({ operation: "getByWorktree", message: "offline" }))
+              : Effect.succeed({ ...emptyStack, stack: currentStack }),
+          ),
+        );
       },
       autoCreate: (request) =>
         mutate("autoCreate", request).pipe(
@@ -265,6 +273,48 @@ it.effect("reports lookup failure instead of claiming no stack exists", () => {
     expect(error.message).toContain("Could not refresh");
   }).pipe(Effect.provide(test.layer));
 });
+
+it.effect("releases the workspace device after a slow stack lookup", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const test = harness({
+      stack,
+      lookupWait: Deferred.succeed(entered, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+      ),
+    });
+    const fiber = yield* handlers
+      .app_stack_device_stop({ platform: "android", leaseId })
+      .pipe(Effect.provide(test.layer), Effect.forkChild);
+    yield* Deferred.await(entered);
+    yield* TestClock.adjust("6 seconds");
+    expect(test.operations).toEqual([]);
+    yield* Deferred.succeed(release, undefined);
+    expect((yield* Fiber.join(fiber)).status).toBe("stopped");
+    expect(test.operations).toEqual([
+      { operation: "stopDevice", input: { stackId: stack.id, platform: "android", leaseId } },
+    ]);
+  }),
+);
+
+it.effect("bounds a stuck lookup without releasing a device", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const test = harness({
+      stack,
+      lookupWait: Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+    });
+    const fiber = yield* handlers
+      .app_stack_device_stop({ platform: "android", leaseId })
+      .pipe(Effect.provide(test.layer), Effect.result, Effect.forkChild);
+    yield* Deferred.await(entered);
+    yield* TestClock.adjust("30 seconds");
+    const result = yield* Fiber.join(fiber);
+    expect(result._tag).toBe("Failure");
+    expect(test.operations).toEqual([]);
+  }),
+);
 
 it.effect("registers workspace tools, validates inputs, and returns results through MCP", () => {
   const test = harness({ stack });
