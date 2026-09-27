@@ -737,7 +737,18 @@ export const startCodexTurn = Effect.fn("startCodexTurn")(function* (
       ],
     } satisfies EffectCodexSchema.V2ThreadInjectItemsParams);
   }
-  return yield* request("turn/start", params);
+  return yield* request("turn/start", params).pipe(
+    Effect.catchTag("CodexAppServerRequestError", (error) => {
+      if (params.input.length !== 0 || !/(?:^|: )EmptyInput$/.test(error.errorMessage)) {
+        return Effect.fail(error);
+      }
+      // Some Codex versions require text even when resuming an interrupted turn.
+      return request("turn/start", {
+        ...params,
+        input: [{ type: "text", text: "Continue where you left off." }],
+      });
+    }),
+  );
 });
 
 function buildCodexCollaborationMode(input: {

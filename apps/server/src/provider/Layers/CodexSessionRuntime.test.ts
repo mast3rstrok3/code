@@ -41,6 +41,64 @@ import {
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
 
 describe("startCodexTurn", () => {
+  it.effect("resumes with explicit text when Codex rejects an empty continuation", () =>
+    Effect.gen(function* () {
+      const params = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      });
+      const calls: Array<{ method: string; payload: unknown }> = [];
+      const result = yield* startCodexTurn((method, payload) => {
+        calls.push({ method, payload });
+        if (method === "turn/start" && payload === params) {
+          return Effect.fail(
+            new CodexErrors.CodexAppServerRequestError({
+              method,
+              code: -32600,
+              errorMessage: "failed to submit turn input: EmptyInput",
+            }),
+          );
+        }
+        return Effect.succeed({ turn: { id: "resumed-turn" } });
+      }, params);
+      NodeAssert.deepStrictEqual(result, { turn: { id: "resumed-turn" } });
+      NodeAssert.deepStrictEqual(
+        calls.map((call) => call.method),
+        ["thread/inject_items", "turn/start", "turn/start"],
+      );
+      NodeAssert.deepStrictEqual(calls[2]?.payload, {
+        ...params,
+        input: [{ type: "text", text: "Continue where you left off." }],
+      });
+    }),
+  );
+
+  for (const scenario of ["nonempty-input", "other-error", "fallback-rejected"] as const) {
+    it.effect(`does not hide continuation failures: ${scenario}`, () =>
+      Effect.gen(function* () {
+        const params = yield* buildTurnStartParams({
+          threadId: "provider-thread-1",
+          runtimeMode: "full-access",
+          ...(scenario === "nonempty-input" ? { prompt: "Keep this input" } : {}),
+        });
+        const error = new CodexErrors.CodexAppServerRequestError({
+          method: "turn/start",
+          code: -32600,
+          errorMessage: scenario === "other-error" ? "Provider unavailable" : "EmptyInput",
+        });
+        let calls = 0;
+        const result = yield* startCodexTurn(() => {
+          calls++;
+          return Effect.fail(error);
+        }, params).pipe(Effect.result);
+        NodeAssert.equal(result._tag, "Failure");
+        NodeAssert.strictEqual(result.failure, error);
+        NodeAssert.equal(calls, scenario === "fallback-rejected" ? 2 : 1);
+      }),
+    );
+  }
+
   it.effect("delivers complete developer instructions before starting each workflow stage", () =>
     Effect.gen(function* () {
       for (const [interactionMode, workflowPromptId] of [
