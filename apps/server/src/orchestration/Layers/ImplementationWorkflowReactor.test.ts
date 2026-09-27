@@ -6957,6 +6957,7 @@ describe("ImplementationWorkflowReactor", () => {
   it.effect("lands a ticket Code Review result handled after a later write to its ticket", () =>
     withSystem((system) =>
       Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse("2026-01-01T00:00:01.000Z"));
         const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
         yield* appendWorkerResult(system, {
           run,
@@ -6987,6 +6988,7 @@ describe("ImplementationWorkflowReactor", () => {
           },
           createdAt: "2026-01-01T00:05:00.000Z",
         });
+        yield* TestClock.setTime(Date.parse(testClockStart));
         yield* appendCodeReviewResult(system, {
           run,
           threadId: firstReviewerId,
@@ -7001,7 +7003,7 @@ describe("ImplementationWorkflowReactor", () => {
         const reviewed = snapshot.implementationRuns.find((entry) => entry.id === run.id)
           ?.ticketStates[0];
         expect(reviewed?.codeReviewPassCount).toBe(1);
-        expect(reviewed?.updatedAt).toBe(testClockStart);
+        expect(reviewed?.updatedAt).toBe("2026-01-01T00:06:00.001Z");
         const secondReviewerId = reviewed?.codeReviewThreadId;
         expect(secondReviewerId).not.toBe(firstReviewerId);
         expect(
@@ -8520,6 +8522,86 @@ describe("ImplementationWorkflowReactor", () => {
             (thread) => thread.workflowRole === "implementation-code-reviewer",
           ),
         ).toEqual([expect.objectContaining({ id: reviewerId })]);
+      }),
+    ),
+  );
+
+  it.effect("rejects a late sibling update that would erase a ticket reviewer claim", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse("2026-01-01T00:00:01.000Z"));
+        const { run, tickets } = yield* launchRun(system, {
+          appReviewStrategy: "nested-workflow",
+          tickets: [planningTicket("TICKET-1"), planningTicket("TICKET-2")],
+        });
+        const beforeClaim = yield* Ref.make<OrchestrationImplementationRun | undefined>(undefined);
+        const dispatch = system.engine.dispatch;
+        const captureClaim = vi.spyOn(system.engine, "dispatch").mockImplementation((command) => {
+          if (
+            command.type === "thread.implementation-run.update" &&
+            command.expectedTicketStageClaims?.some((claim) => claim.stage === "code-review")
+          ) {
+            return Effect.gen(function* () {
+              const snapshot = yield* system.query.getSnapshot();
+              yield* Ref.set(
+                beforeClaim,
+                snapshot.implementationRuns.find((entry) => entry.id === run.id),
+              );
+              return yield* dispatch(command);
+            });
+          }
+          return dispatch(command);
+        });
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          completeTicketReview: false,
+        }).pipe(Effect.ensuring(Effect.sync(() => captureClaim.mockRestore())));
+        const stale = yield* Ref.get(beforeClaim);
+        if (stale === undefined) throw new Error("Reviewer claim missing.");
+        const claimed = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        )!;
+        const reviewerId = claimed.ticketStates[0]?.codeReviewThreadId;
+        if (!reviewerId) throw new Error("Reviewer missing.");
+        const siblingUpdatedAt = "2026-01-01T00:06:30.000Z";
+        const lateWrite = yield* system.engine
+          .dispatch({
+            type: "thread.implementation-run.update",
+            commandId: commandId("late-sibling-progress-after-review-claim"),
+            threadId: sourceThreadId,
+            run: {
+              ...stale,
+              ticketStates: stale.ticketStates.map((entry) =>
+                entry.ticketId === tickets[1]!.id
+                  ? { ...entry, warningMarkdown: "Sibling progress.", updatedAt: siblingUpdatedAt }
+                  : entry,
+              ),
+              updatedAt: siblingUpdatedAt,
+            },
+            createdAt: siblingUpdatedAt,
+          })
+          .pipe(Effect.result);
+        expect(lateWrite).toMatchObject({
+          _tag: "Failure",
+          failure: { detail: STALE_IMPLEMENTATION_TICKET_STATE_DETAIL },
+        });
+        const current = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        )!;
+        expect(current.ticketStates[0]?.codeReviewThreadId).toBe(reviewerId);
+        expect(current.ticketStates[0]?.codeReviewLaunchCount).toBe(1);
+        yield* appendCodeReviewResult(system, {
+          run: current,
+          threadId: reviewerId,
+          ticketId: tickets[0]!.id,
+          status: "clean",
+          tag: "claimed-review-immediate-result",
+        });
+        const completed = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        )!;
+        expect(completed.ticketStates[0]?.status).toBe("succeeded");
       }),
     ),
   );

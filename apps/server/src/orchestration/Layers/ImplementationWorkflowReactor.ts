@@ -3986,6 +3986,15 @@ const make = Effect.gen(function* () {
         isWorkflowThreadPaused(readModel.threads, state.workerThreadId)
       )
         return;
+      const createdAt = DateTime.formatIso(
+        DateTime.makeUnsafe(
+          Math.max(
+            yield* Clock.currentTimeMillis,
+            Date.parse(input.createdAt),
+            Date.parse(state.updatedAt) + 1,
+          ),
+        ),
+      );
       yield* restoreTicketWorktreeIfMissing({ run: input.run, ticketId: input.ticketId });
       const cycleBudget = yield* cyclesForStep({
         key: {
@@ -4003,7 +4012,7 @@ const make = Effect.gen(function* () {
           run: input.run,
           ticketId: state.ticketId,
           reasonMarkdown: `Ticket Code Review cannot continue because cycle ${state.codeReviewPassCount + 1}'s durable thread '${reviewerThreadId}' was deleted.`,
-          updatedAt: input.createdAt,
+          updatedAt: createdAt,
           haltStage: "code-review",
           humanBlocked: true,
         });
@@ -4031,7 +4040,7 @@ const make = Effect.gen(function* () {
           ]
             .filter(Boolean)
             .join("\n\n"),
-          updatedAt: input.createdAt,
+          updatedAt: createdAt,
           haltCategory: "retry-exhausted",
           haltStage: "code-review",
         });
@@ -4051,7 +4060,7 @@ const make = Effect.gen(function* () {
           ]
             .filter(Boolean)
             .join("\n\n"),
-          createdAt: input.createdAt,
+          createdAt,
         });
         return;
       }
@@ -4075,7 +4084,7 @@ const make = Effect.gen(function* () {
             run: input.run,
             ticketId: state.ticketId,
             reasonMarkdown,
-            createdAt: input.createdAt,
+            createdAt,
           });
           return;
         }
@@ -4086,7 +4095,7 @@ const make = Effect.gen(function* () {
           retryableStage: "code-review",
           haltStage: "code-review",
           reasonMarkdown,
-          updatedAt: input.createdAt,
+          updatedAt: createdAt,
           humanBlocked: true,
         });
         return;
@@ -4117,7 +4126,7 @@ const make = Effect.gen(function* () {
           commitSha: head.commitSha,
           codeReviewOutcome: "clean",
           warningMarkdown: input.warningMarkdown ?? "Code Review skipped.",
-          createdAt: input.createdAt,
+          createdAt,
         });
         return;
       }
@@ -4146,7 +4155,17 @@ const make = Effect.gen(function* () {
         isWorkflowThreadPaused(claimReadModel.threads, state.workerThreadId)
       )
         return;
-      const claimedAt = claimRun.updatedAt > input.createdAt ? claimRun.updatedAt : input.createdAt;
+      // Full-run writes must distinguish this claim from the preceding ticket result.
+      const claimedAt = DateTime.formatIso(
+        DateTime.makeUnsafe(
+          Math.max(
+            yield* Clock.currentTimeMillis,
+            Date.parse(claimRun.updatedAt),
+            Date.parse(createdAt),
+            Date.parse(claimState.updatedAt) + 1,
+          ),
+        ),
+      );
       const reviewingRun: OrchestrationImplementationRun = {
         ...claimRun,
         ticketStates: claimRun.ticketStates.map((candidate) =>
@@ -4244,13 +4263,13 @@ const make = Effect.gen(function* () {
             // step's pin covers them unless they carry a pin of their own.
             stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
             orchestratorThread,
-            createdAt: input.createdAt,
+            createdAt: claimedAt,
           }),
           runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode: "implementation-workflow",
           branch: state.branch,
           worktreePath: state.worktreePath,
-          createdAt: input.createdAt,
+          createdAt: claimedAt,
         });
       }
       const baseRef =
@@ -4289,7 +4308,7 @@ const make = Effect.gen(function* () {
         workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
         runtimeMode: orchestratorThread.runtimeMode,
         interactionMode: "implementation-workflow",
-        createdAt: input.createdAt,
+        createdAt: claimedAt,
       });
     },
   );
@@ -8382,7 +8401,11 @@ const make = Effect.gen(function* () {
         // A result handled late (a queue backlog, a recovery replay) is older
         // than what other stages wrote to this ticket meanwhile, and
         // `runUpdateWouldOverwriteNewerTicketState` drops such a write.
-        const updatedAt = DateTime.formatIso(yield* DateTime.now);
+        const updatedAt = DateTime.formatIso(
+          DateTime.makeUnsafe(
+            Math.max(yield* Clock.currentTimeMillis, Date.parse(state.updatedAt) + 1),
+          ),
+        );
         if (
           directive.status === "blocked" &&
           directive.reportMarkdown === WORKFLOW_INTERRUPTION_ERROR_MESSAGE
