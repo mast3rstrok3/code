@@ -1673,6 +1673,39 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("interrupting a thread without a provider binding does not start a session", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+
+      yield* provider.interruptTurn({ threadId: asThreadId("thread-never-started") });
+
+      assert.equal(routing.codex.startSession.mock.calls.length, 0);
+      assert.equal(routing.codex.interruptTurn.mock.calls.length, 0);
+      assert.deepEqual(yield* provider.listSessions(), []);
+    }),
+  );
+
+  it.effect("interrupting a lost session does not recover it", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-lost-before-interrupt");
+      yield* provider.startSession(threadId, {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* routing.codex.stopAll();
+      routing.codex.startSession.mockClear();
+
+      yield* provider.interruptTurn({ threadId });
+
+      assert.equal(routing.codex.startSession.mock.calls.length, 0);
+      assert.equal(routing.codex.interruptTurn.mock.calls.length, 0);
+      assert.deepEqual(yield* provider.listSessions(), []);
+    }),
+  );
+
   it.effect("routes provider operations and rollback conversation", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

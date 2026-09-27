@@ -2143,21 +2143,25 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       });
       let metricProvider = "unknown";
       return yield* Effect.gen(function* () {
-        const routed = yield* resolveRoutableSession({
-          threadId: input.threadId,
-          operation: "ProviderService.interruptTurn",
-          allowRecovery: true,
-        });
-        metricProvider = routed.adapter.provider;
+        // Workflow recovery can interrupt a phase whose provider session is already gone.
+        const binding = yield* directory.getBinding(input.threadId);
+        if (Option.isNone(binding)) return;
+        const instanceId = yield* requireBindingInstanceId(
+          "ProviderService.interruptTurn",
+          binding.value,
+        );
+        const adapter = yield* registry.getByInstance(instanceId);
+        metricProvider = adapter.provider;
+        if (!(yield* adapter.hasSession(input.threadId))) return;
         yield* Effect.annotateCurrentSpan({
           "provider.operation": "interrupt-turn",
-          "provider.kind": routed.adapter.provider,
+          "provider.kind": adapter.provider,
           "provider.thread_id": input.threadId,
           "provider.turn_id": input.turnId,
         });
-        yield* routed.adapter.interruptTurn(routed.threadId, input.turnId);
+        yield* adapter.interruptTurn(input.threadId, input.turnId);
         yield* analytics.record("provider.turn.interrupted", {
-          provider: routed.adapter.provider,
+          provider: adapter.provider,
         });
       }).pipe(
         withMetrics({
