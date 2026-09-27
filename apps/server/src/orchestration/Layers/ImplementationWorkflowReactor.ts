@@ -2034,6 +2034,10 @@ export function workerReportedCurrentAttempt(
   );
 }
 
+/** Set on a ticket when recovery reads its worker as stopped and continues it. */
+const RECOVERED_WORKER_WARNING =
+  "Recovery continued the existing Implementation thread after its provider session stopped.";
+
 /**
  * Whether the run is halted on this ticket's Implementation because its worker
  * spent the launch budget without a result being recorded. A successful result
@@ -2060,8 +2064,7 @@ function discardedWorkerResult(
     state.status !== "ready" ||
     state.workerResult !== null ||
     state.workerThreadId === null ||
-    state.warningMarkdown !==
-      "Recovery continued the existing Implementation thread after its provider session stopped."
+    state.warningMarkdown !== RECOVERED_WORKER_WARNING
   )
     return undefined;
   return run.workerResults.findLast(
@@ -11026,9 +11029,11 @@ const make = Effect.gen(function* () {
    * that kept it from counting. Only the current turn is read, so a prior
    * attempt cannot overwrite a newer assignment.
    *
-   * A ticket halted for want of this result was moved to `ready`, and the halt
-   * write moved its `updatedAt` past a report that was only late, so for that
-   * ticket the report is not required to postdate the ticket state.
+   * A ticket recovery gave up on was moved to `ready`, and that write (and the
+   * exhaustion halt that may follow it) moved its `updatedAt` past a report
+   * that was only late, so for that ticket the report is not required to
+   * postdate the ticket state. A restart can clear the halt and leave only the
+   * `ready` state behind, so the recovery warning marks it too.
    */
   const readWorkerTurnReport = Effect.fn("ImplementationWorkflowReactor.readWorkerTurnReport")(
     function* (input: {
@@ -11037,9 +11042,12 @@ const make = Effect.gen(function* () {
       readonly state: OrchestrationImplementationTicketState;
     }) {
       const { readModel, run, state } = input;
-      const haltAwaitsResult = workerHaltAwaitsResult(run, state.ticketId);
+      const awaitsLateReport =
+        state.status === "ready" &&
+        (workerHaltAwaitsResult(run, state.ticketId) ||
+          state.warningMarkdown === RECOVERED_WORKER_WARNING);
       if (
-        (state.status !== "running" && !(haltAwaitsResult && state.status === "ready")) ||
+        (state.status !== "running" && !awaitsLateReport) ||
         state.workerResult !== null ||
         !state.workerThreadId
       )
@@ -11063,7 +11071,7 @@ const make = Effect.gen(function* () {
           candidate.role === "assistant" &&
           !candidate.streaming &&
           candidate.turnId === worker.latestTurn?.turnId &&
-          (haltAwaitsResult || candidate.createdAt >= state.updatedAt),
+          (awaitsLateReport || candidate.createdAt >= state.updatedAt),
       );
       if (!message) return null;
       const parsed = parseWorkflowDirectiveFromMarkdown(message.text);
@@ -12020,7 +12028,7 @@ const make = Effect.gen(function* () {
                     workerResult: null,
                     warningMarkdown: workerResultProblems.has(state.ticketId)
                       ? `${WORKER_RESULT_REJECTED_PREFIX} ${workerResultProblems.get(state.ticketId)}`
-                      : "Recovery continued the existing Implementation thread after its provider session stopped.",
+                      : RECOVERED_WORKER_WARNING,
                     updatedAt: createdAt,
                   }
                 : state,
