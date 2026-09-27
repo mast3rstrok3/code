@@ -3581,7 +3581,7 @@ describe("ImplementationWorkflowReactor", () => {
             },
             createdAt: "2026-01-01T00:00:02.000Z",
           });
-          yield* system.reactor.start();
+          yield* system.reactor.recoverIncompleteStages();
           yield* system.reactor.drain;
           const settled = (yield* system.query.getSnapshot()).implementationRuns[0];
           expect(settled?.status).toBe("needs-human-attention");
@@ -8429,6 +8429,97 @@ describe("ImplementationWorkflowReactor", () => {
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
         ).toHaveLength(2);
+      }),
+    ),
+  );
+
+  it.effect("preserves sibling progress while claiming a ticket reviewer after Git preflight", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, tickets } = yield* launchRun(system, {
+          appReviewStrategy: "nested-workflow",
+          tickets: [planningTicket("TICKET-1"), planningTicket("TICKET-2")],
+        });
+        const reviewed = tickets[0]!;
+        const other = tickets[1]!;
+        const state = run.ticketStates.find((entry) => entry.ticketId === reviewed.id)!;
+        const stagedAt = "2026-01-01T00:04:00.000Z";
+        const siblingUpdatedAt = "2026-01-01T00:06:30.000Z";
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("review-awaiting-claim"),
+          threadId: sourceThreadId,
+          run: {
+            ...run,
+            ticketStates: run.ticketStates.map((entry) =>
+              entry.ticketId === reviewed.id
+                ? {
+                    ...entry,
+                    status: "code-reviewing",
+                    workerResult: {
+                      ticketId: reviewed.id,
+                      workerThreadId: state.workerThreadId!,
+                      branch: state.branch!,
+                      worktreePath: state.worktreePath!,
+                      status: "succeeded",
+                      commitSha: `${state.branch}@commit`,
+                      validations: requiredValidations(),
+                      notesMarkdown: "Ready for review.",
+                      reportedAt: stagedAt,
+                    },
+                    updatedAt: stagedAt,
+                  }
+                : entry,
+            ),
+            updatedAt: stagedAt,
+          },
+          createdAt: stagedAt,
+        });
+        yield* system.reactor.drain;
+        yield* Ref.set(
+          system.beforeTicketLocalStatus,
+          Effect.gen(function* () {
+            const current = (yield* system.query.getSnapshot()).implementationRuns.find(
+              (entry) => entry.id === run.id,
+            )!;
+            yield* system.engine.dispatch({
+              type: "thread.implementation-run.update",
+              commandId: commandId("sibling-progress-during-review-preflight"),
+              threadId: sourceThreadId,
+              run: {
+                ...current,
+                ticketStates: current.ticketStates.map((entry) =>
+                  entry.ticketId === other.id
+                    ? {
+                        ...entry,
+                        warningMarkdown: "Keep this concurrent progress.",
+                        updatedAt: siblingUpdatedAt,
+                      }
+                    : entry,
+                ),
+                updatedAt: siblingUpdatedAt,
+              },
+              createdAt: siblingUpdatedAt,
+            });
+          }).pipe(Effect.orDie),
+        );
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+        const snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
+        expect(current.ticketStates.find((entry) => entry.ticketId === other.id)).toMatchObject({
+          warningMarkdown: "Keep this concurrent progress.",
+          updatedAt: siblingUpdatedAt,
+        });
+        const reviewerId = current.ticketStates.find(
+          (entry) => entry.ticketId === reviewed.id,
+        )?.codeReviewThreadId;
+        expect(reviewerId).toBeTruthy();
+        expect(
+          snapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-code-reviewer",
+          ),
+        ).toEqual([expect.objectContaining({ id: reviewerId })]);
       }),
     ),
   );

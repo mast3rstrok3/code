@@ -4124,9 +4124,32 @@ const make = Effect.gen(function* () {
       const ticket = ticketsById(
         findThread(readModel, input.sourceThreadId) ?? orchestratorThread,
       ).get(input.ticketId);
+      // Git preflight can outlast another ticket's progress. Claim from the
+      // current run only if the ticket we checked has not changed.
+      const claimReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const claimRun = currentRunForQueuedRerun(
+        claimReadModel,
+        input.run.id,
+        currentRun,
+        yield* Clock.currentTimeMillis,
+      );
+      const claimState = claimRun.ticketStates.find(
+        (candidate) => candidate.ticketId === input.ticketId,
+      );
+      if (
+        claimRun.status === "canceled" ||
+        claimRun.status === "completed" ||
+        claimRun.automationHalt !== null ||
+        claimState === undefined ||
+        claimState.updatedAt !== state.updatedAt ||
+        isTicketStageSkipped(claimRun.skips, input.ticketId, "code-review") ||
+        isWorkflowThreadPaused(claimReadModel.threads, state.workerThreadId)
+      )
+        return;
+      const claimedAt = claimRun.updatedAt > input.createdAt ? claimRun.updatedAt : input.createdAt;
       const reviewingRun: OrchestrationImplementationRun = {
-        ...input.run,
-        ticketStates: input.run.ticketStates.map((candidate) =>
+        ...claimRun,
+        ticketStates: claimRun.ticketStates.map((candidate) =>
           candidate.ticketId === input.ticketId
             ? {
                 ...candidate,
@@ -4139,16 +4162,16 @@ const make = Effect.gen(function* () {
                 codeReviewOutcome: null,
                 codeReviewLaunchCount: candidate.codeReviewLaunchCount + 1,
                 warningMarkdown: input.warningMarkdown ?? candidate.warningMarkdown ?? null,
-                updatedAt: input.createdAt,
+                updatedAt: claimedAt,
               }
             : candidate,
         ),
-        updatedAt: input.createdAt,
+        updatedAt: claimedAt,
       };
       const claimed = yield* updateRun({
         sourceThreadId: input.sourceThreadId,
         run: reviewingRun,
-        createdAt: input.createdAt,
+        createdAt: claimedAt,
         expectedTicketStageClaims: [
           {
             ticketId: state.ticketId,
@@ -10244,14 +10267,14 @@ const make = Effect.gen(function* () {
         ),
         updatedAt: input.updatedAt,
       };
-      if (input.run.automationHalt !== null) {
-        yield* updateRun({
-          sourceThreadId: input.sourceThreadId,
-          run: reviewedTicketRun,
-          createdAt: input.updatedAt,
-        });
-        return;
-      }
+      // Persist the App Review result before Code Review checks the current
+      // ticket state again after Git preflight.
+      const recorded = yield* updateRun({
+        sourceThreadId: input.sourceThreadId,
+        run: reviewedTicketRun,
+        createdAt: input.updatedAt,
+      });
+      if (!recorded || input.run.automationHalt !== null) return;
       if (deferred) {
         yield* startTicketCodeReview({
           sourceThreadId: input.sourceThreadId,
