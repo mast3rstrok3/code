@@ -970,6 +970,46 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
     }),
   );
 
+  it.effect("stops active workflow agents before cleaning up historical sessions", () =>
+    Effect.gen(function* () {
+      const readModel = makeReadModel(null, null, makeSession("ready"));
+      const root = readModel.threads[0]!;
+      const children = (["ready", "stopped", "running", "starting"] as const).map((status) => {
+        const id = ThreadId.make(`child-${status}`);
+        return {
+          ...root,
+          id,
+          parentThreadId: root.id,
+          session: { ...makeSession(status), threadId: id },
+        };
+      });
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.workflow.pause",
+          commandId: CommandId.make("cmd-pause-large-workflow"),
+          threadId: root.id,
+          createdAt: NOW,
+        },
+        readModel: { ...readModel, threads: [root, ...children] },
+      });
+      const events = Array.isArray(result) ? result : [result];
+      expect(events[0]?.type).toBe("thread.workflow-paused");
+      const stoppedIds = events
+        .filter((event) => event.type === "thread.session-stop-requested")
+        .map((event) => event.payload.threadId);
+      expect(stoppedIds.slice(0, 2)).toEqual(
+        expect.arrayContaining(["child-running", "child-starting"]),
+      );
+      expect(stoppedIds).toHaveLength(4);
+      expect(stoppedIds).not.toContain("child-stopped");
+      const settledIds = events
+        .filter((event) => event.type === "thread.settled")
+        .map((event) => event.payload.threadId);
+      expect(settledIds).toHaveLength(5);
+      expect(settledIds).toContain("child-stopped");
+    }),
+  );
+
   it.effect("keeps a paused workflow paused when its stopped agent writes again", () =>
     Effect.gen(function* () {
       // The trailing session write of an agent that was told to stop used to

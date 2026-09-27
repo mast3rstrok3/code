@@ -1728,19 +1728,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
         },
       });
+      // Stop active agents before idle-session cleanup reaches the provider queue.
+      const stopTargets = targets
+        .filter((thread) => thread.session !== null && thread.session.status !== "stopped")
+        .toSorted((left, right) => {
+          const leftActive =
+            left.session?.status === "running" || left.session?.status === "starting";
+          const rightActive =
+            right.session?.status === "running" || right.session?.status === "starting";
+          return Number(rightActive) - Number(leftActive);
+        });
+      for (const thread of stopTargets) {
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: thread.id,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.session-stop-requested",
+          payload: { threadId: thread.id, createdAt: command.createdAt },
+        });
+      }
       for (const thread of targets) {
-        if (thread.session !== null) {
-          events.push({
-            ...(yield* withEventBase({
-              aggregateKind: "thread",
-              aggregateId: thread.id,
-              occurredAt: command.createdAt,
-              commandId: command.commandId,
-            })),
-            type: "thread.session-stop-requested",
-            payload: { threadId: thread.id, createdAt: command.createdAt },
-          });
-        }
         events.push({
           ...(yield* withEventBase({
             aggregateKind: "thread",
