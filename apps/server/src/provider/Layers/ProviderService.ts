@@ -407,6 +407,7 @@ function toRuntimePayloadFromSession(
   session: ProviderSession,
   extra?: {
     readonly modelSelection?: unknown;
+    readonly workflowPromptId?: string | null;
     readonly continueAfterServerUpdate?: TurnId;
     readonly lastRuntimeEvent?: string;
     readonly lastRuntimeEventAt?: string;
@@ -421,6 +422,7 @@ function toRuntimePayloadFromSession(
       ? { continueAfterServerUpdate: extra.continueAfterServerUpdate }
       : {}),
     ...(extra?.modelSelection !== undefined ? { modelSelection: extra.modelSelection } : {}),
+    ...(extra?.workflowPromptId !== undefined ? { workflowPromptId: extra.workflowPromptId } : {}),
     ...(extra?.lastRuntimeEvent !== undefined ? { lastRuntimeEvent: extra.lastRuntimeEvent } : {}),
     ...(extra?.lastRuntimeEventAt !== undefined
       ? { lastRuntimeEventAt: extra.lastRuntimeEventAt }
@@ -448,6 +450,16 @@ function readPersistedCwd(
   if (typeof rawCwd !== "string") return undefined;
   const trimmed = rawCwd.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readPersistedWorkflowPromptId(
+  runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
+): string | undefined {
+  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+    return undefined;
+  }
+  const value = "workflowPromptId" in runtimePayload ? runtimePayload.workflowPromptId : undefined;
+  return typeof value === "string" && isRegisteredWorkflowPromptId(value) ? value : undefined;
 }
 
 const dieOnMissingBindingInstanceId = (
@@ -1194,6 +1206,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     threadId: ThreadId,
     extra?: {
       readonly modelSelection?: unknown;
+      readonly workflowPromptId?: string | null;
       readonly continueAfterServerUpdate?: TurnId;
       readonly lastRuntimeEvent?: string;
       readonly lastRuntimeEventAt?: string;
@@ -1445,6 +1458,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
       const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
+      const workflowPromptId = readPersistedWorkflowPromptId(input.binding.runtimePayload);
 
       const ownerEnvironment = yield* workspaceUserEnvironment(
         input.binding.threadId,
@@ -1453,6 +1467,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       yield* prepareMcpSession({
         threadId: input.binding.threadId,
         providerInstanceId: bindingInstanceId,
+        ...(workflowPromptId !== undefined ? { workflowPromptId } : {}),
       });
       const resumed = yield* adapter
         .startSession({
@@ -1461,6 +1476,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           providerInstanceId: bindingInstanceId,
           ...(persistedCwd ? { cwd: persistedCwd } : {}),
           ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
+          ...(workflowPromptId !== undefined ? { workflowPromptId } : {}),
           ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
           runtimeMode: input.binding.runtimeMode ?? "full-access",
         })
@@ -1725,6 +1741,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         });
         yield* upsertSessionBinding(sessionWithInstance, threadId, {
           modelSelection: input.modelSelection,
+          workflowPromptId: input.workflowPromptId ?? null,
         });
         yield* analytics.record("provider.session.started", {
           provider: sessionWithInstance.provider,

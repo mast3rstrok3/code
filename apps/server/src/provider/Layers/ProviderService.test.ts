@@ -87,6 +87,7 @@ import * as ServerSettings from "../../serverSettings.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
 import * as ProjectionSnapshotQuery from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { WORKFLOW_PROMPT_IDS } from "../WorkflowPromptRegistry.ts";
 
 /**
  * The live layer now depends on the workflow user-input broker, which the
@@ -5066,6 +5067,10 @@ describe("agent browser access", () => {
     recoverSession = false,
     options?: {
       readonly withoutOrchestration?: boolean;
+      readonly workflowPromptId?: string;
+      readonly onStarted?: (
+        provider: ProviderService.ProviderService["Service"],
+      ) => Effect.Effect<void, ProviderServiceError>;
       readonly userContext?: {
         users: ReadonlyArray<WorkspaceUser>;
         ownerUserId: () => WorkspaceUserId;
@@ -5208,7 +5213,9 @@ describe("agent browser access", () => {
           providerInstanceId: codexInstanceId,
           threadId,
           runtimeMode: "full-access",
+          ...(options?.workflowPromptId ? { workflowPromptId: options.workflowPromptId } : {}),
         });
+        if (options?.onStarted) yield* options.onStarted(provider);
         if (options?.userContext)
           yield* options.userContext.onStarted(
             provider,
@@ -5217,7 +5224,10 @@ describe("agent browser access", () => {
         if (recoverSession) {
           yield* provider.stopSession({ threadId });
           yield* provider.sendTurn({ threadId, input: "Resume this thread", attachments: [] });
-          assert.equal(codex.startSession.mock.calls.length, options?.userContext ? 3 : 2);
+          assert.equal(
+            codex.startSession.mock.calls.length,
+            options?.userContext || options?.onStarted ? 3 : 2,
+          );
         }
       }).pipe(Effect.provide(providerLayer));
 
@@ -5405,6 +5415,52 @@ describe("agent browser access", () => {
       const threadId = asThreadId("thread-mcp-recovery-access-off");
       const issued = yield* startSessionWith(false, threadId, undefined, true);
       assert.deepEqual(issued, [
+        { threadId, capabilities: ["pull-requests"] },
+        { threadId, capabilities: ["pull-requests"] },
+      ]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  for (const [workflowPromptId, capabilities] of [
+    [WORKFLOW_PROMPT_IDS.implementationTddCodex, ["workflow-artifacts"]],
+    [WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex, ["app-review", "workflow-artifacts"]],
+    [
+      WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+      ["app-review", "preview", "workflow-artifacts"],
+    ],
+    [WORKFLOW_PROMPT_IDS.planningGrillStageCodex, ["user-input", "workflow-artifacts"]],
+  ] as const) {
+    it.effect(`preserves ${workflowPromptId} tool permissions when recovering a session`, () =>
+      Effect.gen(function* () {
+        const threadId = asThreadId(`thread-mcp-recover-${workflowPromptId}`);
+        const issued = yield* startSessionWith(true, threadId, undefined, true, {
+          workflowPromptId,
+        });
+        assert.deepEqual(issued, [
+          { threadId, capabilities },
+          { threadId, capabilities },
+        ]);
+      }).pipe(Effect.provide(NodeServices.layer)),
+    );
+  }
+
+  it.effect("does not restore workflow permissions after starting an ordinary session", () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("thread-mcp-workflow-to-chat");
+      const issued = yield* startSessionWith(false, threadId, undefined, true, {
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+        onStarted: (provider) =>
+          provider
+            .startSession(threadId, {
+              threadId,
+              provider: CODEX_DRIVER,
+              providerInstanceId: codexInstanceId,
+              runtimeMode: "full-access",
+            })
+            .pipe(Effect.asVoid),
+      });
+      assert.deepEqual(issued, [
+        { threadId, capabilities: ["workflow-artifacts"] },
         { threadId, capabilities: ["pull-requests"] },
         { threadId, capabilities: ["pull-requests"] },
       ]);
