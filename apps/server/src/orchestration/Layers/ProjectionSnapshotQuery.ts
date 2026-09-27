@@ -66,7 +66,6 @@ import {
 } from "@t3tools/contracts";
 import { legacyLinkedPullRequestOf } from "@t3tools/shared/threadPullRequests";
 import * as Arr from "effect/Array";
-import * as Cache from "effect/Cache";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -961,10 +960,19 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
   // Full snapshots repeatedly read historical threads while holding the SQLite
   // transaction. Revalidate only rows whose complete stored contents changed.
-  const decodedThreadRows = yield* Cache.make({
-    capacity: 4096,
-    timeToLive: "5 minutes",
-    lookup: (row: string) => decodeStoredThreadRow(row),
+  // Cache values rather than fibers: a lookup fiber retains its caller's SQL
+  // span, whose completed result can contain the entire workflow read model.
+  const decodedThreadRows = new Map<string, typeof ProjectionThreadDbRowSchema.Type>();
+  const decodeCachedThreadRow = Effect.fnUntraced(function* (row: unknown) {
+    const key = encodeStoredThreadRow(row);
+    const cached = decodedThreadRows.get(key);
+    if (cached !== undefined) return cached;
+    const decoded = yield* decodeStoredThreadRow(key);
+    decodedThreadRows.set(key, decoded);
+    if (decodedThreadRows.size > 4096) {
+      decodedThreadRows.delete(decodedThreadRows.keys().next().value!);
+    }
+    return decoded;
   });
   const listThreadRows = () =>
     sql`
@@ -1018,11 +1026,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
-      `.pipe(
-      Effect.flatMap((rows) =>
-        Effect.forEach(rows, (row) => Cache.get(decodedThreadRows, encodeStoredThreadRow(row))),
-      ),
-    );
+      `.pipe(Effect.flatMap((rows) => Effect.forEach(rows, decodeCachedThreadRow)));
 
   const listActiveThreadRows = SqlSchema.findAll({
     Request: Schema.Void,

@@ -1,3 +1,5 @@
+import * as NodeV8 from "node:v8";
+
 import {
   type AgentSessionImportSource,
   ChatAttachment,
@@ -109,6 +111,41 @@ const projectionSnapshotLayer = it.layer(
     Layer.provideMerge(RepositoryIdentityResolver.layer),
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+it.effect("does not retain completed query results through cached thread rows", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const query = yield* ProjectionSnapshotQuery;
+    yield* sql`INSERT INTO projection_projects
+      (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+      VALUES ('retention-project', 'Project', '/tmp/retention-project', '[]', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')`;
+    yield* sql`INSERT INTO projection_threads
+      (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode, created_at, updated_at)
+      VALUES ('retention-thread', 'retention-project', 'Thread', '{"instanceId":"codex","model":"gpt-6-astra"}', 'full-access', 'default', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')`;
+    // Warm SQLite's statement cache before measuring a changed thread-row lookup.
+    yield* query.getCommandReadModel();
+    yield* sql`UPDATE projection_threads SET title = 'Changed' WHERE thread_id = 'retention-thread'`;
+    // oxlint-disable-next-line typescript/no-extraneous-class -- Identifies retained query results after full GC.
+    class QueryResult {}
+    yield* query.getCommandReadModel().pipe(
+      Effect.map(() => new QueryResult()),
+      Effect.withSpan("read-cached-thread-query"),
+      Effect.asVoid,
+    );
+    assert.strictEqual(NodeV8.queryObjects(QueryResult, { format: "count" }), 0);
+    assert.strictEqual((yield* query.getCommandReadModel()).threads[0]?.title, "Changed");
+  }).pipe(
+    Effect.provide(
+      OrchestrationProjectionSnapshotQueryLive.pipe(
+        Layer.provide(ThreadBackgroundLiveness.layer),
+        Layer.provide(ThreadPlanProgress.layer),
+        Layer.provide(RepositoryIdentityResolver.layer),
+        Layer.provideMerge(SqlitePersistenceMemory),
+        Layer.provide(NodeServices.layer),
+      ),
+    ),
   ),
 );
 
