@@ -4658,6 +4658,7 @@ for (const scenario of [
   "blocked",
   "ticket",
   "ticket-replaced-stack",
+  "ticket-startup-retry",
   "ticket-unhealthy-stack",
   "ticket-dirty-stack",
   "combined",
@@ -4675,6 +4676,20 @@ for (const scenario of [
           : ["suite-b --grep ticket"];
       let storedRun = run({
         previewTargetsPinned: !embedded || scenario === "ticket",
+        ...(scenario === "ticket-startup-retry"
+          ? {
+              status: "failed" as const,
+              outcome: "failed" as const,
+              failure: {
+                reason: "preview-unavailable" as const,
+                phase: null,
+                cycleNumber: null,
+                retryable: false,
+                detailMarkdown: "The stack is starting.",
+                failedAt: now,
+              },
+            }
+          : {}),
         ...(scenario === "empty"
           ? {
               activePhase: "e2e" as const,
@@ -4744,6 +4759,7 @@ for (const scenario of [
       const commands: OrchestrationCommand[] = [];
       const executions: string[] = [];
       const executionEnvironments: Array<ProcessRunInput["env"]> = [];
+      const events = yield* PubSub.unbounded<typeof OrchestrationEvent.Type>();
       let settled = yield* Deferred.make<void>();
       const completePhase = (payload: Record<string, unknown>) => {
         const index = threads.findIndex((entry) => entry.id === storedRun.activeThreadId);
@@ -4807,6 +4823,9 @@ for (const scenario of [
                 }),
             }),
             Layer.mock(OrchestrationEngineService)({
+              subscribeDomainEvents: PubSub.subscribe(events).pipe(
+                Effect.map(Stream.fromSubscription),
+              ),
               dispatch: (command) =>
                 Effect.gen(function* () {
                   commands.push(command);
@@ -4926,7 +4945,32 @@ for (const scenario of [
       yield* Effect.scoped(
         Effect.gen(function* () {
           const reactor = yield* AppReviewWorkflowReactor;
-          yield* reactor.reconcile();
+          if (scenario === "ticket-startup-retry") {
+            yield* reactor.start();
+            expect(executions).toEqual([]);
+            yield* PubSub.publish(
+              events,
+              yield* decodeEvent({
+                sequence: 1,
+                eventId: "retry-startup-event",
+                aggregateKind: "thread",
+                aggregateId: storedRun.controllerThreadId,
+                occurredAt: now,
+                commandId: null,
+                causationEventId: null,
+                correlationId: null,
+                metadata: {},
+                type: "thread.app-review-workflow-rerun-requested",
+                payload: {
+                  sourceThreadId: storedRun.targetThreadId,
+                  run: storedRun,
+                  phase: "e2e",
+                },
+              }),
+            );
+          } else {
+            yield* reactor.reconcile();
+          }
           yield* Deferred.await(settled);
           yield* reactor.drain;
           if (scenario === "ticket-dirty-stack") {
@@ -4951,7 +4995,7 @@ for (const scenario of [
           }
           if (embedded) {
             expect(executions).toEqual(ticket ? ticketCommands : ["suite-a", "suite-b"]);
-            if (scenario === "ticket-replaced-stack") {
+            if (scenario === "ticket-replaced-stack" || scenario === "ticket-startup-retry") {
               expect(storedRun.previewTargets).toEqual(["https://replacement.example.test"]);
               expect(
                 commands.find(
@@ -4959,7 +5003,9 @@ for (const scenario of [
                     command.type === "thread.app-review-workflow.update" &&
                     command.run.previewTargets[0] === "https://replacement.example.test",
                 ),
-              ).toMatchObject({ run: { cyclesUsed: 2 } });
+              ).toMatchObject({
+                run: { cyclesUsed: scenario === "ticket-startup-retry" ? 1 : 2 },
+              });
               expect(executionEnvironments[0]).toMatchObject({
                 APP_REVIEW_PREVIEW_URL: "https://replacement.example.test",
                 APP_REVIEW_STACK_ID: "replacement-stack",

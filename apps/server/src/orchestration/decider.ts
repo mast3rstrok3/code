@@ -5106,10 +5106,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `App Review Workflow '${command.runId}' does not exist.`,
         });
       }
-      // Every phase entry point works on the run's latest cycle, so that is the
-      // one a re-run redoes. Earlier cycles are history.
+      // Review entry points can retry startup before a cycle exists. Planning
+      // and fixing need the findings and repair tickets from the latest cycle.
       const cycle = existing.cycles.at(-1);
-      if (cycle === undefined) {
+      if (cycle === undefined && command.phase !== "e2e" && command.phase !== "review") {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `App Review Workflow '${command.runId}' has not started a cycle yet.`,
@@ -5143,7 +5143,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `App Review Workflow '${command.runId}' has used all ${String(existing.cycleBudget)} of its cycles.`,
         });
       }
-      if (command.phase === "planning" && cycle.actionableFindingsMarkdown === null) {
+      if (command.phase === "planning" && cycle?.actionableFindingsMarkdown == null) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: "Gap analysis needs findings from the browser review of this cycle.",
@@ -5155,7 +5155,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `App Review Workflow '${command.runId}' was launched to review only, so it has no repair step.`,
         });
       }
-      if (command.phase === "fixing" && (cycle.repairTickets ?? []).length === 0) {
+      if (command.phase === "fixing" && (cycle?.repairTickets ?? []).length === 0) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: "The repair step needs the repair tickets gap analysis writes.",

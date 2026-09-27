@@ -4161,7 +4161,7 @@ ${result.outputMarkdown}`,
       (readModel.appReviewWorkflowRuns ?? []).find((candidate) => candidate.id === inputRun.id) ??
       inputRun;
     const cycle = run.cycles.at(-1);
-    if (cycle === undefined) return;
+    if (cycle === undefined && phase !== "e2e" && phase !== "review") return;
     const target = yield* resolveTarget(run.targetThreadId);
     if (target === null) return;
     const workspaceRevision = yield* computeWorkspaceRevision(target.cwd);
@@ -4188,6 +4188,7 @@ ${result.outputMarkdown}`,
       return;
     }
 
+    if (cycle === undefined) return;
     if (phase === "planning") {
       const controller = yield* resolveThread(run.controllerThreadId);
       const review = controller === undefined ? null : reviewRecordForCycle(run, controller, cycle);

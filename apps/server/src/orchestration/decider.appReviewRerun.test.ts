@@ -227,6 +227,48 @@ function rerunRunAppReview() {
 }
 
 it.layer(NodeServices.layer)("App Review phase re-run decider", (it) => {
+  for (const phase of ["e2e", "review"] as const) {
+    it.effect(`retries ${phase} when startup failed before the first cycle`, () =>
+      Effect.gen(function* () {
+        const model = makeReadModel({ cycles: [] });
+        const event = yield* decideOrchestrationCommand({
+          command: rerun(phase),
+          readModel: {
+            ...model,
+            appReviewWorkflowRuns: model.appReviewWorkflowRuns!.map((run) => ({
+              ...run,
+              status: "failed",
+              outcome: "failed",
+              failure: {
+                reason: "preview-unavailable",
+                phase: null,
+                cycleNumber: null,
+                detailMarkdown: "The stack is starting.",
+                failedAt: NOW,
+              },
+            })),
+          },
+        });
+        expect(event).toMatchObject({
+          type: "thread.app-review-workflow-rerun-requested",
+          payload: { phase },
+        });
+      }),
+    );
+  }
+
+  for (const phase of ["planning", "fixing"] as const) {
+    it.effect(`refuses ${phase} before the first review cycle`, () =>
+      Effect.gen(function* () {
+        const error = yield* decideOrchestrationCommand({
+          command: rerun(phase),
+          readModel: makeReadModel({ cycles: [] }),
+        }).pipe(Effect.flip);
+        expect(String(error)).toContain("has not started a cycle");
+      }),
+    );
+  }
+
   it.effect("re-runs a phase of the run's current cycle", () =>
     Effect.gen(function* () {
       const event = yield* decideOrchestrationCommand({
