@@ -77,6 +77,7 @@ import { appStackEnvironment } from "../../appStackEnvironment.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
 import { ServerActivation } from "../../serverActivation.ts";
+import { WorkflowDrainCoordinator } from "../WorkflowDrainCoordinator.ts";
 import {
   appendWorkflowSkillCommandSection,
   WORKFLOW_PROMPT_IDS,
@@ -934,6 +935,7 @@ export function claimAppReviewFixResultContinuation(input: {
         ? {
             ...entry,
             fixResultContinuationCount: (entry.fixResultContinuationCount ?? 0) + 1,
+            fixResultContinuationRequestedAt: input.occurredAt,
           }
         : entry,
     ),
@@ -1044,11 +1046,11 @@ export function appReviewFixResultContinuationNeedsLaunch(
   },
 ): boolean {
   if ((cycle.fixResultContinuationCount ?? 0) === 0) return false;
+  const requestedAt = cycle.fixResultContinuationRequestedAt ?? run.updatedAt;
   const sessionIsActive =
     thread.session?.status === "starting" || thread.session?.status === "running";
   return (
-    !sessionIsActive &&
-    (thread.latestTurn === null || thread.latestTurn.requestedAt < run.updatedAt)
+    !sessionIsActive && (thread.latestTurn === null || thread.latestTurn.requestedAt < requestedAt)
   );
 }
 
@@ -1064,7 +1066,8 @@ export function appReviewPhaseTurnPending(
   if (run.activePhase === null) return false;
   const sessionIsActive =
     thread.session?.status === "starting" || thread.session?.status === "running";
-  if (thread.latestTurn === null || thread.latestTurn.requestedAt < run.updatedAt) {
+  const requestedAt = cycle.fixResultContinuationRequestedAt ?? run.updatedAt;
+  if (thread.latestTurn === null || thread.latestTurn.requestedAt < requestedAt) {
     return (
       sessionIsActive ||
       (cycle.recoveryContinuationCount ?? 0) > 0 ||
@@ -1104,7 +1107,7 @@ export function appReviewRecoveryEvidenceIsCurrent(
     run.status === "failed"
       ? failedAt
       : (cycle.recoveryContinuationCount ?? 0) > 0 || (cycle.fixResultContinuationCount ?? 0) > 0
-        ? run.updatedAt
+        ? (cycle.fixResultContinuationRequestedAt ?? run.updatedAt)
         : null;
   return (
     (baseline === null || createdAt > baseline) &&
@@ -1173,6 +1176,8 @@ export function rerunPlanningPhaseInCycle(input: {
   return {
     ...input.cycle,
     status: "planning",
+    fixResultContinuationCount: 0,
+    fixResultContinuationRequestedAt: null,
     planId: null,
     plannerThreadId: null,
     plannerTurnId: null,
@@ -1203,6 +1208,8 @@ export function rerunFixingPhaseInCycle(input: {
   return {
     ...input.cycle,
     status: "fixing",
+    fixResultContinuationCount: 0,
+    fixResultContinuationRequestedAt: null,
     fixerThreadId: result !== null && detail !== null ? input.cycle.fixerThreadId : null,
     fixResult: null,
     validationRepair:
@@ -1813,6 +1820,10 @@ const make = Effect.gen(function* () {
   const testProcesses = new Map<string, { id: string; fiber: Fiber.Fiber<void, never> }>();
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
+  const workflowDrain = yield* Effect.serviceOption(WorkflowDrainCoordinator);
+  const isDraining = Option.isSome(workflowDrain)
+    ? Effect.map(workflowDrain.value.accepting, (accepting) => !accepting)
+    : Effect.succeed(false);
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const gitWorkflow = yield* GitWorkflowService;
   const appStackManager = yield* AppStackManager;
@@ -3783,16 +3794,14 @@ ${result.outputMarkdown}`,
     if (cycle.fixerThreadId === null) return;
     const continuationNumber = cycle.fixResultContinuationCount ?? 0;
     if (continuationNumber === 0) return;
+    const requestedAt = cycle.fixResultContinuationRequestedAt ?? run.updatedAt;
+    const key = `${run.id}:${String(cycle.cycleNumber)}:${cycle.fixerThreadId}:${String(continuationNumber)}:${requestedAt}`;
     yield* orchestrationEngine.dispatch({
       type: "thread.turn.start",
-      commandId: CommandId.make(
-        `server:app-review-fix-result-continuation:${run.id}:${String(cycle.cycleNumber)}:${String(continuationNumber)}`,
-      ),
+      commandId: CommandId.make(`server:app-review-fix-result-continuation:${key}`),
       threadId: cycle.fixerThreadId,
       message: {
-        messageId: MessageId.make(
-          `message-app-review-fix-result-continuation-${run.id}-${String(cycle.cycleNumber)}-${String(continuationNumber)}`,
-        ),
+        messageId: MessageId.make(`message-app-review-fix-result-continuation-${key}`),
         role: "user",
         text: buildAppReviewFixResultContinuationPrompt({ run, cycle }),
         attachments: [],
@@ -3800,7 +3809,7 @@ ${result.outputMarkdown}`,
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
       interactionMode: "default",
       workflowPromptId: APP_REVIEW_IMPLEMENT_SKILL_ID,
-      createdAt: run.updatedAt,
+      createdAt: requestedAt,
     });
   });
 
@@ -4097,6 +4106,7 @@ ${result.outputMarkdown}`,
     run: AppReviewWorkflowRun,
     occurredAt: string,
   ) {
+    if (yield* isDraining) return;
     if (run.prerequisiteCheck != null) return;
     switch (nextAppReviewWorkflowAction(run)) {
       case "none":
@@ -4368,6 +4378,7 @@ ${result.outputMarkdown}`,
         Cause.hasInterruptsOnly(cause)
           ? Effect.failCause(cause)
           : Effect.gen(function* () {
+              if (yield* isDraining) return;
               const run = yield* runForEvent(event).pipe(Effect.orElseSucceed(() => null));
               if (run !== null && run.status === "running") {
                 yield* failRun({
@@ -4731,6 +4742,7 @@ ${result.outputMarkdown}`,
   );
 
   const reconcileRuns = Effect.fn("AppReviewWorkflowReactor.reconcileRuns")(function* () {
+    if (yield* isDraining) return;
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const occurredAt = yield* nowIso;
     for (const [runId, process] of testProcesses) {
@@ -4772,12 +4784,15 @@ ${result.outputMarkdown}`,
         Effect.catchCause((cause) =>
           Cause.hasInterruptsOnly(cause)
             ? Effect.failCause(cause)
-            : failRun({
-                run,
-                reason: "automation-unavailable",
-                detailMarkdown: `App Review automation was unavailable during restart recovery.\n\n${Cause.pretty(cause)}`,
-                occurredAt,
-              }).pipe(Effect.catch(() => Effect.void)),
+            : Effect.gen(function* () {
+                if (yield* isDraining) return;
+                yield* failRun({
+                  run,
+                  reason: "automation-unavailable",
+                  detailMarkdown: `App Review automation was unavailable during restart recovery.\n\n${Cause.pretty(cause)}`,
+                  occurredAt,
+                }).pipe(Effect.catch(() => Effect.void));
+              }),
         ),
       );
     }
@@ -4831,7 +4846,7 @@ ${result.outputMarkdown}`,
       updatedAt: item.result.completedAt,
     };
     yield* updateRun(updated);
-    yield* reconcileE2e(updated, item.result.completedAt);
+    if (!(yield* isDraining)) yield* reconcileE2e(updated, item.result.completedAt);
   });
 
   const worker: DrainableWorker<WorkItem> = yield* makeDrainableWorker((item: WorkItem) =>
@@ -4840,6 +4855,7 @@ ${result.outputMarkdown}`,
           Effect.retry({ times: 2 }),
           Effect.catchCause((cause) =>
             Effect.gen(function* () {
+              if (yield* isDraining) return;
               yield* Effect.logError("Failed to persist E2E result", Cause.pretty(cause));
               const process = testProcesses.get(item.runId);
               if (process?.id === item.executionId) {

@@ -49,6 +49,8 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { AppReviewWorkflowReactor } from "../Services/AppReviewWorkflowReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { WorkflowDrainCoordinator } from "../WorkflowDrainCoordinator.ts";
+import { OrchestrationCommandInvariantError } from "../Errors.ts";
 
 import {
   ORPHANED_PROVIDER_SESSION_ERROR,
@@ -894,6 +896,35 @@ it("relaunches a claimed result continuation after an interrupted dispatch", () 
       session: { status: "running" },
     }),
   ).toBe(false);
+});
+
+it("keeps continuation evidence current when a lease update advances the run timestamp", () => {
+  const requestedAt = "2026-01-01T00:00:02.000Z";
+  const continued = claimAppReviewFixResultContinuation({
+    run: validationFixingRun(),
+    occurredAt: requestedAt,
+  })!;
+  const current = { ...continued, updatedAt: "2026-01-01T00:02:00.000Z" };
+  const cycle = current.cycles[0]!;
+  const thread = {
+    latestTurn: { requestedAt, state: "completed" },
+    session: { status: "ready" },
+  };
+  expect(cycle.fixResultContinuationRequestedAt).toBe(requestedAt);
+  expect(appReviewFixResultContinuationNeedsLaunch(current, cycle, thread)).toBe(false);
+  expect(appReviewPhaseTurnPending(current, cycle, thread)).toBe(false);
+  expect(appReviewRecoveryEvidenceIsCurrent(current, cycle, "2026-01-01T00:01:00.000Z")).toBe(true);
+  expect(appReviewRecoveryEvidenceIsCurrent(current, cycle, now)).toBe(false);
+
+  const retried = rerunFixingPhaseInCycle({
+    cycle,
+    previousResult: null,
+    validationFailure: null,
+    workspaceRevision: current.workspaceRevision,
+    occurredAt: current.updatedAt,
+  });
+  expect(retried.fixResultContinuationCount).toBe(0);
+  expect(retried.fixResultContinuationRequestedAt).toBeNull();
 });
 
 function run(overrides: Partial<AppReviewWorkflowRun> = {}): AppReviewWorkflowRun {
@@ -3327,9 +3358,10 @@ it("directs selected platforms to real runners and retains browser recording evi
   expect(browser).not.toContain("e2e-platform-");
 });
 
-for (const verdict of ["passed", "failed", "rejected"] as const) {
+for (const verdict of ["passed", "failed", "rejected", "draining"] as const) {
   effectIt.effect(`reconciles ${verdict} review results without launching a browser phase`, () => {
-    const original = review(verdict === "rejected" ? "failed" : verdict);
+    const resultStatus = verdict === "passed" ? "passed" : "failed";
+    const original = review(resultStatus);
     const e2eReview: AppReviewRecord = {
       ...original,
       appReviewScope: "e2e",
@@ -3339,10 +3371,10 @@ for (const verdict of ["passed", "failed", "rejected"] as const) {
           {
             id: "e2e-1",
             label: "Draft tests",
-            status: verdict === "rejected" ? "failed" : verdict,
+            status: resultStatus,
             notes: "Fresh command result",
           },
-          ...(verdict === "failed"
+          ...(verdict === "failed" || verdict === "draining"
             ? [
                 {
                   id: "database-setup",
@@ -3458,15 +3490,27 @@ for (const verdict of ["passed", "failed", "rejected"] as const) {
     }
     const threads = [target, controller, tester];
     const commands: OrchestrationCommand[] = [];
+    let draining = false;
     const layer = AppReviewWorkflowReactorLive.pipe(
       Layer.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          Layer.mock(WorkflowDrainCoordinator)({
+            accepting: Effect.sync(() => !draining),
+            startupRecoveryCause: null,
+          }),
           Layer.mock(ProcessRunner)({}),
           Layer.mock(OrchestrationEngineService)({
             dispatch: (command) =>
-              Effect.sync(() => {
+              Effect.gen(function* () {
                 commands.push(command);
+                if (verdict === "draining" && command.type === "thread.turn.start") {
+                  draining = true;
+                  return yield* new OrchestrationCommandInvariantError({
+                    commandType: command.type,
+                    detail: "The server is draining workflow work for a planned restart.",
+                  });
+                }
                 if (command.type === "thread.app-review-workflow.update") storedRun = command.run;
                 return { sequence: commands.length };
               }),
@@ -3547,6 +3591,12 @@ for (const verdict of ["passed", "failed", "rejected"] as const) {
           expect(turns[0]?.message.text).toContain(
             "even when the reviewer listed them as actionable findings",
           );
+          if (verdict === "draining") {
+            expect(storedRun.failure).toBeNull();
+            const beforeSweep = commands.length;
+            yield* reactor.reconcile();
+            expect(commands).toHaveLength(beforeSweep);
+          }
         }
       }).pipe(Effect.provide(layer)),
     );

@@ -240,6 +240,7 @@ export const AppReviewWorkflowCycle = Schema.Struct({
   recoveryContinuationCount: Schema.optionalKey(NonNegativeInt),
   /** One result-only continuation after a fixer completes without its directive. */
   fixResultContinuationCount: Schema.optionalKey(NonNegativeInt),
+  fixResultContinuationRequestedAt: Schema.optionalKey(Schema.NullOr(IsoDateTime)),
   validationRepair: Schema.optionalKey(
     Schema.NullOr(
       Schema.Struct({
