@@ -1932,6 +1932,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           });
           return;
 
+        case "thread.implementation-run-rerun-requested":
         case "thread.implementation-change-request-retry-requested":
           yield* projectionImplementationRunRepository.upsert({
             runId: event.payload.run.id,

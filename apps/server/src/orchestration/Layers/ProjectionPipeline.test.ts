@@ -7,6 +7,7 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
   MessageId,
+  OrchestrationImplementationRun,
   ProjectId,
   ThreadId,
   type ThreadPullRequestSnapshot,
@@ -46,6 +47,7 @@ import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
 import { ServerConfig } from "../../config.ts";
+import { queueImplementationRerun } from "../implementationRerun.ts";
 
 const makeProjectionPipelinePrefixedTestLayer = (prefix: string) =>
   OrchestrationProjectionPipelineLive.pipe(
@@ -65,6 +67,100 @@ const exists = (filePath: string) =>
 const BaseTestLayer = makeProjectionPipelinePrefixedTestLayer("t3-projection-pipeline-test-");
 const encodeThreadLinkedPullRequest = Schema.encodeSync(
   Schema.fromJsonString(ThreadLinkedPullRequest),
+);
+const decodeImplementationRun = Schema.decodeUnknownEffect(OrchestrationImplementationRun);
+const decodeImplementationRunJson = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(OrchestrationImplementationRun),
+);
+
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-rerun-projection-")))(
+  "implementation rerun projection",
+  (it) => {
+    it.effect("persists the queued generation while retaining the workflow's source thread", () =>
+      Effect.gen(function* () {
+        const pipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const createdAt = "2026-09-27T09:00:00.000Z";
+        const branch = {
+          baseBranch: "dev",
+          pinnedCommit: "abc123",
+          orchestratorBranch: "feature",
+          orchestratorWorktreePath: "/tmp/rerun-projection",
+        };
+        const run = yield* decodeImplementationRun({
+          id: "rerun-run",
+          specId: "rerun-spec",
+          planningTicketIds: ["rerun-ticket"],
+          orchestratorThreadId: "rerun-orchestrator",
+          status: "running",
+          ...branch,
+          launchSummary: {
+            specId: "rerun-spec",
+            planningTicketIds: ["rerun-ticket"],
+            ...branch,
+            validationCommands: [],
+            createdAt,
+          },
+          ticketStates: [
+            {
+              ticketId: "rerun-ticket",
+              status: "failed",
+              dependencyTicketIds: [],
+              updatedAt: createdAt,
+            },
+          ],
+          createdAt,
+          updatedAt: createdAt,
+        });
+        const sourceThreadId = ThreadId.make("rerun-source");
+        const eventBase = {
+          aggregateKind: "thread" as const,
+          aggregateId: sourceThreadId,
+          occurredAt: createdAt,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+        };
+        yield* eventStore.append({
+          ...eventBase,
+          type: "thread.implementation-run-launched",
+          eventId: EventId.make("rerun-launch"),
+          commandId: CommandId.make("rerun-launch"),
+          payload: { sourceThreadId, run },
+        });
+        yield* pipeline.bootstrap;
+        const target = {
+          kind: "ticket",
+          ticketId: run.planningTicketIds[0]!,
+          stage: "implementation",
+        } as const;
+        const queued = queueImplementationRerun({
+          run,
+          target,
+          executionId: "rerun-execution",
+          createdAt: "2026-09-27T09:01:00.000Z",
+        });
+        const event = yield* eventStore.append({
+          ...eventBase,
+          aggregateId: run.orchestratorThreadId,
+          occurredAt: queued.run.updatedAt,
+          type: "thread.implementation-run-rerun-requested",
+          eventId: EventId.make("rerun-request"),
+          commandId: CommandId.make("rerun-request"),
+          payload: { run: queued.run, target },
+        });
+        yield* pipeline.projectEvent(event);
+        const rows = yield* sql<{ source_thread_id: string; run_json: string }>`
+          SELECT source_thread_id, run_json FROM projection_implementation_runs WHERE run_id = ${run.id}
+        `;
+        assert.strictEqual(rows[0]?.source_thread_id, sourceThreadId);
+        const persisted = yield* decodeImplementationRunJson(rows[0]?.run_json);
+        assert.strictEqual(persisted.ticketStates[0]?.implementationGeneration, 1);
+        assert.deepStrictEqual(persisted.ticketStates[0]?.stageExecutions.at(-1), queued.execution);
+      }),
+    );
+  },
 );
 
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-cursor-batch-")))(
