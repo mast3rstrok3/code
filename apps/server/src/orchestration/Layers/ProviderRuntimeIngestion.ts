@@ -183,7 +183,15 @@ type IngestionDomainEvent = Extract<
 
 type ProviderDiffEvent = Extract<ProviderRuntimeEvent, { type: "turn.diff.updated" }>;
 
+interface QueuedTextDelta {
+  source: "text";
+  event: Extract<ProviderRuntimeEvent, { type: "content.delta" }>;
+  chunks: string[];
+  characters: number;
+}
+
 type RuntimeIngestionInput =
+  | QueuedTextDelta
   | {
       source: "runtime";
       event: ProviderRuntimeEvent;
@@ -4925,8 +4933,20 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const queuedTextByThread = new Map<string, QueuedTextDelta>();
+
   const processInput = (input: RuntimeIngestionInput) => {
     switch (input.source) {
+      case "text":
+        return Effect.suspend(() => {
+          if (queuedTextByThread.get(input.event.threadId) === input) {
+            queuedTextByThread.delete(input.event.threadId);
+          }
+          return processRuntimeEvent({
+            ...input.event,
+            payload: { ...input.event.payload, delta: input.chunks.join("") },
+          });
+        });
       case "runtime":
         return processRuntimeEvent(input.event);
       case "domain":
@@ -4971,10 +4991,50 @@ const make = Effect.gen(function* () {
   const worker = {
     ...keyedWorker,
     enqueue: (input: RuntimeIngestionInput) =>
-      (Option.isSome(ingestionBacklog)
-        ? ingestionBacklog.value.track(ingestionKey(input))
-        : Effect.void
-      ).pipe(Effect.andThen(keyedWorker.enqueue(input))),
+      Effect.suspend(() => {
+        const key = ingestionKey(input);
+        const event = input.source === "runtime" ? input.event : undefined;
+        // A slow database must not turn a burst of tokens into thousands of
+        // reads ahead of turn.completed. Merge only text still in the queue;
+        // every other event preserves its place between text fragments.
+        if (
+          event?.type === "content.delta" &&
+          typeof event.payload.delta === "string" &&
+          (event.payload.streamKind === "assistant_text" ||
+            event.payload.streamKind === "reasoning_text" ||
+            event.payload.streamKind === "reasoning_summary_text")
+        ) {
+          const pending = queuedTextByThread.get(key);
+          if (
+            pending &&
+            pending.event.turnId === event.turnId &&
+            pending.event.itemId === event.itemId &&
+            pending.event.provider === event.provider &&
+            pending.event.providerInstanceId === event.providerInstanceId &&
+            pending.event.payload.streamKind === event.payload.streamKind &&
+            pending.event.payload.summaryIndex === event.payload.summaryIndex &&
+            pending.event.payload.contentIndex === event.payload.contentIndex &&
+            pending.characters + event.payload.delta.length <= MAX_BUFFERED_ASSISTANT_CHARS
+          ) {
+            pending.chunks.push(event.payload.delta);
+            pending.characters += event.payload.delta.length;
+            return Effect.void;
+          }
+          const text: QueuedTextDelta = {
+            source: "text",
+            event,
+            chunks: [event.payload.delta],
+            characters: event.payload.delta.length,
+          };
+          queuedTextByThread.set(key, text);
+          input = text;
+        } else {
+          queuedTextByThread.delete(key);
+        }
+        return (
+          Option.isSome(ingestionBacklog) ? ingestionBacklog.value.track(key) : Effect.void
+        ).pipe(Effect.andThen(keyedWorker.enqueue(input)));
+      }),
   };
 
   // Repository detection for a diff goes through VCS subprocesses, which can

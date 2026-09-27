@@ -334,6 +334,7 @@ describe("ProviderRuntimeIngestion", () => {
     threadTitle?: string;
     workspaceSubdirectory?: string;
     isGitRepository?: CheckpointStore.CheckpointStore["Service"]["isGitRepository"];
+    beforeRuntimeContextLookup?: Effect.Effect<void>;
   }) {
     const repositoryRoot = makeTempDir("t3-provider-project-");
     NodeChildProcess.execFileSync("git", ["init", "--initial-branch=main"], {
@@ -356,7 +357,16 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provide(RepositoryIdentityResolver.layer),
       Layer.provide(SqlitePersistenceMemory),
     );
-    const ingestionProjectionSnapshotLayer = projectionSnapshotLayer;
+    const ingestionProjectionSnapshotLayer = Layer.effect(
+      ProjectionSnapshotQuery,
+      Effect.map(ProjectionSnapshotQuery, (query) => ({
+        ...query,
+        getThreadRuntimeContext: (threadId) =>
+          (options?.beforeRuntimeContextLookup ?? Effect.void).pipe(
+            Effect.andThen(query.getThreadRuntimeContext(threadId)),
+          ),
+      })),
+    ).pipe(Layer.provide(projectionSnapshotLayer));
     // Real clock plus an offset the test can advance, so delivery pacing in
     // ingestion can be driven without sleeping. Sleeps stay real.
     let clockOffsetMs = 0;
@@ -495,11 +505,96 @@ describe("ProviderRuntimeIngestion", () => {
         clockOffsetMs += ms;
       },
       emitAndDrain,
+      enqueue: (events: ReadonlyArray<LegacyProviderRuntimeEvent>) =>
+        testRuntime.runPromise(provider.emitAndWaitForEnqueue(events)),
       sqlCount: sqlCounter.count,
       setProviderSession: provider.setSession,
       drain,
     };
   }
+
+  effectIt.effect.each(["paragraph", "token", "turn"] as const)(
+    "settles a queued text burst without one context query per token in %s mode",
+    (responseStreamingMode) =>
+      Effect.gen(function* () {
+        const lookupStarted = yield* Deferred.make<void>();
+        const releaseLookup = yield* Deferred.make<void>();
+        let lookups = 0;
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            serverSettings: { responseStreamingMode },
+            beforeRuntimeContextLookup: Effect.gen(function* () {
+              lookups += 1;
+              if (lookups === 1) {
+                yield* Deferred.succeed(lookupStarted, undefined);
+                yield* Deferred.await(releaseLookup);
+              }
+            }),
+          }),
+        );
+        const base = {
+          provider: ProviderDriverKind.make("codex"),
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("burst-turn"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+        };
+        harness.emit({ ...base, type: "turn.started", eventId: asEventId("burst-start") });
+        yield* Deferred.await(lookupStarted);
+        const events: LegacyProviderRuntimeEvent[] = [];
+        for (const summaryIndex of [0, 1]) {
+          for (const delta of ["Think", " carefully."]) {
+            events.push({
+              ...base,
+              type: "content.delta",
+              eventId: asEventId(`reasoning-${summaryIndex}-${delta}`),
+              itemId: asItemId("reasoning"),
+              payload: { streamKind: "reasoning_summary_text", delta, summaryIndex },
+            });
+          }
+        }
+        for (const item of ["first", "second"]) {
+          for (let index = 0; index < 200; index += 1) {
+            events.push({
+              ...base,
+              type: "content.delta",
+              eventId: asEventId(`${item}-${index}`),
+              itemId: asItemId(item),
+              payload: { streamKind: "assistant_text", delta: `${item}:${index} ` },
+            });
+          }
+          events.push({
+            ...base,
+            type: "item.completed",
+            eventId: asEventId(`${item}-complete`),
+            itemId: asItemId(item),
+            payload: { itemType: "assistant_message", status: "completed" },
+          });
+        }
+        events.push({
+          ...base,
+          type: "turn.completed",
+          eventId: asEventId("burst-complete"),
+          payload: { state: "completed" },
+        });
+        yield* Effect.promise(() => harness.enqueue(events)).pipe(
+          Effect.ensuring(Deferred.succeed(releaseLookup, undefined)),
+        );
+        yield* Effect.promise(harness.drain);
+        const thread = (yield* Effect.promise(harness.readModel)).threads[0]!;
+        expect(thread.session).toMatchObject({ status: "ready", activeTurnId: null });
+        expect(thread.messages.filter((message) => message.role === "assistant")).toMatchObject(
+          ["first", "second"].map((item) => ({
+            text: Array.from({ length: 200 }, (_, index) => `${item}:${index} `).join(""),
+            streaming: false,
+          })),
+        );
+        expect(thread.messages.filter((message) => message.role === "reasoning")).toMatchObject([
+          { text: "Think carefully.\n\nThink carefully.", streaming: false },
+        ]);
+        expect(yield* Effect.promise(harness.pendingIngestionThreadIds)).toEqual(new Set());
+        expect(lookups).toBeLessThan(10);
+      }),
+  );
 
   it("maps turn started/completed events into thread session updates", async () => {
     const harness = await createHarness();
@@ -2824,7 +2919,7 @@ describe("ProviderRuntimeIngestion", () => {
     ]);
   });
 
-  it("buffers assistant deltas with one lifecycle query per event until completion", async () => {
+  it("buffers a burst of assistant deltas without querying for every token", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
@@ -2856,7 +2951,7 @@ describe("ProviderRuntimeIngestion", () => {
         },
       })),
     );
-    expect(harness.sqlCount() - before).toBe(eventCount);
+    expect(harness.sqlCount() - before).toBeLessThan(10);
 
     const midReadModel = await harness.readModel();
     const midThread = midReadModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
