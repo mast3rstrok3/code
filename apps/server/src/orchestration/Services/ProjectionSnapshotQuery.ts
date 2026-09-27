@@ -16,6 +16,8 @@ export interface ProjectionThreadDetailQuery {
  * @module ProjectionSnapshotQuery
  */
 import type {
+  AppReviewId,
+  AppReviewWorkflowRun,
   AgentSessionImportSource,
   ApprovalRequestId,
   CheckpointRef,
@@ -78,6 +80,10 @@ export interface ProjectionFullThreadDiffContext {
  * ProjectionSnapshotQueryShape - Service API for read-model snapshots.
  */
 export interface ProjectionSnapshotQueryShape {
+  /** Find the owning review without loading unrelated threads or workflow runs. */
+  readonly getAppReviewWorkflowRun: (
+    input: { readonly threadId: ThreadId } | { readonly reviewId: AppReviewId },
+  ) => Effect.Effect<Option.Option<AppReviewWorkflowRun>, ProjectionRepositoryError>;
   /** Read the latest request or resolution without loading the thread history. */
   readonly getUserInputActivity: (input: {
     readonly threadId: ThreadId;

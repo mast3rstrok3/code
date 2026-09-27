@@ -4245,35 +4245,13 @@ ${result.outputMarkdown}`,
       return event.payload.run;
     }
     if (event.type === "thread.app-review-workflow-cancel-requested") return null;
-    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-    const runs = readModel.appReviewWorkflowRuns ?? [];
-    if (event.type === "thread.app-review-updated") {
-      return (
-        runs.find((run) =>
-          run.cycles.some(
-            (cycle) =>
-              cycle.reviewId === event.payload.reviewId ||
-              cycle.e2eReviewId === event.payload.reviewId,
-          ),
-        ) ?? null
-      );
-    }
-    const threadId = event.payload.threadId;
-    return (
-      runs.find(
-        (run) =>
-          run.status === "running" &&
-          (run.controllerThreadId === threadId ||
-            run.activeThreadId === threadId ||
-            run.cycles.some(
-              (cycle) =>
-                cycle.e2eThreadId === threadId ||
-                cycle.reviewerThreadId === threadId ||
-                cycle.plannerThreadId === threadId ||
-                cycle.fixerThreadId === threadId,
-            )),
-      ) ?? null
-    );
+    return yield* projectionSnapshotQuery
+      .getAppReviewWorkflowRun(
+        event.type === "thread.app-review-updated"
+          ? { reviewId: event.payload.reviewId }
+          : { threadId: event.payload.threadId },
+      )
+      .pipe(Effect.map(Option.getOrNull));
   });
 
   const processEvent = Effect.fn("AppReviewWorkflowReactor.processEvent")(function* (
@@ -4312,12 +4290,13 @@ ${result.outputMarkdown}`,
       yield* rerunPhase(event.payload.run, event.payload.phase, event.occurredAt);
       return;
     }
+    const run = yield* runForEvent(event);
+    if (run === null) return;
     if (
       event.type === "thread.session-set" &&
       (event.payload.session.status === "starting" || event.payload.session.status === "running")
     ) {
-      const run = yield* runForEvent(event);
-      if (run !== null && isSupersededAppReviewPhaseThread(run, event.payload.threadId)) {
+      if (isSupersededAppReviewPhaseThread(run, event.payload.threadId)) {
         yield* orchestrationEngine.dispatch({
           type: "thread.turn.interrupt",
           commandId: yield* serverCommandId("app-review-workflow-superseded-interrupt"),
@@ -4328,8 +4307,6 @@ ${result.outputMarkdown}`,
       }
     }
     if (event.type === "thread.activity-appended") {
-      const run = yield* runForEvent(event);
-      if (run === null) return;
       if (
         event.payload.activity.kind === "approval.requested" ||
         event.payload.activity.kind === "user-input.requested"
@@ -4347,8 +4324,7 @@ ${result.outputMarkdown}`,
       }
     }
     if (event.type === "thread.session-set" && event.payload.session.status === "error") {
-      const run = yield* runForEvent(event);
-      if (run !== null && run.activeThreadId === event.payload.threadId) {
+      if (run.activeThreadId === event.payload.threadId) {
         const active = yield* resolveThread(event.payload.threadId);
         if (active !== undefined && (yield* phaseThreadState(active)) === "nudging") return;
         // A named phase owns bounded continuation turns in its durable thread.
@@ -4376,18 +4352,14 @@ ${result.outputMarkdown}`,
         return;
       }
     }
-    const run = yield* runForEvent(event);
-    if (run !== null) {
-      const currentRun =
-        (event.type === "thread.activity-appended" &&
-          isAppReviewProviderProgressActivityKind(event.payload.activity.kind)) ||
-        (event.type === "thread.session-set" &&
-          (event.payload.session.status === "starting" ||
-            event.payload.session.status === "running"))
-          ? yield* renewActivePhaseLease(run, event.payload.threadId, event.occurredAt)
-          : run;
-      yield* reconcileRun(currentRun, event.occurredAt);
-    }
+    const currentRun =
+      (event.type === "thread.activity-appended" &&
+        isAppReviewProviderProgressActivityKind(event.payload.activity.kind)) ||
+      (event.type === "thread.session-set" &&
+        (event.payload.session.status === "starting" || event.payload.session.status === "running"))
+        ? yield* renewActivePhaseLease(run, event.payload.threadId, event.occurredAt)
+        : run;
+    yield* reconcileRun(currentRun, event.occurredAt);
   });
 
   const processEventSafely = (event: AppReviewWorkflowEvent) =>

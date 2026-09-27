@@ -40,6 +40,8 @@ const makeProjectionSnapshotQueryLayer = (importedWorkspaceRoots: ReadonlyArray<
   Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
     getThreadDetailSnapshotById: () => Effect.die("unused"),
 
+    getAppReviewWorkflowRun: () => Effect.die("Unexpected review lookup"),
+
     getCommandReadModel: () => Effect.die("unused"),
     getUserInputActivity: () => Effect.die("unused"),
     listActivitiesByKind: () => Effect.die("unused"),

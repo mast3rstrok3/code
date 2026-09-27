@@ -1447,6 +1447,52 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const getAppReviewWorkflowRunRow = SqlSchema.findOneOption({
+    Request: Schema.Union([
+      Schema.Struct({ threadId: ThreadId }),
+      Schema.Struct({ reviewId: AppReviewId }),
+    ]),
+    Result: ProjectionAppReviewWorkflowRunDbRowSchema,
+    execute: (input) => sql`
+      SELECT run_id AS "runId", target_thread_id AS "sourceThreadId", run_json AS "run"
+      FROM projection_app_review_workflow_runs
+      WHERE ${
+        "reviewId" in input
+          ? sql`EXISTS (
+              SELECT 1 FROM json_each(run_json, '$.cycles') AS cycle
+              WHERE json_extract(cycle.value, '$.reviewId') = ${input.reviewId}
+                 OR json_extract(cycle.value, '$.e2eReviewId') = ${input.reviewId}
+            )`
+          : sql`status = 'running' AND (
+              controller_thread_id = ${input.threadId}
+              OR json_extract(run_json, '$.activeThreadId') = ${input.threadId}
+              OR EXISTS (
+                SELECT 1 FROM json_each(run_json, '$.cycles') AS cycle
+                WHERE json_extract(cycle.value, '$.e2eThreadId') = ${input.threadId}
+                   OR json_extract(cycle.value, '$.reviewerThreadId') = ${input.threadId}
+                   OR json_extract(cycle.value, '$.plannerThreadId') = ${input.threadId}
+                   OR json_extract(cycle.value, '$.fixerThreadId') = ${input.threadId}
+              )
+            )`
+      }
+      ORDER BY created_at ASC, run_id ASC
+      LIMIT 1
+    `,
+  });
+
+  const getAppReviewWorkflowRun: ProjectionSnapshotQueryShape["getAppReviewWorkflowRun"] = (
+    input,
+  ) =>
+    getAppReviewWorkflowRunRow(input).pipe(
+      Effect.map(Option.map((row) => normalizeAppReviewPhaseExecution(row.run))),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getAppReviewWorkflowRun:query",
+          "ProjectionSnapshotQuery.getAppReviewWorkflowRun:decodeRow",
+        ),
+      ),
+    );
+
   const listThreadActivityRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ProjectionThreadActivityDbRowSchema,
@@ -5264,6 +5310,7 @@ pending_approval_requests AS (
   ) => getThreadDetailSnapshot(threadId);
 
   return {
+    getAppReviewWorkflowRun,
     getCommandReadModel,
     getUserInputActivity,
     listActivitiesByKind,

@@ -173,6 +173,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets returns existing project and threa
       Effect.provideService(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
         getUserInputActivity: () => Effect.die("unused"),
         listActivitiesByKind: () => Effect.succeed([]),
+        getAppReviewWorkflowRun: () => Effect.die("Unexpected review lookup"),
         getCommandReadModel: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("unused"),
         getShellSnapshot: () => Effect.die("unused"),
@@ -305,6 +306,7 @@ it.effect.each([
       Effect.provideService(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
         getUserInputActivity: () => Effect.die("unused"),
         listActivitiesByKind: () => Effect.succeed([]),
+        getAppReviewWorkflowRun: () => Effect.die("Unexpected review lookup"),
         getCommandReadModel: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("unused"),
         getShellSnapshot: () => Effect.die("unused"),
@@ -396,6 +398,7 @@ it.effect(
 
           getUserInputActivity: () => Effect.die("unused"),
           listActivitiesByKind: () => Effect.succeed([]),
+          getAppReviewWorkflowRun: () => Effect.die("Unexpected review lookup"),
           getCommandReadModel: () => Effect.die("unused"),
           getSnapshot: () => Effect.die("unused"),
           getShellSnapshot: () => Effect.die("unused"),
@@ -461,6 +464,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets preserves typed UUID generation fa
       Effect.provideService(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
         getUserInputActivity: () => Effect.die("unused"),
         listActivitiesByKind: () => Effect.succeed([]),
+        getAppReviewWorkflowRun: () => Effect.die("Unexpected review lookup"),
         getCommandReadModel: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("unused"),
         getShellSnapshot: () => Effect.die("unused"),
