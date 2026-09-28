@@ -1169,9 +1169,8 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed(0),
   });
 
-  // When a thinking block opened, so "Thought for ..." measures the model's
-  // time and not the moment buffered text happened to be flushed.
-  const reasoningStartedAtByMessageId = yield* Cache.make<MessageId, string>({
+  // Preserve message order and thinking duration when buffered text is flushed later.
+  const messageStartedAtByMessageId = yield* Cache.make<MessageId, string>({
     capacity: BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY,
     timeToLive: BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL,
     lookup: () => Effect.succeed(""),
@@ -1924,11 +1923,11 @@ const make = Effect.gen(function* () {
   const clearAssistantMessageState = (messageId: MessageId) =>
     clearBufferedAssistantText(messageId).pipe(
       Effect.andThen(Cache.invalidate(reasoningPartIndexByMessageId, messageId)),
-      Effect.andThen(Cache.invalidate(reasoningStartedAtByMessageId, messageId)),
+      Effect.andThen(Cache.invalidate(messageStartedAtByMessageId, messageId)),
     );
 
-  const reasoningStartedAt = (messageId: MessageId, fallback: string) =>
-    Cache.getOption(reasoningStartedAtByMessageId, messageId).pipe(
+  const messageStartedAt = (messageId: MessageId, fallback: string) =>
+    Cache.getOption(messageStartedAtByMessageId, messageId).pipe(
       Effect.map((started) => Option.getOrElse(started, () => fallback) || fallback),
     );
 
@@ -3581,9 +3580,7 @@ const make = Effect.gen(function* () {
         messageId: input.messageId,
         delta: bufferedText,
         ...(input.turnId ? { turnId: input.turnId } : {}),
-        createdAt: isReasoning
-          ? yield* reasoningStartedAt(input.messageId, input.createdAt)
-          : input.createdAt,
+        createdAt: yield* messageStartedAt(input.messageId, input.createdAt),
       });
       return true;
     });
@@ -3655,9 +3652,7 @@ const make = Effect.gen(function* () {
           messageId: input.messageId,
           delta: text,
           ...(input.turnId ? { turnId: input.turnId } : {}),
-          createdAt: isReasoning
-            ? yield* reasoningStartedAt(input.messageId, input.createdAt)
-            : input.createdAt,
+          createdAt: yield* messageStartedAt(input.messageId, input.createdAt),
         });
       }
 
@@ -4215,11 +4210,11 @@ const make = Effect.gen(function* () {
 
         if (
           Option.getOrElse(
-            yield* Cache.getOption(reasoningStartedAtByMessageId, reasoningMessageId),
+            yield* Cache.getOption(messageStartedAtByMessageId, reasoningMessageId),
             () => "",
           ) === ""
         ) {
-          yield* Cache.set(reasoningStartedAtByMessageId, reasoningMessageId, now);
+          yield* Cache.set(messageStartedAtByMessageId, reasoningMessageId, now);
         }
 
         let delta = reasoningDelta.delta;
@@ -4255,7 +4250,7 @@ const make = Effect.gen(function* () {
             messageId: reasoningMessageId,
             delta: spillChunk,
             turnId,
-            createdAt: yield* reasoningStartedAt(reasoningMessageId, now),
+            createdAt: yield* messageStartedAt(reasoningMessageId, now),
           });
         }
       }
@@ -4287,6 +4282,15 @@ const make = Effect.gen(function* () {
 
         const streamingMode = yield* resolveResponseStreamingMode(thread.projectId);
         if (streamingMode !== "token") {
+          if (
+            Option.getOrElse(
+              yield* Cache.getOption(messageStartedAtByMessageId, assistantMessageId),
+              () => "",
+            ) === ""
+          ) {
+            yield* Cache.set(messageStartedAtByMessageId, assistantMessageId, now);
+          }
+
           // Pace on the server clock. OpenCode stamps every delta of a part
           // with the part's start time, so the event time cannot measure gaps.
           const spillChunk = yield* appendBufferedAssistantText(
@@ -4303,7 +4307,7 @@ const make = Effect.gen(function* () {
               messageId: assistantMessageId,
               delta: spillChunk,
               ...(turnId ? { turnId } : {}),
-              createdAt: now,
+              createdAt: yield* messageStartedAt(assistantMessageId, now),
             });
           }
         } else {

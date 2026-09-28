@@ -1765,21 +1765,20 @@ describe("ProviderRuntimeIngestion", () => {
         const thread = (await harness.readModel()).threads.find(
           (entry) => entry.id === base.threadId,
         )!;
-        expect(thread.messages).toHaveLength(2);
-        expect(thread.messages).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              id: "assistant:unfinished",
-              text: partial,
-              streaming: false,
-            }),
-            expect.objectContaining({
-              id: "assistant:replacement",
-              text: complete,
-              streaming: false,
-            }),
-          ]),
-        );
+        expect(thread.messages).toEqual([
+          expect.objectContaining({
+            id: "assistant:unfinished",
+            text: partial,
+            streaming: false,
+            createdAt: "2026-01-01T00:00:00.000Z",
+          }),
+          expect.objectContaining({
+            id: "assistant:replacement",
+            text: complete,
+            streaming: false,
+            createdAt: "2026-01-01T00:00:01.000Z",
+          }),
+        ]);
         expect(
           thread.activities.filter((entry) => entry.kind === "implementation-worker-result"),
         ).toHaveLength(1);
