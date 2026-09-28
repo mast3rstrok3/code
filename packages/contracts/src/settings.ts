@@ -26,6 +26,7 @@ import {
   ModelSelection,
   ProjectScript,
   ImplementationWorkflowSettings,
+  MaxParallelTickets,
   WorkflowStepCycleOverride,
   WorkflowStepModelOverride,
   WorkflowStepReviewPartsOverride,
@@ -1604,6 +1605,7 @@ export const ServerSettingsPatch = Schema.Struct({
   workflowStepReviewParts: Schema.optionalKey(Schema.Array(WorkflowStepReviewPartsOverride)),
   implementation: Schema.optionalKey(
     Schema.Struct({
+      maxParallelTickets: Schema.optionalKey(MaxParallelTickets),
       appReviewEnabled: Schema.optionalKey(Schema.Boolean),
       finalCodeReviewEnabled: Schema.optionalKey(Schema.Boolean),
       pullRequestCreationEnabled: Schema.optionalKey(Schema.Boolean),

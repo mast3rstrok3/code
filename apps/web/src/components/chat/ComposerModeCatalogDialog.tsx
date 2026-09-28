@@ -104,10 +104,10 @@ export function ComposerModeCatalogDialog(props: {
             definition.id === props.activePreset && definition.availability !== "under-development",
         )?.id ?? "quick-plan";
       setConfiguringPreset(preset);
-      setImplementationSettings(
-        implementationDefaultsForWorkflowPreset(preset) ??
-          props.workflowDefaults.implementationSettings,
-      );
+      setImplementationSettings({
+        ...props.workflowDefaults.implementationSettings,
+        ...implementationDefaultsForWorkflowPreset(preset),
+      });
     }
   }, [
     props.activePreset,
@@ -119,10 +119,10 @@ export function ComposerModeCatalogDialog(props: {
   ]);
 
   const configurePreset = (preset: WorkflowPreset) => {
-    setImplementationSettings(
-      implementationDefaultsForWorkflowPreset(preset) ??
-        props.workflowDefaults.implementationSettings,
-    );
+    setImplementationSettings({
+      ...props.workflowDefaults.implementationSettings,
+      ...implementationDefaultsForWorkflowPreset(preset),
+    });
     setConfiguringPreset(preset);
   };
 

@@ -12,6 +12,7 @@ import {
   ServerSettingsPatch,
 } from "./settings.ts";
 import { DEFAULT_WORKSPACE_USER, DEFAULT_WORKSPACE_USER_VIEW } from "./workspaceUsers.ts";
+import { ImplementationWorkflowSettings } from "./orchestration.ts";
 
 const decodeClientSettings = Schema.decodeUnknownSync(ClientSettingsSchema);
 const decodeClientSettingsPatch = Schema.decodeUnknownSync(ClientSettingsPatch);
@@ -20,6 +21,33 @@ const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
+
+describe("parallel ticket limits", () => {
+  it("preserves workflow limits and partial server defaults", () => {
+    expect(
+      Schema.decodeUnknownSync(ImplementationWorkflowSettings)({ maxParallelTickets: 3 }),
+    ).toMatchObject({ maxParallelTickets: 3 });
+    expect(decodeServerSettingsPatch({ implementation: { maxParallelTickets: 4 } })).toEqual({
+      implementation: { maxParallelTickets: 4 },
+    });
+    expect(
+      encodeServerSettings(decodeServerSettings({ implementation: { maxParallelTickets: 4 } })),
+    ).toMatchObject({ implementation: { maxParallelTickets: 4 } });
+    expect(
+      Schema.decodeUnknownSync(ImplementationWorkflowSettings)({}).maxParallelTickets,
+    ).toBeUndefined();
+  });
+
+  it.each([0, -1, 1.5, 33, Infinity, "2"])(
+    "rejects invalid parallel ticket limit %s",
+    (maxParallelTickets) => {
+      expect(() =>
+        Schema.decodeUnknownSync(ImplementationWorkflowSettings)({ maxParallelTickets }),
+      ).toThrow();
+      expect(() => decodeServerSettingsPatch({ implementation: { maxParallelTickets } })).toThrow();
+    },
+  );
+});
 
 describe("storage cleanup settings", () => {
   it("keeps cleanup disabled for existing installations", () => {

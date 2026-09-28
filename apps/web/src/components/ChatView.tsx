@@ -4394,6 +4394,25 @@ export default function ChatView(props: ChatViewProps) {
     },
     [activeWorkflowNavigation, setWorkflowStepModel],
   );
+  const handleSetMaxParallelTickets = useCallback(
+    (maxParallelTickets: number) => {
+      const root = activeWorkflowNavigation?.root;
+      if (!root) return;
+      void setThreadComposerMode({
+        environmentId: root.environmentId,
+        input: {
+          threadId: root.id,
+          interactionMode: root.interactionMode,
+          workflowPreset: root.workflowPreset ?? null,
+          workflowImplementationSettings: {
+            ...(root.workflowImplementationSettings ?? settings.implementation),
+            maxParallelTickets,
+          },
+        },
+      });
+    },
+    [activeWorkflowNavigation, setThreadComposerMode, settings.implementation],
+  );
   const handleSetWorkflowStepCycles = useCallback<SetWorkflowStepCycles>(
     (key, maxCycles) => {
       const root = activeWorkflowNavigation?.root;
@@ -10863,6 +10882,8 @@ export default function ChatView(props: ChatViewProps) {
       />
     ) : renderedRightPanelSurface?.kind === "workflows" ? (
       <WorkflowsPanel
+        defaultMaxParallelTickets={settings.implementation.maxParallelTickets}
+        onSetMaxParallelTickets={handleSetMaxParallelTickets}
         key={
           activeWorkflowNavigation
             ? `${activeWorkflowNavigation.root.environmentId}:${activeWorkflowNavigation.root.id}`

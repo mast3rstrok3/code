@@ -344,7 +344,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     id: "implementation",
     label: "Implementation",
     description:
-      "Run every ready ticket concurrently, with one active thread per ticket or root review step.",
+      "Run ready tickets up to the workflow's parallel ticket limit, with one active thread per ticket or root review step.",
     route: "implementation",
     interactionMode: "implementation-workflow",
     workflowPromptId: "implementation.orchestrator-planning.codex",
@@ -358,7 +358,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Execute ticket waves",
         skillId: "implementation.tdd.codex",
         threadBoundary: "new child thread",
-        note: "all ready tickets concurrently; one logical implementation per ticket with one interrupted-launch retry",
+        note: "ready tickets up to the parallel ticket limit; one logical implementation per ticket with one interrupted-launch retry",
         subSteps: [
           { label: "TDD implementation worker", workflowPromptId: "implementation.tdd.codex" },
           {
@@ -407,7 +407,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     id: "planning",
     label: "Engineering",
     description:
-      "Plan, run every ready ticket concurrently, then use one thread for each ticket or root step.",
+      "Plan, run ready tickets up to the workflow's parallel ticket limit, then use one thread for each ticket or root step.",
     route: "planning",
     interactionMode: "planning-workflow",
     // The first turn is the grill, and naming it here is what earns the thread
@@ -447,7 +447,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Execute ticket waves",
         skillId: "implementation.tdd.codex",
         threadBoundary: "new child thread",
-        note: "automatic; all ready tickets concurrently, with one active step thread per ticket",
+        note: "automatic; ready tickets up to the parallel ticket limit, with one active step thread per ticket",
         subSteps: [
           { label: "TDD implementation worker", workflowPromptId: "implementation.tdd.codex" },
           {

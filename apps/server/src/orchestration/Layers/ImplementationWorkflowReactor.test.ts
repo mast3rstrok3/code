@@ -1533,6 +1533,7 @@ function withSystem<A, E>(
 function seedPlanning(
   system: ImplementationSystem,
   options?: {
+    readonly maxParallelTickets?: number;
     readonly modelSelection?: ModelSelection;
     readonly sourceBranch?: string;
     readonly tickets?: ReadonlyArray<{
@@ -1568,6 +1569,14 @@ function seedPlanning(
       parentThreadId: null,
       workflowRole: null,
       title: "Planning",
+      ...(options?.maxParallelTickets === undefined
+        ? {}
+        : {
+            workflowImplementationSettings: {
+              ...implementationDefaultsForWorkflowPreset("planning")!,
+              maxParallelTickets: options.maxParallelTickets,
+            },
+          }),
       modelSelection: options?.modelSelection ?? {
         instanceId: ProviderInstanceId.make("codex"),
         model: "gpt-5-codex",
@@ -1694,6 +1703,7 @@ function appendWorkerResult(
     readonly commitSha?: string;
     readonly completeTicketReview?: boolean;
     readonly notesMarkdown?: string;
+    readonly reportedAt?: string;
   },
 ) {
   return Effect.gen(function* () {
@@ -1727,12 +1737,12 @@ function appendWorkerResult(
             input.status === "succeeded" ? (input.commitSha ?? `${state.branch}@commit`) : null,
           validations: requiredValidations(),
           notesMarkdown: input.notesMarkdown ?? input.status,
-          reportedAt: "2026-01-01T00:00:01.000Z",
+          reportedAt: input.reportedAt ?? "2026-01-01T00:00:01.000Z",
         },
         turnId: null,
-        createdAt: "2026-01-01T00:00:01.000Z",
+        createdAt: input.reportedAt ?? "2026-01-01T00:00:01.000Z",
       },
-      createdAt: "2026-01-01T00:00:01.000Z",
+      createdAt: input.reportedAt ?? "2026-01-01T00:00:01.000Z",
     });
     yield* system.reactor.drain;
     if (
@@ -4489,6 +4499,145 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("limits parallel tickets to ten by default and fills a freed slot", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, tickets } = yield* launchRun(system, {
+          tickets: Array.from({ length: 12 }, (_, index) => planningTicket(`TICKET-${index + 1}`)),
+        });
+        expect(run.ticketStates.filter((state) => state.status === "running")).toHaveLength(10);
+        expect(run.ticketStates.filter((state) => state.status === "ready")).toHaveLength(2);
+        expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(11);
+        yield* appendWorkerResult(system, { run, status: "succeeded", ticketId: tickets[0]!.id });
+        const snapshot = yield* system.query.getSnapshot();
+        const states = snapshot.implementationRuns[0]!.ticketStates;
+        expect(states.filter((state) => state.status === "succeeded")).toHaveLength(1);
+        expect(states.filter((state) => state.status === "running")).toHaveLength(10);
+        expect(states.filter((state) => state.status === "ready")).toHaveLength(1);
+        expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(12);
+      }),
+    ),
+  );
+
+  it.effect("inherits the server parallel ticket limit during recovery", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          yield* launchRun(system, {
+            tickets: [1, 2, 3, 4].map((index) => planningTicket(`TICKET-${index}`)),
+          });
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
+          const snapshot = yield* system.query.getSnapshot();
+          expect(snapshot.implementationRuns[0]?.ticketStates.map((state) => state.status)).toEqual(
+            ["running", "running", "running", "ready"],
+          );
+          expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(4);
+        }),
+      { serverSettings: { implementation: { maxParallelTickets: 3 } } },
+    ),
+  );
+
+  it.effect("keeps parallel ticket slots occupied through App Review and Code Review", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, tickets } = yield* launchRun(system, {
+          appReviewStrategy: "nested-workflow",
+          maxParallelTickets: 2,
+          tickets: [
+            {
+              ...planningTicket("TICKET-1"),
+              appReviewEligible: true,
+              appReviewPlanMarkdown: "Review the app.",
+            },
+            planningTicket("TICKET-2"),
+            planningTicket("TICKET-3"),
+          ],
+        });
+        for (const ticket of tickets.slice(0, 2)) {
+          yield* appendWorkerResult(system, {
+            run,
+            status: "succeeded",
+            ticketId: ticket.id,
+            completeTicketReview: false,
+          });
+        }
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+        const snapshot = yield* system.query.getSnapshot();
+        expect(snapshot.implementationRuns[0]?.ticketStates.map((state) => state.status)).toEqual([
+          "app-reviewing",
+          "code-reviewing",
+          "ready",
+        ]);
+        expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(3);
+      }),
+    ),
+  );
+
+  it.effect("applies live parallel ticket limits without interrupting active tickets", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run, tickets } = yield* launchRun(system, {
+            tickets: [1, 2, 3, 4, 5].map((index) => planningTicket(`TICKET-${index}`)),
+            maxParallelTickets: 1,
+          });
+          expect(run.ticketStates.filter((state) => state.status === "running")).toHaveLength(1);
+          const setLimit = (limit: number) =>
+            system.engine.dispatch({
+              type: "thread.composer-mode.set",
+              commandId: commandId(`parallel-limit-${limit}`),
+              threadId: sourceThreadId,
+              interactionMode: "planning-workflow",
+              workflowPreset: "planning",
+              workflowImplementationSettings: {
+                ...implementationDefaultsForWorkflowPreset("planning")!,
+                maxParallelTickets: limit,
+              },
+              createdAt: now,
+            });
+          yield* setLimit(3);
+          yield* system.reactor.drain;
+          expect(
+            (yield* system.query.getSnapshot()).implementationRuns[0]?.ticketStates.filter(
+              (state) => state.status === "running",
+            ),
+          ).toHaveLength(3);
+          yield* setLimit(2);
+          yield* system.reactor.drain;
+          expect(
+            (yield* system.query.getSnapshot()).implementationRuns[0]?.ticketStates.filter(
+              (state) => state.status === "running",
+            ),
+          ).toHaveLength(3);
+          yield* appendWorkerResult(system, {
+            run,
+            status: "succeeded",
+            reportedAt: testClockStart,
+            ticketId: tickets[0]!.id,
+          });
+          expect(
+            (yield* system.query.getSnapshot()).implementationRuns[0]?.ticketStates.map(
+              (state) => state.status,
+            ),
+          ).toEqual(["succeeded", "running", "running", "ready", "ready"]);
+          yield* appendWorkerResult(system, {
+            run,
+            status: "succeeded",
+            reportedAt: testClockStart,
+            ticketId: tickets[1]!.id,
+          });
+          expect(
+            (yield* system.query.getSnapshot()).implementationRuns[0]?.ticketStates.map(
+              (state) => state.status,
+            ),
+          ).toEqual(["succeeded", "succeeded", "running", "running", "ready"]);
+        }),
+      { serverSettings: { implementation: { maxParallelTickets: 4 } } },
+    ),
+  );
+
   it.effect("starts all 30 ready tickets with unique worker identities and singleton scopes", () =>
     withSystem((system) =>
       Effect.gen(function* () {
@@ -4497,6 +4646,7 @@ describe("ImplementationWorkflowReactor", () => {
         );
         const { run, tickets } = yield* launchRun(system, {
           tickets: plannedTickets,
+          maxParallelTickets: 30,
         });
         const snapshot = yield* system.query.getSnapshot();
         const workers = snapshot.threads.filter(
@@ -10071,6 +10221,7 @@ describe("ImplementationWorkflowReactor", () => {
       Effect.gen(function* () {
         const { run, tickets } = yield* launchRun(system, {
           appReviewStrategy: "nested-workflow",
+          maxParallelTickets: 3,
           tickets: ["TICKET-1", "TICKET-2", "TICKET-3"].map((key) => ({
             ...planningTicket(key),
             appReviewEligible: true,

@@ -27,6 +27,7 @@ import { resolveDefaultAgentModelSelectionState } from "../../modelSelection";
 import { primaryServerProvidersAtom } from "../../state/server";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { WorkflowSkillContent } from "../WorkflowSkillContent";
+import { WorkflowTicketConcurrency } from "../WorkflowTicketConcurrency";
 import { EngineeringWorkflowSettings } from "../EngineeringWorkflowSettings";
 import {
   useWorkflowModelChoices,
@@ -221,6 +222,20 @@ function WorkflowStepModelDefaultsBody(props: {
             onSetStepModel={props.onSetStepModel}
           />
         </div>
+      </SettingsRow>
+      <SettingsRow
+        title="Ticket scheduling"
+        description="Default limit for workflows without their own setting."
+      >
+        <WorkflowTicketConcurrency
+          value={props.implementationSettings.maxParallelTickets}
+          onChange={(maxParallelTickets) =>
+            props.onSetImplementationSettings({
+              ...props.implementationSettings,
+              maxParallelTickets,
+            })
+          }
+        />
       </SettingsRow>
       <SettingsRow
         title="Models and defaults for all eleven steps"

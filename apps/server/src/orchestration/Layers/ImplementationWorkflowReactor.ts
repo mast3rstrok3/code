@@ -21,6 +21,7 @@ import {
   type AppReviewWorkflowRun,
   AppReviewWorkflowRunId,
   CommandId,
+  DEFAULT_MAX_PARALLEL_TICKETS,
   AppReviewId,
   isRunStageSkipped,
   isTicketSkipped,
@@ -95,6 +96,7 @@ import {
   WORKFLOW_PROMPT_IDS,
 } from "../../provider/WorkflowPromptRegistry.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { readyTicketsWithinLimit } from "../implementationTicketConcurrency.ts";
 import {
   ImplementationWorkflowReactor,
   type ImplementationWorkflowReactorShape,
@@ -163,7 +165,8 @@ type ImplementationWorkflowEvent = Extract<
       | "thread.implementation-run-cancel-requested"
       | "thread.app-review-workflow-launched"
       | "thread.app-review-workflow-updated"
-      | "thread.workflow-resumed";
+      | "thread.workflow-resumed"
+      | "thread.composer-mode-set";
   }
 >;
 
@@ -3128,6 +3131,16 @@ const make = Effect.gen(function* () {
       const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
       if (orchestratorThread === null) return input.run;
       if (input.run.automationHalt !== null) return input.run;
+      if (isWorkflowThreadPaused(readModel.threads, orchestratorThread.id)) return input.run;
+      const root = findThread(
+        readModel,
+        orchestratorThread.workflowContext?.rootThreadId ?? input.sourceThreadId,
+      );
+      const settings = yield* serverSettingsService.getSettings;
+      const limit =
+        root?.workflowImplementationSettings?.maxParallelTickets ??
+        settings.implementation.maxParallelTickets ??
+        DEFAULT_MAX_PARALLEL_TICKETS;
 
       // Passes rather than one sweep, because a skipped ticket is terminal the
       // moment it takes its branch: what waited on it becomes ready inside this
@@ -3163,9 +3176,7 @@ const make = Effect.gen(function* () {
             updatedAt: input.createdAt,
           });
         }
-        const readyTicketIds = workingRun.ticketStates
-          .filter((ticketState) => ticketState.status === "ready")
-          .map((ticketState) => ticketState.ticketId);
+        const readyTicketIds = readyTicketsWithinLimit(workingRun, limit);
         if (readyTicketIds.length === 0) break;
         const exhaustedTicket = workingRun.ticketStates.find(
           (state) =>
@@ -10955,6 +10966,20 @@ const make = Effect.gen(function* () {
       case "thread.workflow-resumed":
         yield* handleWorkflowResumed(event);
         return;
+      case "thread.composer-mode-set": {
+        if (event.payload.workflowImplementationSettings === undefined) return;
+        const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+        for (const run of readModel.implementationRuns) {
+          if (run.status !== "running" || run.artifactSource !== "planning-spec") continue;
+          const sourceThreadId = findRunSourceThreadId({ readModel, run });
+          if (sourceThreadId === null) continue;
+          const orchestrator = findThread(readModel, run.orchestratorThreadId);
+          const rootId = orchestrator?.workflowContext?.rootThreadId ?? sourceThreadId;
+          if (rootId !== event.payload.threadId) continue;
+          yield* startReadyWorkers({ sourceThreadId, run, createdAt: event.occurredAt });
+        }
+        return;
+      }
     }
   });
 
@@ -12976,7 +13001,8 @@ const make = Effect.gen(function* () {
           event.type !== "thread.implementation-run-cancel-requested" &&
           event.type !== "thread.app-review-workflow-launched" &&
           event.type !== "thread.app-review-workflow-updated" &&
-          event.type !== "thread.workflow-resumed"
+          event.type !== "thread.workflow-resumed" &&
+          event.type !== "thread.composer-mode-set"
         ) {
           return Effect.void;
         }

@@ -20,6 +20,7 @@ import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Button } from "./ui/button";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { EngineeringWorkflowSettings } from "./EngineeringWorkflowSettings";
+import { WorkflowTicketConcurrency } from "./WorkflowTicketConcurrency";
 import { Switch } from "./ui/switch";
 import { WorkflowStepCyclePins, type SetWorkflowStepCycles } from "./WorkflowStepCycles";
 import {
@@ -93,6 +94,8 @@ const RECOVERY_BACKUP_PIN_KEY: WorkflowModelPinKey = {
 };
 
 export function WorkflowSettingsBody(props: {
+  readonly maxParallelTickets?: number | undefined;
+  readonly onSetMaxParallelTickets?: ((value: number) => void) | undefined;
   readonly environmentId: EnvironmentId;
   readonly preset: WorkflowPreset | null;
   readonly pinFor: (key: WorkflowModelPinKey) => ModelSelection | null;
@@ -115,6 +118,19 @@ export function WorkflowSettingsBody(props: {
   readonly implementationSettingsScope?: "defaults" | "run" | undefined;
 }) {
   const choices = useWorkflowModelChoices(props.environmentId);
+  const { implementationSettings, onSetImplementationSettings } = props;
+  const onSetConcurrency =
+    props.onSetMaxParallelTickets ??
+    (implementationSettings && onSetImplementationSettings
+      ? (maxParallelTickets: number) =>
+          onSetImplementationSettings({ ...implementationSettings, maxParallelTickets })
+      : undefined);
+  const concurrencyControl = onSetConcurrency ? (
+    <WorkflowTicketConcurrency
+      value={props.maxParallelTickets ?? implementationSettings?.maxParallelTickets}
+      onChange={onSetConcurrency}
+    />
+  ) : null;
   const steps = pinnableSteps(props.preset);
   const defaultPinFor = (key: WorkflowModelPinKey): ModelSelection | null =>
     props.defaultStepModels?.find(
@@ -146,6 +162,7 @@ export function WorkflowSettingsBody(props: {
   if (steps.length === 0) {
     return (
       <div className="space-y-3 px-3 py-2">
+        {concurrencyControl}
         {recoveryBackupControl}
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           This workflow has no other agent model settings.
@@ -165,6 +182,7 @@ export function WorkflowSettingsBody(props: {
     return (
       <ScrollArea className="max-h-[min(42rem,75vh)]">
         <div className="space-y-4 px-3 py-2">
+          {concurrencyControl}
           {recoveryBackupControl}
           <p className="text-[11px] leading-relaxed text-muted-foreground">
             {props.description ??
@@ -199,6 +217,7 @@ export function WorkflowSettingsBody(props: {
   return (
     <ScrollArea className="max-h-[26rem]">
       <div className="space-y-3 px-3 py-2">
+        {concurrencyControl}
         {recoveryBackupControl}
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           {props.description ??
@@ -276,6 +295,8 @@ export function WorkflowSettingsBody(props: {
  * from only one of them.
  */
 export function WorkflowSettingsMenu(props: {
+  readonly maxParallelTickets?: number | undefined;
+  readonly onSetMaxParallelTickets?: ((value: number) => void) | undefined;
   readonly environmentId: EnvironmentId;
   readonly preset: WorkflowPreset | null;
   readonly pinFor: (key: WorkflowModelPinKey) => ModelSelection | null;
@@ -329,6 +350,8 @@ export function WorkflowSettingsMenu(props: {
         </div>
         {open && onSetStepModel !== undefined ? (
           <WorkflowSettingsBody
+            maxParallelTickets={props.maxParallelTickets}
+            onSetMaxParallelTickets={props.onSetMaxParallelTickets}
             environmentId={props.environmentId}
             preset={props.preset}
             pinFor={props.pinFor}

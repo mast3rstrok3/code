@@ -192,7 +192,14 @@ export const WorkflowPreset = Schema.Literals([
 ]);
 export type WorkflowPreset = typeof WorkflowPreset.Type;
 
+export const DEFAULT_MAX_PARALLEL_TICKETS = 10;
+export const MAX_PARALLEL_TICKETS = 32;
+export const MaxParallelTickets = Schema.Int.check(
+  Schema.isBetween({ minimum: 1, maximum: MAX_PARALLEL_TICKETS }),
+);
+
 export const ImplementationWorkflowSettings = Schema.Struct({
+  maxParallelTickets: Schema.optionalKey(MaxParallelTickets),
   ticketAppReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   appReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   finalCodeReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
