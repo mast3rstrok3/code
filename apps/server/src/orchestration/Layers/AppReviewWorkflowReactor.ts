@@ -2759,18 +2759,20 @@ const make = Effect.gen(function* () {
     );
   };
 
-  /**
-   * What the run should make of the thread driving its current phase. Reads the
-   * read model only when the answer can be "nudging".
-   */
+  /** Classify an apparent phase failure using current session state. */
   const phaseThreadState = Effect.fn("AppReviewWorkflowReactor.phaseThreadState")(function* (
     thread: OrchestrationThread,
   ) {
     if (!threadTurnFailed(thread)) return "working" as const;
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    // Loading message history can outlast a replacement session's startup.
+    const current = readModel.threads.find((candidate) => candidate.id === thread.id);
     return appReviewPhaseThreadState({
       threads: readModel.threads,
-      thread,
+      thread:
+        current === undefined
+          ? thread
+          : { ...thread, latestTurn: current.latestTurn, session: current.session },
       nowMs: Date.parse(yield* nowIso),
     });
   });
@@ -3242,7 +3244,7 @@ ${result.outputMarkdown}`,
         hasSettledCheckpoint(tester) &&
         !phaseAwaitingBackgroundTask(tester, Date.parse(occurredAt));
       if (!failed && !completedWithoutReview) return;
-      if (failed && (yield* phaseThreadState(tester)) === "nudging") return;
+      if (failed && (yield* phaseThreadState(tester)) !== "failed") return;
       yield* failCycle({
         run,
         reason: "review-blocked",
@@ -3341,7 +3343,7 @@ ${result.outputMarkdown}`,
         hasSettledCheckpoint(reviewer) &&
         !phaseAwaitingBackgroundTask(reviewer, Date.parse(occurredAt));
       if (!failed && !completedWithoutReview) return;
-      if (failed && (yield* phaseThreadState(reviewer)) === "nudging") return;
+      if (failed && (yield* phaseThreadState(reviewer)) !== "failed") return;
       yield* failCycle({
         run,
         reason: "review-blocked",
@@ -3624,7 +3626,7 @@ ${result.outputMarkdown}`,
     }
     if (appReviewPhaseTurnPending(run, cycle, planner)) return;
     if (threadTurnFailed(planner) && !hasSettledCheckpoint(planner)) {
-      if ((yield* phaseThreadState(planner)) === "nudging") return;
+      if ((yield* phaseThreadState(planner)) !== "failed") return;
       yield* failCycle({
         run,
         reason: "plan-missing",
@@ -3643,7 +3645,7 @@ ${result.outputMarkdown}`,
       // A failed turn captures a checkpoint too, so the nudge wait above does
       // not cover it: without this, a provider outage spends a planning launch
       // in seconds instead of waiting for the nudge to resume the planner.
-      if ((yield* phaseThreadState(planner)) === "nudging") return;
+      if ((yield* phaseThreadState(planner)) !== "failed") return;
       yield* failCycle({
         run,
         reason: "plan-missing",
@@ -3897,7 +3899,7 @@ ${result.outputMarkdown}`,
         hasSettledCheckpoint(fixer) &&
         !phaseAwaitingBackgroundTask(fixer, Date.parse(occurredAt));
       if (!failed && !completedWithoutResult) return;
-      if (failed && (yield* phaseThreadState(fixer)) === "nudging") return;
+      if (failed && (yield* phaseThreadState(fixer)) !== "failed") return;
       if (completedWithoutResult) {
         const continued = yield* continueFixerForMissingResult(run, occurredAt);
         if (continued !== null) return;
@@ -4349,7 +4351,7 @@ ${result.outputMarkdown}`,
     if (event.type === "thread.session-set" && event.payload.session.status === "error") {
       if (run.activeThreadId === event.payload.threadId) {
         const active = yield* resolveThread(event.payload.threadId);
-        if (active !== undefined && (yield* phaseThreadState(active)) === "nudging") return;
+        if (active !== undefined && (yield* phaseThreadState(active)) !== "failed") return;
         // A named phase owns bounded continuation turns in its durable thread.
         // A session error with no active phase has no safe retry target.
         const phaseReason =

@@ -326,6 +326,102 @@ it("accepts a legacy passing E2E report without scope metadata", () => {
   ).toBeNull();
 });
 
+for (const status of ["starting", "running", "stopped"] as const) {
+  effectIt.effect(`rechecks stale fixer failure against its current ${status} session`, () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse(now));
+      let storedRun = validationFixingRun();
+      const oldTime = "2025-12-31T23:59:00.000Z";
+      const stale = decodeThread({
+        id: storedRun.activeThreadId,
+        projectId: "project",
+        title: "Repair",
+        modelSelection: { instanceId: "codex", model: "gpt-6-astra" },
+        runtimeMode: "full-access",
+        workflowRole: "app-review-fixer",
+        branch: "dev",
+        worktreePath: "/assigned/worktree",
+        createdAt: oldTime,
+        updatedAt: oldTime,
+        deletedAt: null,
+        messages: [],
+        activities: [],
+        checkpoints: [],
+        latestTurn: {
+          turnId: "old-turn",
+          state: "interrupted",
+          requestedAt: oldTime,
+          startedAt: oldTime,
+          completedAt: oldTime,
+          assistantMessageId: null,
+        },
+        session: {
+          threadId: storedRun.activeThreadId,
+          status: "stopped",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: oldTime,
+        },
+      });
+      const current = decodeThread({
+        ...stale,
+        session: { ...stale.session, status, updatedAt: now },
+      });
+      const commands: OrchestrationCommand[] = [];
+      const layer = AppReviewWorkflowReactorLive.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            Layer.mock(ProcessRunner)({}),
+            Layer.mock(OrchestrationEngineService)({
+              dispatch: (command) =>
+                Effect.sync(() => {
+                  commands.push(command);
+                  if (command.type === "thread.app-review-workflow.update") storedRun = command.run;
+                  return { sequence: commands.length };
+                }),
+            }),
+            Layer.mock(ProjectionSnapshotQuery)({
+              getCommandReadModel: () =>
+                Effect.succeed({
+                  ...createEmptyReadModel(now),
+                  threads: [current],
+                  appReviewWorkflowRuns: [storedRun],
+                }),
+              getThreadDetailById: (id) =>
+                Effect.succeed(id === stale.id ? Option.some(stale) : Option.none()),
+            }),
+            Layer.mock(GitWorkflowService)({}),
+            Layer.mock(AppStackManager)(noAppStacks),
+            Layer.mock(ReviewService)({}),
+            Layer.mock(ServerSettingsService)({}),
+            Layer.mock(T3ProjectFileLoader)({}),
+          ),
+        ),
+      );
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const reactor = yield* AppReviewWorkflowReactor;
+          yield* reactor.reconcile();
+          yield* reactor.drain;
+          if (status === "stopped") {
+            expect(storedRun.status).toBe("failed");
+            expect(storedRun.failure?.reason).toBe("fixer-failed");
+          } else {
+            expect(storedRun.status).toBe("running");
+            expect(storedRun.cycles[0]?.fixingLaunchCount).toBe(2);
+            expect(commands.some((command) => command.type === "thread.turn.interrupt")).toBe(
+              false,
+            );
+          }
+        }).pipe(Effect.provide(layer)),
+      );
+    }),
+  );
+}
+
 function validationFixingRun(): AppReviewWorkflowRun {
   const run = reviewingRun();
   return {
