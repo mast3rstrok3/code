@@ -4641,13 +4641,22 @@ describe("ImplementationWorkflowReactor", () => {
           yield* system.reactor.drain;
           yield* system.reactor.recoverIncompleteStages();
           yield* system.reactor.drain;
+          snapshot = yield* system.query.getSnapshot();
+          expect(
+            snapshot.threads.find((thread) => thread.id === threadId)?.workflowPausedAt,
+          ).toBeNull();
+          expect(snapshot.implementationRuns[0]?.ticketStates[0]?.resumeQueuedAt).toBe(now);
+          expect(snapshot.implementationRuns[0]?.ticketStates[0]?.status).toBe(state.status);
           yield* appendWorkerResult(system, {
             run,
             ticketId: run.ticketStates[1]!.ticketId,
             status: "succeeded",
             reportedAt: testClockStart,
           });
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
           snapshot = yield* system.query.getSnapshot();
+          expect(snapshot.implementationRuns[0]?.ticketStates[0]?.resumeQueuedAt).toBeNull();
           expect(snapshot.implementationRuns[0]?.ticketStates[1]?.status).toBe("succeeded");
           expect(snapshot.implementationRuns[0]?.ticketStates[2]?.status).toBe("ready");
           expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(3);

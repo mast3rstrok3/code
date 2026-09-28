@@ -663,6 +663,14 @@ export function reconcileWorkflowState(
         });
         continue;
       }
+      const executionTarget = execution.target;
+      if (
+        executionTarget.kind === "ticket" &&
+        run.ticketStates.some(
+          (ticket) => ticket.ticketId === executionTarget.ticketId && ticket.resumeQueuedAt != null,
+        )
+      )
+        continue;
       if (execution.state === "queued") {
         actions.push({
           type: "claim-queued-stage",
@@ -741,7 +749,9 @@ export function reconcileWorkflowState(
     }
 
     const hasActive = [...latest.values()].some((execution) => ACTIVE_STATES.has(execution.state));
-    const hasQueued = [...latest.values()].some((execution) => execution.state === "queued");
+    const hasQueued =
+      run.ticketStates.some((ticket) => ticket.resumeQueuedAt != null) ||
+      [...latest.values()].some((execution) => execution.state === "queued");
     const hasTimedRetry = [...latest.values()].some(
       (execution) => execution.state === "retry-wait" && execution.recovery?.retryAt !== null,
     );

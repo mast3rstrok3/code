@@ -1394,6 +1394,8 @@ export type OrchestrationImplementationTicketStateStatus =
 export const OrchestrationImplementationTicketState = Schema.Struct({
   ticketId: OrchestrationPlanningTicketId,
   status: OrchestrationImplementationTicketStateStatus,
+  /** Resuming a paused ticket waits for dependency completion and a parallel slot. */
+  resumeQueuedAt: Schema.optionalKey(Schema.NullOr(IsoDateTime)),
   nativeVerification: Schema.optionalKey(Schema.NullOr(NativeVerificationHandoff)),
   dependencyTicketIds: Schema.Array(OrchestrationPlanningTicketId).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),

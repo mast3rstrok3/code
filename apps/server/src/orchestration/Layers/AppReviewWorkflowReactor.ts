@@ -101,6 +101,7 @@ import {
 } from "../stageClaim.ts";
 import { WORKFLOW_PROVIDER_LEASE_MS } from "../workflowStageExecutions.ts";
 import { isWorkflowThreadPaused } from "../workflowPause.ts";
+import { appReviewWaitsForAdmission } from "../implementationTicketConcurrency.ts";
 import { parseWorkflowDirectiveFromMarkdown } from "../workflowDirectives.ts";
 import {
   findWorkflowStepModels,
@@ -2123,7 +2124,8 @@ const make = Effect.gen(function* () {
       current?.status !== "running" ||
       current.updatedAt !== run.updatedAt ||
       current.activePhase !== phase ||
-      isWorkflowThreadPaused(latest.threads, run.controllerThreadId)
+      isWorkflowThreadPaused(latest.threads, run.controllerThreadId) ||
+      appReviewWaitsForAdmission(run, latest)
     )
       return false;
     if (result === "ready") return true;
@@ -2410,7 +2412,11 @@ const make = Effect.gen(function* () {
       if (target === null) return;
       if (!preflightPassed && !(yield* checkPrerequisites(run, target.cwd, "e2e"))) return;
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-      if (isWorkflowThreadPaused(readModel.threads, run.controllerThreadId)) return;
+      if (
+        isWorkflowThreadPaused(readModel.threads, run.controllerThreadId) ||
+        appReviewWaitsForAdmission(run, readModel)
+      )
+        return;
       const completed = completedAppReviewTests(execution);
       const remaining = execution.commands.filter(
         (selection) => !completed.some((result) => result.command === selection.command),
@@ -2593,7 +2599,11 @@ const make = Effect.gen(function* () {
     // A paused run is waiting for the user. The decider refuses a launch under
     // a paused scope, so going on would spend a cycle on a command that cannot
     // land. That is how a stopped workflow kept opening browser reviewers.
-    if (isWorkflowThreadPaused(readModel.threads, currentRun.controllerThreadId)) return;
+    if (
+      isWorkflowThreadPaused(readModel.threads, currentRun.controllerThreadId) ||
+      appReviewWaitsForAdmission(currentRun, readModel)
+    )
+      return;
     const target = yield* resolveTarget(currentRun.targetThreadId);
     if (target === null) {
       if (!(yield* targetIsGone(currentRun.targetThreadId))) {
@@ -4122,6 +4132,8 @@ ${result.outputMarkdown}`,
   ) {
     if (yield* isDraining) return;
     if (run.prerequisiteCheck != null) return;
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    if (appReviewWaitsForAdmission(run, readModel)) return;
     switch (nextAppReviewWorkflowAction(run)) {
       case "none":
         return;
@@ -4397,7 +4409,11 @@ ${result.outputMarkdown}`,
               const run = yield* runForEvent(event).pipe(Effect.orElseSucceed(() => null));
               if (run !== null && run.status === "running") {
                 const latest = yield* projectionSnapshotQuery.getCommandReadModel();
-                if (isWorkflowThreadPaused(latest.threads, run.controllerThreadId)) return;
+                if (
+                  isWorkflowThreadPaused(latest.threads, run.controllerThreadId) ||
+                  appReviewWaitsForAdmission(run, latest)
+                )
+                  return;
                 yield* failRun({
                   run,
                   reason: "automation-unavailable",
@@ -4483,7 +4499,11 @@ ${result.outputMarkdown}`,
       implementationRuns: input.readModel.implementationRuns,
     });
     if (claim === null) return false;
-    if (isWorkflowThreadPaused(input.readModel.threads, input.run.controllerThreadId)) return false;
+    if (
+      isWorkflowThreadPaused(input.readModel.threads, input.run.controllerThreadId) ||
+      appReviewWaitsForAdmission(input.run, input.readModel)
+    )
+      return false;
     const [phaseThread, controller, target] = yield* Effect.all([
       resolveThread(claim.threadId),
       resolveThread(input.run.controllerThreadId),
@@ -4634,7 +4654,8 @@ ${result.outputMarkdown}`,
       const check = run.prerequisiteCheck!;
       if (
         Date.parse(occurredAt) < Date.parse(check.nextCheckAt) ||
-        isWorkflowThreadPaused(readModel.threads, run.controllerThreadId)
+        isWorkflowThreadPaused(readModel.threads, run.controllerThreadId) ||
+        appReviewWaitsForAdmission(run, readModel)
       )
         return true;
       const target = yield* resolveTarget(run.targetThreadId);
@@ -4722,7 +4743,8 @@ ${result.outputMarkdown}`,
         !appReviewPrerequisiteRecoveryIsCurrent(current, latest.implementationRuns) ||
         current.updatedAt !== claimed.updatedAt ||
         current.prerequisiteCheck?.nextCheckAt !== claimed.prerequisiteCheck.nextCheckAt ||
-        isWorkflowThreadPaused(latest.threads, run.controllerThreadId)
+        isWorkflowThreadPaused(latest.threads, run.controllerThreadId) ||
+        appReviewWaitsForAdmission(run, latest)
       )
         return true;
       if (result === "waiting") return true;
@@ -4769,13 +4791,15 @@ ${result.outputMarkdown}`,
         current.status !== "running" ||
         current.activePhase !== "e2e" ||
         current.cycles.at(-1)?.e2eExecution?.id !== process.id ||
-        isWorkflowThreadPaused(readModel.threads, current.controllerThreadId)
+        isWorkflowThreadPaused(readModel.threads, current.controllerThreadId) ||
+        appReviewWaitsForAdmission(current, readModel)
       ) {
         yield* Fiber.interrupt(process.fiber);
         testProcesses.delete(runId);
       }
     }
     for (const run of readModel.appReviewWorkflowRuns ?? []) {
+      if (appReviewWaitsForAdmission(run, readModel)) continue;
       if (run.prerequisiteCheck != null) {
         yield* recoverPrerequisites(run, readModel, occurredAt);
         continue;
@@ -4784,7 +4808,11 @@ ${result.outputMarkdown}`,
         if (yield* recoverFailedImplementationPhase({ run, readModel, occurredAt })) continue;
       }
       if (run.status !== "running") continue;
-      if (isWorkflowThreadPaused(readModel.threads, run.controllerThreadId)) continue;
+      if (
+        isWorkflowThreadPaused(readModel.threads, run.controllerThreadId) ||
+        appReviewWaitsForAdmission(run, readModel)
+      )
+        continue;
       const activeThread =
         run.activeThreadId === null
           ? undefined
@@ -4804,7 +4832,11 @@ ${result.outputMarkdown}`,
             : Effect.gen(function* () {
                 if (yield* isDraining) return;
                 const latest = yield* projectionSnapshotQuery.getCommandReadModel();
-                if (isWorkflowThreadPaused(latest.threads, run.controllerThreadId)) return;
+                if (
+                  isWorkflowThreadPaused(latest.threads, run.controllerThreadId) ||
+                  appReviewWaitsForAdmission(run, latest)
+                )
+                  return;
                 yield* failRun({
                   run,
                   reason: "automation-unavailable",
@@ -4839,6 +4871,7 @@ ${result.outputMarkdown}`,
       run.activePhase !== "e2e" ||
       cycle?.e2eExecution?.id !== item.executionId ||
       isWorkflowThreadPaused(readModel.threads, run.controllerThreadId) ||
+      appReviewWaitsForAdmission(run, readModel) ||
       !cycle.e2eExecution.commands.some(
         (selection) =>
           selection.command === item.result.command &&

@@ -4755,6 +4755,7 @@ for (const scenario of [
   "invalid-retry",
   "blocked",
   "ticket",
+  "ticket-queued",
   "ticket-replaced-stack",
   "ticket-startup-retry",
   "ticket-starting-stack",
@@ -4778,8 +4779,9 @@ for (const scenario of [
         scenario === "ticket-replaced-stack"
           ? ["suite-a", "suite-b --grep ticket"]
           : ["suite-b --grep ticket"];
+      let resumeQueuedAt: string | null = scenario === "ticket-queued" ? now : null;
       let storedRun = run({
-        previewTargetsPinned: !embedded || scenario === "ticket",
+        previewTargetsPinned: !embedded || scenario === "ticket" || scenario === "ticket-queued",
         ...(scenario === "ticket-startup-retry"
           ? {
               status: "failed" as const,
@@ -4971,7 +4973,15 @@ for (const scenario of [
                   snapshotSequence: commands.length,
                   projects: [],
                   threads,
-                  implementationRuns: [],
+                  implementationRuns:
+                    scenario === "ticket-queued"
+                      ? [
+                          {
+                            id: "implementation-1",
+                            ticketStates: [{ ticketId: "ticket-1", resumeQueuedAt }],
+                          } as unknown as OrchestrationImplementationRun,
+                        ]
+                      : [],
                   appReviewWorkflowRuns: runVisible ? [storedRun] : [],
                   updatedAt: now,
                 })),
@@ -5064,6 +5074,15 @@ for (const scenario of [
       yield* Effect.scoped(
         Effect.gen(function* () {
           const reactor = yield* AppReviewWorkflowReactor;
+          if (scenario === "ticket-queued") {
+            yield* reactor.start();
+            yield* reactor.reconcile();
+            yield* reactor.drain;
+            expect(commands).toEqual([]);
+            expect(executions).toEqual([]);
+            expect(storedRun.cyclesUsed).toBe(0);
+            resumeQueuedAt = null;
+          }
           if (diffError) {
             yield* reactor.start();
             runVisible = true;

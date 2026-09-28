@@ -1,4 +1,5 @@
 import {
+  OrchestrationImplementationRun,
   CommandId,
   DEFAULT_WORKSPACE_USER_ID,
   ProjectId,
@@ -10,8 +11,11 @@ import {
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import { decideOrchestrationCommand } from "./decider.ts";
+
+const decodeRun = Schema.decodeUnknownEffect(OrchestrationImplementationRun);
 
 const NOW = "2026-01-01T00:00:00.000Z";
 const SETTLED_AT = "2025-12-30T00:00:00.000Z";
@@ -74,6 +78,70 @@ function resumeCommand(threadId: string) {
 }
 
 it.layer(NodeServices.layer)("workflow resume decider", (it) => {
+  it.effect("queues resumed tickets before clearing pauses and preserves their stages", () =>
+    Effect.gen(function* () {
+      const summary = {
+        specId: null,
+        planningTicketIds: ["paused", "active"],
+        baseBranch: "dev",
+        pinnedCommit: "abc",
+        orchestratorBranch: "workflow",
+        orchestratorWorktreePath: "/tmp/workflow",
+        validationCommands: [],
+        createdAt: NOW,
+      };
+      const run = yield* decodeRun({
+        ...summary,
+        id: "run",
+        orchestratorThreadId: "orchestrator",
+        status: "running",
+        launchSummary: summary,
+        updatedAt: NOW,
+        ticketStates: [
+          {
+            ticketId: "paused",
+            status: "code-reviewing",
+            workerThreadId: "worker",
+            codeReviewThreadId: "reviewer",
+            updatedAt: NOW,
+          },
+          { ticketId: "active", status: "running", workerThreadId: "other-worker", updatedAt: NOW },
+        ],
+      });
+      const readModel = {
+        ...makeReadModel([
+          makeThread({ id: "root", parentThreadId: null }),
+          makeThread({ id: "orchestrator", parentThreadId: "root" }),
+          makeThread({ id: "worker", parentThreadId: "orchestrator" }),
+          {
+            ...makeThread({ id: "reviewer", parentThreadId: "worker" }),
+            workflowPausedAt: SETTLED_AT,
+          },
+          makeThread({ id: "other-worker", parentThreadId: "orchestrator" }),
+        ]),
+        implementationRuns: [run],
+      };
+      const result = yield* decideOrchestrationCommand({
+        readModel,
+        command: resumeCommand("root"),
+      });
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((event) => event.type)).toEqual([
+        "thread.implementation-run-updated",
+        "thread.workflow-resumed",
+      ]);
+      const update = events[0];
+      if (update?.type !== "thread.implementation-run-updated")
+        throw new Error("Missing queued resume.");
+      expect(update.payload.run.ticketStates[0]).toMatchObject({
+        status: "code-reviewing",
+        codeReviewThreadId: "reviewer",
+        resumeQueuedAt: NOW,
+      });
+      expect(update.payload.run.ticketStates[1]?.resumeQueuedAt).toBeUndefined();
+    }),
+  );
+
   it.effect("un-settles the whole paused subtree so recovery can re-enter it", () =>
     Effect.gen(function* () {
       const result = yield* decideOrchestrationCommand({

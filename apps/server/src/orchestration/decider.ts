@@ -78,6 +78,7 @@ import {
   planningReviewerVerdictExampleJson,
 } from "./workflowDirectives.ts";
 import { isWorkflowThreadPaused } from "./workflowPause.ts";
+import { ticketIsPaused } from "./implementationTicketConcurrency.ts";
 import { NUDGEABLE_WORKFLOW_ROLES } from "./workflowNudge.ts";
 import {
   normalizeImplementationRerunTargetForHalt,
@@ -1801,6 +1802,58 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             (thread.deletedAt === null && thread.archivedAt === null)),
       );
       const events: PlannedOrchestrationEvent[] = [];
+      const resumedIds = new Set(pausedTargets.map((thread) => thread.id));
+      const resumedModel = {
+        ...readModel,
+        threads: readModel.threads.map((thread) =>
+          resumedIds.has(thread.id) ? { ...thread, workflowPausedAt: null } : thread,
+        ),
+      };
+      // Persist admission holds before clearing pauses so review recovery cannot bypass the limit.
+      for (const run of readModel.implementationRuns) {
+        if (run.status === "completed" || run.status === "canceled") continue;
+        const queuedIds = new Set(
+          run.ticketStates
+            .filter(
+              (ticket) =>
+                [
+                  "running",
+                  "app-reviewing",
+                  "code-reviewing",
+                  "awaiting-native-verification",
+                ].includes(ticket.status) &&
+                ticketIsPaused(ticket, readModel) &&
+                !ticketIsPaused(ticket, resumedModel),
+            )
+            .map((ticket) => ticket.ticketId),
+        );
+        if (queuedIds.size === 0) continue;
+        const sourceThreadId = readModel.threads.find(
+          (thread) => thread.id === run.orchestratorThreadId,
+        )?.parentThreadId;
+        if (sourceThreadId == null) continue;
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: sourceThreadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.implementation-run-updated",
+          payload: {
+            sourceThreadId,
+            run: {
+              ...run,
+              ticketStates: run.ticketStates.map((ticket) =>
+                queuedIds.has(ticket.ticketId)
+                  ? { ...ticket, resumeQueuedAt: command.createdAt, updatedAt: command.createdAt }
+                  : ticket,
+              ),
+              updatedAt: command.createdAt,
+            },
+          },
+        });
+      }
       for (const thread of pausedTargets) {
         events.push({
           ...(yield* withEventBase({

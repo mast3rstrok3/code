@@ -102,6 +102,21 @@ function model(implementationRun: OrchestrationImplementationRun) {
 }
 
 describe("workflow stage reconciliation", () => {
+  it("leaves queued resumes waiting when their old leases expire", () => {
+    const queued = {
+      ...ticket({ ticketId: "A", executions: [execution({ ticketId: "A" })] }),
+      resumeQueuedAt: now,
+    };
+    const current = run({ tickets: [queued] });
+    expect(reconcileWorkflowState(model(current), "2026-01-02T00:00:00.000Z")).toEqual([]);
+    const admitted = { ...current, ticketStates: [{ ...queued, resumeQueuedAt: null }] };
+    expect(
+      reconcileWorkflowState(model(admitted), "2026-01-02T00:00:00.000Z").some(
+        (action) => action.type === "expire-lease",
+      ),
+    ).toBe(true);
+  });
+
   it("classifies a missing App Review fixer result as a missing directive", () => {
     const appReviewRun = {
       id: "app-review-run-1",

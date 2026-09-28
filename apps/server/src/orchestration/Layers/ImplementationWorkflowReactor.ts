@@ -96,7 +96,7 @@ import {
   WORKFLOW_PROMPT_IDS,
 } from "../../provider/WorkflowPromptRegistry.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
-import { readyTicketsWithinLimit } from "../implementationTicketConcurrency.ts";
+import { readyTicketsWithinLimit, ticketIsPaused } from "../implementationTicketConcurrency.ts";
 import {
   ImplementationWorkflowReactor,
   type ImplementationWorkflowReactorShape,
@@ -3176,7 +3176,37 @@ const make = Effect.gen(function* () {
             updatedAt: input.createdAt,
           });
         }
-        const readyTicketIds = readyTicketsWithinLimit(workingRun, limit, readModel);
+        const admittedIds = readyTicketsWithinLimit(workingRun, limit, readModel);
+        const resumedIds = new Set(
+          workingRun.ticketStates
+            .filter((state) => state.resumeQueuedAt != null && admittedIds.includes(state.ticketId))
+            .map((state) => state.ticketId),
+        );
+        if (resumedIds.size > 0) {
+          const resumedRun = {
+            ...workingRun,
+            ticketStates: workingRun.ticketStates.map((state) =>
+              resumedIds.has(state.ticketId)
+                ? { ...state, resumeQueuedAt: null, updatedAt: input.createdAt }
+                : state,
+            ),
+            updatedAt: input.createdAt,
+          };
+          if (
+            !(yield* updateRun({
+              sourceThreadId: input.sourceThreadId,
+              run: resumedRun,
+              createdAt: input.createdAt,
+            }))
+          )
+            return workingRun;
+          workingRun = resumedRun;
+        }
+        const readyTicketIds = admittedIds.filter((id) =>
+          workingRun.ticketStates.some(
+            (state) => state.ticketId === id && state.status === "ready",
+          ),
+        );
         if (readyTicketIds.length === 0) break;
         const exhaustedTicket = workingRun.ticketStates.find(
           (state) =>
@@ -3990,6 +4020,7 @@ const make = Effect.gen(function* () {
         currentRun.status === "completed" ||
         currentRun.automationHalt !== null ||
         currentState === undefined ||
+        currentState.resumeQueuedAt != null ||
         currentState.codeReviewGeneration !== state.codeReviewGeneration ||
         currentState.codeReviewLaunchCount !== state.codeReviewLaunchCount ||
         currentState.codeReviewThreadId !== state.codeReviewThreadId ||
@@ -4374,6 +4405,8 @@ const make = Effect.gen(function* () {
       state.branch == null ||
       state.workerThreadId == null ||
       state.status !== "app-reviewing" ||
+      state.resumeQueuedAt != null ||
+      ticketIsPaused(state, readModel) ||
       (state.appReviewWorkflowRunId != null && claimedControllerThreadId === undefined)
     )
       return;
@@ -10403,7 +10436,7 @@ const make = Effect.gen(function* () {
     const ticketId = nestedRun.caller.ticketId;
     if (ticketId !== undefined) {
       const ticketState = run.ticketStates.find((state) => state.ticketId === ticketId);
-      if (ticketState === undefined) return;
+      if (ticketState === undefined || ticketState.resumeQueuedAt != null) return;
       // An orphaned review keeps running until its cancel lands, and writing
       // what it says back would not only undo the rewind that orphaned it, it
       // would carry every other ticket along with it, from the pre-rewind
@@ -11226,7 +11259,7 @@ const make = Effect.gen(function* () {
         !state.workerThreadId
       )
         return null;
-      if (isWorkflowThreadPaused(readModel.threads, state.workerThreadId)) return null;
+      if (state.resumeQueuedAt != null || ticketIsPaused(state, readModel)) return null;
       const worker = findThread(readModel, state.workerThreadId);
       if (
         !worker ||
@@ -11514,6 +11547,7 @@ const make = Effect.gen(function* () {
   }) {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const state = input.run.ticketStates.find((candidate) => candidate.ticketId === input.ticketId);
+    if (state?.resumeQueuedAt != null) return false;
     const existingReviewer =
       state?.codeReviewThreadId == null ? null : findThread(readModel, state.codeReviewThreadId);
     if (
@@ -11622,7 +11656,7 @@ const make = Effect.gen(function* () {
     const taskActivitiesByThread = yield* loadBackgroundTaskActivities(readModel.threads, nowMs);
     const pendingIngestion = yield* pendingIngestionThreadIds(ingestionBacklog);
     for (const persistedRun of readModel.implementationRuns) {
-      const run = yield* cleanupTicketResources({ run: persistedRun, createdAt });
+      let run = yield* cleanupTicketResources({ run: persistedRun, createdAt });
       if (run.status === "completed" || run.status === "canceled") {
         yield* teardownWorkflowStacks({ readModel, run, createdAt });
         continue;
@@ -11666,6 +11700,19 @@ const make = Effect.gen(function* () {
       if (isWorkflowThreadPaused(readModel.threads, run.orchestratorThreadId)) continue;
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) continue;
+      if (
+        run.status === "running" &&
+        run.automationHalt === null &&
+        run.ticketStates.some((state) => state.resumeQueuedAt != null)
+      ) {
+        yield* recoverRunStage(
+          run.id,
+          "resume-admission",
+          startReadyWorkers({ sourceThreadId, run, createdAt }),
+        );
+        readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+        run = findRunById(readModel, run.id) ?? run;
+      }
       // Completed workers still need their result recorded when another ticket halts automation.
       let recoveredWorker = false;
       const workerResultProblems = new Map<string, string>();
@@ -11688,6 +11735,7 @@ const make = Effect.gen(function* () {
       const recordedWorker = run.ticketStates.find(
         (state) =>
           state.status === "running" &&
+          state.resumeQueuedAt == null &&
           state.workerResult?.status === "succeeded" &&
           state.workerThreadId !== null &&
           !isWorkflowThreadPaused(readModel.threads, state.workerThreadId),
@@ -11710,6 +11758,7 @@ const make = Effect.gen(function* () {
         (state) =>
           state.workerThreadId !== null &&
           !isWorkflowThreadPaused(readModel.threads, state.workerThreadId) &&
+          state.resumeQueuedAt == null &&
           discardedWorkerResult(run, state) !== undefined,
       );
       if (discardedWorker?.workerThreadId) {
@@ -12075,9 +12124,8 @@ const make = Effect.gen(function* () {
       if (run.artifactSource === "planning-spec" && run.status === "running") {
         // Stop step pauses one ticket's worker subtree without pausing the run,
         // so a ticket stage is only recoverable while its worker is not paused.
-        const ticketStagePaused = (state: { readonly workerThreadId: ThreadId | null }) =>
-          state.workerThreadId !== null &&
-          isWorkflowThreadPaused(readModel.threads, state.workerThreadId);
+        const ticketStagePaused = (state: OrchestrationImplementationTicketState) =>
+          state.resumeQueuedAt != null || ticketIsPaused(state, readModel);
         const appReviewRunsById = new Map(
           (readModel.appReviewWorkflowRuns ?? []).map((candidate) => [candidate.id, candidate]),
         );
@@ -12221,7 +12269,12 @@ const make = Effect.gen(function* () {
         const interruptedWorkerIds = new Set(
           run.ticketStates
             .filter((state) => {
-              if (state.status !== "running" || state.workerThreadId === null) return false;
+              if (
+                state.status !== "running" ||
+                state.workerThreadId === null ||
+                ticketStagePaused(state)
+              )
+                return false;
               const thread = readModel.threads.find(
                 (candidate) => candidate.id === state.workerThreadId,
               );
@@ -12262,7 +12315,7 @@ const make = Effect.gen(function* () {
       if (
         run.artifactSource === "planning-spec" &&
         run.status === "running" &&
-        run.ticketStates.some((state) => state.status === "ready")
+        run.ticketStates.some((state) => state.status === "ready" || state.resumeQueuedAt != null)
       ) {
         yield* recoverRunStage(
           run.id,
@@ -12598,7 +12651,12 @@ const make = Effect.gen(function* () {
         continue;
       }
       const state = run.ticketStates.find((candidate) => candidate.ticketId === ticketId);
-      if (state === undefined || !ticketAwaitsAppReviewRun(state, nestedRun.id)) continue;
+      if (
+        state === undefined ||
+        state.resumeQueuedAt != null ||
+        !ticketAwaitsAppReviewRun(state, nestedRun.id)
+      )
+        continue;
       yield* resumeTicketAppReview({ run, ticketId, nestedRun, createdAt }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("ticket App Review preview-refresh resume failed", {
