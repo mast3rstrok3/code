@@ -3983,7 +3983,9 @@ const make = Effect.gen(function* () {
         currentState.codeReviewLaunchCount !== state.codeReviewLaunchCount ||
         currentState.codeReviewThreadId !== state.codeReviewThreadId ||
         (currentState.status !== "app-reviewing" && currentState.status !== "code-reviewing") ||
-        isWorkflowThreadPaused(readModel.threads, state.workerThreadId)
+        isWorkflowThreadPaused(readModel.threads, state.workerThreadId) ||
+        (state.codeReviewThreadId != null &&
+          isWorkflowThreadPaused(readModel.threads, state.codeReviewThreadId))
       )
         return;
       const createdAt = DateTime.formatIso(
@@ -4152,7 +4154,9 @@ const make = Effect.gen(function* () {
         claimState === undefined ||
         claimState.updatedAt !== state.updatedAt ||
         isTicketStageSkipped(claimRun.skips, input.ticketId, "code-review") ||
-        isWorkflowThreadPaused(claimReadModel.threads, state.workerThreadId)
+        isWorkflowThreadPaused(claimReadModel.threads, state.workerThreadId) ||
+        (state.codeReviewThreadId != null &&
+          isWorkflowThreadPaused(claimReadModel.threads, state.codeReviewThreadId))
       )
         return;
       // Full-run writes must distinguish this claim from the preceding ticket result.
@@ -11487,6 +11491,12 @@ const make = Effect.gen(function* () {
     const state = input.run.ticketStates.find((candidate) => candidate.ticketId === input.ticketId);
     const existingReviewer =
       state?.codeReviewThreadId == null ? null : findThread(readModel, state.codeReviewThreadId);
+    if (
+      existingReviewer !== null &&
+      isWorkflowThreadPaused(readModel.threads, existingReviewer.id)
+    ) {
+      return false;
+    }
     let resultProblem: string | null = null;
     if (
       existingReviewer?.latestTurn?.state === "completed" &&

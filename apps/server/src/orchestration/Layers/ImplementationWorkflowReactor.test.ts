@@ -7573,6 +7573,74 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("preserves a paused ticket reviewer's launch budget until resume", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          completeTicketReview: false,
+        });
+        let snapshot = yield* system.query.getSnapshot();
+        const state = snapshot.implementationRuns.find((entry) => entry.id === run.id)
+          ?.ticketStates[0];
+        const threadId = state?.codeReviewThreadId;
+        if (!state || !threadId) throw new Error("Ticket reviewer missing.");
+        yield* system.engine.dispatch({
+          type: "thread.workflow.pause",
+          commandId: commandId("pause-ticket-reviewer"),
+          threadId,
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("stop-paused-ticket-reviewer"),
+          threadId,
+          session: {
+            threadId,
+            status: "stopped",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:02.500Z",
+          },
+          createdAt: "2026-01-01T00:00:02.500Z",
+        });
+        yield* system.reactor.drain;
+        for (let sweep = 0; sweep < 3; sweep++) {
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
+        }
+        snapshot = yield* system.query.getSnapshot();
+        const paused = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(paused?.automationHalt).toBeNull();
+        expect(paused?.status).toBe("running");
+        expect(paused?.ticketStates[0]?.codeReviewLaunchCount).toBe(state.codeReviewLaunchCount);
+        expect(snapshot.threads.find((thread) => thread.id === threadId)?.messages).toHaveLength(1);
+
+        yield* system.engine.dispatch({
+          type: "thread.workflow.resume",
+          commandId: commandId("resume-ticket-reviewer"),
+          threadId,
+          createdAt: "2026-01-01T00:00:03.000Z",
+        });
+        yield* system.reactor.drain;
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+        snapshot = yield* system.query.getSnapshot();
+        const resumed = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(resumed?.automationHalt).toBeNull();
+        expect(resumed?.ticketStates[0]?.codeReviewThreadId).toBe(threadId);
+        expect(resumed?.ticketStates[0]?.codeReviewLaunchCount).toBe(
+          state.codeReviewLaunchCount + 1,
+        );
+        expect(snapshot.threads.find((thread) => thread.id === threadId)?.messages).toHaveLength(2);
+      }),
+    ),
+  );
+
   it.effect("leaves a paused run's stage alone and re-enters it on resume", () =>
     withSystem((system) =>
       Effect.gen(function* () {
