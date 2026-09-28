@@ -3235,6 +3235,8 @@ const ThreadAppReviewWorkflowRerunCommand = Schema.Struct({
    * are discarded; earlier phases keep what they produced.
    */
   phase: AppReviewWorkflowPhase,
+  /** Replace the E2E selection for this retry and execute its commands serially. */
+  e2eCommands: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1))),
   /** Pins the phase's model before it starts again, same as the Models list. */
   modelSelection: Schema.optionalKey(ModelSelection),
   createdAt: IsoDateTime,
@@ -4247,6 +4249,7 @@ export const ThreadAppReviewWorkflowRerunRequestedPayload = Schema.Struct({
   run: AppReviewWorkflowRun,
   /** The phase of the run's current cycle that starts again. */
   phase: AppReviewWorkflowPhase,
+  e2eCommands: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1))),
 });
 
 export const ThreadMessageSentPayload = Schema.Struct({

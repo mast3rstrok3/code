@@ -5149,6 +5149,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.app-review-workflow.rerun": {
+      if (command.e2eCommands !== undefined && command.phase !== "e2e") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Replacement E2E commands require an E2E retry.",
+        });
+      }
       const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
       const existing = (readModel.appReviewWorkflowRuns ?? []).find(
         (run) => run.id === command.runId,
@@ -5227,6 +5233,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           sourceThreadId: existing.targetThreadId,
           run: existing,
           phase: command.phase,
+          ...(command.e2eCommands === undefined ? {} : { e2eCommands: command.e2eCommands }),
         },
       };
       if (command.modelSelection === undefined) return rerunEvent;

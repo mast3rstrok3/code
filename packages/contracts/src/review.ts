@@ -291,6 +291,8 @@ export const AppReviewWorkflowRun = Schema.Struct({
   caller: AppReviewWorkflowCaller,
   testPlatforms: Schema.optionalKey(ReviewTestPlatforms),
   e2eCommands: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+  /** Keep a split retry serial, including after server recovery. */
+  serialE2e: Schema.optionalKey(Schema.Boolean),
   briefMarkdown: TrimmedNonEmptyString,
   supportingContextMarkdown: Schema.NullOr(Schema.String),
   previewTargets: Schema.Array(TrimmedNonEmptyString),

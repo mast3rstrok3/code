@@ -4758,6 +4758,7 @@ for (const scenario of [
   "ticket-queued",
   "ticket-replaced-stack",
   "ticket-startup-retry",
+  "ticket-split-retry",
   "ticket-starting-stack",
   "ticket-unhealthy-stack",
   "ticket-dirty-stack",
@@ -4775,14 +4776,17 @@ for (const scenario of [
       const releaseDiff = yield* Deferred.make<void>();
       const ticket = scenario.startsWith("ticket");
       const embedded = ticket || scenario === "combined";
+      const splitRetry = scenario === "ticket-split-retry";
+      const retryCommands = ["suite-b --grep phone", "suite-b --grep tablet"];
       const ticketCommands =
         scenario === "ticket-replaced-stack"
           ? ["suite-a", "suite-b --grep ticket"]
           : ["suite-b --grep ticket"];
       let resumeQueuedAt: string | null = scenario === "ticket-queued" ? now : null;
       let storedRun = run({
-        previewTargetsPinned: !embedded || scenario === "ticket" || scenario === "ticket-queued",
-        ...(scenario === "ticket-startup-retry"
+        previewTargetsPinned:
+          !embedded || scenario === "ticket" || scenario === "ticket-queued" || splitRetry,
+        ...(scenario === "ticket-startup-retry" || splitRetry
           ? {
               status: "failed" as const,
               outcome: "failed" as const,
@@ -4821,7 +4825,7 @@ for (const scenario of [
               e2eCommands: ticketCommands,
             }
           : {}),
-        ...(scenario === "ticket-replaced-stack"
+        ...(scenario === "ticket-replaced-stack" || splitRetry
           ? {
               cyclesUsed: 1,
               cycles: [
@@ -4843,6 +4847,9 @@ for (const scenario of [
             }
           : {}),
       });
+      const historicalCycles = structuredClone(storedRun.cycles);
+      let activeTests = 0;
+      let peakTests = 0;
       const thread = (id: ThreadId) =>
         decodeThread({
           id,
@@ -4905,7 +4912,11 @@ for (const scenario of [
             NodeServices.layer,
             Layer.mock(ProcessRunner)({
               run: (input) =>
-                Effect.sync(() => {
+                Effect.gen(function* () {
+                  activeTests += 1;
+                  peakTests = Math.max(peakTests, activeTests);
+                  yield* Effect.yieldNow;
+                  activeTests -= 1;
                   const command = input.args.at(-1)!;
                   const cycle = storedRun.cycles.at(-1)!;
                   expect(
@@ -5066,7 +5077,9 @@ for (const scenario of [
             }),
             Layer.mock(T3ProjectFileLoader)({
               loadStrict: () =>
-                Effect.succeed(Option.some({ e2eCommands: ["suite-a", "suite-b"] })),
+                Effect.succeed(
+                  Option.some({ e2eCommands: ["suite-a", "suite-b"], e2eConcurrency: 4 }),
+                ),
             }),
           ),
         ),
@@ -5134,7 +5147,7 @@ for (const scenario of [
               workflowPausedAt: null,
             });
             yield* reactor.reconcile();
-          } else if (scenario === "ticket-startup-retry") {
+          } else if (scenario === "ticket-startup-retry" || splitRetry) {
             yield* reactor.start();
             expect(executions).toEqual([]);
             yield* PubSub.publish(
@@ -5154,6 +5167,7 @@ for (const scenario of [
                   sourceThreadId: storedRun.targetThreadId,
                   run: storedRun,
                   phase: "e2e",
+                  ...(splitRetry ? { e2eCommands: retryCommands } : {}),
                 },
               }),
             );
@@ -5192,7 +5206,15 @@ for (const scenario of [
             return;
           }
           if (embedded) {
-            expect(executions).toEqual(ticket ? ticketCommands : ["suite-a", "suite-b"]);
+            expect(executions).toEqual(
+              splitRetry ? retryCommands : ticket ? ticketCommands : ["suite-a", "suite-b"],
+            );
+            if (splitRetry) {
+              expect(storedRun.serialE2e).toBe(true);
+              expect(peakTests).toBe(1);
+              expect(storedRun.cyclesUsed).toBe(2);
+              expect(storedRun.cycles.slice(0, 1)).toEqual(historicalCycles);
+            }
             if (
               scenario === "ticket-replaced-stack" ||
               scenario === "ticket-startup-retry" ||

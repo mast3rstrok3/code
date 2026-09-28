@@ -227,6 +227,25 @@ function rerunRunAppReview() {
 }
 
 it.layer(NodeServices.layer)("App Review phase re-run decider", (it) => {
+  it.effect("carries split E2E retry commands without replacing historical cycles", () =>
+    Effect.gen(function* () {
+      const readModel = makeReadModel({ cycles: [cycle({})] });
+      const e2eCommands = ["suite --phone", "suite --tablet"];
+      const event = yield* decideOrchestrationCommand({
+        command: { ...rerun("e2e"), e2eCommands },
+        readModel,
+      });
+      expect(event).toMatchObject({
+        type: "thread.app-review-workflow-rerun-requested",
+        payload: { e2eCommands, run: readModel.appReviewWorkflowRuns![0] },
+      });
+      const failure = yield* decideOrchestrationCommand({
+        command: { ...rerun("review"), e2eCommands },
+        readModel,
+      }).pipe(Effect.flip);
+      expect(failure).toMatchObject({ detail: "Replacement E2E commands require an E2E retry." });
+    }),
+  );
   for (const phase of ["e2e", "review"] as const) {
     it.effect(`retries ${phase} when startup failed before the first cycle`, () =>
       Effect.gen(function* () {

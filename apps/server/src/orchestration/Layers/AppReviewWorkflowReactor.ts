@@ -2423,7 +2423,7 @@ const make = Effect.gen(function* () {
       );
       if (remaining.length === 0) return;
       const config = yield* projectFileLoader.loadStrict(target.cwd);
-      const concurrency = Option.getOrUndefined(config)?.e2eConcurrency ?? 1;
+      const concurrency = run.serialE2e ? 1 : (Option.getOrUndefined(config)?.e2eConcurrency ?? 1);
       const previewUrl = run.previewTargets[0] ?? null;
       // A lookup failure only costs the suite its stack ID, never the test run.
       const stackLookup = yield* appStackManager
@@ -2661,7 +2661,7 @@ const make = Effect.gen(function* () {
     }
     const includesE2e = reviewScope === "e2e" || reviewScope === "both";
     const e2eCommands = includesE2e
-      ? isTicketAppReview(run)
+      ? isTicketAppReview(run) || run.serialE2e
         ? (run.e2eCommands ?? [])
         : yield* e2eCommandsForCwd(cwd, run)
       : [];
@@ -4176,6 +4176,7 @@ ${result.outputMarkdown}`,
     inputRun: AppReviewWorkflowRun,
     phase: AppReviewWorkflowPhase,
     occurredAt: string,
+    e2eCommands?: ReadonlyArray<string>,
   ) {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const run =
@@ -4191,6 +4192,7 @@ ${result.outputMarkdown}`,
     // saying was wrong, so its verdict cannot stand.
     const reopened = {
       ...run,
+      ...(e2eCommands === undefined ? {} : { e2eCommands, serialE2e: true }),
       prerequisiteCheck: null,
       status: "running" as const,
       outcome: null,
@@ -4324,7 +4326,12 @@ ${result.outputMarkdown}`,
       return;
     }
     if (event.type === "thread.app-review-workflow-rerun-requested") {
-      yield* rerunPhase(event.payload.run, event.payload.phase, event.occurredAt);
+      yield* rerunPhase(
+        event.payload.run,
+        event.payload.phase,
+        event.occurredAt,
+        event.payload.e2eCommands,
+      );
       return;
     }
     const run = yield* runForEvent(event);
