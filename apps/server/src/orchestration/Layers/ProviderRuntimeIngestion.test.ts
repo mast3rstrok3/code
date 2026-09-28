@@ -1668,6 +1668,125 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
+  for (const responseStreamingMode of ["paragraph", "token", "turn"] as const) {
+    it.each(["started", "delta", "completion"] as const)(
+      `separates a replacement assistant item at %s in ${responseStreamingMode} mode`,
+      async (boundary) => {
+        const harness = await createHarness({ serverSettings: { responseStreamingMode } });
+        const base = {
+          provider: ProviderDriverKind.make("codex"),
+          threadId: asThreadId("thread-replacement-worker"),
+          turnId: asTurnId("replacement-turn"),
+          createdAt: "2026-01-01T00:00:01.000Z",
+        };
+        await runtime!.runPromise(
+          harness.engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make("cmd-replacement-worker-create"),
+            threadId: base.threadId,
+            projectId: asProjectId("project-1"),
+            ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+            parentThreadId: asThreadId("thread-1"),
+            workflowRole: "implementation-worker",
+            title: "Implementation Worker",
+            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6-astra" },
+            interactionMode: "implementation-workflow",
+            runtimeMode: "full-access",
+            branch: "feature",
+            worktreePath: "/repo",
+            createdAt: "2026-01-01T00:00:00.000Z",
+          }),
+        );
+        const partial = '```json\n{"type":"implementation-worker-result","ticketId":"unfinished';
+        const complete =
+          '```json\n{"type":"implementation-worker-result","ticketId":"ticket-1","workerThreadId":"thread-replacement-worker","branch":"feature","worktreePath":"/repo","status":"succeeded","commitSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","validations":[],"notesMarkdown":"Done","reportedAt":"2026-01-01T00:00:00.000Z"}\n```';
+        await harness.emitAndDrain([
+          { ...base, type: "turn.started", eventId: asEventId("replacement-turn-start") },
+          {
+            ...base,
+            type: "content.delta",
+            eventId: asEventId("unfinished-delta"),
+            createdAt: "2026-01-01T00:00:00.000Z",
+            itemId: asItemId("unfinished"),
+            payload: { streamKind: "assistant_text", delta: partial },
+          },
+        ]);
+        if (boundary === "started") {
+          await harness.emitAndDrain([
+            {
+              ...base,
+              type: "item.started",
+              eventId: asEventId("replacement-start"),
+              itemId: asItemId("replacement"),
+              payload: { itemType: "assistant_message", status: "inProgress" },
+            },
+          ]);
+        }
+        if (boundary !== "completion") {
+          await harness.emitAndDrain([
+            {
+              ...base,
+              type: "content.delta",
+              eventId: asEventId("replacement-delta-1"),
+              itemId: asItemId("replacement"),
+              payload: { streamKind: "assistant_text", delta: complete.slice(0, 40) },
+            },
+            {
+              ...base,
+              type: "item.completed",
+              eventId: asEventId("late-unfinished-completion"),
+              itemId: asItemId("unfinished"),
+              payload: { itemType: "assistant_message", status: "completed", detail: partial },
+            },
+            {
+              ...base,
+              type: "content.delta",
+              eventId: asEventId("replacement-delta-2"),
+              itemId: asItemId("replacement"),
+              payload: { streamKind: "assistant_text", delta: complete.slice(40) },
+            },
+          ]);
+        }
+        await harness.emitAndDrain([
+          {
+            ...base,
+            type: "item.completed",
+            eventId: asEventId("replacement-completed"),
+            itemId: asItemId("replacement"),
+            payload: { itemType: "assistant_message", status: "completed", detail: complete },
+          },
+          {
+            ...base,
+            type: "turn.completed",
+            eventId: asEventId("replacement-turn-completed"),
+            payload: { state: "completed" },
+          },
+        ]);
+        const thread = (await harness.readModel()).threads.find(
+          (entry) => entry.id === base.threadId,
+        )!;
+        expect(thread.messages).toHaveLength(2);
+        expect(thread.messages).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: "assistant:unfinished",
+              text: partial,
+              streaming: false,
+            }),
+            expect.objectContaining({
+              id: "assistant:replacement",
+              text: complete,
+              streaming: false,
+            }),
+          ]),
+        );
+        expect(
+          thread.activities.filter((entry) => entry.kind === "implementation-worker-result"),
+        ).toHaveLength(1);
+      },
+    );
+  }
+
   it("streams reasoning deltas into a finalized reasoning message", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

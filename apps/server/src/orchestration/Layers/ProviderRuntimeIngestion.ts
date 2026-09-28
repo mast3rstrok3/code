@@ -4149,6 +4149,41 @@ const make = Effect.gen(function* () {
         event.type === "content.delta" && event.payload.streamKind === "assistant_text"
           ? event.payload.delta
           : undefined;
+      const assistantItemId =
+        assistantDelta !== undefined ||
+        ((event.type === "item.started" || event.type === "item.completed") &&
+          event.payload.itemType === "assistant_message")
+          ? event.itemId
+          : undefined;
+      const assistantTurnId = toTurnId(event.turnId);
+      if (assistantItemId !== undefined && assistantTurnId !== undefined) {
+        const segment = Option.getOrUndefined(
+          yield* getAssistantSegmentStateForTurn(thread.id, assistantTurnId),
+        );
+        if (segment?.activeMessageId && segment.baseKey !== String(assistantItemId)) {
+          const completedMessage =
+            event.type === "item.completed"
+              ? yield* getThreadMessageById(
+                  thread.id,
+                  assistantSegmentMessageId(String(assistantItemId), 0),
+                )
+              : undefined;
+          // A new item can replace an unfinished response. A late completion
+          // of the old item must not close the replacement in progress.
+          if (completedMessage === undefined) {
+            yield* finalizeActiveSegmentForTurn({
+              event,
+              threadId: thread.id,
+              turnId: assistantTurnId,
+              createdAt: now,
+              commandTag: "assistant-complete-on-new-item",
+              finalDeltaCommandTag: "assistant-delta-finalize-on-new-item",
+              hasProjectedMessage:
+                (yield* getThreadMessageById(thread.id, segment.activeMessageId)) !== undefined,
+            });
+          }
+        }
+      }
       const reasoningDelta =
         event.type === "content.delta" &&
         (event.payload.streamKind === "reasoning_text" ||
@@ -4468,9 +4503,17 @@ const make = Effect.gen(function* () {
             role: "reasoning",
           });
         }
-        const activeAssistantMessageId = turnId
-          ? yield* getActiveAssistantMessageIdForTurn(thread.id, turnId)
-          : Option.none<MessageId>();
+        const activeSegment = turnId
+          ? Option.getOrUndefined(yield* getAssistantSegmentStateForTurn(thread.id, turnId))
+          : undefined;
+        const completionTargetsActive =
+          event.itemId === undefined ||
+          !activeSegment?.activeMessageId ||
+          activeSegment.baseKey === String(event.itemId);
+        const activeAssistantMessageId =
+          completionTargetsActive && activeSegment?.activeMessageId
+            ? Option.some(activeSegment.activeMessageId)
+            : Option.none<MessageId>();
         const assistantMessageId = Option.getOrElse(
           activeAssistantMessageId,
           () => assistantCompletion.messageId,
@@ -4524,7 +4567,7 @@ const make = Effect.gen(function* () {
           }
         }
 
-        if (turnId) {
+        if (turnId && completionTargetsActive) {
           yield* clearAssistantSegmentStateForTurn(thread.id, turnId);
         }
       }
