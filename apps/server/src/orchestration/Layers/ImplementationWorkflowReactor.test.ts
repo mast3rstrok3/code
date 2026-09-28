@@ -4575,6 +4575,87 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  for (const phase of ["implementation", "app-review", "code-review"] as const) {
+    it.effect(`releases parallel ticket slots while ${phase} is paused`, () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system, {
+            appReviewStrategy: "nested-workflow",
+            maxParallelTickets: 1,
+            tickets: [
+              {
+                ...planningTicket("TICKET-1"),
+                appReviewEligible: phase === "app-review",
+                appReviewPlanMarkdown: "Review the app.",
+              },
+              planningTicket("TICKET-2"),
+              planningTicket("TICKET-3"),
+            ],
+          });
+          if (phase !== "implementation") {
+            yield* appendWorkerResult(system, {
+              run,
+              status: "succeeded",
+              completeTicketReview: false,
+            });
+          }
+          let snapshot = yield* system.query.getSnapshot();
+          const state = snapshot.implementationRuns[0]!.ticketStates[0]!;
+          const controller = snapshot.appReviewWorkflowRuns?.find(
+            (review) => review.id === state.appReviewWorkflowRunId,
+          )?.controllerThreadId;
+          const threadId =
+            phase === "app-review"
+              ? controller
+              : phase === "code-review"
+                ? state.codeReviewThreadId
+                : state.workerThreadId;
+          if (!threadId) throw new Error("Ticket phase thread missing.");
+          expect(snapshot.implementationRuns[0]?.ticketStates[1]?.status).toBe("ready");
+          yield* system.engine.dispatch({
+            type: "thread.workflow.pause",
+            commandId: commandId(`pause-slot-${phase}`),
+            threadId,
+            createdAt: now,
+          });
+          yield* system.reactor.drain;
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
+          snapshot = yield* system.query.getSnapshot();
+          expect(
+            snapshot.implementationRuns[0]?.ticketStates.map((ticket) => ticket.status),
+          ).toEqual([state.status, "running", "ready"]);
+          expect(
+            snapshot.threads.find((thread) => thread.id === threadId)?.workflowPausedAt,
+          ).not.toBeNull();
+          expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(3);
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
+          expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(3);
+          yield* system.engine.dispatch({
+            type: "thread.workflow.resume",
+            commandId: commandId(`resume-slot-${phase}`),
+            threadId,
+            createdAt: now,
+          });
+          yield* system.reactor.drain;
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
+          yield* appendWorkerResult(system, {
+            run,
+            ticketId: run.ticketStates[1]!.ticketId,
+            status: "succeeded",
+            reportedAt: testClockStart,
+          });
+          snapshot = yield* system.query.getSnapshot();
+          expect(snapshot.implementationRuns[0]?.ticketStates[1]?.status).toBe("succeeded");
+          expect(snapshot.implementationRuns[0]?.ticketStates[2]?.status).toBe("ready");
+          expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(3);
+        }),
+      ),
+    );
+  }
+
   it.effect("applies live parallel ticket limits without interrupting active tickets", () =>
     withSystem(
       (system) =>

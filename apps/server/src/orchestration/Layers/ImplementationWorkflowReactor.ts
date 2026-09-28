@@ -3176,7 +3176,7 @@ const make = Effect.gen(function* () {
             updatedAt: input.createdAt,
           });
         }
-        const readyTicketIds = readyTicketsWithinLimit(workingRun, limit);
+        const readyTicketIds = readyTicketsWithinLimit(workingRun, limit, readModel);
         if (readyTicketIds.length === 0) break;
         const exhaustedTicket = workingRun.ticketStates.find(
           (state) =>
