@@ -30,6 +30,60 @@ import { ProcessRunner } from "../processRunner.ts";
 
 /** A fleet run records every test of a suite; past this the run is misconfigured. */
 const MAX_TEST_RECORDINGS = 2_000;
+const MAX_TEST_LOG_BYTES = 8 * 1024 * 1024;
+
+const prepareTestLogs = Effect.fn("prepareTestLogs")(function* (runDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const crypto = yield* Crypto.Crypto;
+  const id = yield* crypto.randomUUIDv4;
+  yield* fs.makeDirectory(runDir, { recursive: true });
+  const logs = {
+    stdout: {
+      path: path.join(runDir, `${id}.stdout.log`),
+      bytes: 0,
+      truncated: false,
+      failed: false,
+    },
+    stderr: {
+      path: path.join(runDir, `${id}.stderr.log`),
+      bytes: 0,
+      truncated: false,
+      failed: false,
+    },
+  };
+  for (const log of Object.values(logs)) {
+    yield* fs.writeFileString(log.path, "", { flag: "wx", mode: 0o600 });
+  }
+  return {
+    write: Effect.fn("writeTestLog")(function* (stream: "stdout" | "stderr", chunk: Uint8Array) {
+      const log = logs[stream];
+      if (log.failed) return;
+      const remaining = MAX_TEST_LOG_BYTES - log.bytes;
+      if (chunk.byteLength > remaining) log.truncated = true;
+      if (remaining === 0) return;
+      const bytes = chunk.subarray(0, remaining);
+      yield* fs.writeFile(log.path, bytes, { flag: "a" }).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            log.bytes += bytes.byteLength;
+          }),
+        ),
+        Effect.catch((error) => {
+          log.failed = true;
+          return Effect.logWarning("E2E test log could not be saved", error);
+        }),
+      );
+    }),
+    describe: () =>
+      Object.entries(logs)
+        .map(
+          ([stream, log]) =>
+            `${stream} log: \`${log.path}\`${log.failed ? ". Incomplete because a log write failed." : log.truncated ? ". Truncated at 8 MiB." : ""}`,
+        )
+        .join("\n"),
+  };
+});
 
 /** Where a run's collected test recordings live, below `stateDir/preview-artifacts`. */
 export const appReviewTestRecordingsDir = (path: Path.Path, stateDir: string, runId: string) =>
@@ -230,6 +284,13 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
           Effect.tapError((error) => Effect.logWarning("E2E recording unavailable", error)),
           Effect.orElseSucceed(() => null),
         );
+  const logs =
+    input.recordingsDir === undefined
+      ? null
+      : yield* prepareTestLogs(input.recordingsDir).pipe(
+          Effect.tapError((error) => Effect.logWarning("E2E test logs unavailable", error)),
+          Effect.orElseSucceed(() => null),
+        );
   const result = yield* runner
     .run({
       command: platform === "win32" ? "cmd.exe" : "/bin/sh",
@@ -254,13 +315,18 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
       timeoutBehavior: "timedOutResult",
       maxOutputBytes: 8_192,
       outputMode: "truncate",
+      ...(logs === null ? {} : { onOutputChunk: logs.write }),
     })
     .pipe(
       Effect.map((output) => ({
         status: output.code === 0 && !output.timedOut ? ("passed" as const) : ("failed" as const),
-        outputMarkdown: output.timedOut
-          ? "Test command exceeded the 45 minute limit."
-          : `Exit code: ${output.code ?? "none"}\n${output.stdout}\n${output.stderr}`,
+        outputMarkdown: [
+          output.timedOut
+            ? "Test command exceeded the 45 minute limit."
+            : `Exit code: ${output.code ?? "none"}\n${output.stdout}\n${output.stderr}`,
+          ...(output.stdoutTruncated ? ["Inline stdout was truncated."] : []),
+          ...(output.stderrTruncated ? ["Inline stderr was truncated."] : []),
+        ].join("\n\n"),
       })),
       Effect.catch((error) =>
         Effect.succeed({ status: "failed" as const, outputMarkdown: error.message }),
@@ -277,6 +343,7 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
     command: input.command,
     executedCommand: input.retryCommand,
     ...result,
+    outputMarkdown: `${result.outputMarkdown}\n\n${logs?.describe() ?? "No test output logs were retained."}`,
     ...(recordings.length === 0 ? {} : { recordings }),
     completedAt: DateTime.formatIso(yield* DateTime.now),
   } satisfies AppReviewTestResult;

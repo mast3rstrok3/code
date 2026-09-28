@@ -27,6 +27,10 @@ export interface ProcessRunInput {
   readonly stdin?: string | undefined;
   /** Receives every stdout chunk, including bytes beyond the buffered output limit. */
   readonly onStdoutChunk?: ((chunk: Uint8Array) => void) | undefined;
+  /** Receives both streams beyond the buffer limit and waits for each chunk to be handled. */
+  readonly onOutputChunk?:
+    | ((stream: "stdout" | "stderr", chunk: Uint8Array) => Effect.Effect<void>)
+    | undefined;
   readonly maxOutputBytes?: number | undefined;
   readonly outputMode?: "error" | "truncate" | undefined;
   readonly truncatedMarker?: string | undefined;
@@ -330,6 +334,10 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
 
   const stdin = input.stdin;
   const onStdoutChunk = input.onStdoutChunk;
+  const onOutputChunk = input.onOutputChunk;
+  const stdoutStream = onStdoutChunk
+    ? child.stdout.pipe(Stream.tap((chunk) => Effect.sync(() => onStdoutChunk(chunk))))
+    : child.stdout;
   const writeStdin =
     stdin === undefined
       ? Effect.void
@@ -355,9 +363,9 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
         cwd: input.cwd,
         spawnCwd: input.spawnCwd,
         streamName: "stdout",
-        stream: onStdoutChunk
-          ? child.stdout.pipe(Stream.tap((chunk) => Effect.sync(() => onStdoutChunk(chunk))))
-          : child.stdout,
+        stream: onOutputChunk
+          ? stdoutStream.pipe(Stream.tap((chunk) => onOutputChunk("stdout", chunk)))
+          : stdoutStream,
         maxOutputBytes,
         outputMode,
         truncatedMarker,
@@ -368,7 +376,9 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
         cwd: input.cwd,
         spawnCwd: input.spawnCwd,
         streamName: "stderr",
-        stream: child.stderr,
+        stream: onOutputChunk
+          ? child.stderr.pipe(Stream.tap((chunk) => onOutputChunk("stderr", chunk)))
+          : child.stderr,
         maxOutputBytes,
         outputMode,
         truncatedMarker,

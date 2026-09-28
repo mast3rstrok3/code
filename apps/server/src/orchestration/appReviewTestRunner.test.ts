@@ -1,12 +1,14 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, expect } from "@effect/vitest";
 import { AppReviewWorkflowRunId, type AppReviewWorkflowCycle } from "@t3tools/contracts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import {
   layer as processRunnerLayer,
@@ -26,6 +28,120 @@ const selections = ["calendar", "lists", "chat"].map((command) => ({
   command,
   retryCommand: command,
 }));
+
+it.effect("retains failure output beyond the inline limit in private logs", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const platform = yield* HostProcessPlatform;
+    const cwd = yield* fs.makeTempDirectoryScoped();
+    const script = path.join(cwd, "fail.cjs");
+    const stdout = `${"x".repeat(9_000)}\nLast stdout failure\n`;
+    const stderr = `${"y".repeat(9_000)}\nLast stderr failure\n`;
+    yield* fs.writeFileString(
+      script,
+      "process.stdout.write('x'.repeat(9000) + '\\nLast stdout failure\\n'); process.stderr.write('y'.repeat(9000) + '\\nLast stderr failure\\n'); process.exitCode = 1;",
+    );
+    const recordingsDir = path.join(cwd, "evidence");
+    const result = yield* runAppReviewTest({
+      command: "suite",
+      retryCommand: "node fail.cjs",
+      cwd,
+      previewUrl: null,
+      executionId: "failure-output",
+      recordingsDir,
+    });
+    expect(result.status).toBe("failed");
+    expect(result.outputMarkdown).toContain("Inline stdout was truncated");
+    expect(result.outputMarkdown).toContain("Inline stderr was truncated");
+    expect(result.outputMarkdown.length).toBeLessThan(18_000);
+    const files = yield* fs.readDirectory(recordingsDir);
+    for (const [stream, expected] of [
+      ["stdout", stdout],
+      ["stderr", stderr],
+    ] as const) {
+      const file = files.find((name) => name.endsWith(`.${stream}.log`));
+      expect(file).toBeDefined();
+      const logPath = path.join(recordingsDir, file!);
+      expect(result.outputMarkdown).toContain(logPath);
+      expect(yield* fs.readFileString(logPath)).toBe(expected);
+      if (platform !== "win32") {
+        expect((yield* fs.stat(logPath)).mode & 0o777).toBe(0o600);
+      }
+    }
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(processRunnerLayer.pipe(Layer.provideMerge(NodeServices.layer))),
+  ),
+);
+
+for (const scenario of ["timeout", "log-limit", "write-failure"] as const) {
+  it.effect(`retains honest test diagnostics after ${scenario}`, () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const recordingsDir = yield* fs.makeTempDirectoryScoped();
+      const output = scenario === "log-limit" ? "x".repeat(8 * 1024 * 1024 + 100) : "last failure";
+      const result = yield* runAppReviewTest({
+        command: "suite",
+        retryCommand: "suite",
+        cwd: recordingsDir,
+        previewUrl: null,
+        executionId: scenario,
+        recordingsDir,
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          writeFile: (file, bytes, options) =>
+            scenario === "write-failure" && file.endsWith(".log")
+              ? Effect.fail(
+                  PlatformError.systemError({
+                    _tag: "PermissionDenied",
+                    module: "FileSystem",
+                    method: "writeFile",
+                  }),
+                )
+              : fs.writeFile(file, bytes, options),
+        }),
+        Effect.provideService(ProcessRunner, {
+          run: (input) =>
+            Effect.gen(function* () {
+              yield* input.onOutputChunk!("stdout", new TextEncoder().encode(output));
+              yield* input.onOutputChunk!("stdout", new TextEncoder().encode("\nend"));
+              return {
+                code: scenario === "timeout" ? null : ChildProcessSpawner.ExitCode(0),
+                timedOut: scenario === "timeout",
+                stdout: "",
+                stderr: "",
+                stdoutTruncated: scenario === "log-limit",
+                stderrTruncated: false,
+                stdoutInvalidUtf8: false,
+                stderrInvalidUtf8: false,
+              };
+            }),
+        }),
+      );
+      expect(result.status).toBe(scenario === "timeout" ? "failed" : "passed");
+      const file = (yield* fs.readDirectory(recordingsDir)).find((name) =>
+        name.endsWith(".stdout.log"),
+      );
+      expect(file).toBeDefined();
+      const logPath = path.join(recordingsDir, file!);
+      expect(result.outputMarkdown).toContain(logPath);
+      const saved = yield* fs.readFileString(logPath);
+      if (scenario === "timeout") {
+        expect(result.outputMarkdown).toContain("exceeded the 45 minute limit");
+        expect(saved).toBe("last failure\nend");
+      } else if (scenario === "log-limit") {
+        expect(result.outputMarkdown).toContain("Truncated at 8 MiB");
+        expect(saved).toHaveLength(8 * 1024 * 1024);
+      } else {
+        expect(result.outputMarkdown).toContain("Incomplete because a log write failed");
+        expect(saved).toBe("");
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+}
 
 it("uses a repair's failed-test selector and never reopens a passed suite", () => {
   expect(
