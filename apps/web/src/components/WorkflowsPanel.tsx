@@ -1736,7 +1736,8 @@ function TicketPhases(props: {
             resolveWorkflowTicketStatus({
               ticketState: states.get(ticket.id)?.status ?? null,
               reviewOutcome:
-                states.get(ticket.id)?.status === "app-reviewing"
+                states.get(ticket.id)?.status === "app-reviewing" ||
+                states.get(ticket.id)?.status === "blocked"
                   ? states.get(ticket.id)?.appReviewOutcome
                   : states.get(ticket.id)?.codeReviewOutcome,
               threadStatuses: (threadsByTicketId.get(ticket.id) ?? []).map(
@@ -1919,7 +1920,7 @@ function TicketPhases(props: {
               const ticketStatus = resolveWorkflowTicketStatus({
                 ticketState: state?.status ?? null,
                 reviewOutcome:
-                  state?.status === "app-reviewing"
+                  state?.status === "app-reviewing" || state?.status === "blocked"
                     ? state.appReviewOutcome
                     : state?.codeReviewOutcome,
                 threadStatuses: linkedThreads.map(resolveWorkflowThreadStatus),
@@ -1931,7 +1932,8 @@ function TicketPhases(props: {
                   ? "skipped"
                   : ticketStatus === "paused"
                     ? "paused"
-                    : state?.status === "app-reviewing" && state.appReviewOutcome != null
+                    : (state?.status === "app-reviewing" || state?.status === "blocked") &&
+                        state.appReviewOutcome != null
                       ? `App Review ${state.appReviewOutcome}`
                       : state?.status === "code-reviewing" && state.codeReviewOutcome != null
                         ? `Code Review ${state.codeReviewOutcome}`

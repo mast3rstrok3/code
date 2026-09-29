@@ -12,6 +12,8 @@ import type {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
+import { ticketAppReviewIsBlocked } from "./implementationReviewBlocks.ts";
+
 const ACTIVE_STATES = new Set<WorkflowStageExecution["state"]>([
   "starting",
   "running",
@@ -168,6 +170,12 @@ function ticketCurrentTarget(
       };
     }
     case "blocked":
+      return ticketAppReviewIsBlocked(ticket)
+        ? {
+            target: { kind: "ticket", ...base, stage: "app-review" },
+            generation: ticket.appReviewGeneration,
+          }
+        : null;
     case "awaiting-native-verification":
       return null;
   }
@@ -234,7 +242,7 @@ export function normalizeImplementationRunExecutions(
     const state: WorkflowStageExecution["state"] =
       ticket.status === "succeeded"
         ? "succeeded"
-        : halt !== null || ticket.status === "failed"
+        : halt !== null || ticket.status === "failed" || ticketAppReviewIsBlocked(ticket)
           ? "halted"
           : retry !== null
             ? "reconciling"
@@ -248,9 +256,11 @@ export function normalizeImplementationRunExecutions(
           ? retry.humanBlocked
             ? "structural-invariant"
             : "provider-transport"
-          : ticket.status === "failed"
-            ? "provider-terminal"
-            : undefined;
+          : ticketAppReviewIsBlocked(ticket)
+            ? "review-findings"
+            : ticket.status === "failed"
+              ? "provider-terminal"
+              : undefined;
     const detail = halt?.detail ?? retry?.detail ?? ticket.warningMarkdown ?? undefined;
     let foundCurrent = false;
     const stageExecutions = ticket.stageExecutions.map((execution) => {
@@ -734,7 +744,11 @@ export function reconcileWorkflowState(
           ticketId: ticket.ticketId,
           dependencyTicketIds: ticket.dependencyTicketIds,
         });
-      } else if (dependencyState === "eligible" && ticket.status === "blocked") {
+      } else if (
+        dependencyState === "eligible" &&
+        ticket.status === "blocked" &&
+        !ticketAppReviewIsBlocked(ticket)
+      ) {
         actions.push({
           type: "derive-dependency-eligibility",
           commandId: reconciliationCommandId(

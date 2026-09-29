@@ -12,6 +12,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { createEmptyReadModel } from "./projector.ts";
 import { queueImplementationRerun } from "./implementationRerun.ts";
+import { isolateTicketReviewBlocks } from "./implementationReviewBlocks.ts";
+import { readyTicketsWithinLimit } from "./implementationTicketConcurrency.ts";
 import { failImplementationTickets } from "./Layers/ImplementationWorkflowReactor.ts";
 import {
   reconcileWorkflowState,
@@ -22,6 +24,64 @@ import {
 } from "./workflowStageExecutions.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
+
+it("keeps review blockers out of dependency eligibility and releases their parallel slot", () => {
+  const blocked = {
+    ...ticket({ ticketId: "review", status: "blocked" }),
+    appReviewOutcome: "failed" as const,
+    warningMarkdown: "Android device is owned by another session.",
+  };
+  const independent = ticket({ ticketId: "independent", status: "ready" });
+  const dependent = ticket({ ticketId: "dependent", status: "blocked", dependencies: ["review"] });
+  const current = run({ tickets: [blocked, independent, dependent] });
+  const normalized = normalizeImplementationRunExecutions(current);
+  expect(normalized.ticketStates[0]?.stageExecutions.at(-1)).toMatchObject({
+    target: { stage: "app-review" },
+    state: "halted",
+    failure: { detail: blocked.warningMarkdown },
+  });
+  expect(reconcileWorkflowState(model(current), now)).not.toContainEqual(
+    expect.objectContaining({ type: "derive-dependency-eligibility", ticketId: "review" }),
+  );
+  expect(readyTicketsWithinLimit({ ...current, skips: [] }, 1, model(current))).toEqual([
+    "independent",
+  ]);
+});
+
+it("isolates persisted ticket review halts without restarting failed reviews", () => {
+  const current = {
+    ...run({
+      tickets: [
+        {
+          ...ticket({ ticketId: "review", status: "app-reviewing" }),
+          appReviewOutcome: "failed" as const,
+        },
+        ticket({ ticketId: "independent", status: "ready" }),
+      ],
+      status: "needs-human-attention",
+    }),
+    automationHalt: {
+      ticketId: "review",
+      stage: "app-review" as const,
+      category: "review-blocked" as const,
+      detail: "Device busy",
+      haltedAt: now,
+    },
+  };
+  const recovered = isolateTicketReviewBlocks(current);
+  expect(recovered.status).toBe("running");
+  expect(recovered.automationHalt).toBeNull();
+  expect(recovered.ticketStates[0]?.status).toBe("blocked");
+  expect(isolateTicketReviewBlocks(recovered)).toBe(recovered);
+  expect(
+    isolateTicketReviewBlocks({ ...recovered, ticketStates: [recovered.ticketStates[0]!] }).status,
+  ).toBe("needs-human-attention");
+  const structural = {
+    ...current,
+    automationHalt: { ...current.automationHalt, category: "structural-invariant" as const },
+  };
+  expect(isolateTicketReviewBlocks(structural)).toBe(structural);
+});
 const addMilliseconds = (value: string, milliseconds: number) =>
   DateTime.formatIso(
     DateTime.add(DateTime.makeUnsafe(Date.parse(value)), {

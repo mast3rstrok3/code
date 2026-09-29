@@ -4538,6 +4538,83 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("a blocked ticket review releases its slot without launching its dependents", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, tickets } = yield* launchRun(system, {
+          appReviewStrategy: "nested-workflow",
+          maxParallelTickets: 1,
+          tickets: [
+            {
+              ...planningTicket("REVIEW"),
+              appReviewEligible: true,
+              appReviewPlanMarkdown: "Review the native app.",
+            },
+            { ...planningTicket("DEPENDENT"), dependencyKeys: ["REVIEW"] },
+            planningTicket("INDEPENDENT"),
+          ],
+        });
+        const ticket = tickets[0]!;
+        yield* appendWorkerResult(system, {
+          run,
+          ticketId: ticket.id,
+          status: "succeeded",
+          completeTicketReview: false,
+        });
+        let snapshot = yield* system.query.getSnapshot();
+        const reviewId = snapshot.implementationRuns[0]?.ticketStates[0]?.appReviewWorkflowRunId;
+        const nested = snapshot.appReviewWorkflowRuns?.find((entry) => entry.id === reviewId);
+        if (nested === undefined) throw new Error("Review missing.");
+        const failedAt = "2026-01-01T00:04:00.000Z";
+        yield* system.engine.dispatch({
+          type: "thread.app-review-workflow.update",
+          commandId: commandId("block-native-review"),
+          threadId: nested.controllerThreadId,
+          run: {
+            ...nested,
+            status: "failed",
+            outcome: "failed",
+            activePhase: null,
+            activeThreadId: null,
+            failure: {
+              reason: "review-blocked",
+              phase: "fixing",
+              cycleNumber: 1,
+              detailMarkdown: "Android lease belongs to another session.",
+              failedAt,
+            },
+            updatedAt: failedAt,
+            completedAt: failedAt,
+          },
+          createdAt: failedAt,
+        });
+        yield* system.reactor.drain;
+        snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns[0]!;
+        expect(current.status).toBe("running");
+        expect(current.automationHalt).toBeNull();
+        expect(current.ticketStates.map((entry) => entry.status)).toEqual([
+          "blocked",
+          "blocked",
+          "running",
+        ]);
+        expect(current.ticketStates[0]?.workerResult?.status).toBe("succeeded");
+        expect(current.ticketStates[0]?.warningMarkdown).toContain("Android lease");
+        expect(current.ticketStates[1]?.workerThreadId).toBeNull();
+        const launches = (yield* Ref.get(system.createWorktreeInputs)).length;
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+        snapshot = yield* system.query.getSnapshot();
+        expect(snapshot.implementationRuns[0]?.ticketStates.map((entry) => entry.status)).toEqual([
+          "blocked",
+          "blocked",
+          "running",
+        ]);
+        expect((yield* Ref.get(system.createWorktreeInputs)).length).toBe(launches);
+      }),
+    ),
+  );
+
   it.effect("keeps parallel ticket slots occupied through App Review and Code Review", () =>
     withSystem((system) =>
       Effect.gen(function* () {
@@ -10833,11 +10910,7 @@ describe("ImplementationWorkflowReactor", () => {
             (candidate) => candidate.id === run.id,
           );
           expect(current?.status).toBe("needs-human-attention");
-          expect(current?.automationHalt).toMatchObject({
-            stage: "app-review",
-            category: "review-blocked",
-            ticketId: ticket.id,
-          });
+          expect(current?.automationHalt).toBeNull();
           const failedState = current?.ticketStates.find(
             (candidate) => candidate.ticketId === ticket.id,
           );
@@ -10996,107 +11069,104 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect(
-    "re-running one ticket of a grouped App Review halt restarts every failed sibling",
-    () =>
-      withSystem((system) =>
-        Effect.gen(function* () {
-          const { run, tickets } = yield* launchRun(system, {
-            appReviewStrategy: "nested-workflow",
-            tickets: [
-              {
-                ...planningTicket("TICKET-1"),
-                appReviewEligible: true,
-                appReviewPlanMarkdown: "Review the first page.",
-              },
-              {
-                ...planningTicket("TICKET-2"),
-                appReviewEligible: true,
-                appReviewPlanMarkdown: "Review the second page.",
-              },
-            ],
+  it.effect("re-running one blocked App Review leaves its blocked sibling untouched", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, tickets } = yield* launchRun(system, {
+          appReviewStrategy: "nested-workflow",
+          tickets: [
+            {
+              ...planningTicket("TICKET-1"),
+              appReviewEligible: true,
+              appReviewPlanMarkdown: "Review the first page.",
+            },
+            {
+              ...planningTicket("TICKET-2"),
+              appReviewEligible: true,
+              appReviewPlanMarkdown: "Review the second page.",
+            },
+          ],
+        });
+        for (const ticket of tickets) {
+          yield* appendWorkerResult(system, {
+            run,
+            status: "succeeded",
+            ticketId: ticket.id,
+            completeTicketReview: false,
           });
-          for (const ticket of tickets) {
-            yield* appendWorkerResult(system, {
-              run,
-              status: "succeeded",
-              ticketId: ticket.id,
-              completeTicketReview: false,
-            });
-          }
-          let snapshot = yield* system.query.getSnapshot();
-          const oldReviewIds = new Map(
-            snapshot.implementationRuns
-              .find((entry) => entry.id === run.id)
-              ?.ticketStates.map(
-                (state) => [state.ticketId, state.appReviewWorkflowRunId] as const,
-              ),
+        }
+        let snapshot = yield* system.query.getSnapshot();
+        const oldReviewIds = new Map(
+          snapshot.implementationRuns
+            .find((entry) => entry.id === run.id)
+            ?.ticketStates.map((state) => [state.ticketId, state.appReviewWorkflowRunId] as const),
+        );
+        for (const ticket of tickets) {
+          const nested = (snapshot.appReviewWorkflowRuns ?? []).find(
+            (entry) => entry.id === oldReviewIds.get(ticket.id),
           );
-          for (const ticket of tickets) {
-            const nested = (snapshot.appReviewWorkflowRuns ?? []).find(
-              (entry) => entry.id === oldReviewIds.get(ticket.id),
-            );
-            if (nested === undefined) throw new Error(`Nested review missing for ${ticket.id}.`);
-            yield* system.engine.dispatch({
-              type: "thread.app-review-workflow.update",
-              commandId: commandId(`fail-grouped-review-${ticket.id}`),
-              threadId: nested.controllerThreadId,
-              run: {
-                ...nested,
-                status: "failed",
-                outcome: "failed",
-                activePhase: null,
-                activeThreadId: null,
-                failure: {
-                  reason: "plan-missing",
-                  phase: "planning",
-                  cycleNumber: 1,
-                  detailMarkdown: "planning exhausted its 2 phase launches.",
-                  failedAt: "2026-01-01T00:04:00.000Z",
-                },
-                updatedAt: "2026-01-01T00:04:00.000Z",
-                completedAt: "2026-01-01T00:04:00.000Z",
-              },
-              createdAt: "2026-01-01T00:04:00.000Z",
-            });
-          }
-          yield* system.reactor.drain;
-
-          snapshot = yield* system.query.getSnapshot();
-          const halted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-          expect(halted?.status).toBe("needs-human-attention");
-          const haltedTicketId = halted?.automationHalt?.ticketId;
-          // Re-run the sibling the halt does not name: it still speaks for the group.
-          const sibling = tickets.find((ticket) => ticket.id !== haltedTicketId);
-          if (haltedTicketId === undefined || sibling === undefined) {
-            throw new Error("Expected a ticket App Review halt naming one of two tickets.");
-          }
+          if (nested === undefined) throw new Error(`Nested review missing for ${ticket.id}.`);
           yield* system.engine.dispatch({
-            type: "thread.implementation-run.rerun",
-            commandId: commandId("rerun-grouped-review"),
-            threadId: sourceThreadId,
-            runId: run.id,
-            target: { kind: "ticket", ticketId: sibling.id, stage: "app-review" },
-            createdAt: "2026-01-01T00:05:00.000Z",
+            type: "thread.app-review-workflow.update",
+            commandId: commandId(`fail-grouped-review-${ticket.id}`),
+            threadId: nested.controllerThreadId,
+            run: {
+              ...nested,
+              status: "failed",
+              outcome: "failed",
+              activePhase: null,
+              activeThreadId: null,
+              failure: {
+                reason: "plan-missing",
+                phase: "planning",
+                cycleNumber: 1,
+                detailMarkdown: "planning exhausted its 2 phase launches.",
+                failedAt: "2026-01-01T00:04:00.000Z",
+              },
+              updatedAt: "2026-01-01T00:04:00.000Z",
+              completedAt: "2026-01-01T00:04:00.000Z",
+            },
+            createdAt: "2026-01-01T00:04:00.000Z",
           });
-          yield* system.reactor.drain;
+        }
+        yield* system.reactor.drain;
 
-          snapshot = yield* system.query.getSnapshot();
-          const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-          expect(current?.status).toBe("running");
-          expect(current?.automationHalt).toBeNull();
-          for (const ticket of tickets) {
-            const state = current?.ticketStates.find((entry) => entry.ticketId === ticket.id);
-            expect(state?.status).toBe("app-reviewing");
-            expect(state?.appReviewWorkflowRunId).not.toBe(oldReviewIds.get(ticket.id));
-            expect(
-              (snapshot.appReviewWorkflowRuns ?? []).find(
-                (entry) => entry.id === state?.appReviewWorkflowRunId,
-              )?.status,
-            ).toBe("running");
+        snapshot = yield* system.query.getSnapshot();
+        const halted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(halted?.status).toBe("needs-human-attention");
+        expect(halted?.automationHalt).toBeNull();
+        const sibling = tickets[0]!;
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.rerun",
+          commandId: commandId("rerun-grouped-review"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "ticket", ticketId: sibling.id, stage: "app-review" },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(current?.status).toBe("running");
+        expect(current?.automationHalt).toBeNull();
+        for (const ticket of tickets) {
+          const state = current?.ticketStates.find((entry) => entry.ticketId === ticket.id);
+          if (ticket.id !== sibling.id) {
+            expect(state?.status).toBe("blocked");
+            expect(state?.appReviewWorkflowRunId).toBe(oldReviewIds.get(ticket.id));
+            continue;
           }
-        }),
-      ),
+          expect(state?.status).toBe("app-reviewing");
+          expect(state?.appReviewWorkflowRunId).not.toBe(oldReviewIds.get(ticket.id));
+          expect(
+            (snapshot.appReviewWorkflowRuns ?? []).find(
+              (entry) => entry.id === state?.appReviewWorkflowRunId,
+            )?.status,
+          ).toBe("running");
+        }
+      }),
+    ),
   );
 
   it.effect("hands unfinished App Review repairs to the replacement worker", () =>

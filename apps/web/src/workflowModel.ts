@@ -1350,10 +1350,8 @@ export function resolveWorkflowTicketStatus(input: {
   switch (input.ticketState) {
     case "awaiting-native-verification":
       return "awaiting";
-    // A run marks a ticket blocked while its dependencies are still building,
-    // which is a queue rather than something the user has to unblock.
     case "blocked":
-      return "queued";
+      return input.reviewOutcome === "failed" ? "failed" : "queued";
     case "ready":
       return "pending";
     case "running":

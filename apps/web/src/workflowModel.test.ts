@@ -1616,6 +1616,25 @@ describe("resolveWorkflowStepRollup", () => {
 });
 
 describe("resolveWorkflowTicketStatus", () => {
+  it("distinguishes a blocked review from a ticket waiting on dependencies", () => {
+    expect(
+      resolveWorkflowTicketStatus({
+        ticketState: "blocked",
+        reviewOutcome: "failed",
+        threadStatuses: ["completed"],
+        skipped: false,
+        paused: false,
+      }),
+    ).toBe("failed");
+    expect(
+      resolveWorkflowTicketStatus({
+        ticketState: "blocked",
+        threadStatuses: [],
+        skipped: false,
+        paused: false,
+      }),
+    ).toBe("queued");
+  });
   it("shows terminal review outcomes instead of a running ticket stage", () => {
     for (const ticketState of ["app-reviewing", "code-reviewing"]) {
       for (const reviewOutcome of ["failed", "blocked", "exhausted", "canceled"]) {

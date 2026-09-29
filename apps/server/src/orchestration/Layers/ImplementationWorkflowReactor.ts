@@ -96,6 +96,10 @@ import {
   WORKFLOW_PROMPT_IDS,
 } from "../../provider/WorkflowPromptRegistry.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import {
+  isolateTicketReviewBlocks,
+  ticketAppReviewIsBlocked,
+} from "../implementationReviewBlocks.ts";
 import { readyTicketsWithinLimit, ticketIsPaused } from "../implementationTicketConcurrency.ts";
 import {
   ImplementationWorkflowReactor,
@@ -529,6 +533,7 @@ function markDependentsReady(
     ...run,
     ticketStates: run.ticketStates.map((state) =>
       state.status === "blocked" &&
+      !ticketAppReviewIsBlocked(state) &&
       state.dependencyTicketIds.every((ticketId) => succeededTicketIds.has(ticketId))
         ? { ...state, status: "ready" as const, updatedAt }
         : state,
@@ -2316,7 +2321,10 @@ const make = Effect.gen(function* () {
       });
       return false;
     }
-    const run = { ...input.run, automationHalt: summarizeTicketAppReviewHalt(input.run) };
+    const run = isolateTicketReviewBlocks({
+      ...input.run,
+      automationHalt: summarizeTicketAppReviewHalt(input.run),
+    });
     const written = yield* orchestrationEngine
       .dispatch({
         type: "thread.implementation-run.update",
@@ -10073,6 +10081,20 @@ const make = Effect.gen(function* () {
               : null,
         });
       }
+      const latestBeforeRerun = yield* projectionSnapshotQuery.getCommandReadModel();
+      const currentBeforeRerun = findRunById(latestBeforeRerun, run.id);
+      if (currentBeforeRerun !== null) {
+        rerunRun = {
+          ...rerunRun,
+          ticketStates: rerunRun.ticketStates.map((state) =>
+            ticketIds.includes(state.ticketId)
+              ? state
+              : (currentBeforeRerun.ticketStates.find(
+                  (entry) => entry.ticketId === state.ticketId,
+                ) ?? state),
+          ),
+        };
+      }
       yield* updateRun({
         sourceThreadId,
         run: rerunRun,
@@ -10111,7 +10133,12 @@ const make = Effect.gen(function* () {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     yield* runAcceptedRerun({
       readModel,
-      run: findRunById(readModel, event.payload.run.id) ?? event.payload.run,
+      run: currentRunForQueuedRerun(
+        readModel,
+        event.payload.run.id,
+        event.payload.run,
+        yield* Clock.currentTimeMillis,
+      ),
       target: event.payload.target,
       createdAt: event.occurredAt,
     });
@@ -10397,15 +10424,26 @@ const make = Effect.gen(function* () {
           });
           return;
         }
-        yield* blockRun({
-          sourceThreadId: input.sourceThreadId,
-          run: reviewedTicketRun,
-          ticketId,
-          reasonMarkdown: warningMarkdown ?? `Ticket App Review ended ${outcome}.`,
-          updatedAt: input.updatedAt,
-          haltCategory: "review-blocked",
-          haltStage: "app-review",
+        const blockedRun = isolateTicketReviewBlocks({
+          ...reviewedTicketRun,
+          ticketStates: reviewedTicketRun.ticketStates.map((state) =>
+            state.ticketId === ticketId
+              ? { ...state, status: "blocked" as const, resumeQueuedAt: null }
+              : state,
+          ),
         });
+        const blocked = yield* updateRun({
+          sourceThreadId: input.sourceThreadId,
+          run: blockedRun,
+          createdAt: input.updatedAt,
+        });
+        if (blocked) {
+          yield* startReadyWorkers({
+            sourceThreadId: input.sourceThreadId,
+            run: blockedRun,
+            createdAt: input.updatedAt,
+          });
+        }
         return;
       }
       yield* startTicketCodeReview({
@@ -10446,8 +10484,8 @@ const make = Effect.gen(function* () {
       const recoveredContinuation =
         ownsActivePhase &&
         run.status === "needs-human-attention" &&
-        run.automationHalt?.stage === "app-review" &&
-        run.automationHalt.ticketId === ticketId;
+        ((run.automationHalt?.stage === "app-review" && run.automationHalt.ticketId === ticketId) ||
+          (run.automationHalt === null && ticketAppReviewIsBlocked(ticketState)));
       const linkedTicketRun: OrchestrationImplementationRun = {
         ...run,
         ...(recoveredContinuation
@@ -11657,6 +11695,14 @@ const make = Effect.gen(function* () {
     const pendingIngestion = yield* pendingIngestionThreadIds(ingestionBacklog);
     for (const persistedRun of readModel.implementationRuns) {
       let run = yield* cleanupTicketResources({ run: persistedRun, createdAt });
+      const isolated = isolateTicketReviewBlocks(run);
+      if (isolated !== run) {
+        const sourceThreadId = findRunSourceThreadId({ readModel, run });
+        if (sourceThreadId !== null) {
+          const recorded = yield* updateRun({ sourceThreadId, run: isolated, createdAt });
+          if (recorded) run = isolated;
+        }
+      }
       if (run.status === "completed" || run.status === "canceled") {
         yield* teardownWorkflowStacks({ readModel, run, createdAt });
         continue;
@@ -12888,7 +12934,7 @@ const make = Effect.gen(function* () {
         const currentTicket = run.ticketStates.find(
           (ticket) => ticket.ticketId === action.ticketId,
         );
-        if (currentTicket === undefined) continue;
+        if (currentTicket === undefined || ticketAppReviewIsBlocked(currentTicket)) continue;
         const dependencyState = ticketDependencyState(run, currentTicket);
         if (
           (action.type === "derive-dependency-block" && dependencyState !== "blocked") ||
