@@ -82,6 +82,27 @@ it("isolates persisted ticket review halts without restarting failed reviews", (
   };
   expect(isolateTicketReviewBlocks(structural)).toBe(structural);
 });
+
+it("releases a failed review restored after its global halt was cleared", () => {
+  const current = run({
+    tickets: [
+      {
+        ...ticket({ ticketId: "review", status: "app-reviewing" }),
+        appReviewOutcome: "failed" as const,
+      },
+      ticket({ ticketId: "independent", status: "ready" }),
+    ],
+    status: "running",
+  });
+  const recovered = isolateTicketReviewBlocks(current);
+  expect(recovered.automationHalt).toBeNull();
+  expect(recovered.status).toBe("running");
+  expect(recovered.ticketStates[0]?.status).toBe("blocked");
+  expect(readyTicketsWithinLimit({ ...recovered, skips: [] }, 1, model(recovered))).toEqual([
+    "independent",
+  ]);
+  expect(isolateTicketReviewBlocks(recovered)).toBe(recovered);
+});
 const addMilliseconds = (value: string, milliseconds: number) =>
   DateTime.formatIso(
     DateTime.add(DateTime.makeUnsafe(Date.parse(value)), {

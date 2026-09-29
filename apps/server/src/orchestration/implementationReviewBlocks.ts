@@ -26,7 +26,10 @@ export function isolateTicketReviewBlocks(
     (halt !== null && !ticketReviewHalt)
   )
     return run;
-  const ticketStates = ticketReviewHalt
+  const hasFailedReview = run.ticketStates.some(
+    (ticket) => ticket.status === "app-reviewing" && ticket.appReviewOutcome === "failed",
+  );
+  const ticketStates = hasFailedReview
     ? run.ticketStates.map((ticket) =>
         ticket.status === "app-reviewing" && ticket.appReviewOutcome === "failed"
           ? { ...ticket, status: "blocked" as const, resumeQueuedAt: null }
@@ -45,6 +48,6 @@ export function isolateTicketReviewBlocks(
   )
     ? "running"
     : "needs-human-attention";
-  if (!ticketReviewHalt && status === run.status) return run;
+  if (!ticketReviewHalt && !hasFailedReview && status === run.status) return run;
   return { ...run, status, ticketStates, automationHalt: null };
 }
