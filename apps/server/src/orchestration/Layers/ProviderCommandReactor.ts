@@ -11,6 +11,7 @@ import {
   type OrchestrationReadModel,
   type OrchestrationThread,
   ProviderDriverKind,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ProviderInteractionMode,
   type ProjectId,
   type OrchestrationSession,
@@ -43,6 +44,7 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import { ServerConfig } from "../../config.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
 import {
   ProviderAdapterProcessError,
@@ -325,6 +327,7 @@ const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const serverConfig = yield* ServerConfig;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
@@ -1064,13 +1067,29 @@ const make = Effect.gen(function* () {
       interactionMode: input.interactionMode ?? thread.interactionMode,
     });
     const settings = yield* serverSettingsService.getSettings;
-    const normalizedInput = toNonEmptyProviderInput(
+    let normalizedInput = toNonEmptyProviderInput(
       appendWorkflowStepInstructions(
         input.messageText,
         workflowPromptId,
         settings.workflowStepInstructions,
       ),
     );
+    // Leave room for attachment paths and provider context without losing repair evidence.
+    if (
+      workflowPromptId !== undefined &&
+      normalizedInput !== undefined &&
+      normalizedInput.length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS - 20_000
+    ) {
+      const directory = path.join(serverConfig.stateDir, "workflow-prompts");
+      yield* fileSystem.makeDirectory(directory, { recursive: true });
+      const promptPath = path.join(directory, `${yield* crypto.randomUUIDv4}.md`);
+      yield* fileSystem.writeFileString(promptPath, normalizedInput, { mode: 0o600 });
+      normalizedInput = [
+        "Continue this workflow using the complete instructions and evidence saved in the file below.",
+        `Workflow prompt file: ${promptPath}`,
+        "Read the entire file in chunks before working. It contains this turn's assigned workspace, repair scope, evidence, and required result format. Follow those instructions and preserve completed work. Do not treat a truncated file read as the complete assignment.",
+      ].join("\n");
+    }
     const sessionModelSwitch =
       activeSession === undefined
         ? "in-session"

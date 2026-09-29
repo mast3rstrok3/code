@@ -22,6 +22,7 @@ import {
   ComposerContextId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_WORKSPACE_USER_ID,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   EventId,
   MessageId,
   ProjectId,
@@ -1125,6 +1126,61 @@ describe("ProviderCommandReactor", () => {
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
         });
+      }),
+  );
+
+  effectIt.effect(
+    "delivers oversized workflow repairs through a complete durable prompt file",
+    () =>
+      Effect.gen(function* () {
+        const instruction = "Preserve every failed acceptance selection.";
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            workflowStepInstructions: {
+              [WORKFLOW_PROMPT_IDS.implementationTddCodex]: instruction,
+            },
+          }),
+        );
+        const sent = yield* Deferred.make<void>();
+        harness.sendTurn.mockImplementation(() =>
+          Deferred.succeed(sent, undefined).pipe(
+            Effect.as({ threadId: ThreadId.make("thread-1"), turnId: asTurnId("turn-1") }),
+          ),
+        );
+        const message = `Repair evidence:\n${"x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)}\nRequired result: app-review-fix-result`;
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-oversized-workflow"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("oversized-workflow-message"),
+            role: "user",
+            text: message,
+            attachments: [],
+          },
+          interactionMode: "implementation-workflow",
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+          runtimeMode: "full-access",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        });
+        yield* Deferred.await(sent);
+        yield* Effect.promise(() => harness.drain());
+        const request = harness.sendTurn.mock.calls[0]?.[0] as {
+          readonly input?: string;
+          readonly workflowPromptId?: string;
+        };
+        expect(request?.workflowPromptId).toBe(WORKFLOW_PROMPT_IDS.implementationTddCodex);
+        expect(request?.input?.length).toBeLessThan(PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
+        const promptPath = request?.input?.match(/^Workflow prompt file: (.+)$/m)?.[1];
+        expect(promptPath).toBeDefined();
+        expect(NodePath.dirname(promptPath!)).toBe(
+          NodePath.join(harness.stateDir, "workflow-prompts"),
+        );
+        const saved = NodeFS.readFileSync(promptPath!, "utf8");
+        expect(saved).toContain(message);
+        expect(saved).toContain(instruction);
+        expect(saved).toContain("<worktree-runtime-context>");
+        expect(NodeFS.statSync(promptPath!).mode & 0o777).toBe(0o600);
       }),
   );
 
