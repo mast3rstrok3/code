@@ -2231,7 +2231,7 @@ export const make = Effect.gen(function* () {
         bodyFile,
         ...(credentials !== undefined ? { credentials } : {}),
       })
-      .pipe(Effect.ensuring(fileSystem.remove(bodyFile).pipe(Effect.catch(() => Effect.void))));
+      .pipe(Effect.ensuring(fileSystem.remove(bodyFile).pipe(Effect.ignore)));
 
     const created = yield* findOpenPr(cwd, headContext, credentials);
     if (!created) {

@@ -76,6 +76,12 @@ export interface ProjectionFullThreadDiffContext {
   readonly toCheckpointRef: CheckpointRef | null;
 }
 
+/** The thread fields pull request sync reads, for a thread with at least one link. */
+export type ProjectionThreadPullRequests = Pick<
+  OrchestrationThreadShell,
+  "id" | "projectId" | "settledOverride" | "settledAt" | "pullRequests"
+>;
+
 /**
  * ProjectionSnapshotQueryShape - Service API for read-model snapshots.
  */
@@ -136,9 +142,15 @@ export interface ProjectionSnapshotQueryShape {
    *
    * Returns only projects and thread shell summaries so clients can bootstrap
    * lightweight navigation state without hydrating every thread body.
+   *
+   * `unsettledOnly` is for background sweeps, not clients. It skips settled
+   * threads and their sessions, PR links, and turns, and its `updatedAt`
+   * ignores those rows. It still resolves every project, which keeps
+   * repository identities cached for client connects.
    */
   readonly getShellSnapshot: (options?: {
     readonly userView?: WorkspaceUserView;
+    readonly unsettledOnly?: boolean;
   }) => Effect.Effect<OrchestrationShellSnapshot, ProjectionRepositoryError>;
 
   /**
@@ -150,6 +162,16 @@ export interface ProjectionSnapshotQueryShape {
   readonly getArchivedShellSnapshot: (options?: {
     readonly userView?: WorkspaceUserView;
   }) => Effect.Effect<OrchestrationShellSnapshot, ProjectionRepositoryError>;
+
+  /**
+   * Read active (not deleted, not archived) threads that have at least one pull
+   * request link, in shell snapshot order. Skips repository identity, so no
+   * legacy `linkedPullRequest` is derived.
+   */
+  readonly listThreadsWithPullRequests: () => Effect.Effect<
+    ReadonlyArray<ProjectionThreadPullRequests>,
+    ProjectionRepositoryError
+  >;
 
   /** Durable worktree ownership retained after thread deletion, including across restarts. */
   readonly getDeletedWorktreeThreads: () => Effect.Effect<

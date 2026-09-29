@@ -1670,7 +1670,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      if (thread.settledOverride !== null) {
+      if (thread.settledOverride !== null || thread.autoSettleDisabledAt != null) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `thread ${command.threadId} changed before automatic settlement`,
@@ -2111,12 +2111,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // defeats the request. (A running session IS snoozable — snooze only
       // affects visibility, never the agent.)
       if (openRequests(thread).size > 0) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `thread ${command.threadId} has a pending approval or user-input request and cannot be snoozed`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} has a pending approval or user-input request and cannot be snoozed`,
+        });
       }
       // A queued turn start — a user message no turn has adopted yet — is
       // invisible pending work: no session, no pending flags. Snoozing in
@@ -2288,12 +2286,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // (rather than silently pinning) keeps a raced reorder-after-unpin
       // from resurrecting a pin the user just cleared.
       if (thread.pinnedAt == null) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `thread ${command.threadId} is not pinned and cannot be reordered`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} is not pinned and cannot be reordered`,
+        });
       }
       // Idempotent by re-emission (see thread.settle): a duplicate drop on
       // the same slot keeps the existing updatedAt so it projects as a no-op.
@@ -2311,6 +2307,37 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           orderKey: command.orderKey,
           updatedAt: keyUnchanged ? thread.updatedAt : occurredAt,
+        },
+      };
+    }
+
+    case "thread.auto-settle.set": {
+      const thread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      // Idempotent by re-emission (see thread.unpin): setting the current
+      // state again keeps the existing timestamps so duplicates do not churn
+      // ordering. The flag is independent of the settled lifecycle: it only
+      // gates the automatic paths, so it never blocks a manual settle.
+      const currentlyDisabledAt = thread.autoSettleDisabledAt ?? null;
+      const unchanged = command.enabled
+        ? currentlyDisabledAt === null
+        : currentlyDisabledAt !== null;
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.auto-settle-set",
+        payload: {
+          threadId: command.threadId,
+          autoSettleDisabledAt: command.enabled ? null : (currentlyDisabledAt ?? occurredAt),
+          updatedAt: unchanged ? thread.updatedAt : occurredAt,
         },
       };
     }
@@ -2374,12 +2401,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (command.linkedPullRequest != null) {
         const { linkedPullRequest: linked, ...metadata } = command;
         const project = readModel.projects.find((project) => project.id === thread.projectId);
-        let host = project?.repositoryIdentity?.canonicalKey.split("/")[0] ?? "unknown";
-        try {
-          host = new URL(linked.url).hostname;
-        } catch {
-          // Historical clients can send links without a parseable URL.
-        }
+        // Historical clients can send links without a parseable URL.
+        const host = URL.canParse(linked.url)
+          ? new URL(linked.url).hostname
+          : (project?.repositoryIdentity?.canonicalKey.split("/")[0] ?? "unknown");
         const hasMetadata = Object.entries(metadata).some(
           ([key, value]) => !["type", "commandId", "threadId"].includes(key) && value !== undefined,
         );
@@ -6316,12 +6341,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           sessionComingAlive ||
           threadHasQueuedTurnStart(thread, command.createdAt)
         ) {
-          return yield* Effect.fail(
-            new OrchestrationCommandInvariantError({
-              commandType: command.type,
-              detail: `thread ${command.threadId} was re-engaged after settle; skipping session stop`,
-            }),
-          );
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `thread ${command.threadId} was re-engaged after settle; skipping session stop`,
+          });
         }
       }
       return {

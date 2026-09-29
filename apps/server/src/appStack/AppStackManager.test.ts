@@ -5,6 +5,7 @@ import * as NodePath from "node:path";
 
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -98,7 +99,6 @@ const derivedPaths = {
   attachmentsDir: "/tmp/t3-app-dev-stack-manager-test/state/attachments",
   environmentThemesDir: "/tmp/t3-app-dev-stack-manager-test/state/themes",
   logsDir: "/tmp/t3-app-dev-stack-manager-test/state/logs",
-  serverLogPath: "/tmp/t3-app-dev-stack-manager-test/state/logs/server.log",
   serverTracePath: "/tmp/t3-app-dev-stack-manager-test/state/logs/server.trace.ndjson",
   providerLogsDir: "/tmp/t3-app-dev-stack-manager-test/state/logs/provider",
   providerEventLogPath: "/tmp/t3-app-dev-stack-manager-test/state/logs/provider/events.log",
@@ -134,7 +134,7 @@ const makeConfigLayer = (input?: {
     otlpTracesExport: DEFAULT_SIGNAL_EXPORT,
     otlpMetricsExport: DEFAULT_SIGNAL_EXPORT,
     otlpLogsExport: DEFAULT_SIGNAL_EXPORT,
-    otlpServiceName: "t3-server",
+    otelEnvironment: OtelEnvironment.none,
     mode: "web",
     port: 0,
     host: undefined,
