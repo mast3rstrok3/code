@@ -6214,20 +6214,29 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  for (const corrected of [true, false]) {
+  for (const [corrected, lastLaunch] of [
+    [true, false],
+    [false, false],
+    [true, true],
+    [false, true],
+  ] as const) {
     it.effect(
-      `requests a corrected worker report and ${corrected ? "accepts the correction" : "halts with the parse error after the retry"}`,
+      `requests a corrected worker report${lastLaunch ? " on the last launch" : ""} and ${corrected ? "accepts the correction" : "halts with the parse error after the retry"}`,
       () =>
         withSystem((system) =>
           Effect.gen(function* () {
             const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
             const state = run.ticketStates[0]!;
             const threadId = state.workerThreadId!;
-            for (const attempt of [1, 2]) {
+            // On the last launch, the first turn stops without a report and
+            // recovery spends the second launch before the rejected report lands.
+            const reports = lastLaunch ? [null, false, corrected] : [false, corrected];
+            for (const [index, valid] of reports.entries()) {
+              const attempt = index + 1;
+              const report = attempt - reports.length + 2;
               const createdAt = DateTime.formatIso(yield* DateTime.now);
               const turnId = TurnId.make(`worker-report-turn-${attempt}`);
               const messageId = MessageId.make(`worker-report-message-${attempt}`);
-              const valid = corrected && attempt === 2;
               yield* system.engine.dispatch({
                 type: "thread.session.set",
                 commandId: commandId(`worker-report-running-${attempt}`),
@@ -6249,21 +6258,24 @@ describe("ImplementationWorkflowReactor", () => {
                 threadId,
                 turnId,
                 messageId,
-                delta: `\`\`\`json\n${yield* encodeJson({
-                  type: "implementation-worker-result",
-                  ticketId: state.ticketId,
-                  workerThreadId: threadId,
-                  branch: state.branch,
-                  worktreePath: state.worktreePath,
-                  status: "succeeded",
-                  commitSha: "worker-commit",
-                  validations: valid
-                    ? requiredValidations()
-                    : [{ command: "pnpm test", status: "failed", completedAt: null }],
-                  notesMarkdown:
-                    "The initial failed attempt has no retained timestamp. Later verification passed.",
-                  reportedAt: createdAt,
-                })}\n\`\`\``,
+                delta:
+                  valid === null
+                    ? "Still working on the ticket."
+                    : `\`\`\`json\n${yield* encodeJson({
+                        type: "implementation-worker-result",
+                        ticketId: state.ticketId,
+                        workerThreadId: threadId,
+                        branch: state.branch,
+                        worktreePath: state.worktreePath,
+                        status: "succeeded",
+                        commitSha: "worker-commit",
+                        validations: valid
+                          ? requiredValidations()
+                          : [{ command: "pnpm test", status: "failed", completedAt: null }],
+                        notesMarkdown:
+                          "The initial failed attempt has no retained timestamp. Later verification passed.",
+                        reportedAt: createdAt,
+                      })}\n\`\`\``,
                 createdAt,
               });
               yield* system.engine.dispatch({
@@ -6301,9 +6313,19 @@ describe("ImplementationWorkflowReactor", () => {
                   (thread) => thread.workflowRole === "implementation-worker",
                 ),
               ).toHaveLength(1);
-              if (attempt === 1) {
+              if (report < 1) {
+                expect(current.automationHalt).toBeNull();
+                expect(current.ticketStates[0]?.attemptCount).toBe(2);
+                expect(worker.messages.at(-1)?.text).not.toContain(
+                  "The workflow rejected the report",
+                );
+              } else if (report === 1) {
+                expect(current.automationHalt).toBeNull();
                 expect(current.ticketStates[0]?.workerResult).toBeNull();
                 expect(current.ticketStates[0]?.attemptCount).toBe(2);
+                expect(current.ticketStates[0]?.implementationGeneration).toBe(
+                  state.implementationGeneration + (lastLaunch ? 1 : 0),
+                );
                 const prompt = worker.messages.at(-1)?.text;
                 expect(prompt).toContain(
                   "The workflow rejected the report: Directive field 'completedAt'",

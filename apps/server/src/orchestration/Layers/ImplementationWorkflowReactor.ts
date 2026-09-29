@@ -2056,6 +2056,39 @@ const RECOVERED_WORKER_WARNING =
   "Recovery continued the existing Implementation thread after its provider session stopped.";
 
 /**
+ * Reopen a worker whose turn ended without an accepted report. A rejected report
+ * only needs its directive rewritten, so one that lands on the last launch gets
+ * a single correction launch in a new generation instead of halting finished
+ * work. A correction that is itself rejected counts against the budget as usual.
+ */
+function reopenInterruptedWorker(
+  state: OrchestrationImplementationTicketState,
+  resultProblem: string | undefined,
+  updatedAt: string,
+): OrchestrationImplementationTicketState {
+  const reopened = {
+    ...state,
+    status: "ready" as const,
+    workerResult: null,
+    warningMarkdown:
+      resultProblem === undefined
+        ? RECOVERED_WORKER_WARNING
+        : `${WORKER_RESULT_REJECTED_PREFIX} ${resultProblem}`,
+    updatedAt,
+  };
+  const firstCorrection =
+    resultProblem !== undefined &&
+    !(state.warningMarkdown?.startsWith(WORKER_RESULT_REJECTED_PREFIX) ?? false);
+  return firstCorrection && state.attemptCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES
+    ? {
+        ...reopened,
+        implementationGeneration: state.implementationGeneration + 1,
+        attemptCount: IMPLEMENTATION_STAGE_MAX_LAUNCHES - 1,
+      }
+    : reopened;
+}
+
+/**
  * Whether the run is halted on this ticket's Implementation because its worker
  * spent the launch budget without a result being recorded. A successful result
  * from the ticket's worker answers that halt.
@@ -12334,15 +12367,11 @@ const make = Effect.gen(function* () {
             ...run,
             ticketStates: run.ticketStates.map((state) =>
               interruptedWorkerIds.has(state.ticketId)
-                ? {
-                    ...state,
-                    status: "ready" as const,
-                    workerResult: null,
-                    warningMarkdown: workerResultProblems.has(state.ticketId)
-                      ? `${WORKER_RESULT_REJECTED_PREFIX} ${workerResultProblems.get(state.ticketId)}`
-                      : RECOVERED_WORKER_WARNING,
-                    updatedAt: createdAt,
-                  }
+                ? reopenInterruptedWorker(
+                    state,
+                    workerResultProblems.get(state.ticketId),
+                    createdAt,
+                  )
                 : state,
             ),
             updatedAt: createdAt,
