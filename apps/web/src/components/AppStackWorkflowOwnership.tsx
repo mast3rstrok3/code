@@ -10,7 +10,7 @@ export function AppStackWorkflowOwnershipBadge(props: { readonly stack: AppStack
   if (label === null) return null;
 
   return (
-    <span className="inline-flex h-5 items-center rounded-full border border-sky-500/25 bg-sky-500/10 px-2 text-[11px] font-medium text-sky-700 dark:text-sky-400">
+    <span className="inline-flex h-5 items-center rounded-full border border-info/25 bg-info/10 px-2 text-2xs font-medium text-info-foreground">
       {label}
     </span>
   );
@@ -22,7 +22,7 @@ export function AppStackWorkflowConflictWarning(props: {
   if (props.conflicts.length === 0) return null;
 
   return (
-    <div className="flex gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 p-3 text-xs text-amber-800 dark:text-amber-400">
+    <div className="flex gap-2 rounded-lg border border-warning/25 bg-warning/5 p-3 text-xs text-warning-foreground">
       <TriangleAlertIcon className="mt-0.5 size-4 shrink-0" />
       <div className="space-y-1">
         <div className="font-medium">Workflow stack ownership conflicts</div>

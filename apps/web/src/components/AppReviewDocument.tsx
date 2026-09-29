@@ -289,7 +289,7 @@ export function AppReviewDocument(props: {
                   <h4 className="text-sm font-semibold">{finding.title}</h4>
                   <span
                     className={cn(
-                      "rounded border px-1.5 py-0.5 text-[11px] font-medium",
+                      "rounded border px-1.5 py-0.5 text-2xs font-medium",
                       severityClassName[finding.severity],
                     )}
                   >

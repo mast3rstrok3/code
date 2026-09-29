@@ -195,7 +195,7 @@ export function SidebarThreadTouchSurface(props: {
           aria-label={`${props.action.label} thread`}
           tabIndex={open ? 0 : -1}
           className={cn(
-            "absolute inset-y-0 right-0 flex cursor-pointer flex-col items-center justify-center gap-0.5 bg-[#007aff] text-[10px] font-medium text-white outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white",
+            "absolute inset-y-0 right-0 flex cursor-pointer flex-col items-center justify-center gap-0.5 bg-info text-3xs font-medium text-white outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white",
             open ? "z-[2] pointer-events-auto" : "z-0 pointer-events-none",
           )}
           style={{ width: THREAD_ROW_SWIPE_ACTION_WIDTH_PX }}

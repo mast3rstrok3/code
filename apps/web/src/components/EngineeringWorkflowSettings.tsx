@@ -247,7 +247,7 @@ function AppReviewPhaseControls(
         }
         return (
           <li key={phase.label} className="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-2 p-3">
-            <span className="flex size-6 items-center justify-center rounded-full bg-muted text-[11px] font-semibold text-muted-foreground">
+            <span className="flex size-6 items-center justify-center rounded-full bg-muted text-2xs font-semibold text-muted-foreground">
               {index + 1}
             </span>
             <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
@@ -316,7 +316,7 @@ function EngineeringWorkflowStepControls(
             <div className="flex items-start justify-between gap-2">
               <div>
                 <div className="text-xs font-medium text-foreground">Ticket App Review</div>
-                <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                <p className="mt-1 text-2xs leading-relaxed text-muted-foreground">
                   Runs before the ticket's Code Review. Each step can use its own model.
                 </p>
               </div>
@@ -513,7 +513,7 @@ function EngineeringWorkflowStepRow(
         </span>
         <div className="min-w-0 self-center">
           <div className="truncate text-xs font-medium text-foreground">{target.label}</div>
-          <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{summary}</div>
+          <div className="mt-0.5 truncate text-2xs text-muted-foreground">{summary}</div>
         </div>
         {canChangeEnabled ? (
           <Button
@@ -557,7 +557,7 @@ function EngineeringWorkflowStepRow(
               <span className="block truncate text-xs font-medium text-foreground">
                 {target.label}
               </span>
-              <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+              <span className="mt-0.5 block truncate text-2xs text-muted-foreground">
                 {summary}
               </span>
             </span>
@@ -578,7 +578,7 @@ function EngineeringWorkflowStepRow(
           ) : null}
         </div>
         <CollapsiblePanel>
-          <div className="border-t border-border/60 px-3 pb-3 pt-3 sm:pl-[3.75rem]">
+          <div className="border-t border-border/60 px-3 pb-3 pt-3 sm:pl-15">
             <EngineeringWorkflowStepControls
               {...props}
               target={target}
@@ -621,7 +621,7 @@ function WorkflowPhaseSection(
           )}
           <span className="min-w-0 flex-1">
             <span className="block text-xs font-semibold text-foreground">{props.label}</span>
-            <span className="mt-0.5 block text-[11px] text-muted-foreground">{summary}</span>
+            <span className="mt-0.5 block text-2xs text-muted-foreground">{summary}</span>
           </span>
         </CollapsibleTrigger>
         <CollapsiblePanel>
@@ -656,7 +656,7 @@ function WorkflowModelSetup(
           )}
           <span className="min-w-0">
             <span className="block text-xs font-semibold text-foreground">Model setup</span>
-            <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+            <span className="mt-0.5 block truncate text-2xs text-muted-foreground">
               Preselected workflow and review models
             </span>
           </span>

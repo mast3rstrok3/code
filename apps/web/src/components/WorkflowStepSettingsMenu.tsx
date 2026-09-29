@@ -145,18 +145,18 @@ export function WorkflowStepSettingsMenu(props: {
       </PopoverTrigger>
       <PopoverPopup side="bottom" align="end" padding="none" className="w-72">
         <div className="border-b border-border/70 px-3 py-2">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+          <div className="text-3xs font-medium uppercase tracking-wider text-muted-foreground">
             Step settings
           </div>
           <div className="truncate text-xs font-semibold text-foreground">{props.stepLabel}</div>
         </div>
 
         <div className="space-y-2 px-3 py-2">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+          <div className="text-3xs font-medium uppercase tracking-wider text-muted-foreground">
             Model
           </div>
           {props.usesRootThread ? (
-            <p className="text-[11px] leading-relaxed text-muted-foreground">
+            <p className="text-2xs leading-relaxed text-muted-foreground">
               This step shares the workflow&apos;s main thread, so it uses the model selected in
               that thread&apos;s composer. Per-step models are available only for steps that start a
               separate thread.
@@ -172,7 +172,7 @@ export function WorkflowStepSettingsMenu(props: {
               onSetStepModel={onSetStepModel}
             />
           ) : (
-            <p className="text-[11px] leading-relaxed text-muted-foreground">
+            <p className="text-2xs leading-relaxed text-muted-foreground">
               This step has no agent of its own, so there is no model to choose.
             </p>
           )}
@@ -266,7 +266,7 @@ export function WorkflowStepSettingsMenu(props: {
             <TooltipPopup side="top">{restartDisabledReason ?? props.restartLabel}</TooltipPopup>
           </Tooltip>
           {restartDisabledReason !== null ? (
-            <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
+            <p className="px-2 text-2xs leading-relaxed text-muted-foreground">
               {restartDisabledReason}
             </p>
           ) : null}
@@ -300,7 +300,7 @@ export function WorkflowStepSettingsMenu(props: {
               </Tooltip>
               {confirmingClear && confirmClearMessage !== null ? (
                 <>
-                  <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
+                  <p className="px-2 text-2xs leading-relaxed text-muted-foreground">
                     {confirmClearMessage}
                   </p>
                   <button
@@ -313,7 +313,7 @@ export function WorkflowStepSettingsMenu(props: {
                 </>
               ) : null}
               {clearDisabledReason !== null ? (
-                <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
+                <p className="px-2 text-2xs leading-relaxed text-muted-foreground">
                   {clearDisabledReason}
                 </p>
               ) : null}

@@ -2241,7 +2241,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       {row.message.workflowPromptId ? (
         <button
           type="button"
-          className="me-1 inline-flex items-center rounded-full border border-border/70 bg-background/70 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="me-1 inline-flex items-center rounded-full border border-border/70 bg-background/70 px-2 py-0.5 text-2xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           onClick={() => ctx.onOpenWorkflowInstructions(row.message.workflowPromptId!)}
         >
           Skill ·{" "}

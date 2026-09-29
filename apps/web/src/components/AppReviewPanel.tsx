@@ -417,7 +417,7 @@ function CycleStep(props: {
       <div className="flex shrink-0 items-center gap-1.5">
         <span
           className={cn(
-            "text-[11px]",
+            "text-2xs",
             props.status === "failed" ? "text-destructive" : "text-muted-foreground",
           )}
         >

@@ -51,7 +51,7 @@ function PageIntro({ title, description }: { title: string; description: string 
   return (
     <div className="space-y-3">
       <div className="space-y-1 px-1">
-        <h1 className="text-lg font-semibold text-foreground tracking-[-0.01em]">{title}</h1>
+        <h1 className="text-lg font-semibold text-foreground">{title}</h1>
         <p className="max-w-2xl text-sm text-muted-foreground">{description}</p>
       </div>
       <div className="flex flex-wrap items-center gap-2 px-1">

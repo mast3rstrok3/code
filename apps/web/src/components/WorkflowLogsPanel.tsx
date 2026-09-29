@@ -77,7 +77,7 @@ function LogEntryRow({
           <span className="min-w-0 truncate text-sm font-medium text-foreground/90">
             {entry.toolTitle ?? entry.label}
           </span>
-          <span className="shrink-0 text-[11px] text-muted-foreground/60 tabular-nums">
+          <span className="shrink-0 text-2xs text-muted-foreground/60 tabular-nums">
             {formatShortTimestamp(entry.createdAt, timestampFormat)}
           </span>
           {entry.toolLifecycleStatus ? (
@@ -97,7 +97,7 @@ function LogEntryRow({
           </p>
         ) : null}
         {command ? (
-          <pre className="max-h-28 overflow-auto rounded-md border border-border/55 bg-background/70 px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground/80">
+          <pre className="max-h-28 overflow-auto rounded-md border border-border/55 bg-background/70 px-2.5 py-2 font-mono text-2xs leading-relaxed text-foreground/80">
             {command}
           </pre>
         ) : null}
@@ -125,11 +125,11 @@ export function WorkflowLogsPanel({ entries, timestampFormat }: WorkflowLogsPane
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-background">
-      <div className="surface-subheader flex items-center gap-2">
+      <div className="flex h-10 min-h-10 shrink-0 items-center gap-2 border-b border-border/60 bg-background">
         <ScrollTextIcon className="size-4 text-muted-foreground" />
         <div className="min-w-0">
           <div className="text-sm font-medium">Logs</div>
-          <div className="text-[11px] text-muted-foreground">
+          <div className="text-2xs text-muted-foreground">
             {visibleEntries.length === 1
               ? "1 activity"
               : `${visibleEntries.length.toString()} activities`}

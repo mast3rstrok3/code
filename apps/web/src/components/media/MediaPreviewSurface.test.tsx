@@ -10,7 +10,7 @@ describe("MediaPreviewSurface", () => {
         kind="video"
         name="recording.webm"
         url="/api/assets/token/recording.webm"
-        mediaClassName="video-preview"
+        mediaClassName="max-h-64"
       />,
     );
 
@@ -18,7 +18,7 @@ describe("MediaPreviewSurface", () => {
     expect(html).toContain("controls");
     expect(html).toContain('preload="metadata"');
     expect(html).toContain('type="video/webm"');
-    expect(html).toContain('class="video-preview"');
+    expect(html).toContain('class="max-h-64"');
     expect(html).not.toContain("Open raw");
   });
 

@@ -46,7 +46,7 @@ export function WorkflowTicketConcurrency(props: {
           }
         }}
       />
-      <p id={`${id}-description`} className="text-[11px] leading-relaxed text-muted-foreground">
+      <p id={`${id}-description`} className="text-2xs leading-relaxed text-muted-foreground">
         Each ticket holds a slot through implementation and review. Lowering the limit lets active
         tickets finish before more start. Choose 1 to work on one ticket at a time.
       </p>

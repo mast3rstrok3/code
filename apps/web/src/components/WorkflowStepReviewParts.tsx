@@ -52,7 +52,7 @@ export function WorkflowStepReviewPartPins(props: {
 
   return (
     <div className={props.className ?? "space-y-2"}>
-      <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+      <div className="text-3xs font-medium uppercase tracking-wider text-muted-foreground">
         Review parts
       </div>
       {targets.map((target) => {
@@ -72,14 +72,14 @@ export function WorkflowStepReviewPartPins(props: {
                 <button
                   type="button"
                   onClick={() => props.onSetStepReviewParts(target.key, null)}
-                  className="cursor-pointer shrink-0 text-[10px] font-medium uppercase tracking-wider text-muted-foreground hover:text-foreground"
+                  className="cursor-pointer shrink-0 text-3xs font-medium uppercase tracking-wider text-muted-foreground hover:text-foreground"
                 >
                   Auto
                 </button>
               ) : null}
             </div>
             <div className="flex items-center gap-4">
-              <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <label className="flex items-center gap-1.5 text-2xs text-muted-foreground">
                 E2E tests
                 <Switch
                   checked={parts.e2e}
@@ -96,7 +96,7 @@ export function WorkflowStepReviewPartPins(props: {
                 props.onSetStepReviewParts(target.key, { ...parts, testPlatforms })
               }
             />
-            <p className="text-[11px] leading-relaxed text-muted-foreground">
+            <p className="text-2xs leading-relaxed text-muted-foreground">
               {describeAppReviewParts(parts)}
               {parts.e2e ? "" : ". This review step is skipped"} · {target.description}
             </p>

@@ -33,10 +33,10 @@ export function WorkflowModelQuickPins(props: {
   return (
     <div className="space-y-3 rounded-lg border border-border/70 bg-muted/20 p-3">
       <div>
-        <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        <div className="text-3xs font-medium uppercase tracking-wider text-muted-foreground">
           Quick model assignments
         </div>
-        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+        <p className="mt-1 text-2xs leading-relaxed text-muted-foreground">
           Set common review roles here, or tune them in their chronological steps below.
         </p>
       </div>

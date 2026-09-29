@@ -38,7 +38,7 @@ export function WorkflowInstructionsPanel({
           <div className="min-w-0">
             <h2 className="font-medium text-sm">{skill.title}</h2>
             <p className="mt-1 text-xs text-muted-foreground">{skill.description}</p>
-            <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
+            <div className="mt-2 flex flex-wrap gap-1.5 text-3xs text-muted-foreground">
               <code className="rounded bg-muted px-1.5 py-0.5">{skill.id}</code>
               <code className="rounded bg-muted px-1.5 py-0.5">{workflowPromptId}</code>
             </div>

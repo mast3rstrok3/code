@@ -399,7 +399,7 @@ function TimelineTimeRange(props: {
   return (
     <span
       className={cn(
-        "flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] leading-4 text-muted-foreground",
+        "flex flex-wrap items-center gap-x-2 gap-y-0.5 text-3xs leading-4 text-muted-foreground",
         props.className,
       )}
     >
@@ -511,9 +511,9 @@ function ThreadRow(props: {
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-sm font-medium">{row.thread.title}</span>
-          <span className={cn("shrink-0 text-[11px]", visual.textClass)}>{visual.label}</span>
+          <span className={cn("shrink-0 text-2xs", visual.textClass)}>{visual.label}</span>
         </span>
-        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-2xs text-muted-foreground">
           <span className="shrink-0">{role}</span>
           <span aria-hidden>·</span>
           <span className="min-w-0 truncate">
@@ -813,7 +813,7 @@ function PlanningArtifacts(props: {
   if (props.spec === null && props.tickets.length === 0) return null;
   return (
     <section className="border-t border-border/70 p-2">
-      <div className="mb-2 px-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+      <div className="mb-2 px-1 text-3xs font-medium uppercase tracking-wider text-muted-foreground">
         Planning documents
       </div>
       <div className="flex flex-wrap gap-1.5">
@@ -1042,12 +1042,12 @@ export function TicketAppReviewCycles(props: {
                   <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
                 )}
                 <StatusDot status={cycleStatus} className="size-1.5" />
-                <span className="min-w-0 flex-1 truncate text-[11px] font-medium">
+                <span className="min-w-0 flex-1 truncate text-2xs font-medium">
                   Cycle {cycle.cycleNumber} of {props.run.cycleBudget}
                 </span>
                 <span
                   className={cn(
-                    "shrink-0 text-[10px] capitalize",
+                    "shrink-0 text-3xs capitalize",
                     STEP_VISUALS[cycleStatus].textClass,
                   )}
                 >
@@ -1105,7 +1105,7 @@ export function TicketAppReviewCycles(props: {
                         >
                           <span
                             className={cn(
-                              "absolute -left-[1.05rem] top-0.5 flex size-3.5 items-center justify-center rounded-full border border-border bg-background text-[8px]",
+                              "absolute -left-[1.05rem] top-0.5 flex size-3.5 items-center justify-center rounded-full border border-border bg-background text-4xs",
                               STEP_VISUALS[phaseStatus].textClass,
                             )}
                           >
@@ -1116,7 +1116,7 @@ export function TicketAppReviewCycles(props: {
                               type="button"
                               aria-expanded={phaseOpen}
                               onClick={() => props.disclosures.toggle(phaseDisclosureId)}
-                              className="cursor-pointer flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-1 text-left text-[10px] hover:bg-accent/40"
+                              className="cursor-pointer flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-1 text-left text-3xs hover:bg-accent/40"
                             >
                               {phaseOpen ? (
                                 <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
@@ -1220,12 +1220,12 @@ export function TicketAppReviewCycles(props: {
                               ) : (
                                 <ChevronRight className="size-3 shrink-0 text-muted-foreground" />
                               )}
-                              <span className="min-w-0 flex-1 truncate text-[10px] font-medium text-foreground">
+                              <span className="min-w-0 flex-1 truncate text-3xs font-medium text-foreground">
                                 {ticket.key} · {ticket.title}
                               </span>
                             </button>
                             {ticketOpen ? (
-                              <div className="whitespace-pre-wrap border-t border-border/60 px-2 py-1.5 text-[9px] leading-4 text-muted-foreground">
+                              <div className="whitespace-pre-wrap border-t border-border/60 px-2 py-1.5 text-3xs leading-4 text-muted-foreground">
                                 {ticket.bodyMarkdown}
                               </div>
                             ) : null}
@@ -1247,12 +1247,12 @@ export function TicketAppReviewCycles(props: {
                         ) : (
                           <ChevronRight className="size-3 shrink-0 text-muted-foreground" />
                         )}
-                        <span className="min-w-0 flex-1 truncate text-[10px] font-medium text-foreground">
+                        <span className="min-w-0 flex-1 truncate text-3xs font-medium text-foreground">
                           Gaps to fix
                         </span>
                       </button>
                       {gapsOpen ? (
-                        <p className="whitespace-pre-wrap border-t border-border/60 px-2 py-1.5 text-[10px] leading-4 text-muted-foreground">
+                        <p className="whitespace-pre-wrap border-t border-border/60 px-2 py-1.5 text-3xs leading-4 text-muted-foreground">
                           {cycle.actionableFindingsMarkdown}
                         </p>
                       ) : null}
@@ -1264,7 +1264,7 @@ export function TicketAppReviewCycles(props: {
           );
         })}
       {props.run.cycles.length === 0 ? (
-        <div className="py-1 text-[10px] text-muted-foreground/65">Review cycle is starting</div>
+        <div className="py-1 text-3xs text-muted-foreground/65">Review cycle is starting</div>
       ) : null}
     </div>
   );
@@ -1296,7 +1296,7 @@ function AppReviewRunsTimeline(props: {
         .map((run, index) => (
           <section key={run.id}>
             {props.runs.length > 1 ? (
-              <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              <div className="mb-1 text-3xs font-medium uppercase tracking-wider text-muted-foreground">
                 Recorded App Review {index + 1} · {run.status}
               </div>
             ) : null}
@@ -1400,7 +1400,7 @@ function ThreadRowList(props: {
         <button
           type="button"
           onClick={() => setShowAll(true)}
-          className="cursor-pointer w-full rounded px-2 py-1 text-left text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
+          className="cursor-pointer w-full rounded px-2 py-1 text-left text-3xs text-muted-foreground hover:bg-accent hover:text-foreground"
         >
           Show {hiddenCount} earlier attempt{hiddenCount === 1 ? "" : "s"}
         </button>
@@ -1427,7 +1427,7 @@ function EarlierThreads(props: {
   if (props.threads.length === 0) return null;
   return (
     <details className="mt-1 rounded border border-border/60 px-1.5 py-1">
-      <summary className="cursor-pointer text-[10px] text-muted-foreground">
+      <summary className="cursor-pointer text-3xs text-muted-foreground">
         Earlier threads · {props.threads.length}
       </summary>
       <ThreadRowList {...props} />
@@ -1489,7 +1489,7 @@ function WorkflowExecutionStatusList(props: {
       execution.state === "halted" && execution.failure?.category !== "dependency-failed",
   ).length;
   return (
-    <div className="border-b border-border/70 px-3 py-2 text-[11px]">
+    <div className="border-b border-border/70 px-3 py-2 text-2xs">
       <div className="font-medium text-foreground">
         Recorded stages: {halted} halted, {unfinished} unfinished, {dependencyBlocked}{" "}
         dependency-blocked
@@ -1765,14 +1765,11 @@ function TicketPhases(props: {
           >
             <div className="mb-1 flex items-center gap-1.5">
               <StatusDot status={waveStatus} className="size-1.5" />
-              <div className="min-w-0 flex-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              <div className="min-w-0 flex-1 text-3xs font-medium uppercase tracking-wider text-muted-foreground">
                 Wave {waveIndex + 1} · {wave.length} ticket{wave.length === 1 ? "" : "s"}
               </div>
               <span
-                className={cn(
-                  "shrink-0 text-[10px] font-medium",
-                  STEP_VISUALS[waveStatus].textClass,
-                )}
+                className={cn("shrink-0 text-3xs font-medium", STEP_VISUALS[waveStatus].textClass)}
               >
                 {STEP_VISUALS[waveStatus].label}
               </span>
@@ -1966,10 +1963,7 @@ function TicketPhases(props: {
                         {ticketLabel} · {ticket.title}
                       </span>
                       <span
-                        className={cn(
-                          "text-[10px] capitalize",
-                          STEP_VISUALS[ticketStatus].textClass,
-                        )}
+                        className={cn("text-3xs capitalize", STEP_VISUALS[ticketStatus].textClass)}
                       >
                         {ticketDetail}
                       </span>
@@ -2080,13 +2074,13 @@ function TicketPhases(props: {
                             <section key={stage.label} className="relative">
                               <span
                                 className={cn(
-                                  "absolute -left-[1.05rem] top-1 flex size-4 items-center justify-center rounded-full border border-border bg-background text-[9px] font-medium",
+                                  "absolute -left-[1.05rem] top-1 flex size-4 items-center justify-center rounded-full border border-border bg-background text-3xs font-medium",
                                   STEP_VISUALS[stageStatus].textClass,
                                 )}
                               >
                                 {stageIndex + 1}
                               </span>
-                              <div className="flex min-w-0 items-center gap-1 text-[11px]">
+                              <div className="flex min-w-0 items-center gap-1 text-2xs">
                                 <button
                                   type="button"
                                   aria-expanded={stageOpen}
@@ -2122,7 +2116,7 @@ function TicketPhases(props: {
                                   <button
                                     type="button"
                                     onClick={props.onOpenAppReview}
-                                    className="cursor-pointer inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] hover:bg-accent hover:text-foreground"
+                                    className="cursor-pointer inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-3xs hover:bg-accent hover:text-foreground"
                                   >
                                     Results <Eye className="size-3" aria-hidden />
                                   </button>
@@ -2243,7 +2237,7 @@ function TicketPhases(props: {
                                       onOpenThread={props.onOpenThread}
                                     />
                                   ) : (
-                                    <div className="py-1 text-[10px] text-muted-foreground/65">
+                                    <div className="py-1 text-3xs text-muted-foreground/65">
                                       No thread created
                                     </div>
                                   )}
@@ -2285,7 +2279,7 @@ function TicketPhases(props: {
                                             ) : (
                                               <ChevronRight className="size-3 shrink-0 text-muted-foreground" />
                                             )}
-                                            <span className="min-w-0 flex-1 truncate text-[10px] font-medium text-muted-foreground">
+                                            <span className="min-w-0 flex-1 truncate text-3xs font-medium text-muted-foreground">
                                               Cycle {cycleNumber} of {props.ticketCodeReviewBudget}
                                             </span>
                                           </button>
@@ -2304,7 +2298,7 @@ function TicketPhases(props: {
                                     })}
                                   </div>
                                   {currentCodeReviewThreads.length === 0 ? (
-                                    <div className="py-1 text-[10px] text-muted-foreground/65">
+                                    <div className="py-1 text-3xs text-muted-foreground/65">
                                       No cycle started
                                     </div>
                                   ) : null}
@@ -2323,7 +2317,7 @@ function TicketPhases(props: {
                                   onOpenThread={props.onOpenThread}
                                 />
                               ) : stageOpen ? (
-                                <div className="py-1 text-[10px] text-muted-foreground/65">
+                                <div className="py-1 text-3xs text-muted-foreground/65">
                                   No thread created
                                 </div>
                               ) : null}
@@ -2707,7 +2701,7 @@ function WorkflowGroupCard(props: {
             </span>
             <span
               className={cn(
-                "max-w-[38%] shrink-0 truncate text-[11px]",
+                "max-w-[38%] shrink-0 truncate text-2xs",
                 STEP_VISUALS[headerStatus].textClass,
               )}
             >
@@ -2722,7 +2716,7 @@ function WorkflowGroupCard(props: {
                     type="button"
                     aria-label="View App Review results"
                     onClick={props.onOpenAppReview}
-                    className="cursor-pointer flex items-center gap-1 rounded-md px-2 py-1.5 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+                    className="cursor-pointer flex items-center gap-1 rounded-md px-2 py-1.5 text-2xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
                   />
                 }
               >
@@ -2752,7 +2746,7 @@ function WorkflowGroupCard(props: {
         </div>
         {expanded ? (
           <div className="border-t border-border/70">
-            <div className="space-y-1 border-b border-border/70 px-3 py-2 text-[11px] text-muted-foreground">
+            <div className="space-y-1 border-b border-border/70 px-3 py-2 text-2xs text-muted-foreground">
               {currentStep ? (
                 <div
                   className={cn(
@@ -2837,14 +2831,14 @@ function WorkflowGroupCard(props: {
                     {runningStep ? (
                       <span
                         className={cn(
-                          "max-w-[45%] truncate text-[10px]",
+                          "max-w-[45%] truncate text-3xs",
                           STEP_VISUALS[phaseStatus].textClass,
                         )}
                       >
                         {workflowStepLabel(runningStep)}
                       </span>
                     ) : null}
-                    <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                    <span className="shrink-0 text-3xs tabular-nums text-muted-foreground">
                       {phaseSettled}/{phaseStatuses.length} done
                     </span>
                   </button>
@@ -2979,7 +2973,7 @@ function WorkflowGroupCard(props: {
                                     ) : (
                                       <ChevronRight className="size-3.5 shrink-0" />
                                     )}
-                                    <span className="shrink-0 text-[10px] font-medium text-muted-foreground">
+                                    <span className="shrink-0 text-3xs font-medium text-muted-foreground">
                                       {index + 1}
                                     </span>
                                     <StatusDot status={stepStatus} />
@@ -2993,9 +2987,7 @@ function WorkflowGroupCard(props: {
                                     >
                                       {workflowStepLabel(step)}
                                     </h4>
-                                    <span
-                                      className={cn("shrink-0 text-[10px]", stepVisual.textClass)}
-                                    >
+                                    <span className={cn("shrink-0 text-3xs", stepVisual.textClass)}>
                                       {stepVisual.label}
                                     </span>
                                   </button>
@@ -3047,7 +3039,7 @@ function WorkflowGroupCard(props: {
                                   />
                                 </div>
                                 {stepOpen ? (
-                                  <div className="flex flex-wrap items-center gap-1.5 px-1 pb-1 text-[10px] text-muted-foreground">
+                                  <div className="flex flex-wrap items-center gap-1.5 px-1 pb-1 text-3xs text-muted-foreground">
                                     {step.skillId ? (
                                       <button
                                         type="button"
@@ -3206,7 +3198,7 @@ function WorkflowGroupCard(props: {
                                   disclosures={disclosures}
                                 />
                               ) : stepOpen && step.entries.length === 0 ? (
-                                <div className="px-2 py-1 text-[11px] text-muted-foreground/55">
+                                <div className="px-2 py-1 text-2xs text-muted-foreground/55">
                                   Not started
                                 </div>
                               ) : stepOpen ? (
@@ -3221,7 +3213,7 @@ function WorkflowGroupCard(props: {
                                           [step.id]: true,
                                         }))
                                       }
-                                      className="cursor-pointer w-full rounded px-2 py-1 text-left text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                                      className="cursor-pointer w-full rounded px-2 py-1 text-left text-3xs text-muted-foreground hover:bg-accent hover:text-foreground"
                                     >
                                       Show {step.entries.length - VISIBLE_STAGE_THREADS} earlier
                                       entr
@@ -3240,7 +3232,7 @@ function WorkflowGroupCard(props: {
                                     return entry.kind === "thread" ? (
                                       <div key={entry.id}>
                                         {cycleLabel ? (
-                                          <div className="px-2 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                                          <div className="px-2 pt-1 text-3xs font-medium uppercase tracking-wide text-muted-foreground/70">
                                             {cycleLabel}
                                           </div>
                                         ) : null}
@@ -3488,7 +3480,7 @@ export function WorkflowsPanel(props: {
       <div className="p-3">
         {groups.length > 0 ? (
           <div className="mb-3 rounded-lg border border-border/80 bg-card p-2">
-            <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+            <div className="mb-2 text-3xs font-medium uppercase tracking-wider text-muted-foreground">
               Interaction modes
             </div>
             <div className="flex gap-2 overflow-x-auto pb-1">
@@ -3527,7 +3519,7 @@ export function WorkflowsPanel(props: {
                       <span className="block truncate text-xs font-medium">
                         {groupTitle(group)}
                       </span>
-                      <span className={cn("block truncate text-[10px]", "text-muted-foreground")}>
+                      <span className={cn("block truncate text-3xs", "text-muted-foreground")}>
                         {currentPath.subtitle}
                       </span>
                     </span>
@@ -3549,7 +3541,7 @@ export function WorkflowsPanel(props: {
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">
                   {workflow.root.title}
                 </span>
-                <span className="shrink-0 text-[11px] text-muted-foreground">Main thread</span>
+                <span className="shrink-0 text-2xs text-muted-foreground">Main thread</span>
               </span>
               <TimelineTimeRange
                 {...rootTimeRange}

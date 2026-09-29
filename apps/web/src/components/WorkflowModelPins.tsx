@@ -102,13 +102,13 @@ export function WorkflowModelPinControls(props: {
                 : null,
             )
           }
-          className="cursor-pointer shrink-0 text-[10px] font-medium uppercase tracking-wider text-muted-foreground hover:text-foreground"
+          className="cursor-pointer shrink-0 text-3xs font-medium uppercase tracking-wider text-muted-foreground hover:text-foreground"
         >
           {props.mixed ? "Set all" : props.pinnedSelection === null ? "Set" : "Auto"}
         </button>
       </div>
       {props.pinnedSelection === null ? (
-        <p className="text-[11px] leading-relaxed text-muted-foreground">
+        <p className="text-2xs leading-relaxed text-muted-foreground">
           {props.mixed ? "Models differ by step" : props.inheritedLabel}
           {props.note === undefined ? "" : ` · ${props.note}`}
         </p>
@@ -127,7 +127,7 @@ export function WorkflowModelPinControls(props: {
             }}
           />
           {props.note === undefined ? null : (
-            <p className="text-[11px] leading-relaxed text-muted-foreground">{props.note}</p>
+            <p className="text-2xs leading-relaxed text-muted-foreground">{props.note}</p>
           )}
         </>
       )}

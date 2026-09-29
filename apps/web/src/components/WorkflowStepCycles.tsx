@@ -55,13 +55,13 @@ function WorkflowStepCycleControl(props: {
           onClick={() =>
             props.onSetStepCycles(target.key, setCycles === null ? inheritedCycles : null)
           }
-          className="cursor-pointer shrink-0 text-[10px] font-medium uppercase tracking-wider text-muted-foreground hover:text-foreground"
+          className="cursor-pointer shrink-0 text-3xs font-medium uppercase tracking-wider text-muted-foreground hover:text-foreground"
         >
           {setCycles === null ? "Set" : "Auto"}
         </button>
       </div>
       {setCycles === null ? (
-        <p className="text-[11px] leading-relaxed text-muted-foreground">
+        <p className="text-2xs leading-relaxed text-muted-foreground">
           {props.inheritedLabel} · {target.description}
         </p>
       ) : (
@@ -83,7 +83,7 @@ function WorkflowStepCycleControl(props: {
             }}
             size="compact"
           />
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
+          <p className="text-2xs leading-relaxed text-muted-foreground">
             1 to {target.maxCycles}. {target.description}
           </p>
         </>
@@ -127,7 +127,7 @@ export function WorkflowStepCyclePins(props: {
   return (
     <div className={props.className ?? "space-y-2"}>
       {props.showHeading === false ? null : (
-        <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        <div className="text-3xs font-medium uppercase tracking-wider text-muted-foreground">
           Cycles
         </div>
       )}

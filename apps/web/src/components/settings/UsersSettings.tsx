@@ -121,7 +121,7 @@ function WorkspaceUserSettingsRow({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 space-y-1">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <span className="truncate text-[13px] font-semibold tracking-[-0.01em] text-foreground">
+            <span className="truncate text-sm font-semibold text-foreground">
               {user.displayName}
             </span>
             <Badge variant={tokenCount > 0 ? "success" : "secondary"} size="sm">
@@ -131,7 +131,7 @@ function WorkspaceUserSettingsRow({
             </Badge>
           </div>
           <p className="text-xs text-muted-foreground/80">
-            Stable user id <code className="text-[11px]">{user.id}</code>
+            Stable user id <code className="text-2xs">{user.id}</code>
           </p>
         </div>
       </div>
@@ -158,7 +158,7 @@ function WorkspaceUserSettingsRow({
             Rename
           </Button>
         </div>
-        {renameMessage ? <p className="text-[11px] text-destructive">{renameMessage}</p> : null}
+        {renameMessage ? <p className="text-2xs text-destructive">{renameMessage}</p> : null}
       </form>
 
       {ownerTokens.map((token) => (
@@ -285,7 +285,7 @@ function OwnerTokenRow({
           Remove
         </Button>
       </div>
-      {error ? <p className="text-[11px] text-destructive">{error}</p> : null}
+      {error ? <p className="text-2xs text-destructive">{error}</p> : null}
     </form>
   );
 }
@@ -368,8 +368,8 @@ function AddGithubOwnerTokenForm({
           {checking ? "Checking…" : "Add token"}
         </Button>
       </div>
-      {message ? <p className="text-[11px] text-destructive">{message}</p> : null}
-      <div className="grid gap-1 text-[11px] text-muted-foreground">
+      {message ? <p className="text-2xs text-destructive">{message}</p> : null}
+      <div className="grid gap-1 text-2xs text-muted-foreground">
         <p>
           {validation.valid || validation.reason === "blank-token" ? (
             <GithubTokenLink owner={owner}>
@@ -434,7 +434,7 @@ function AddWorkspaceUserRow({
           Add user
         </Button>
       </div>
-      {message ? <p className="text-[11px] text-destructive">{message}</p> : null}
+      {message ? <p className="text-2xs text-destructive">{message}</p> : null}
     </form>
   );
 }

@@ -75,7 +75,7 @@ export function AppReviewLaunchControls(props: {
               onCheckedChange={(checked) => props.onReviewOnlyChange(checked === true)}
             />
             <span className="text-xs font-medium text-foreground">Only review</span>
-            <span className="col-start-2 text-[11px] leading-relaxed text-muted-foreground">
+            <span className="col-start-2 text-2xs leading-relaxed text-muted-foreground">
               One browser review and the gap analysis that tickets what it finds, then stop. Nothing
               is repaired.
             </span>
@@ -93,7 +93,7 @@ export function AppReviewLaunchControls(props: {
                 type="number"
                 value={props.cycleBudget}
               />
-              <span className="text-[11px] leading-relaxed text-muted-foreground">
+              <span className="text-2xs leading-relaxed text-muted-foreground">
                 1 to {APP_REVIEW_WORKFLOW_MAX_CYCLES}. Each cycle is one browser review, the repair
                 tickets its gap analysis writes, and the fix. A passing review ends the run early.
                 Settings uses {props.defaultCycleBudget} by default.
@@ -110,7 +110,7 @@ export function AppReviewLaunchControls(props: {
               type="text"
               value={props.reviewUrl}
             />
-            <span className="text-[11px] leading-relaxed text-muted-foreground">
+            <span className="text-2xs leading-relaxed text-muted-foreground">
               {targetLabel === "App Stack"
                 ? "Empty reviews this worktree's App Stack."
                 : `Reviews ${targetLabel} as given, without resolving an App Stack.`}

@@ -160,12 +160,12 @@ function StatusBadge({ status }: { readonly status: AppStack["status"] }) {
   return (
     <span
       className={cn(
-        "inline-flex h-5 items-center rounded-full border px-2 text-[11px] font-medium",
-        status === "running" && "border-emerald-500/30 bg-emerald-500/10 text-emerald-600",
+        "inline-flex h-5 items-center rounded-full border px-2 text-2xs font-medium",
+        status === "running" && "border-success/30 bg-success/10 text-success-foreground",
         status === "error" && "border-destructive/30 bg-destructive/10 text-destructive",
         status === "stopped" && "border-border bg-muted text-muted-foreground",
         isTransitioningAppStackStatus(status) &&
-          "border-amber-500/30 bg-amber-500/10 text-amber-600",
+          "border-warning/30 bg-warning/10 text-warning-foreground",
       )}
     >
       {status}
@@ -203,7 +203,7 @@ function StackServices({ stack }: { readonly stack: AppStack }) {
           >
             <div className="min-w-0">
               <div className="truncate text-xs font-medium">{service.name}</div>
-              <div className="truncate text-[11px] text-muted-foreground">
+              <div className="truncate text-2xs text-muted-foreground">
                 {service.status}
                 {service.containerPort ? ` · :${service.containerPort}` : ""}
                 {service.health ? ` · ${service.health}` : ""}
@@ -238,10 +238,10 @@ function PodPhaseBadge({ phase }: { readonly phase: string }) {
   return (
     <span
       className={cn(
-        "inline-flex h-5 items-center rounded-full border px-2 text-[11px] font-medium",
-        phase === "Running" && "border-emerald-500/30 bg-emerald-500/10 text-emerald-600",
+        "inline-flex h-5 items-center rounded-full border px-2 text-2xs font-medium",
+        phase === "Running" && "border-success/30 bg-success/10 text-success-foreground",
         phase === "Failed" && "border-destructive/30 bg-destructive/10 text-destructive",
-        phase === "Pending" && "border-amber-500/30 bg-amber-500/10 text-amber-600",
+        phase === "Pending" && "border-warning/30 bg-warning/10 text-warning-foreground",
         phase !== "Running" &&
           phase !== "Failed" &&
           phase !== "Pending" &&
@@ -339,7 +339,7 @@ function StackKubernetesInspect(props: {
                   onClick={() => props.onSelectPod(pod)}
                 >
                   <span className="block truncate text-xs font-medium">{pod.name}</span>
-                  <span className="block truncate text-[11px] text-muted-foreground">
+                  <span className="block truncate text-2xs text-muted-foreground">
                     {pod.readyContainerCount}/{pod.totalContainerCount} ready
                     {pod.restartCount > 0 ? ` · ${pod.restartCount} restarts` : ""}
                     {owner ? ` · ${owner}` : ""}
@@ -381,7 +381,7 @@ function StackKubernetesInspect(props: {
                   key={container.name}
                   type="button"
                   className={cn(
-                    "max-w-full truncate rounded-md border px-2 py-1 text-[11px] transition-colors",
+                    "max-w-full truncate rounded-md border px-2 py-1 text-2xs transition-colors",
                     container.name === selectedContainerName
                       ? "border-primary/35 bg-primary/8 text-primary"
                       : "border-border/70 bg-muted/40 text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -421,7 +421,7 @@ function StackKubernetesInspect(props: {
                 Loading logs
               </div>
             ) : (
-              <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-[11px] leading-relaxed text-foreground/80">
+              <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-2xs leading-relaxed text-foreground/80">
                 {logText.length > 0 ? logText : "No log lines returned."}
               </pre>
             )}
@@ -1040,22 +1040,22 @@ export function AppStackPanel(props: AppStackPanelProps) {
                 <span className="min-w-0 truncate text-sm font-medium">{stackName}</span>
                 <span
                   className={cn(
-                    "inline-flex h-5 items-center rounded-full border px-2 text-[11px] font-medium uppercase",
+                    "inline-flex h-5 items-center rounded-full border px-2 text-2xs font-medium uppercase",
                     variant === "prod"
-                      ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                      ? "border-warning/30 bg-warning/10 text-warning-foreground"
                       : "border-border bg-muted text-muted-foreground",
                   )}
                 >
                   {variant}
                 </span>
                 {isCurrent ? (
-                  <span className="inline-flex h-5 items-center rounded-full border border-primary/25 bg-primary/10 px-2 text-[11px] font-medium text-primary">
+                  <span className="inline-flex h-5 items-center rounded-full border border-primary/25 bg-primary/10 px-2 text-2xs font-medium text-primary">
                     Current
                   </span>
                 ) : null}
                 <AppStackWorkflowOwnershipBadge stack={stack} />
                 {isProtectedAppStack(stack) ? (
-                  <span className="inline-flex h-5 items-center gap-1 rounded-full border border-border bg-muted px-2 text-[11px] font-medium text-muted-foreground">
+                  <span className="inline-flex h-5 items-center gap-1 rounded-full border border-border bg-muted px-2 text-2xs font-medium text-muted-foreground">
                     <ShieldCheckIcon className="size-3" />
                     Protected
                   </span>
@@ -1420,7 +1420,7 @@ export function AppStackPanel(props: AppStackPanelProps) {
               </form>
 
               {!stackBackendEnabled ? (
-                <div className="flex gap-2 rounded-md border border-amber-500/25 bg-amber-500/5 p-2 text-xs text-amber-700 dark:text-amber-500">
+                <div className="flex gap-2 rounded-md border border-warning/25 bg-warning/5 p-2 text-xs text-warning-foreground">
                   <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
                   <div>Enable native app stack handling on the server before starting stacks.</div>
                 </div>

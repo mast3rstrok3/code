@@ -8,7 +8,7 @@ import { Button } from "../ui/button";
 import { parseCatalogContent } from "./workflowCatalogContent";
 
 const RAW_CLASS_NAME =
-  "mb-4 overflow-auto rounded-lg border border-border/70 bg-muted/35 p-3 text-[11px] leading-relaxed whitespace-pre-wrap";
+  "mb-4 overflow-auto rounded-lg border border-border/70 bg-muted/35 p-3 text-2xs leading-relaxed whitespace-pre-wrap";
 
 /**
  * Renders a catalog prompt or document body. Markdown is rendered for reading;
@@ -43,7 +43,7 @@ export function WorkflowCatalogContent({
             {showRaw ? "Show formatted" : "Show raw"}
           </Button>
           {parsed.envelopeTag && !showRaw ? (
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-2xs text-muted-foreground">
               Wrapped in <code className="font-mono">{`<${parsed.envelopeTag}>`}</code> when sent to
               the agent
             </span>

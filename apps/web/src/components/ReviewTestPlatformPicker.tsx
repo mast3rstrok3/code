@@ -41,7 +41,7 @@ export function ReviewTestPlatformPicker(props: {
           </label>
         ))}
       </div>
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-2xs text-muted-foreground">
         Web by default. Windows and Android can use configured runners from Linux. iOS and macOS
         need a Mac. Missing runners block the selected tests.
       </p>
@@ -84,7 +84,7 @@ export function TicketTestPlatformPicker(props: {
         </p>
       ) : null}
       {props.ticketId !== undefined ? (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-2xs text-muted-foreground">
           Applies to the next App Review run. Rerun App Review to test a completed ticket again.
         </p>
       ) : null}
