@@ -5067,6 +5067,7 @@ describe("agent browser access", () => {
     recoverSession = false,
     options?: {
       readonly withoutOrchestration?: boolean;
+      readonly withoutMcpCredential?: boolean;
       readonly workflowPromptId?: string;
       readonly onStarted?: (
         provider: ProviderService.ProviderService["Service"],
@@ -5168,6 +5169,23 @@ describe("agent browser access", () => {
               threadId: request.threadId,
               capabilities: [...(request.capabilities ?? [])].toSorted(),
             });
+            if (options?.workflowPromptId && !options.withoutMcpCredential) {
+              return {
+                config: {
+                  environmentId: EnvironmentId.make("test-workflow-mcp"),
+                  threadId: request.threadId,
+                  providerInstanceId: request.providerInstanceId,
+                  providerSessionId: `mcp-${issued.length}`,
+                  endpoint: "http://127.0.0.1/mcp",
+                  authorizationHeader: "Bearer test-workflow-token",
+                  capabilities: request.capabilities ?? new Set<string>(),
+                },
+              };
+            }
+            assert.equal(
+              options?.withoutMcpCredential ? codex.startSession.mock.calls.length : 0,
+              0,
+            );
             return undefined;
           }),
       }).pipe(
@@ -5443,6 +5461,36 @@ describe("agent browser access", () => {
       }).pipe(Effect.provide(NodeServices.layer)),
     );
   }
+
+  it.effect("rejects a workflow launch before starting the provider when MCP is unavailable", () =>
+    Effect.gen(function* () {
+      const error = yield* startSessionWith(
+        true,
+        asThreadId("workflow-mcp-unavailable"),
+        undefined,
+        false,
+        {
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+          withoutMcpCredential: true,
+          onStarted: () => Effect.die("A workflow must not start without its artifact tools."),
+        },
+      ).pipe(Effect.flip);
+      assert.ok(error.message.includes("Workflow tools are unavailable"));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("preserves artifact tools when browser access is disabled for a workflow", () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("workflow-browser-disabled");
+      const issued = yield* startSessionWith(false, threadId, undefined, true, {
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+      });
+      assert.deepEqual(issued, [
+        { threadId, capabilities: ["app-review", "workflow-artifacts"] },
+        { threadId, capabilities: ["app-review", "workflow-artifacts"] },
+      ]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 
   it.effect("does not restore workflow permissions after starting an ordinary session", () =>
     Effect.gen(function* () {

@@ -56,6 +56,9 @@ import {
   WORKFLOW_REQUEST_USER_INPUT_CODE_MODE_FORWARDING,
 } from "../WorkflowPromptRegistry.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
+const decodeMcpServerStatusResponse = Schema.decodeUnknownEffect(
+  EffectCodexSchema.V2ListMcpServerStatusResponse,
+);
 const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 const PROVIDER = ProviderDriverKind.make("codex");
@@ -717,6 +720,49 @@ function runtimeModeToTurnSandboxPolicy(
       };
   }
 }
+
+export const requireCodexWorkflowTools = Effect.fn("requireCodexWorkflowTools")(function* (
+  request: CodexClient.CodexAppServerClient["Service"]["raw"]["request"],
+  threadId: string,
+) {
+  let cursor: string | null = null;
+  const seen = new Set<string | null>();
+  do {
+    if (seen.has(cursor)) break;
+    seen.add(cursor);
+    const raw: unknown = yield* request("mcpServerStatus/list", {
+      threadId,
+      cursor,
+      detail: "toolsAndAuthOnly",
+    });
+    const response = yield* decodeMcpServerStatusResponse(raw).pipe(
+      Effect.mapError((error) =>
+        CodexErrors.CodexAppServerRequestError.invalidPayload(
+          "mcpServerStatus/list",
+          "decode-payload",
+          error,
+        ),
+      ),
+    );
+    const server = response.data.find((entry) => entry.name === "t3-code");
+    if (server !== undefined) {
+      const names = new Set(Object.values(server.tools).map((tool) => tool.name));
+      if (
+        ["workflow_context_get", "workflow_ticket_get", "workflow_spec_get"].every((name) =>
+          names.has(name),
+        )
+      )
+        return;
+      break;
+    }
+    cursor = response.nextCursor ?? null;
+  } while (cursor !== null);
+  return yield* CodexErrors.CodexAppServerRequestError.internalError(
+    "T3 workflow artifact tools are unavailable in this Codex session. Reconnect the T3 MCP service before retrying the turn.",
+    undefined,
+    { method: "mcpServerStatus/list" },
+  );
+});
 
 export const startCodexTurn = Effect.fn("startCodexTurn")(function* (
   request: CodexClient.CodexAppServerClient["Service"]["raw"]["request"],
@@ -2781,6 +2827,9 @@ export const makeCodexSessionRuntime = (
                 }),
               ),
             );
+          }
+          if (options.mcpCapabilities?.has("workflow-artifacts")) {
+            yield* requireCodexWorkflowTools(client.raw.request, providerThreadId);
           }
           const normalizedModel = normalizeCodexModelSlug(
             input.model ?? (yield* Ref.get(sessionRef)).model,

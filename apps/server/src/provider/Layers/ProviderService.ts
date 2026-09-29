@@ -1087,17 +1087,22 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     const workflowCapabilities = mcpCapabilitiesForWorkflowPromptId(input.workflowPromptId);
     return Effect.gen(function* () {
       const browserEnabled = (yield* agentAccessSettings(input.threadId)).browser;
-      const capabilities = workflowCapabilities ?? (yield* agentAccessCapabilities(input.threadId));
-      const needsBrowser = capabilities.has("preview");
-      if (!browserEnabled && needsBrowser) {
-        yield* clearMcpSession(input.threadId);
-        return undefined;
-      }
+      const capabilities = new Set(
+        workflowCapabilities ?? (yield* agentAccessCapabilities(input.threadId)),
+      );
+      if (!browserEnabled) capabilities.delete("preview");
       const credential = yield* issueMcpCredential({
         threadId: input.threadId,
         providerInstanceId: input.providerInstanceId,
         capabilities,
       });
+      if (workflowCapabilities !== undefined && credential === undefined) {
+        yield* clearMcpSession(input.threadId);
+        return yield* toValidationError(
+          "ProviderService.prepareMcpSession",
+          "Workflow tools are unavailable. Restore the T3 MCP service, then retry this workflow stage.",
+        );
+      }
       if (credential) {
         const deviceEnvironment = capabilities.has("device")
           ? yield* agentDeviceEnvironment

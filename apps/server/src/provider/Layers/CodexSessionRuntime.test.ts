@@ -26,6 +26,7 @@ import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import {
   buildTurnStartParams,
   startCodexTurn,
+  requireCodexWorkflowTools,
   decodeWorkflowRequestUserInputArguments,
   describeMcpElicitation,
   hasConfiguredMcpServer,
@@ -39,6 +40,84 @@ import {
   toMcpElicitationResponse,
 } from "./CodexSessionRuntime.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
+
+describe("required workflow tools", () => {
+  it.effect("checks the session catalog across pages before allowing work", () =>
+    Effect.gen(function* () {
+      const calls: unknown[] = [];
+      yield* requireCodexWorkflowTools((method, params) => {
+        calls.push({ method, params });
+        return Effect.succeed(
+          calls.length === 1
+            ? { data: [], nextCursor: "next" }
+            : {
+                data: [
+                  {
+                    name: "t3-code",
+                    authStatus: "bearerToken",
+                    resources: [],
+                    resourceTemplates: [],
+                    tools: Object.fromEntries(
+                      ["workflow_context_get", "workflow_ticket_get", "workflow_spec_get"].map(
+                        (name) => [name, { name, inputSchema: {} }],
+                      ),
+                    ),
+                  },
+                ],
+                nextCursor: null,
+              },
+        );
+      }, "workflow-thread");
+      NodeAssert.deepEqual(calls, [
+        {
+          method: "mcpServerStatus/list",
+          params: { threadId: "workflow-thread", cursor: null, detail: "toolsAndAuthOnly" },
+        },
+        {
+          method: "mcpServerStatus/list",
+          params: { threadId: "workflow-thread", cursor: "next", detail: "toolsAndAuthOnly" },
+        },
+      ]);
+    }),
+  );
+
+  it.effect.each(["missing-server", "missing-tools", "repeated-cursor"])(
+    "rejects %s before starting agent work",
+    (scenario) =>
+      Effect.gen(function* () {
+        let calls = 0;
+        let started = false;
+        const error = yield* requireCodexWorkflowTools(() => {
+          calls += 1;
+          return Effect.succeed({
+            data:
+              scenario === "missing-tools"
+                ? [
+                    {
+                      name: "t3-code",
+                      authStatus: "bearerToken",
+                      resources: [],
+                      resourceTemplates: [],
+                      tools: {},
+                    },
+                  ]
+                : [],
+            nextCursor: scenario === "repeated-cursor" ? "same" : null,
+          });
+        }, "workflow-thread").pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              started = true;
+            }),
+          ),
+          Effect.flip,
+        );
+        NodeAssert.match(error.message, /workflow artifact tools are unavailable/);
+        NodeAssert.equal(started, false);
+        NodeAssert.equal(calls, scenario === "repeated-cursor" ? 2 : 1);
+      }),
+  );
+});
 
 describe("startCodexTurn", () => {
   it.effect("resumes with explicit text when Codex rejects an empty continuation", () =>
