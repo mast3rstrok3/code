@@ -466,6 +466,16 @@ it.effect("reuses an existing stack without provisioning or changing its owner",
   }).pipe(Effect.provide(test.layer));
 });
 
+it.effect("sends a bundle to the controller even when this worktree already runs alone", () => {
+  const test = harness({ stack });
+  return Effect.gen(function* () {
+    yield* handlers.app_stack_start({ bundle: ["cortex"] });
+    expect(test.operations).toMatchObject([
+      { operation: "autoCreate", input: { worktreePath: stack.worktreePath, bundle: ["cortex"] } },
+    ]);
+  }).pipe(Effect.provide(test.layer));
+});
+
 for (const status of ["stopped", "error"] as const) {
   it.effect(
     `starts an existing ${status} stack through restart, preserving its configuration`,

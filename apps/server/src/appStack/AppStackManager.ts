@@ -1,6 +1,8 @@
 import {
   AppStack,
   AppStackAutoCreateResult,
+  AppStackBundlePlan,
+  type AppStackBundlePlanInput,
   AppStackByWorktreeResult,
   AppStackDeleteResult,
   AppStackAndroidStatus,
@@ -46,6 +48,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as ServerConfig from "../config.ts";
+import { createBundleWorktree } from "./bundleWorktrees.ts";
 import {
   makeKubectlRunner,
   makeNativeAppStackService,
@@ -97,6 +100,10 @@ export class AppStackManager extends Context.Service<
     readonly autoCreate: (
       input: AppStackAutoCreateInput,
     ) => Effect.Effect<AppStackAutoCreateResult, AppStackError>;
+    /** Every platform app the worktree can bundle with, and where each one's worktree is. */
+    readonly bundlePlan: (
+      input: AppStackBundlePlanInput,
+    ) => Effect.Effect<AppStackBundlePlan, AppStackError>;
     readonly stop: (input: AppStackGetInput) => Effect.Effect<AppStack, AppStackError>;
     readonly setProtected: (
       input: AppStackSetProtectedInput,
@@ -129,24 +136,30 @@ export class AppStackManager extends Context.Service<
       const config = yield* ServerConfig.ServerConfig;
       const httpClient = yield* HttpClient.HttpClient;
       const baseUrl = config.appStackBackendUrl?.href.replace(/\/+$/u, "") ?? null;
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const runCommand = makeNativeCommandRunner(spawner);
 
       if (config.appStackNative !== undefined && baseUrl === null) {
-        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        const unavailable = (operation: string) =>
+        const unavailable = (operation: string, feature = "Cluster device leases") =>
           Effect.fail(
             new AppStackError({
               operation,
               reason: "disabled",
-              message:
-                "Cluster device leases require a Stacks controller. Configure T3CODE_APP_STACK_BACKEND_URL and its authentication on this Code server.",
+              message: `${feature} require a Stacks controller. Configure T3CODE_APP_STACK_BACKEND_URL and its authentication on this Code server.`,
             }),
           );
+        const native = makeNativeAppStackService(
+          config.appStackNative,
+          makeKubectlRunner(config.appStackNative.kubectlPath, spawner),
+          runCommand,
+        );
         return AppStackManager.of({
-          ...makeNativeAppStackService(
-            config.appStackNative,
-            makeKubectlRunner(config.appStackNative.kubectlPath, spawner),
-            makeNativeCommandRunner(spawner),
-          ),
+          ...native,
+          autoCreate: (input) =>
+            input.bundle !== undefined && input.bundle.length > 0
+              ? unavailable("autoCreate", "Bundled app stacks")
+              : native.autoCreate(input),
+          bundlePlan: () => unavailable("bundlePlan", "Bundled app stacks"),
           startDevice: () => unavailable("startDevice"),
           stopDevice: () => unavailable("stopDevice"),
           getDeviceLease: () => unavailable("getDeviceLease"),
@@ -492,9 +505,92 @@ export class AppStackManager extends Context.Service<
         return withVariant(stack);
       });
 
+      const requestBundlePlan = Effect.fn("AppStackManager.requestBundlePlan")(function* (
+        operation: string,
+        input: AppStackBundlePlanInput,
+        bundle: "all" | ReadonlyArray<string>,
+      ) {
+        const base = yield* requireBaseUrl(operation);
+        return yield* executeJson(
+          operation,
+          HttpClientRequest.post(appStackUrl(base, "/bundle-plan")).pipe(
+            HttpClientRequest.bodyJsonUnsafe({
+              worktree_path: input.worktreePath,
+              git_branch: input.gitBranch ?? null,
+              variant: input.variant ?? "dev",
+              bundle,
+            }),
+          ),
+          AppStackBundlePlan,
+        );
+      });
+
+      const bundlePlan = (input: AppStackBundlePlanInput) =>
+        requestBundlePlan("bundlePlan", input, "all");
+
+      // The controller starts a bundle only when every chosen app has a
+      // worktree on the branch, and never creates one itself.
+      const autoCreateBundle = Effect.fn("AppStackManager.autoCreateBundle")(function* (
+        input: AppStackAutoCreateInput,
+        bundle: ReadonlyArray<string>,
+      ) {
+        const variant = input.variant ?? "dev";
+        const plan = yield* requestBundlePlan(
+          "autoCreate",
+          { worktreePath: input.worktreePath, gitBranch: input.gitBranch, variant },
+          bundle,
+        );
+        const createdWorktreePaths: Array<string> = [];
+        for (const member of plan.members) {
+          if (member.found) continue;
+          const repositoryPath = member.repositoryPath ?? null;
+          const worktreePath = member.worktreePath ?? null;
+          if (repositoryPath === null || worktreePath === null) {
+            return yield* new AppStackError({
+              operation: "autoCreate",
+              reason: "invalid_response",
+              message: `The controller has no checkout of ${member.repository} for ${member.app}, so its worktree cannot be created.`,
+            });
+          }
+          yield* createBundleWorktree(runCommand, {
+            repositoryPath,
+            worktreePath,
+            branch: plan.branch,
+            baseBranch: member.baseBranch,
+          });
+          createdWorktreePaths.push(worktreePath);
+        }
+        const base = yield* requireBaseUrl("autoCreate");
+        const result = yield* executeJson(
+          "autoCreate",
+          HttpClientRequest.post(appStackUrl(base, "/auto-create")).pipe(
+            HttpClientRequest.bodyJsonUnsafe({
+              worktree_path: input.worktreePath,
+              display_name: input.displayName,
+              git_branch: plan.branch,
+              variant,
+              bundle,
+              ...(input.workflowId === undefined ? {} : { workflow_id: input.workflowId }),
+            }),
+          ),
+          AppStackAutoCreateResult,
+        );
+        return {
+          ...result,
+          stack: result.stack === null ? null : withVariant(result.stack),
+          bundle: result.bundle?.map(withVariant) ?? null,
+          createdWorktreePaths,
+        };
+      });
+
       const autoCreateRequest = Effect.fn("AppStackManager.autoCreateRequest")(function* (
         input: AppStackAutoCreateInput,
       ) {
+        // A standalone stack of this worktree joins the bundle, so an active
+        // one is no reason to skip the controller.
+        if (input.bundle !== undefined && input.bundle.length > 0) {
+          return yield* autoCreateBundle(input, input.bundle);
+        }
         const existing = yield* getByWorktree({
           worktreePath: input.worktreePath,
           variant: input.variant,
@@ -608,6 +704,15 @@ export class AppStackManager extends Context.Service<
 
       const restart = Effect.fn("AppStackManager.restart")(function* (input: AppStackGetInput) {
         const stack = yield* get(input);
+        // The controller stops every member of a bundle; start them together again.
+        const bundle =
+          stack.bundleId == null
+            ? undefined
+            : (yield* list({})).stacks.flatMap((member) =>
+                member.bundleId === stack.bundleId && member.id !== stack.id && member.app
+                  ? [member.app]
+                  : [],
+              );
         yield* stop(input);
         const result = yield* autoCreate({
           worktreePath: stack.worktreePath,
@@ -615,6 +720,7 @@ export class AppStackManager extends Context.Service<
           gitBranch: stack.branchName ?? null,
           workflowId: stack.workflowId ?? undefined,
           variant: stack.variant,
+          ...(bundle === undefined ? {} : { bundle }),
         });
         if (result.stack === null) {
           return yield* new AppStackError({
@@ -838,6 +944,7 @@ export class AppStackManager extends Context.Service<
         getByWorktree,
         get,
         autoCreate,
+        bundlePlan,
         stop,
         setProtected,
         workflowTeardown,

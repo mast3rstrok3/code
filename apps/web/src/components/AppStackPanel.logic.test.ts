@@ -4,6 +4,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   appStackBulkDeleteConfirmation,
   appStackBulkDeleteFailureMessage,
+  appStackBundleApps,
+  appStackBundleMemberDescription,
   appStackOwnershipLabel,
   appStackProtectionAction,
   appStackSelectionState,
@@ -239,6 +241,22 @@ describe("autoCreateNotice", () => {
     expect(autoCreateNotice(makeResult())).toBe(null);
   });
 
+  it("names the worktrees a bundle start created", () => {
+    expect(
+      autoCreateNotice(
+        makeResult({
+          createdWorktreePaths: ["/repos/cortex.worktrees/x", "/repos/chat.worktrees/x"],
+        }),
+      ),
+    ).toEqual({
+      kind: "created-worktrees",
+      message:
+        "Created worktrees for the bundle: /repos/cortex.worktrees/x, /repos/chat.worktrees/x",
+      url: null,
+      stackId: "hero-dev",
+    });
+  });
+
   it("reports an already-running stack with its URL and id", () => {
     const notice = autoCreateNotice(
       makeResult({
@@ -294,5 +312,48 @@ describe("app stack protection", () => {
     expect(guarded.label).toBe("Protected");
     expect(guarded.nextProtected).toBe(false);
     expect(guarded.ariaLabel).toBe("Stop protecting hero from automatic teardown");
+  });
+});
+
+describe("appStackBundleApps", () => {
+  const rudi = makeStack({ id: "rudi", app: "rudi", bundleId: "rudi" });
+  const cortex = makeStack({ id: "cortex", app: "cortex", bundleId: "rudi" });
+  const other = makeStack({ id: "chat", app: "chat", bundleId: "chat" });
+
+  it("lists the stack's own app first, then the other members of its bundle", () => {
+    expect(appStackBundleApps(cortex, [rudi, cortex, other])).toEqual(["cortex", "rudi"]);
+  });
+
+  it("returns null for a standalone stack", () => {
+    expect(appStackBundleApps(makeStack({ app: "rudi" }), [rudi, cortex])).toBe(null);
+  });
+});
+
+describe("appStackBundleMemberDescription", () => {
+  const member = {
+    app: "cortex",
+    repository: "cortex",
+    worktreePath: "/repos/cortex.worktrees/feature-x",
+    found: false,
+    baseBranch: "dev",
+  };
+  const describeMember = (overrides: { own?: boolean; selected?: boolean; found?: boolean }) =>
+    appStackBundleMemberDescription(
+      { ...member, found: overrides.found ?? false },
+      { own: overrides.own ?? false, selected: overrides.selected ?? true, branch: "feature/x" },
+    );
+
+  it("says an unchecked app stays on its standing dev copy", () => {
+    expect(describeMember({ selected: false })).toBe("Standing dev copy");
+  });
+
+  it("shows the existing worktree of a checked app", () => {
+    expect(describeMember({ found: true })).toBe("/repos/cortex.worktrees/feature-x");
+  });
+
+  it("says where a missing worktree will be created and from which branch", () => {
+    expect(describeMember({})).toBe(
+      "New worktree /repos/cortex.worktrees/feature-x from origin/feature/x, else origin/dev",
+    );
   });
 });

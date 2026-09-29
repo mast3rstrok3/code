@@ -91,6 +91,11 @@ export const AppStack = Schema.Struct({
   // Protected stacks survive workflow teardown and are the last thing the
   // environment sheds under memory pressure. Older servers omit the field.
   protected: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
+  // The platform app the worktree's contract names, and the bundle the stack
+  // runs in. Every member of a bundle carries the same bundleId; stop, restart
+  // and delete act on all of them.
+  app: Schema.optionalKey(NullableTrimmedNonEmptyString),
+  bundleId: Schema.optionalKey(NullableTrimmedNonEmptyString),
 });
 export type AppStack = typeof AppStack.Type;
 
@@ -167,8 +172,39 @@ export const AppStackAutoCreateInput = Schema.Struct({
   // Defaults to dev. Nothing picks prod on the caller's behalf: workflows
   // never set it, and the panel asks for it explicitly.
   variant: Schema.optional(AppStackVariant),
+  // Other platform apps to run from their same-branch worktrees next to this
+  // one. Apps left out stay on their standing dev copies. Missing worktrees
+  // are created before the bundle starts.
+  bundle: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
 });
 export type AppStackAutoCreateInput = typeof AppStackAutoCreateInput.Type;
+
+export const AppStackBundlePlanInput = Schema.Struct({
+  worktreePath: TrimmedNonEmptyString,
+  gitBranch: Schema.optional(NullableTrimmedNonEmptyString),
+  variant: Schema.optional(AppStackVariant),
+});
+export type AppStackBundlePlanInput = typeof AppStackBundlePlanInput.Type;
+
+export const AppStackBundlePlanMember = Schema.Struct({
+  app: TrimmedNonEmptyString,
+  repository: TrimmedNonEmptyString,
+  repositoryPath: Schema.optionalKey(NullableTrimmedNonEmptyString),
+  // The worktree on the branch, or where a missing one would be created.
+  worktreePath: Schema.optionalKey(NullableTrimmedNonEmptyString),
+  found: Schema.Boolean,
+  // The branch a missing worktree starts from when the branch is not on origin.
+  baseBranch: TrimmedNonEmptyString,
+});
+export type AppStackBundlePlanMember = typeof AppStackBundlePlanMember.Type;
+
+/** Every platform app a worktree can bundle with, the worktree's own app first. */
+export const AppStackBundlePlan = Schema.Struct({
+  app: TrimmedNonEmptyString,
+  branch: TrimmedNonEmptyString,
+  members: Schema.Array(AppStackBundlePlanMember),
+});
+export type AppStackBundlePlan = typeof AppStackBundlePlan.Type;
 
 export const AppStackAutoCreateResult = Schema.Struct({
   // Null only for reserved branches, which are served by a standing
@@ -180,6 +216,10 @@ export const AppStackAutoCreateResult = Schema.Struct({
   message: Schema.optional(Schema.NullOr(Schema.String)),
   frontendUrl: Schema.NullOr(TrimmedNonEmptyString),
   frontendServiceName: Schema.NullOr(TrimmedNonEmptyString),
+  // Every member of the bundle, this stack included, when it runs in one.
+  bundle: Schema.optionalKey(Schema.NullOr(Schema.Array(AppStack))),
+  // Worktrees Code created for bundle members that had none on the branch.
+  createdWorktreePaths: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
 });
 export type AppStackAutoCreateResult = typeof AppStackAutoCreateResult.Type;
 

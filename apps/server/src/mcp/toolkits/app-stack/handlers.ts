@@ -216,8 +216,11 @@ export const handlers = {
     const workspace = yield* resolveWorkspace(operation);
     const manager = yield* requireEnabled(operation);
     const variant = input.variant ?? "dev";
+    const bundle = input.bundle ?? [];
     const existing = yield* lookupStack(workspace.worktreePath, variant, operation);
-    if (existing.stack) {
+    // A bundle request always reaches the controller: a standalone stack of
+    // this worktree restarts inside the bundle.
+    if (existing.stack && bundle.length === 0) {
       if (existing.stack.status === "stopping") {
         return yield* new AppStackError({
           operation,
@@ -238,6 +241,7 @@ export const handlers = {
       displayName:
         input.displayName ?? appStackDisplayName(workspace.worktreePath, workspace.branch),
       variant,
+      ...(bundle.length === 0 ? {} : { bundle }),
     });
     yield* checkStackScope(result.stack, workspace.worktreePath, variant, operation);
     return result;

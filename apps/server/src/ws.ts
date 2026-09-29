@@ -4321,6 +4321,10 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.appStackAutoCreate, appStackManager.autoCreate(input), {
             "rpc.aggregate": "app-stack",
           }),
+        [WS_METHODS.appStackBundlePlan]: (input) =>
+          observeRpcEffect(WS_METHODS.appStackBundlePlan, appStackManager.bundlePlan(input), {
+            "rpc.aggregate": "app-stack",
+          }),
         [WS_METHODS.appStackStop]: (input) =>
           observeRpcEffect(WS_METHODS.appStackStop, appStackManager.stop(input), {
             "rpc.aggregate": "app-stack",

@@ -1,3 +1,8 @@
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
@@ -60,6 +65,27 @@ const decodeProtectionRequest = Schema.decodeUnknownSync(
 const decodeVariantRequest = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ variant: Schema.String })),
 );
+
+const decodeBundleRequest = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      bundle: Schema.optional(Schema.Array(Schema.String)),
+      git_branch: Schema.optional(Schema.NullOr(Schema.String)),
+      namespace: Schema.optional(Schema.String),
+    }),
+  ),
+);
+
+const requestBody = (
+  requests: ReadonlyArray<HttpClientRequest.HttpClientRequest>,
+  path: string,
+) => {
+  const request = requests.find((candidate) => new URL(candidate.url).pathname.endsWith(path));
+  if (request?.body._tag !== "Uint8Array") {
+    return assert.fail(`expected a JSON body for ${path}`);
+  }
+  return decodeBundleRequest(new TextDecoder().decode(request.body.body));
+};
 
 const derivedPaths = {
   stateDir: "/tmp/t3-app-dev-stack-manager-test/state",
@@ -1067,5 +1093,214 @@ it.effect("rejects a malformed device response instead of claiming a lease was a
       .startDevice({ stackId: stackJson.id, platform: "android", leaseId: deviceLeaseJson.leaseId })
       .pipe(Effect.flip);
     assert.equal(error.reason, "invalid_response");
+  }).pipe(Effect.provide(layer));
+});
+
+const git = (cwd: string, ...args: Array<string>) =>
+  NodeChildProcess.execFileSync(
+    "git",
+    ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args],
+    {
+      cwd,
+      encoding: "utf8",
+    },
+  ).trim();
+
+// A main checkout cloned from its own bare origin, with a dev branch and,
+// optionally, the bundle branch already pushed.
+const makeCheckout = (root: string, name: string, pushedBranch: string | null) => {
+  const seed = NodePath.join(root, `${name}-seed`);
+  const origin = NodePath.join(root, `${name}.git`);
+  const checkout = NodePath.join(root, name);
+  NodeFS.mkdirSync(seed);
+  git(seed, "init", "--quiet", "-b", "dev");
+  git(seed, "commit", "--quiet", "--allow-empty", "-m", "dev");
+  const devSha = git(seed, "rev-parse", "HEAD");
+  let branchSha: string | null = null;
+  if (pushedBranch !== null) {
+    git(seed, "checkout", "--quiet", "-b", pushedBranch);
+    git(seed, "commit", "--quiet", "--allow-empty", "-m", "feature");
+    branchSha = git(seed, "rev-parse", "HEAD");
+    git(seed, "checkout", "--quiet", "dev");
+  }
+  git(root, "clone", "--quiet", "--bare", seed, origin);
+  git(root, "clone", "--quiet", origin, checkout);
+  return { checkout, devSha, branchSha };
+};
+
+it.effect("creates missing bundle worktrees from origin before starting the bundle", () => {
+  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-app-stack-bundle-"));
+  const branch = "feature/bundle";
+  const cortex = makeCheckout(root, "cortex", branch);
+  const chat = makeCheckout(root, "chat", null);
+  const cortexWorktree = NodePath.join(root, "cortex.worktrees", "feature-bundle");
+  const chatWorktree = NodePath.join(root, "chat.worktrees", "feature-bundle");
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const member = (app: string, worktreePath: string, bundleId: string) => ({
+    ...stackJson,
+    id: bundleId === stackJson.id && app === "rudi" ? stackJson.id : `${app}-stack`,
+    uuid: bundleId === stackJson.id && app === "rudi" ? stackJson.id : `${app}-stack`,
+    worktreePath,
+    app,
+    bundleId,
+  });
+  const layer = makeLayer({
+    bearerToken: "backend-token",
+    requests,
+    response: (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/app-dev-stacks/bundle-plan") {
+        return Response.json({
+          app: "rudi",
+          branch,
+          members: [
+            {
+              app: "rudi",
+              repository: "rudi",
+              repositoryPath: "/repos/rudi",
+              worktreePath: stackJson.worktreePath,
+              found: true,
+              baseBranch: "dev",
+            },
+            {
+              app: "cortex",
+              repository: "cortex",
+              repositoryPath: cortex.checkout,
+              worktreePath: cortexWorktree,
+              found: false,
+              baseBranch: "dev",
+            },
+            {
+              app: "chat",
+              repository: "chat",
+              repositoryPath: chat.checkout,
+              worktreePath: chatWorktree,
+              found: false,
+              baseBranch: "dev",
+            },
+          ],
+        });
+      }
+      if (url.pathname === "/api/app-dev-stacks/auto-create") {
+        return Response.json({
+          stack: member("rudi", stackJson.worktreePath, stackJson.id),
+          created: true,
+          frontendUrl: null,
+          frontendServiceName: null,
+          bundle: [
+            member("rudi", stackJson.worktreePath, stackJson.id),
+            member("cortex", cortexWorktree, stackJson.id),
+            member("chat", chatWorktree, stackJson.id),
+          ],
+        });
+      }
+      return new Response(`unexpected request ${request.url}`, { status: 404 });
+    },
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppStackManager;
+    const result = yield* manager.autoCreate({
+      worktreePath: stackJson.worktreePath,
+      displayName: "feature",
+      gitBranch: branch,
+      namespace: "ignored-for-bundles",
+      bundle: ["cortex", "chat"],
+    });
+
+    // No by-worktree shortcut: a running standalone stack joins the bundle.
+    assert.deepEqual(
+      requests.map((request) => new URL(request.url).pathname),
+      ["/api/app-dev-stacks/bundle-plan", "/api/app-dev-stacks/auto-create"],
+    );
+    assert.deepEqual(requestBody(requests, "/bundle-plan").bundle, ["cortex", "chat"]);
+    const createBody = requestBody(requests, "/auto-create");
+    assert.deepEqual(createBody.bundle, ["cortex", "chat"]);
+    assert.equal(createBody.git_branch, branch);
+    assert.equal(createBody.namespace, undefined);
+    assert.deepEqual(result.createdWorktreePaths, [cortexWorktree, chatWorktree]);
+    assert.deepEqual(
+      result.bundle?.map((stack) => [stack.app, stack.bundleId, stack.variant]),
+      [
+        ["rudi", stackJson.id, "dev"],
+        ["cortex", stackJson.id, "dev"],
+        ["chat", stackJson.id, "dev"],
+      ],
+    );
+
+    // A branch already on origin is tracked; a new one starts from origin/dev.
+    assert.equal(git(cortexWorktree, "rev-parse", "HEAD"), cortex.branchSha);
+    assert.equal(git(cortexWorktree, "rev-parse", "--abbrev-ref", "HEAD"), branch);
+    assert.equal(
+      git(cortexWorktree, "rev-parse", "--abbrev-ref", "@{upstream}"),
+      `origin/${branch}`,
+    );
+    assert.equal(git(chatWorktree, "rev-parse", "HEAD"), chat.devSha);
+    assert.equal(git(chatWorktree, "rev-parse", "--abbrev-ref", "HEAD"), branch);
+  }).pipe(
+    Effect.provide(layer),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(root, { recursive: true, force: true }))),
+  );
+});
+
+it.effect("restarts a bundle member together with the other members", () => {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const bundleId = stackJson.id;
+  const rudi = { ...stackJson, app: "rudi", bundleId };
+  const cortex = {
+    ...stackJson,
+    id: "22222222-2222-2222-2222-222222222222",
+    uuid: "22222222-2222-2222-2222-222222222222",
+    worktreePath: "/repo/cortex.worktrees/feature",
+    app: "cortex",
+    bundleId,
+  };
+  const unrelated = {
+    ...stackJson,
+    id: "33333333-3333-3333-3333-333333333333",
+    uuid: "33333333-3333-3333-3333-333333333333",
+    app: "chat",
+    bundleId: null,
+  };
+  const layer = makeLayer({
+    bearerToken: "backend-token",
+    requests,
+    response: (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === `/api/app-dev-stacks/${rudi.id}`) return Response.json(rudi);
+      if (url.pathname === "/api/app-dev-stacks") {
+        return Response.json([rudi, cortex, unrelated]);
+      }
+      if (url.pathname === `/api/app-dev-stacks/${rudi.id}/stop`) {
+        return Response.json({ ...rudi, status: "stopped" });
+      }
+      if (url.pathname === "/api/app-dev-stacks/bundle-plan") {
+        return Response.json({
+          app: "rudi",
+          branch: "feature",
+          members: [
+            { app: "rudi", repository: "rudi", found: true, baseBranch: "dev" },
+            { app: "cortex", repository: "cortex", found: true, baseBranch: "dev" },
+          ],
+        });
+      }
+      if (url.pathname === "/api/app-dev-stacks/auto-create") {
+        return Response.json({
+          stack: rudi,
+          created: true,
+          frontendUrl: null,
+          frontendServiceName: null,
+          bundle: [rudi, cortex],
+        });
+      }
+      return new Response(`unexpected request ${request.url}`, { status: 404 });
+    },
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppStackManager;
+    yield* manager.restart({ stackId: rudi.id });
+
+    assert.deepEqual(requestBody(requests, "/auto-create").bundle, ["cortex"]);
   }).pipe(Effect.provide(layer));
 });

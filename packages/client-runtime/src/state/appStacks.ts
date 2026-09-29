@@ -53,6 +53,12 @@ export function createAppStackEnvironmentAtoms<R, E>(
       scheduler: lifecycleScheduler,
       concurrency: stackLifecycleConcurrency,
     }),
+    bundlePlan: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:app-stack:bundle-plan",
+      tag: WS_METHODS.appStackBundlePlan,
+      staleTimeMs: 5_000,
+      idleTtlMs: 60_000,
+    }),
     stop: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:app-stack:stop",
       tag: WS_METHODS.appStackStop,

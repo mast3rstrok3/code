@@ -58,6 +58,21 @@ Stacks created for a workflow are labeled **Workflow-owned**. If historical impl
 map more than one visible stack to the same workflow, the panel reports the conflict but never
 deletes either stack automatically.
 
+## Bundles across apps
+
+When a worktree's contract names its platform app (`x-stacks-app-dev.app`), the **New Stack**
+form (the **+** in the App Stack panel) lists every platform app. The worktree's own app is always
+checked. Check the others you want to run from their worktrees on the same branch. They reach each
+other, while every unchecked app keeps using its standing dev copy. For example, check only Rudi to
+run a Rudi worktree against the standing dev Medical Repository. Check Cortex too, and Cortex calls
+your Rudi instead of the standing one. A standing app never calls a bundle member.
+
+If a checked app has no worktree on the branch, T3 Code creates one where the form shows. The new
+worktree tracks `origin/<branch>` when the branch was pushed and otherwise starts from `origin/dev`.
+Each app runs in its own namespace. Stop, restart, and delete act on the whole bundle. Agents get
+the same choice through the `bundle` argument of `app_stack_start`. Bundles need a Stacks
+controller and are not available in native mode.
+
 ## Android and Windows checks
 
 On an environment connected to a Stacks controller, ask your thread's agent to test on

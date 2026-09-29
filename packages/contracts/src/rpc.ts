@@ -230,6 +230,8 @@ import {
   AppStackAutoCreateResult,
   AppStackBackendStatus,
   AppStackByWorktreeInput,
+  AppStackBundlePlan,
+  AppStackBundlePlanInput,
   AppStackByWorktreeResult,
   AppStackDeleteResult,
   AppStackError,
@@ -406,6 +408,7 @@ export const WS_METHODS = {
   appStackGetByWorktree: "appStack.getByWorktree",
   appStackGet: "appStack.get",
   appStackAutoCreate: "appStack.autoCreate",
+  appStackBundlePlan: "appStack.bundlePlan",
   appStackStop: "appStack.stop",
   appStackSetProtected: "appStack.setProtected",
   appStackRestart: "appStack.restart",
@@ -1372,6 +1375,12 @@ export const WsAppStackAutoCreateRpc = Rpc.make(WS_METHODS.appStackAutoCreate, {
   error: Schema.Union([AppStackError, EnvironmentAuthorizationError]),
 });
 
+export const WsAppStackBundlePlanRpc = Rpc.make(WS_METHODS.appStackBundlePlan, {
+  payload: AppStackBundlePlanInput,
+  success: AppStackBundlePlan,
+  error: Schema.Union([AppStackError, EnvironmentAuthorizationError]),
+});
+
 export const WsAppStackStopRpc = Rpc.make(WS_METHODS.appStackStop, {
   payload: AppStackGetInput,
   success: AppStack,
@@ -1746,6 +1755,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsAppStackGetByWorktreeRpc,
   WsAppStackGetRpc,
   WsAppStackAutoCreateRpc,
+  WsAppStackBundlePlanRpc,
   WsAppStackStopRpc,
   WsAppStackSetProtectedRpc,
   WsAppStackRestartRpc,

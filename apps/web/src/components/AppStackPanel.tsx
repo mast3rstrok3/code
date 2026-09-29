@@ -62,6 +62,8 @@ import {
 import {
   appStackBulkDeleteConfirmation,
   appStackBulkDeleteFailureMessage,
+  appStackBundleApps,
+  appStackBundleMemberDescription,
   appStackProtectionAction,
   appStackSelectionState,
   autoCreateNotice,
@@ -444,6 +446,8 @@ export function AppStackPanel(props: AppStackPanelProps) {
   const [createVariant, setCreateVariant] = useState<AppStackVariant>("dev");
   const [manualPath, setManualPath] = useState(currentWorktreePath);
   const [manualNamespace, setManualNamespace] = useState("");
+  // Other platform apps checked to run from their worktrees next to this one.
+  const [bundleSelection, setBundleSelection] = useState<ReadonlySet<string>>(() => new Set());
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<AutoCreateNotice | null>(null);
   const [pendingActions, setPendingActions] = useState<ReadonlyMap<string, StackPendingAction>>(
@@ -530,6 +534,27 @@ export function AppStackPanel(props: AppStackPanelProps) {
   const browseEntries = (browseQuery.data?.entries ?? []).slice(0, 8);
   const browseParentPath =
     browsePath.length > 0 ? getBrowseParentPath(ensureBrowseDirectoryPath(browsePath)) : null;
+  // Fails for a worktree whose contract names no platform app; it starts alone.
+  const bundlePlanQuery = useEnvironmentQuery(
+    isCreateOpen && stackBackendEnabled && submittedPath
+      ? appStackEnvironment.bundlePlan({
+          environmentId: props.environmentId,
+          input: {
+            worktreePath: submittedPath,
+            gitBranch: props.activeThread?.branch ?? null,
+            variant: createVariant,
+          },
+        })
+      : null,
+  );
+  const bundlePlan = bundlePlanQuery.data ?? null;
+  const submittedBundle = useMemo(
+    () =>
+      (bundlePlan?.members ?? []).flatMap((member) =>
+        member.app !== bundlePlan?.app && bundleSelection.has(member.app) ? [member.app] : [],
+      ),
+    [bundlePlan, bundleSelection],
+  );
   const currentStackQuery = useEnvironmentQuery(
     stackBackendEnabled && currentPath
       ? appStackEnvironment.byWorktree({
@@ -678,6 +703,7 @@ export function AppStackPanel(props: AppStackPanelProps) {
       sourceStack?: AppStack | null,
       requestedNamespace?: string | null,
       requestedVariant?: AppStackVariant | null,
+      bundle?: ReadonlyArray<string>,
     ) => {
       const normalizedPath = normalizeWorktreePath(worktreePath);
       if (!normalizedPath) return;
@@ -703,6 +729,7 @@ export function AppStackPanel(props: AppStackPanelProps) {
             namespace,
             workflowId: sourceStack?.workflowId ?? undefined,
             variant,
+            ...(bundle && bundle.length > 0 ? { bundle: [...bundle] } : {}),
           },
         });
         if (result._tag === "Failure") {
@@ -916,11 +943,13 @@ export function AppStackPanel(props: AppStackPanelProps) {
   const runCreateStart = useCallback(() => {
     if (!stackBackendEnabled || !submittedPath || submittedPathStartKey === null) return;
     if (pendingActions.has(submittedPathStartKey)) return;
-    void runStart(submittedPath, null, submittedNamespace, createVariant);
+    void runStart(submittedPath, null, submittedNamespace, createVariant, submittedBundle);
   }, [
+    createVariant,
     pendingActions,
     runStart,
     stackBackendEnabled,
+    submittedBundle,
     submittedNamespace,
     submittedPath,
     submittedPathStartKey,
@@ -972,6 +1001,7 @@ export function AppStackPanel(props: AppStackPanelProps) {
     const selected = selectedStackIds.has(stack.id);
     const isCurrent = normalizeWorktreePath(stack.worktreePath) === currentPath;
     const repoBranch = stackRepoBranchLabel(stack);
+    const bundleApps = appStackBundleApps(stack, listedStacks);
     const variant = stack.variant ?? appStackVariantForComposePath(stack.composePath);
     const stackName = displayStackName(stack);
 
@@ -1034,6 +1064,7 @@ export function AppStackPanel(props: AppStackPanelProps) {
               </span>
               <span className="mt-1 block truncate text-xs text-muted-foreground">
                 {repoBranch ? `${repoBranch} · ` : ""}
+                {bundleApps ? `bundle ${bundleApps.join(" + ")} · ` : ""}
                 {stack.namespace ? `namespace ${stack.namespace}` : "namespace pending"}
               </span>
             </span>
@@ -1311,14 +1342,63 @@ export function AppStackPanel(props: AppStackPanelProps) {
                     ? "Builds the production image from this worktree and runs it without source mounts. Nothing starts it for you; rebuild after every change."
                     : "Dev servers with hot reload over the mounted worktree."}
                 </div>
+                {bundlePlan ? (
+                  <div className="space-y-1 rounded-md border border-border/70 p-2">
+                    <div className="text-xs font-medium">Apps on {bundlePlan.branch}</div>
+                    <div className="text-xs text-muted-foreground">
+                      Checked apps run from their worktrees on this branch and reach each other.
+                      Unchecked apps stay on their standing dev copies.
+                    </div>
+                    {bundlePlan.members.map((member) => {
+                      const own = member.app === bundlePlan.app;
+                      const selected = own || bundleSelection.has(member.app);
+                      return (
+                        <label
+                          key={member.app}
+                          className="grid cursor-pointer grid-cols-[auto_minmax(0,1fr)] items-start gap-2 rounded-md px-1 py-1 text-xs hover:bg-accent/50"
+                        >
+                          <Checkbox
+                            checked={selected}
+                            disabled={own}
+                            onCheckedChange={(checked) =>
+                              setBundleSelection((current) => {
+                                const next = new Set(current);
+                                if (checked) next.add(member.app);
+                                else next.delete(member.app);
+                                return next;
+                              })
+                            }
+                            className="mt-0.5"
+                          />
+                          <span className="min-w-0">
+                            <span className="block font-medium">{member.app}</span>
+                            <span className="block truncate text-muted-foreground">
+                              {appStackBundleMemberDescription(member, {
+                                own,
+                                selected,
+                                branch: bundlePlan.branch,
+                              })}
+                            </span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
-                  <Input
-                    value={manualNamespace}
-                    onChange={(event) => setManualNamespace(event.currentTarget.value)}
-                    placeholder={submittedNamespace ?? "namespace"}
-                    className="min-w-0"
-                    aria-label="Kubernetes namespace"
-                  />
+                  {submittedBundle.length > 0 ? (
+                    <div className="self-center truncate text-xs text-muted-foreground">
+                      Each app gets its own namespace.
+                    </div>
+                  ) : (
+                    <Input
+                      value={manualNamespace}
+                      onChange={(event) => setManualNamespace(event.currentTarget.value)}
+                      placeholder={submittedNamespace ?? "namespace"}
+                      className="min-w-0"
+                      aria-label="Kubernetes namespace"
+                    />
+                  )}
                   <Button
                     size="sm"
                     type="submit"

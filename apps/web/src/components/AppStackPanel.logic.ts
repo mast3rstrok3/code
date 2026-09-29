@@ -2,6 +2,7 @@ import type {
   AppStack,
   AppStackListResult,
   AppStackAutoCreateResult,
+  AppStackBundlePlanMember,
   AppStackPod,
   AppStackService,
 } from "@t3tools/contracts";
@@ -63,7 +64,7 @@ export function isTransitioningAppStackStatus(status: AppStack["status"]): boole
 }
 
 export interface AutoCreateNotice {
-  readonly kind: "reserved" | "already-running";
+  readonly kind: "reserved" | "already-running" | "created-worktrees";
   readonly message: string;
   readonly url: string | null;
   readonly stackId: string | null;
@@ -175,6 +176,15 @@ export function appStackBulkDeleteFailureMessage(
 
 /** Informational (non-error) notice when auto-create returned an existing stack. */
 export function autoCreateNotice(result: AppStackAutoCreateResult): AutoCreateNotice | null {
+  const createdWorktreePaths = result.createdWorktreePaths ?? [];
+  if (createdWorktreePaths.length > 0) {
+    return {
+      kind: "created-worktrees",
+      message: `Created ${createdWorktreePaths.length === 1 ? "a worktree" : "worktrees"} for the bundle: ${createdWorktreePaths.join(", ")}`,
+      url: result.frontendUrl,
+      stackId: result.stack?.id ?? null,
+    };
+  }
   if (result.created) return null;
   const message = result.message?.trim();
   if (result.reserved === true) {
@@ -327,4 +337,30 @@ export function previewForPod(pod: AppStackPod, stack: AppStack): PreviewCandida
   }
 
   return null;
+}
+
+/** The apps a bundled stack runs with, its own first; null for a standalone stack. */
+export function appStackBundleApps(
+  stack: AppStack,
+  stacks: ReadonlyArray<AppStack>,
+): ReadonlyArray<string> | null {
+  if (!stack.bundleId) return null;
+  const others = stacks.flatMap((member) =>
+    member.bundleId === stack.bundleId && member.id !== stack.id && member.app ? [member.app] : [],
+  );
+  return stack.app ? [stack.app, ...others] : others;
+}
+
+/** Where a bundle-plan app runs when the stack starts, in the New Stack form. */
+export function appStackBundleMemberDescription(
+  member: AppStackBundlePlanMember,
+  input: { readonly own: boolean; readonly selected: boolean; readonly branch: string },
+): string {
+  if (input.own) return "This worktree";
+  if (!input.selected) return "Standing dev copy";
+  if (member.found) return member.worktreePath ?? "Worktree on this branch";
+  const origin = `origin/${input.branch}, else origin/${member.baseBranch}`;
+  return member.worktreePath
+    ? `New worktree ${member.worktreePath} from ${origin}`
+    : `New worktree from ${origin}`;
 }

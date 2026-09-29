@@ -29,6 +29,7 @@ export type WorkspaceInput = typeof WorkspaceInput.Type;
 const StartInput = Schema.Struct({
   ...WorkspaceInput.fields,
   displayName: Schema.optionalKey(TrimmedNonEmptyString),
+  bundle: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
 });
 export type StartInput = typeof StartInput.Type;
 const PodLogsInput = Schema.Struct({
@@ -130,7 +131,7 @@ export const AppStackGetTool = Tool.make("app_stack_get", {
 
 const AppStackStartTool = Tool.make("app_stack_start", {
   description:
-    "Start or reuse this thread's workspace App Stack. Defaults to dev; prod must be explicit and needs a prod compose contract. Uses the workspace and branch from the authenticated thread. Preserves existing workflow ownership; new stacks are manually owned. Returns current status and URLs, which may not be ready yet; use app_stack_get to check readiness.",
+    'Start or reuse this thread\'s workspace App Stack. Defaults to dev; prod must be explicit and needs a prod compose contract. Uses the workspace and branch from the authenticated thread. Preserves existing workflow ownership; new stacks are manually owned. Pass bundle, a list of other platform apps such as ["cortex", "medical-repository"], to run those apps from their worktrees on the same branch next to this one; missing worktrees are created from origin, and every app left out keeps using its standing dev copy. Returns current status and URLs, which may not be ready yet; use app_stack_get to check readiness.',
   parameters: StartInput,
   success: AppStackAutoCreateResult,
   failure: AppStackError,
