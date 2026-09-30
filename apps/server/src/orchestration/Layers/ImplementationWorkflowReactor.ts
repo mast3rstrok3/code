@@ -73,9 +73,11 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import { HttpClient } from "effect/unstable/http";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -2152,6 +2154,8 @@ const make = Effect.gen(function* () {
   const appStackManager = yield* AppStackManager;
   const serverSettingsService = yield* ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const changeRequestLocks = yield* SynchronizedRef.make(
     new Map<string, { readonly semaphore: Semaphore.Semaphore; readonly users: number }>(),
   );
@@ -3716,6 +3720,73 @@ const make = Effect.gen(function* () {
   );
 
   /**
+   * True when git has already unregistered the checkout at `worktreePath`.
+   * `git worktree remove` drops the worktree's admin dir even when deleting the
+   * checkout fails partway, for example on files an App Stack container wrote as
+   * root. Git then no longer answers for the directory, so it needs a plain delete.
+   */
+  const isUnregisteredWorktreeLeftover = (worktreePath: string) =>
+    Effect.gen(function* () {
+      if (!(yield* fileSystem.exists(worktreePath))) return false;
+      const dotGit = path.join(worktreePath, ".git");
+      if (!(yield* fileSystem.exists(dotGit))) return true;
+      // A `.git` directory (not a linked worktree) fails this read and is kept.
+      const gitdir = /^gitdir:\s*(.+)$/m.exec(yield* fileSystem.readFileString(dotGit))?.[1];
+      if (gitdir === undefined) return false;
+      return !(yield* fileSystem.exists(path.resolve(worktreePath, gitdir.trim())));
+    }).pipe(Effect.orElseSucceed(() => false));
+
+  const leftoverRemovalWarnings = new Set<string>();
+
+  /**
+   * Finishes deleting a succeeded ticket's worktree that an earlier removal left
+   * behind. Only paths the run derived for its tickets qualify, and only once git
+   * has unregistered them, so a worktree git cannot read for another reason stays.
+   */
+  const removeTicketWorktreeLeftover = Effect.fn(
+    "ImplementationWorkflowReactor.removeTicketWorktreeLeftover",
+  )(function* (input: {
+    readonly run: OrchestrationImplementationRun;
+    readonly ticketId: string;
+    readonly worktreePath: string;
+    readonly cleanupRequestedAt: string;
+    readonly createdAt: string;
+  }) {
+    if (!input.worktreePath.startsWith(`${input.run.orchestratorWorktreePath}-ticket-`)) return;
+    if (!(yield* isUnregisteredWorktreeLeftover(input.worktreePath))) return;
+    const removed = yield* fileSystem
+      .remove(input.worktreePath, { recursive: true, force: true })
+      .pipe(Effect.result);
+    if (removed._tag === "Failure") {
+      // Recovery retries every pass; one warning per path keeps the log readable.
+      if (!leftoverRemovalWarnings.has(input.worktreePath)) {
+        leftoverRemovalWarnings.add(input.worktreePath);
+        yield* Effect.logWarning("ticket worktree leftover removal failed", {
+          runId: input.run.id,
+          ticketId: input.ticketId,
+          worktreePath: input.worktreePath,
+          cause: errorDetail(removed.failure),
+        });
+      }
+      return;
+    }
+    leftoverRemovalWarnings.delete(input.worktreePath);
+    yield* appendActivity({
+      threadId: input.run.orchestratorThreadId,
+      tone: "info",
+      kind: "implementation-ticket-worktree-removed",
+      summary: `Ticket ${input.ticketId} worktree removed`,
+      payload: {
+        runId: input.run.id,
+        ticketId: input.ticketId,
+        worktreePath: input.worktreePath,
+        cleanupRequestedAt: input.cleanupRequestedAt,
+      },
+      createdAt: input.createdAt,
+    });
+  });
+
+  /**
    * Deletes a succeeded ticket's worktree once its App Stack is gone. The ticket
    * branch keeps the accepted commit, which is all dependents and integration
    * read, so a long run does not hold every finished worktree until it ends. A
@@ -3747,7 +3818,16 @@ const make = Effect.gen(function* () {
             const worktreeHead = yield* gitWorkflow
               .resolveCommit({ cwd: state.worktreePath, ref: "HEAD" })
               .pipe(Effect.option);
-            if (Option.isNone(worktreeHead)) return null;
+            if (Option.isNone(worktreeHead)) {
+              yield* removeTicketWorktreeLeftover({
+                run,
+                ticketId: state.ticketId,
+                worktreePath: state.worktreePath,
+                cleanupRequestedAt: state.resourceCleanupAt ?? input.createdAt,
+                createdAt: input.createdAt,
+              });
+              return null;
+            }
             const cleanupSafety = yield* Effect.all([
               gitWorkflow.localStatus({ cwd: state.worktreePath }),
               verifiedDependency({ run, ticketId: state.ticketId }),

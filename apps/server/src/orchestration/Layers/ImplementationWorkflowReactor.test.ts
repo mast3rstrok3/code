@@ -39,6 +39,8 @@ import { implementationWorkflowDefaultSkips } from "@t3tools/shared/workflowStep
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
@@ -1624,6 +1626,7 @@ function launchRun(
   options?: Parameters<typeof seedPlanning>[1] & {
     readonly appReviewStrategy?: "legacy-inline" | "nested-workflow";
     readonly skips?: ReadonlyArray<OrchestrationImplementationSkipTarget>;
+    readonly orchestratorWorktreePath?: string;
   },
 ) {
   return Effect.gen(function* () {
@@ -1636,7 +1639,8 @@ function launchRun(
       baseBranch: "main",
       pinnedCommit: "abc123",
       orchestratorBranch: "implementation/checkout",
-      orchestratorWorktreePath: "/tmp/implementation-reactor.worktrees/checkout",
+      orchestratorWorktreePath:
+        options?.orchestratorWorktreePath ?? "/tmp/implementation-reactor.worktrees/checkout",
       validationCommands: ["vp check", "vp run typecheck"],
       skips: options?.skips ? [...options.skips] : [],
       createdAt: now,
@@ -5139,6 +5143,80 @@ describe("ImplementationWorkflowReactor", () => {
       { failRemoveWorktreeAttempts: 1 },
     ),
   );
+
+  // A removal that fails partway (for example on files a stack container wrote as
+  // root) still drops git's registration, so git can no longer read the checkout.
+  describe("ticket worktree leftovers", () => {
+    const failRemovalThenUnregister = (
+      system: ImplementationSystem,
+      options?: { readonly liveAdminDir?: boolean },
+    ) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "ticket-leftover-" });
+        const { run } = yield* launchRun(system, {
+          orchestratorWorktreePath: path.join(root, "repo.worktrees", "checkout"),
+        });
+        const worktreePath = `${run.orchestratorWorktreePath}-ticket-1`;
+        yield* fileSystem.makeDirectory(path.join(worktreePath, "apps"), { recursive: true });
+        yield* fileSystem.writeFileString(path.join(worktreePath, "apps", "index.ts"), "");
+        if (options?.liveAdminDir) {
+          const adminDir = path.join(root, "admin");
+          yield* fileSystem.makeDirectory(adminDir);
+          yield* fileSystem.writeFileString(
+            path.join(worktreePath, ".git"),
+            `gitdir: ${adminDir}\n`,
+          );
+        }
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* system.reactor.recoverIncompleteStages();
+        expect(yield* Ref.get(system.removeWorktreeInputs)).toHaveLength(1);
+        yield* Ref.update(system.activeWorktreePaths, (paths) => {
+          const active = new Set(paths);
+          active.delete(worktreePath);
+          return active;
+        });
+        yield* system.reactor.recoverIncompleteStages();
+        return { run, worktreePath, fileSystem };
+      }).pipe(Effect.provide(NodeServices.layer));
+
+    it.effect("deletes a succeeded ticket's checkout that git already unregistered", () =>
+      withSystem(
+        (system) =>
+          Effect.gen(function* () {
+            const { run, worktreePath, fileSystem } = yield* failRemovalThenUnregister(system);
+
+            expect(yield* fileSystem.exists(worktreePath)).toBe(false);
+            expect(yield* Ref.get(system.removeWorktreeInputs)).toHaveLength(1);
+            const snapshot = yield* system.query.getSnapshot();
+            const orchestrator = snapshot.threads.find(
+              (thread) => thread.id === run.orchestratorThreadId,
+            );
+            expect(
+              orchestrator?.activities.some(
+                (activity) => activity.kind === "implementation-ticket-worktree-removed",
+              ),
+            ).toBe(true);
+          }),
+        { failRemoveWorktreeAttempts: 1 },
+      ),
+    );
+
+    it.effect("keeps a checkout whose git admin dir still exists", () =>
+      withSystem(
+        (system) =>
+          Effect.gen(function* () {
+            const { worktreePath, fileSystem } = yield* failRemovalThenUnregister(system, {
+              liveAdminDir: true,
+            });
+
+            expect(yield* fileSystem.exists(`${worktreePath}/apps/index.ts`)).toBe(true);
+          }),
+        { failRemoveWorktreeAttempts: 1 },
+      ),
+    );
+  });
 
   it.effect("deletes an unowned legacy stack on the exact ticket worktree", () =>
     withSystem((system) =>
