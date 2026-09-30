@@ -57,6 +57,7 @@ import { describe } from "vite-plus/test";
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../../vcs/VcsProcess.ts";
 import { OrchestrationCommandInvariantError } from "../Errors.ts";
+import { WorkflowDrainCoordinator } from "../WorkflowDrainCoordinator.ts";
 import { STALE_IMPLEMENTATION_TICKET_STATE_DETAIL } from "../implementationRunConcurrency.ts";
 import { executeNativeVerification } from "../nativeVerificationService.ts";
 import { AppStackManager } from "../../appStack/AppStackManager.ts";
@@ -675,6 +676,7 @@ const decodeBuildContractExample = Schema.decodeUnknownEffect(
 );
 
 interface ImplementationCalls {
+  readonly workflowAccepting: Ref.Ref<boolean>;
   readonly autoCreateInputs: Ref.Ref<
     ReadonlyArray<{
       readonly worktreePath: string;
@@ -841,6 +843,12 @@ function makeTestLayer(
     Layer.provideMerge(NodeServices.layer),
     Layer.provideMerge(ThreadBackgroundLiveness.layer),
     Layer.provideMerge(ThreadPlanProgress.layer),
+    Layer.provideMerge(
+      Layer.mock(WorkflowDrainCoordinator)({
+        accepting: Ref.get(calls.workflowAccepting),
+        startupRecoveryCause: null,
+      }),
+    ),
   );
 
   return Layer.mergeAll(
@@ -1406,6 +1414,7 @@ function withSystem<A, E>(
   },
 ) {
   return Effect.gen(function* () {
+    const workflowAccepting = yield* Ref.make(true);
     const autoCreateInputs = yield* Ref.make<
       ReadonlyArray<{
         readonly worktreePath: string;
@@ -1456,6 +1465,7 @@ function withSystem<A, E>(
     const frontendProbeUrls = yield* Ref.make<ReadonlyArray<string>>([]);
     const beforeTicketLocalStatus = yield* Ref.make<Effect.Effect<void> | null>(null);
     const calls = {
+      workflowAccepting,
       autoCreateInputs,
       workflowTeardownInputs,
       stopStackIds,
@@ -6171,6 +6181,37 @@ describe("ImplementationWorkflowReactor", () => {
           ).toHaveLength(0);
         }),
       { failCreateWorktreeAfter: 1 },
+    ),
+  );
+
+  it.effect("keeps a worker launch rejected during restart recoverable", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* Ref.set(system.beforeTicketLocalStatus, Ref.set(system.workflowAccepting, false));
+        const { run } = yield* launchRun(system, {
+          tickets: [planningTicket("TICKET-1"), planningTicket("TICKET-2", ["TICKET-1"])],
+        });
+        const interrupted = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        );
+        expect(interrupted?.status).toBe("running");
+        expect(interrupted?.automationHalt).toBeNull();
+        expect(interrupted?.ticketStates.map((state) => state.status)).toEqual([
+          "running",
+          "blocked",
+        ]);
+
+        yield* Ref.set(system.workflowAccepting, true);
+        yield* system.reactor.recoverIncompleteStages();
+        const resumed = yield* system.query.getSnapshot();
+        const worker = resumed.threads.find(
+          (thread) => thread.id === interrupted?.ticketStates[0]?.workerThreadId,
+        );
+        expect(worker?.messages).toHaveLength(1);
+        expect(
+          resumed.implementationRuns.find((entry) => entry.id === run.id)?.automationHalt,
+        ).toBeNull();
+      }),
     ),
   );
 

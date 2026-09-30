@@ -1616,6 +1616,22 @@ describe("resolveWorkflowStepRollup", () => {
 });
 
 describe("resolveWorkflowTicketStatus", () => {
+  it.each(["approval", "input"] as const)(
+    "keeps terminal tickets authoritative when a linked thread still requests %s",
+    (threadStatus) => {
+      const statuses = (["succeeded", "failed"] as const).map((ticketState) =>
+        resolveWorkflowTicketStatus({
+          ticketState,
+          threadStatuses: [threadStatus],
+          skipped: false,
+          paused: false,
+        }),
+      );
+      expect(statuses).toEqual(["done", "failed"]);
+      expect(resolveWorkflowStepRollup(statuses)).toBe("failed");
+    },
+  );
+
   it("distinguishes a blocked review from a ticket waiting on dependencies", () => {
     expect(
       resolveWorkflowTicketStatus({

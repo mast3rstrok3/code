@@ -129,6 +129,7 @@ import {
   stageClaimState,
 } from "../stageClaim.ts";
 import { ServerActivation } from "../../serverActivation.ts";
+import { WorkflowDrainCoordinator } from "../WorkflowDrainCoordinator.ts";
 import { implementationRerunTargetMatchesHalt } from "../implementationRerun.ts";
 import {
   runUpdateWouldOverwriteNewerTicketState,
@@ -2147,6 +2148,10 @@ function errorDetail(error: unknown): string {
 const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
+  const workflowDrain = yield* Effect.serviceOption(WorkflowDrainCoordinator);
+  const isDraining = Option.isSome(workflowDrain)
+    ? Effect.map(workflowDrain.value.accepting, (accepting) => !accepting)
+    : Effect.succeed(false);
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const gitWorkflow = yield* GitWorkflowService;
@@ -3172,6 +3177,7 @@ const make = Effect.gen(function* () {
       readonly run: OrchestrationImplementationRun;
       readonly createdAt: string;
     }) {
+      if (yield* isDraining) return input.run;
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
       if (orchestratorThread === null) return input.run;
@@ -3468,6 +3474,9 @@ const make = Effect.gen(function* () {
 
       const failedStarts = startResults.filter(({ result }) => result._tag === "Failure");
       if (failedStarts.length > 0) {
+        // A restart can reject launches after their claims were saved. Recovery
+        // resumes those claims; failing them here would also fail dependents.
+        if (yield* isDraining) return nextRun;
         const firstFailure = failedStarts[0];
         const failureDetail =
           firstFailure?.result._tag === "Failure"

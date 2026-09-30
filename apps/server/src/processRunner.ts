@@ -319,6 +319,8 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
             }
           : {}),
         shell: spawnCommand.shell,
+        // Stop descendants that ignore SIGTERM when the command's scope closes.
+        forceKillAfter: "5 seconds",
       }),
     )
     .pipe(

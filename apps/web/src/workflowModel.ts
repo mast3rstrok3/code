@@ -1335,6 +1335,9 @@ export function resolveWorkflowTicketStatus(input: {
 }): WorkflowStepStatus {
   if (input.skipped) return "skipped";
   if (input.paused) return "paused";
+  // Old child requests do not reopen a ticket that the run has already finished.
+  if (input.ticketState === "succeeded") return "done";
+  if (input.ticketState === "failed") return "failed";
   if (input.threadStatuses.includes("approval") || input.threadStatuses.includes("input")) {
     return "awaiting";
   }
@@ -1358,10 +1361,6 @@ export function resolveWorkflowTicketStatus(input: {
     case "app-reviewing":
     case "code-reviewing":
       return "running";
-    case "succeeded":
-      return "done";
-    case "failed":
-      return "failed";
     default:
       return resolveWorkflowStepStatus({ threadStatuses: input.threadStatuses });
   }
