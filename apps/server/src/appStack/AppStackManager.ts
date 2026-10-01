@@ -3,6 +3,9 @@ import {
   AppStackAutoCreateResult,
   AppStackBundlePlan,
   type AppStackBundlePlanInput,
+  type AppStackBundleSelection,
+  type AppStackCreatedWorktree,
+  type AppStackOmittedServices,
   AppStackByWorktreeResult,
   AppStackDeleteResult,
   AppStackAndroidStatus,
@@ -48,12 +51,38 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as ServerConfig from "../config.ts";
-import { createBundleWorktree } from "./bundleWorktrees.ts";
+import { createBundleWorktree, removeBundleWorktree } from "./bundleWorktrees.ts";
 import {
   makeKubectlRunner,
   makeNativeAppStackService,
   makeNativeCommandRunner,
 } from "./NativeAppStackManager.ts";
+
+const bundlesApps = (bundle: AppStackBundleSelection | undefined) =>
+  bundle === "all" || (bundle !== undefined && bundle.length > 0);
+
+const omitsServices = (omitServices: AppStackOmittedServices | undefined) =>
+  Object.values(omitServices ?? {}).some((services) => services.length > 0);
+
+/**
+ * A controller that predates omitted services ignores the field and starts
+ * every service, so the stack would silently run a different shape.
+ */
+const requireOmittedServicesSupport = (
+  input: AppStackAutoCreateInput,
+  stacks: ReadonlyArray<AppStack | null>,
+) =>
+  omitsServices(input.omitServices) &&
+  stacks.some((stack) => stack !== null && stack.omittedServices === undefined)
+    ? Effect.fail(
+        new AppStackError({
+          operation: "autoCreate",
+          reason: "invalid_response",
+          message:
+            "The Stacks controller is too old for omitted services; it would start every service. Update the controller or clear the omitted services.",
+        }),
+      )
+    : Effect.void;
 
 const BACKEND_TOKEN_ENV = "T3CODE_APP_STACK_BACKEND_BEARER_TOKEN";
 const OIDC_TOKEN_URL_ENV = "T3CODE_APP_STACK_BACKEND_OIDC_TOKEN_URL";
@@ -156,9 +185,11 @@ export class AppStackManager extends Context.Service<
         return AppStackManager.of({
           ...native,
           autoCreate: (input) =>
-            input.bundle !== undefined && input.bundle.length > 0
+            bundlesApps(input.bundle)
               ? unavailable("autoCreate", "Bundled app stacks")
-              : native.autoCreate(input),
+              : omitsServices(input.omitServices)
+                ? unavailable("autoCreate", "Omitted app stack services")
+                : native.autoCreate(input),
           bundlePlan: () => unavailable("bundlePlan", "Bundled app stacks"),
           startDevice: () => unavailable("startDevice"),
           stopDevice: () => unavailable("stopDevice"),
@@ -532,7 +563,7 @@ export class AppStackManager extends Context.Service<
       // worktree on the branch, and never creates one itself.
       const autoCreateBundle = Effect.fn("AppStackManager.autoCreateBundle")(function* (
         input: AppStackAutoCreateInput,
-        bundle: ReadonlyArray<string>,
+        bundle: AppStackBundleSelection,
       ) {
         const variant = input.variant ?? "dev";
         const plan = yield* requestBundlePlan(
@@ -540,7 +571,7 @@ export class AppStackManager extends Context.Service<
           { worktreePath: input.worktreePath, gitBranch: input.gitBranch, variant },
           bundle,
         );
-        const createdWorktreePaths: Array<string> = [];
+        const createdWorktrees: Array<AppStackCreatedWorktree> = [];
         for (const member of plan.members) {
           if (member.found) continue;
           const repositoryPath = member.repositoryPath ?? null;
@@ -558,7 +589,7 @@ export class AppStackManager extends Context.Service<
             branch: plan.branch,
             baseBranch: member.baseBranch,
           });
-          createdWorktreePaths.push(worktreePath);
+          createdWorktrees.push({ repositoryPath, worktreePath });
         }
         const base = yield* requireBaseUrl("autoCreate");
         const result = yield* executeJson(
@@ -571,15 +602,30 @@ export class AppStackManager extends Context.Service<
               variant,
               bundle,
               ...(input.workflowId === undefined ? {} : { workflow_id: input.workflowId }),
+              ...(input.omitServices === undefined ? {} : { omit_services: input.omitServices }),
             }),
           ),
           AppStackAutoCreateResult,
+        ).pipe(
+          // Nobody would ever record or remove worktrees made for a bundle the
+          // controller refused, so take them back.
+          Effect.tapError(() =>
+            Effect.forEach(
+              createdWorktrees,
+              (worktree) => removeBundleWorktree(runCommand, worktree),
+              {
+                discard: true,
+              },
+            ),
+          ),
         );
+        yield* requireOmittedServicesSupport(input, [result.stack, ...(result.bundle ?? [])]);
         return {
           ...result,
           stack: result.stack === null ? null : withVariant(result.stack),
           bundle: result.bundle?.map(withVariant) ?? null,
-          createdWorktreePaths,
+          createdWorktreePaths: createdWorktrees.map((worktree) => worktree.worktreePath),
+          createdWorktrees,
         };
       });
 
@@ -588,14 +634,17 @@ export class AppStackManager extends Context.Service<
       ) {
         // A standalone stack of this worktree joins the bundle, so an active
         // one is no reason to skip the controller.
-        if (input.bundle !== undefined && input.bundle.length > 0) {
+        if (input.bundle !== undefined && bundlesApps(input.bundle)) {
           return yield* autoCreateBundle(input, input.bundle);
         }
-        const existing = yield* getByWorktree({
-          worktreePath: input.worktreePath,
-          variant: input.variant,
-        });
+        // An exact shape lets the controller replace an active stack that
+        // bundles or omits differently, so it skips the shortcut too.
+        const existing =
+          input.omitServices === undefined
+            ? yield* getByWorktree({ worktreePath: input.worktreePath, variant: input.variant })
+            : null;
         if (
+          existing !== null &&
           existing.stack !== null &&
           ["pending", "starting", "running", "stopping"].includes(existing.stack.status)
         ) {
@@ -620,10 +669,12 @@ export class AppStackManager extends Context.Service<
               variant: input.variant ?? "dev",
               ...(input.namespace === undefined ? {} : { namespace: input.namespace }),
               ...(input.workflowId === undefined ? {} : { workflow_id: input.workflowId }),
+              ...(input.omitServices === undefined ? {} : { omit_services: input.omitServices }),
             }),
           ),
           AppStackAutoCreateResult,
         );
+        yield* requireOmittedServicesSupport(input, [result.stack]);
         return { ...result, stack: result.stack === null ? null : withVariant(result.stack) };
       });
 
@@ -704,14 +755,28 @@ export class AppStackManager extends Context.Service<
 
       const restart = Effect.fn("AppStackManager.restart")(function* (input: AppStackGetInput) {
         const stack = yield* get(input);
-        // The controller stops every member of a bundle; start them together again.
+        // The controller stops every member of a bundle; start them together again,
+        // each leaving out what it left out before. Restart creates new rows, so
+        // the shape has to be sent again.
+        const members =
+          stack.bundleId == null
+            ? []
+            : (yield* list({})).stacks.filter(
+                (member) => member.bundleId === stack.bundleId && member.id !== stack.id,
+              );
         const bundle =
           stack.bundleId == null
             ? undefined
-            : (yield* list({})).stacks.flatMap((member) =>
-                member.bundleId === stack.bundleId && member.id !== stack.id && member.app
-                  ? [member.app]
-                  : [],
+            : members.flatMap((member) => (member.app ? [member.app] : []));
+        const omitServices =
+          stack.omittedServices === undefined
+            ? undefined
+            : Object.fromEntries(
+                [stack, ...members].flatMap((member) =>
+                  member.app && member.omittedServices?.length
+                    ? [[member.app, member.omittedServices] as const]
+                    : [],
+                ),
               );
         yield* stop(input);
         const result = yield* autoCreate({
@@ -721,6 +786,7 @@ export class AppStackManager extends Context.Service<
           workflowId: stack.workflowId ?? undefined,
           variant: stack.variant,
           ...(bundle === undefined ? {} : { bundle }),
+          ...(omitServices === undefined ? {} : { omitServices }),
         });
         if (result.stack === null) {
           return yield* new AppStackError({

@@ -202,6 +202,22 @@ function harness(
           ),
         ),
       delete: (request) => mutate("delete", request).pipe(Effect.as({ deleted: true as const })),
+      bundlePlan: (request) => {
+        operations.push({ operation: "bundlePlan", input: request });
+        return Effect.succeed({
+          app: "rudi",
+          branch: request.gitBranch ?? "dev",
+          members: [
+            {
+              app: "rudi",
+              repository: "rudi",
+              found: true,
+              baseBranch: "dev",
+              services: ["backend", "codex-runner", "frontend"],
+            },
+          ],
+        });
+      },
       listPods: (request) => {
         operations.push({ operation: "listPods", input: request });
         return Effect.succeed({ stackId: request.stackId, namespace: "rudi-dev", pods: [] });
@@ -327,6 +343,7 @@ it.effect("registers workspace tools, validates inputs, and returns results thro
       const server = yield* McpServer.McpServer;
       const listed = { tools: server.tools.map(({ tool }) => tool) };
       expect(listed.tools.map((tool) => tool.name).toSorted()).toEqual([
+        "app_stack_bundle_plan",
         "app_stack_delete",
         "app_stack_device_start",
         "app_stack_device_status",
@@ -475,6 +492,40 @@ it.effect("sends a bundle to the controller even when this worktree already runs
     ]);
   }).pipe(Effect.provide(test.layer));
 });
+
+it.effect("sends omitted services to the controller even when this worktree already runs", () => {
+  const test = harness({ stack });
+  return Effect.gen(function* () {
+    yield* handlers.app_stack_start({ bundle: "all", omitServices: { rudi: ["codex-runner"] } });
+    expect(test.operations).toMatchObject([
+      {
+        operation: "autoCreate",
+        input: {
+          worktreePath: stack.worktreePath,
+          bundle: "all",
+          omitServices: { rudi: ["codex-runner"] },
+        },
+      },
+    ]);
+  }).pipe(Effect.provide(test.layer));
+});
+
+it.effect(
+  "plans the bundle for this thread's worktree and branch without changing anything",
+  () => {
+    const test = harness({ worktreePath: "/worktrees/feature" });
+    return Effect.gen(function* () {
+      const plan = yield* handlers.app_stack_bundle_plan({});
+      expect(plan.members[0]?.services).toEqual(["backend", "codex-runner", "frontend"]);
+      expect(test.operations).toEqual([
+        {
+          operation: "bundlePlan",
+          input: { worktreePath: "/worktrees/feature", gitBranch: "dev", variant: "dev" },
+        },
+      ]);
+    }).pipe(Effect.provide(test.layer));
+  },
+);
 
 for (const status of ["stopped", "error"] as const) {
   it.effect(

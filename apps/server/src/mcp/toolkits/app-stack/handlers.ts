@@ -218,9 +218,9 @@ export const handlers = {
     const variant = input.variant ?? "dev";
     const bundle = input.bundle ?? [];
     const existing = yield* lookupStack(workspace.worktreePath, variant, operation);
-    // A bundle request always reaches the controller: a standalone stack of
-    // this worktree restarts inside the bundle.
-    if (existing.stack && bundle.length === 0) {
+    // A bundle or omissions always reach the controller: a stack of this
+    // worktree in another shape restarts in the requested one.
+    if (existing.stack && bundle.length === 0 && input.omitServices === undefined) {
       if (existing.stack.status === "stopping") {
         return yield* new AppStackError({
           operation,
@@ -242,9 +242,20 @@ export const handlers = {
         input.displayName ?? appStackDisplayName(workspace.worktreePath, workspace.branch),
       variant,
       ...(bundle.length === 0 ? {} : { bundle }),
+      ...(input.omitServices === undefined ? {} : { omitServices: input.omitServices }),
     });
     yield* checkStackScope(result.stack, workspace.worktreePath, variant, operation);
     return result;
+  }),
+  app_stack_bundle_plan: Effect.fn("AppStackToolkit.bundlePlan")(function* (input: WorkspaceInput) {
+    const operation = "app_stack_bundle_plan";
+    const workspace = yield* resolveWorkspace(operation);
+    const manager = yield* requireEnabled(operation);
+    return yield* manager.bundlePlan({
+      worktreePath: workspace.worktreePath,
+      gitBranch: workspace.branch,
+      variant: input.variant ?? "dev",
+    });
   }),
   app_stack_stop: Effect.fn("AppStackToolkit.stop")(function* (input: WorkspaceInput) {
     const { manager, stack } = yield* requireStack(input, "app_stack_stop");

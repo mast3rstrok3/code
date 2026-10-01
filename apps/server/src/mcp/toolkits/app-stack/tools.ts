@@ -1,6 +1,8 @@
 import {
   AppStack,
   AppStackAutoCreateResult,
+  AppStackBundlePlan,
+  AppStackBundleSelection,
   AppStackByWorktreeResult,
   AppStackDeleteResult,
   AppStackDevicePlatform,
@@ -12,6 +14,7 @@ import {
   AppStackGetPodLogsInput,
   AppStackGetPodLogsResult,
   AppStackListPodsResult,
+  AppStackOmittedServices,
   AppStackVariant,
   IsoDateTime,
   TrimmedNonEmptyString,
@@ -29,7 +32,8 @@ export type WorkspaceInput = typeof WorkspaceInput.Type;
 const StartInput = Schema.Struct({
   ...WorkspaceInput.fields,
   displayName: Schema.optionalKey(TrimmedNonEmptyString),
-  bundle: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+  bundle: Schema.optionalKey(AppStackBundleSelection),
+  omitServices: Schema.optionalKey(AppStackOmittedServices),
 });
 export type StartInput = typeof StartInput.Type;
 const PodLogsInput = Schema.Struct({
@@ -131,7 +135,7 @@ export const AppStackGetTool = Tool.make("app_stack_get", {
 
 const AppStackStartTool = Tool.make("app_stack_start", {
   description:
-    'Start or reuse this thread\'s workspace App Stack. Defaults to dev; prod must be explicit and needs a prod compose contract. Uses the workspace and branch from the authenticated thread. Preserves existing workflow ownership; new stacks are manually owned. Pass bundle, a list of other platform apps such as ["cortex", "medical-repository"], to run those apps from their worktrees on the same branch next to this one; missing worktrees are created from origin, and every app left out keeps using its standing dev copy. Returns current status and URLs, which may not be ready yet; use app_stack_get to check readiness.',
+    'Start or reuse this thread\'s workspace App Stack. Defaults to dev; prod must be explicit and needs a prod compose contract. Uses the workspace and branch from the authenticated thread. Preserves existing workflow ownership; new stacks are manually owned. Pass bundle, a list of other platform apps such as ["cortex", "medical-repository"] or "all", to run those apps from their worktrees on the same branch next to this one; missing worktrees are created from origin, and every app left out keeps using its standing dev copy. Pass omitServices, such as {"rudi": ["codex-runner"]}, to leave compose services of this app or a bundled one out; services that depend on them start without them. With either set, a running stack of this workspace that bundles or omits differently is replaced. app_stack_bundle_plan lists the app and service names. Returns current status and URLs, which may not be ready yet; use app_stack_get to check readiness.',
   parameters: StartInput,
   success: AppStackAutoCreateResult,
   failure: AppStackError,
@@ -142,6 +146,20 @@ const AppStackStartTool = Tool.make("app_stack_start", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, true);
+
+const AppStackBundlePlanTool = Tool.make("app_stack_bundle_plan", {
+  description:
+    "List the platform apps this workspace's App Stack can bundle, with each app's compose services and the worktree on this branch that would run it (found: false means app_stack_start would create it). The first member is this workspace's own app. Defaults to dev. Changes nothing. Use the names for app_stack_start's bundle and omitServices, or for a ticket's appStack.",
+  parameters: WorkspaceInput,
+  success: AppStackBundlePlan,
+  failure: AppStackError,
+  dependencies,
+})
+  .annotate(Tool.Title, "Plan this workspace's App Stack bundle")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
 
 const AppStackStopTool = Tool.make("app_stack_stop", {
   description:
@@ -216,6 +234,7 @@ const AppStackLogsTool = Tool.make("app_stack_logs", {
 export const AppStackToolkit = Toolkit.make(
   AppStackGetTool,
   AppStackStartTool,
+  AppStackBundlePlanTool,
   AppStackStopTool,
   AppStackRestartTool,
   AppStackDeleteTool,

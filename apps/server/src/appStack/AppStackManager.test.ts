@@ -70,9 +70,10 @@ const decodeVariantRequest = Schema.decodeUnknownSync(
 const decodeBundleRequest = Schema.decodeUnknownSync(
   Schema.fromJsonString(
     Schema.Struct({
-      bundle: Schema.optional(Schema.Array(Schema.String)),
+      bundle: Schema.optional(Schema.Union([Schema.Literal("all"), Schema.Array(Schema.String)])),
       git_branch: Schema.optional(Schema.NullOr(Schema.String)),
       namespace: Schema.optional(Schema.String),
+      omit_services: Schema.optional(Schema.Record(Schema.String, Schema.Array(Schema.String))),
     }),
   ),
 );
@@ -1219,6 +1220,10 @@ it.effect("creates missing bundle worktrees from origin before starting the bund
     assert.equal(createBody.git_branch, branch);
     assert.equal(createBody.namespace, undefined);
     assert.deepEqual(result.createdWorktreePaths, [cortexWorktree, chatWorktree]);
+    assert.deepEqual(result.createdWorktrees, [
+      { repositoryPath: cortex.checkout, worktreePath: cortexWorktree },
+      { repositoryPath: chat.checkout, worktreePath: chatWorktree },
+    ]);
     assert.deepEqual(
       result.bundle?.map((stack) => [stack.app, stack.bundleId, stack.variant]),
       [
@@ -1243,10 +1248,57 @@ it.effect("creates missing bundle worktrees from origin before starting the bund
   );
 });
 
+it.effect("removes the worktrees it created when the controller refuses the bundle", () => {
+  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-app-stack-bundle-"));
+  const branch = "feature/refused";
+  const chat = makeCheckout(root, "chat", null);
+  const chatWorktree = NodePath.join(root, "chat.worktrees", "feature-refused");
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const layer = makeLayer({
+    bearerToken: "backend-token",
+    requests,
+    response: (request) =>
+      new URL(request.url).pathname === "/api/app-dev-stacks/bundle-plan"
+        ? Response.json({
+            app: "rudi",
+            branch,
+            members: [
+              {
+                app: "chat",
+                repository: "chat",
+                repositoryPath: chat.checkout,
+                worktreePath: chatWorktree,
+                found: false,
+                baseBranch: "dev",
+              },
+            ],
+          })
+        : Response.json({ detail: "chat has no service named web" }, { status: 400 }),
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppStackManager;
+    yield* manager
+      .autoCreate({
+        worktreePath: stackJson.worktreePath,
+        displayName: "feature",
+        gitBranch: branch,
+        bundle: ["chat"],
+        omitServices: { chat: ["web"] },
+      })
+      .pipe(Effect.flip);
+    assert.equal(NodeFS.existsSync(chatWorktree), false);
+    assert.notInclude(git(chat.checkout, "worktree", "list"), chatWorktree);
+  }).pipe(
+    Effect.provide(layer),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(root, { recursive: true, force: true }))),
+  );
+});
+
 it.effect("restarts a bundle member together with the other members", () => {
   const requests: Array<HttpClientRequest.HttpClientRequest> = [];
   const bundleId = stackJson.id;
-  const rudi = { ...stackJson, app: "rudi", bundleId };
+  const rudi = { ...stackJson, app: "rudi", bundleId, omittedServices: ["codex-runner"] };
   const cortex = {
     ...stackJson,
     id: "22222222-2222-2222-2222-222222222222",
@@ -1254,6 +1306,7 @@ it.effect("restarts a bundle member together with the other members", () => {
     worktreePath: "/repo/cortex.worktrees/feature",
     app: "cortex",
     bundleId,
+    omittedServices: null,
   };
   const unrelated = {
     ...stackJson,
@@ -1301,6 +1354,99 @@ it.effect("restarts a bundle member together with the other members", () => {
     const manager = yield* AppStackManager;
     yield* manager.restart({ stackId: rudi.id });
 
-    assert.deepEqual(requestBody(requests, "/auto-create").bundle, ["cortex"]);
+    // Restart creates new rows, so each member's omissions are sent again.
+    const createBody = requestBody(requests, "/auto-create");
+    assert.deepEqual(createBody.bundle, ["cortex"]);
+    assert.deepEqual(createBody.omit_services, { rudi: ["codex-runner"] });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("sends an exact shape past the active-stack shortcut and bundles every app", () => {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const layer = makeLayer({
+    bearerToken: "backend-token",
+    requests,
+    response: (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/app-dev-stacks/bundle-plan") {
+        return Response.json({ app: "rudi", branch: "feature", members: [] });
+      }
+      if (url.pathname === "/api/app-dev-stacks/auto-create") {
+        return Response.json({
+          stack: { ...stackJson, omittedServices: ["codex-runner"] },
+          created: true,
+          frontendUrl: null,
+          frontendServiceName: null,
+        });
+      }
+      // The by-worktree shortcut would return this running stack as it is.
+      return Response.json({ stack: stackJson, frontendUrl: null, frontendServiceName: null });
+    },
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppStackManager;
+    const result = yield* manager.autoCreate({
+      worktreePath: stackJson.worktreePath,
+      displayName: "feature",
+      gitBranch: "feature",
+      omitServices: { rudi: ["codex-runner"] },
+    });
+    assert.deepEqual(result.stack?.omittedServices, ["codex-runner"]);
+    assert.deepEqual(
+      requests.map((request) => new URL(request.url).pathname),
+      ["/api/app-dev-stacks/auto-create"],
+    );
+    assert.deepEqual(requestBody(requests, "/auto-create").omit_services, {
+      rudi: ["codex-runner"],
+    });
+
+    requests.length = 0;
+    yield* manager.autoCreate({
+      worktreePath: stackJson.worktreePath,
+      displayName: "feature",
+      gitBranch: "feature",
+      bundle: "all",
+      omitServices: {},
+    });
+    assert.equal(requestBody(requests, "/bundle-plan").bundle, "all");
+    const bundleBody = requestBody(requests, "/auto-create");
+    assert.equal(bundleBody.bundle, "all");
+    assert.deepEqual(bundleBody.omit_services, {});
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("refuses omitted services when the controller predates them", () => {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const layer = makeLayer({
+    bearerToken: "backend-token",
+    requests,
+    response: () =>
+      Response.json({
+        stack: stackJson,
+        created: true,
+        frontendUrl: null,
+        frontendServiceName: null,
+      }),
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppStackManager;
+    const error = yield* manager
+      .autoCreate({
+        worktreePath: stackJson.worktreePath,
+        displayName: "feature",
+        omitServices: { rudi: ["codex-runner"] },
+      })
+      .pipe(Effect.flip);
+    assert.match(error.message, /too old for omitted services/u);
+
+    // An empty shape needs nothing the old controller lacks.
+    const result = yield* manager.autoCreate({
+      worktreePath: stackJson.worktreePath,
+      displayName: "feature",
+      omitServices: {},
+    });
+    assert.equal(result.stack?.id, stackJson.id);
   }).pipe(Effect.provide(layer));
 });

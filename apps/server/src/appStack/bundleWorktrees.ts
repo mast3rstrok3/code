@@ -64,3 +64,24 @@ export const createBundleWorktree = Effect.fn("createBundleWorktree")(function* 
     ]);
   }
 });
+
+/**
+ * Removes a worktree `createBundleWorktree` made when the bundle it was made
+ * for never started. Not forced, so nothing written there is lost, and the
+ * branch stays.
+ */
+export const removeBundleWorktree = (
+  run: NativeCommandRunner,
+  input: { readonly repositoryPath: string; readonly worktreePath: string },
+) =>
+  Effect.tryPromise(() =>
+    run("git", ["-C", input.repositoryPath, "worktree", "remove", input.worktreePath]),
+  ).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("could not remove an unused bundle worktree", {
+        worktreePath: input.worktreePath,
+        cause: cause instanceof Error ? cause.message : String(cause),
+      }),
+    ),
+    Effect.asVoid,
+  );

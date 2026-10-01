@@ -1,4 +1,5 @@
-import { ReviewTestPlatforms, TicketTestPlatforms } from "./reviewPlatforms.ts";
+import { ReviewTestPlatforms, TicketAppStack, TicketTestPlatforms } from "./reviewPlatforms.ts";
+import { AppStackCreatedWorktree, AppStackShape } from "./appStack.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
@@ -762,13 +763,19 @@ export type WorkflowStepCycleOverride = typeof WorkflowStepCycleOverride.Type;
  * standing default, and the ticket sub-step entry overrides it for the App
  * Review each ticket runs. Both parts default to on when no entry exists.
  */
-export const WorkflowStepReviewPartsOverride = Schema.Struct({
-  workflowPromptId: TrimmedNonEmptyString,
-  stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
+export const WorkflowStepReviewParts = Schema.Struct({
   e2e: Schema.Boolean,
   browser: Schema.Boolean,
   testPlatforms: Schema.optionalKey(ReviewTestPlatforms),
   ticketTestPlatforms: Schema.optionalKey(Schema.Array(TicketTestPlatforms)),
+  ticketAppStacks: Schema.optionalKey(Schema.Array(TicketAppStack)),
+});
+export type WorkflowStepReviewParts = typeof WorkflowStepReviewParts.Type;
+
+export const WorkflowStepReviewPartsOverride = Schema.Struct({
+  workflowPromptId: TrimmedNonEmptyString,
+  stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
+  ...WorkflowStepReviewParts.fields,
 });
 export type WorkflowStepReviewPartsOverride = typeof WorkflowStepReviewPartsOverride.Type;
 
@@ -843,6 +850,12 @@ export const OrchestrationPlanningTicket = Schema.Struct({
   appReviewScope: Schema.optionalKey(AppReviewScope),
   appReviewCommands: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   appReviewPlanMarkdown: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  /**
+   * The App Stack the ticket's App Review runs: the apps it bundles and the
+   * services it leaves out. The planner sets it; absent means the ticket's own
+   * app alone, with every service.
+   */
+  appStack: Schema.optionalKey(AppStackShape),
   status: TrimmedNonEmptyString.pipe(Schema.withDecodingDefault(Effect.succeed("open"))),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -1438,6 +1451,11 @@ export const OrchestrationImplementationTicketState = Schema.Struct({
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   appReviewWorkflowRunId: Schema.optionalKey(Schema.NullOr(AppReviewWorkflowRunId)),
+  /**
+   * Worktrees Code created in other repositories so the ticket's App Stack
+   * could bundle their apps. Ticket cleanup removes them.
+   */
+  bundleWorktrees: Schema.optionalKey(Schema.Array(AppStackCreatedWorktree)),
   appReviewOutcome: Schema.optionalKey(
     Schema.NullOr(Schema.Literals(["passed", "failed", "exhausted", "skipped"])),
   ),
@@ -2586,14 +2604,7 @@ const ThreadWorkflowStepReviewPartsSetCommand = Schema.Struct({
   workflowPromptId: TrimmedNonEmptyString,
   /** Set when the override targets one sub-step of a step rather than the step. */
   stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
-  parts: Schema.NullOr(
-    Schema.Struct({
-      e2e: Schema.Boolean,
-      browser: Schema.Boolean,
-      testPlatforms: Schema.optionalKey(ReviewTestPlatforms),
-      ticketTestPlatforms: Schema.optionalKey(Schema.Array(TicketTestPlatforms)),
-    }),
-  ),
+  parts: Schema.NullOr(WorkflowStepReviewParts),
   createdAt: IsoDateTime,
 });
 
@@ -2794,6 +2805,7 @@ export const ThreadPlanningTicketArtifactInput = Schema.Struct({
   appReviewScope: Schema.optionalKey(AppReviewScope),
   appReviewCommands: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   appReviewPlanMarkdown: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  appStack: Schema.optionalKey(AppStackShape),
 });
 export type ThreadPlanningTicketArtifactInput = typeof ThreadPlanningTicketArtifactInput.Type;
 
@@ -2809,6 +2821,8 @@ export const PlanningReviewerTicketEdit = Schema.Union([
     appReviewScope: Schema.optional(AppReviewScope),
     appReviewCommands: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
     appReviewPlanMarkdown: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    /** Null clears the ticket's App Stack back to its own app alone. */
+    appStack: Schema.optional(Schema.NullOr(AppStackShape)),
   }),
   Schema.Struct({
     type: Schema.Literal("create"),
@@ -2825,6 +2839,7 @@ export const PlanningReviewerTicketEdit = Schema.Union([
     appReviewPlanMarkdown: Schema.NullOr(TrimmedNonEmptyString).pipe(
       Schema.withDecodingDefault(Effect.succeed(null)),
     ),
+    appStack: Schema.optionalKey(AppStackShape),
     replacesPlanningTicketIds: Schema.Array(OrchestrationPlanningTicketId).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
     ),
@@ -4114,14 +4129,7 @@ export const ThreadWorkflowStepReviewPartsSetPayload = Schema.Struct({
   /** Set when the override targets one sub-step of a step rather than the step. */
   stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
   /** Null clears the override and returns the step to the standing Settings. */
-  parts: Schema.NullOr(
-    Schema.Struct({
-      e2e: Schema.Boolean,
-      browser: Schema.Boolean,
-      testPlatforms: Schema.optionalKey(ReviewTestPlatforms),
-      ticketTestPlatforms: Schema.optionalKey(Schema.Array(TicketTestPlatforms)),
-    }),
-  ),
+  parts: Schema.NullOr(WorkflowStepReviewParts),
   updatedAt: IsoDateTime,
 });
 

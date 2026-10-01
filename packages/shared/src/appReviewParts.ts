@@ -1,5 +1,6 @@
 import type {
   AppReviewScope,
+  AppStackShape,
   ReviewTestPlatform,
   WorkflowStepReviewPartsOverride,
 } from "@t3tools/contracts";
@@ -18,6 +19,7 @@ export interface AppReviewParts {
   readonly ticketTestPlatforms?: NonNullable<
     WorkflowStepReviewPartsOverride["ticketTestPlatforms"]
   >;
+  readonly ticketAppStacks?: NonNullable<WorkflowStepReviewPartsOverride["ticketAppStacks"]>;
 }
 
 export const DEFAULT_APP_REVIEW_PARTS: AppReviewParts = { e2e: true, browser: false };
@@ -149,6 +151,7 @@ function reviewPartsFromOverride(entry: WorkflowStepReviewPartsOverride): AppRev
     ...(entry.ticketTestPlatforms === undefined
       ? {}
       : { ticketTestPlatforms: entry.ticketTestPlatforms }),
+    ...(entry.ticketAppStacks === undefined ? {} : { ticketAppStacks: entry.ticketAppStacks }),
   };
 }
 
@@ -184,5 +187,48 @@ export function setTicketTestPlatforms(
   return {
     ...parts,
     ticketTestPlatforms: platforms === null ? others : [...others, { ticketId, platforms }],
+  };
+}
+
+export type TicketAppStackSource = "override" | "plan" | "default";
+
+interface TicketWithAppStack {
+  readonly id: string;
+  readonly appStack?: AppStackShape | undefined;
+}
+
+/**
+ * The App Stack a ticket's App Review runs: the user's override, else the
+ * planner's, else the ticket's own app alone with every service.
+ */
+export function resolveTicketAppStack(
+  parts: AppReviewParts,
+  ticket: TicketWithAppStack,
+): AppStackShape {
+  return (
+    parts.ticketAppStacks?.find((entry) => entry.ticketId === ticket.id)?.appStack ??
+    ticket.appStack ??
+    {}
+  );
+}
+
+export function ticketAppStackSource(
+  parts: AppReviewParts,
+  ticket: TicketWithAppStack,
+): TicketAppStackSource {
+  if (parts.ticketAppStacks?.some((entry) => entry.ticketId === ticket.id)) return "override";
+  return ticket.appStack === undefined ? "default" : "plan";
+}
+
+/** Null clears the override, so the ticket runs the App Stack its plan names. */
+export function setTicketAppStack(
+  parts: AppReviewParts,
+  ticketId: string,
+  appStack: AppStackShape | null,
+): AppReviewParts {
+  const others = (parts.ticketAppStacks ?? []).filter((entry) => entry.ticketId !== ticketId);
+  return {
+    ...parts,
+    ticketAppStacks: appStack === null ? others : [...others, { ticketId, appStack }],
   };
 }
