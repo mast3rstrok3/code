@@ -380,10 +380,9 @@ function AddGithubOwnerTokenForm({
           )}
         </p>
         <p>
-          The link selects Contents and Pull requests (read and write) and Commit statuses and
-          Actions (read). Choose the repositories yourself, since GitHub cannot pre-select them. Add
-          Workflows (read and write) if agents edit <code>.github/workflows</code>, and Issues if
-          they work with issues.
+          The link selects Contents, Pull requests, and Workflows (read and write) and Commit
+          statuses and Actions (read). Choose the repositories yourself, since GitHub cannot
+          pre-select them. Add Issues if agents work with issues.
         </p>
       </div>
     </form>

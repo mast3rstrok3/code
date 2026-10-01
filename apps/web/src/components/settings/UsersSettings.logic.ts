@@ -223,12 +223,14 @@ export function removeWorkspaceUserGithubOwnerToken(
 }
 
 /**
- * Permissions T3 Code threads need: push, pull requests, and reading CI.
+ * Permissions T3 Code threads need: push, pull requests, reading CI, and pushing commits that
+ * touch `.github/workflows` (GitHub rejects those pushes without `workflows`, which is write-only).
  * GitHub cannot pre-fill repository access, so the user still picks the repositories.
  */
 export const GITHUB_FINE_GRAINED_TOKEN_PERMISSIONS = {
   contents: "write",
   pull_requests: "write",
+  workflows: "write",
   statuses: "read",
   actions: "read",
 } as const;

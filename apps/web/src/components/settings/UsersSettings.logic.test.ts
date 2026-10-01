@@ -200,6 +200,7 @@ describe("githubFineGrainedTokenUrl", () => {
       target_name: "Acme",
       contents: "write",
       pull_requests: "write",
+      workflows: "write",
       statuses: "read",
       actions: "read",
     });
