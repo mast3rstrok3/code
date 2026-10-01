@@ -280,6 +280,7 @@ function buildPlanningTicketsFromArtifact(input: {
         ? {}
         : { appReviewCommands: ticket.appReviewCommands }),
       appReviewPlanMarkdown: ticket.appReviewPlanMarkdown ?? null,
+      ...(ticket.appStack === undefined ? {} : { appStack: ticket.appStack }),
       status: "open",
       createdAt: input.command.createdAt,
       updatedAt: input.command.createdAt,
@@ -370,6 +371,7 @@ function applyPlanningReviewerEdits(input: {
           ? {}
           : { appReviewCommands: edit.appReviewCommands }),
         appReviewPlanMarkdown: edit.appReviewPlanMarkdown,
+        ...(edit.appStack === undefined ? {} : { appStack: edit.appStack }),
         status: "open",
         createdAt: input.updatedAt,
         updatedAt: input.updatedAt,
@@ -409,8 +411,12 @@ function applyPlanningReviewerEdits(input: {
           );
         }),
     );
+    // Null clears the ticket's App Stack back to its own app alone.
+    const { appStack: currentAppStack, ...ticketWithoutAppStack } = ticket;
+    const appStack = edit.appStack === undefined ? currentAppStack : (edit.appStack ?? undefined);
     tickets.set(edit.ticketId, {
-      ...ticket,
+      ...ticketWithoutAppStack,
+      ...(appStack === undefined ? {} : { appStack }),
       ...(edit.title === undefined ? {} : { title: edit.title }),
       ...(edit.bodyMarkdown === undefined ? {} : { bodyMarkdown: edit.bodyMarkdown }),
       ...(edit.plannedFileChanges === undefined
@@ -520,6 +526,8 @@ function buildPlanningTicketsStagePrompt(spec: OrchestrationPlanningSpec): strin
     "Use workflow_spec_get to retrieve the Spec body when needed. Do not rely on prompt-embedded artifact content.",
     "",
     "Inspect the repository before naming planned files. Every ticket must include at least one exact repository-relative POSIX file path with action create, update, or delete. Do not use absolute paths, directories, guesses, or glob patterns. Represent renames as delete plus create.",
+    "",
+    'A ticket may add an optional appStack when its App Review needs other platform apps running from this branch ({"bundle": ["<app>"]}) or must leave services out ({"omitServices": {"<app>": ["<service>"]}}). Take app and service names from app_stack_bundle_plan. Leave it out otherwise.',
     "",
     "When ready, finish with exactly one fenced JSON block using this shape. Dependencies must reference ticket keys from the same JSON payload.",
     "```json",

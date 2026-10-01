@@ -101,6 +101,7 @@ import Migration0096 from "./Migrations/052_ProjectionThreadTitleState.ts";
 import Migration0097 from "./Migrations/053_PullRequestFilesViewed.ts";
 import Migration0098 from "./Migrations/098_ProjectionProjectsOwnerUserId.ts";
 import Migration0099 from "./Migrations/054_ProjectionThreadsAutoSettleDisabledAt.ts";
+import Migration0100 from "./Migrations/100_PlanningTicketAppStack.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -223,6 +224,7 @@ const migrationEntries = [
   [98, "ProjectionProjectsOwnerUserId", Migration0098],
   // Upstream ID 54 is also taken by the fork. Run it at the next unused fork ID.
   [99, "ProjectionThreadsAutoSettleDisabledAt", Migration0099],
+  [100, "PlanningTicketAppStack", Migration0100],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

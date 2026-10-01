@@ -5,7 +5,11 @@ import {
   recordRegressionCycle,
   invalidateRegressionChecks,
 } from "../finalRegression.ts";
-import { appStackServiceBlocksReadiness } from "@t3tools/shared/appStack";
+import {
+  appStackServiceBlocksReadiness,
+  appStackShapeRequest,
+  describeAppStackShape,
+} from "@t3tools/shared/appStack";
 import {
   nativeVerificationEvidenceMarkdown,
   nativeVerificationIsOpen,
@@ -46,6 +50,7 @@ import {
   type OrchestrationImplementationValidationResult,
   type OrchestrationImplementationWorkerResult,
   type OrchestrationPlanningTicket,
+  type AppStackCreatedWorktree,
   type OrchestrationReadModel,
   type OrchestrationThread,
   type OrchestrationThreadActivity,
@@ -62,6 +67,8 @@ import {
   appReviewScopeForParts,
   describeAppReviewParts,
   resolveLayeredAppReviewStepParts,
+  resolveTicketAppStack,
+  type AppReviewParts,
 } from "@t3tools/shared/appReviewParts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { proposedPlanTitle } from "@t3tools/shared/orchestrationPlanning";
@@ -523,6 +530,47 @@ function ticketsById(
     map.set(ticket.id, ticket);
   }
   return map;
+}
+
+/**
+ * The exact shape a ticket's App Stack starts with: the user's per-ticket
+ * choice, else the planner's, else the ticket's own app alone. A ticket that
+ * works in the orchestrator worktree shares the integration stack, which a
+ * ticket must never reshape, so it sends no shape at all.
+ */
+function ticketAppStackRequest(input: {
+  readonly parts: AppReviewParts;
+  readonly ticket: OrchestrationPlanningTicket;
+  readonly worktreePath: string;
+  readonly run: OrchestrationImplementationRun;
+}) {
+  return normalizeWorkflowWorktreePath(input.worktreePath) ===
+    normalizeWorkflowWorktreePath(input.run.orchestratorWorktreePath)
+    ? null
+    : appStackShapeRequest(resolveTicketAppStack(input.parts, input.ticket));
+}
+
+/** Records the bundle worktrees a ticket's stack start created, so cleanup removes them. */
+function withTicketBundleWorktrees(
+  run: OrchestrationImplementationRun,
+  ticketId: string,
+  created: ReadonlyArray<AppStackCreatedWorktree>,
+): OrchestrationImplementationRun {
+  if (created.length === 0) return run;
+  return {
+    ...run,
+    ticketStates: run.ticketStates.map((state) => {
+      if (state.ticketId !== ticketId) return state;
+      const known = new Set((state.bundleWorktrees ?? []).map((worktree) => worktree.worktreePath));
+      return {
+        ...state,
+        bundleWorktrees: [
+          ...(state.bundleWorktrees ?? []),
+          ...created.filter((worktree) => !known.has(worktree.worktreePath)),
+        ],
+      };
+    }),
+  };
 }
 
 function markDependentsReady(
@@ -3915,22 +3963,82 @@ const make = Effect.gen(function* () {
           .filter((result) => result !== null)
           .map((result) => [result.ticketId, result.retention] as const),
       );
-      if (retainedByTicket.size === 0) return run;
+      // Worktrees created so the ticket's stack could bundle other apps go once
+      // that stack is deleted. Removal is not forced: Git keeps a worktree with
+      // local changes, and the branch stays either way. Failures are retried
+      // on the next cleanup pass.
+      const bundleWorktreeResults = yield* Effect.forEach(
+        run.ticketStates,
+        (state) =>
+          Effect.gen(function* () {
+            if (
+              state.status !== "succeeded" ||
+              state.appDevStackTierDownAt === null ||
+              (state.bundleWorktrees ?? []).length === 0
+            ) {
+              return null;
+            }
+            const remaining: Array<AppStackCreatedWorktree> = [];
+            for (const worktree of state.bundleWorktrees ?? []) {
+              const removed = yield* gitWorkflow
+                .removeWorktree({ cwd: worktree.repositoryPath, path: worktree.worktreePath })
+                .pipe(Effect.result);
+              if (removed._tag === "Failure") {
+                yield* Effect.logWarning("ticket bundle worktree cleanup failed", {
+                  runId: run.id,
+                  ticketId: state.ticketId,
+                  worktreePath: worktree.worktreePath,
+                  cause: errorDetail(removed.failure),
+                });
+                remaining.push(worktree);
+                continue;
+              }
+              yield* appendActivity({
+                threadId: run.orchestratorThreadId,
+                tone: "info",
+                kind: "implementation-ticket-bundle-worktree-removed",
+                summary: `Ticket ${state.ticketId} bundle worktree removed`,
+                payload: {
+                  runId: run.id,
+                  ticketId: state.ticketId,
+                  worktreePath: worktree.worktreePath,
+                },
+                createdAt: input.createdAt,
+              });
+            }
+            return remaining.length === state.bundleWorktrees?.length
+              ? null
+              : { ticketId: state.ticketId, remaining };
+          }),
+        { concurrency: 4 },
+      );
+      const bundleWorktreesByTicket = new Map(
+        bundleWorktreeResults
+          .filter((result) => result !== null)
+          .map((result) => [result.ticketId, result.remaining] as const),
+      );
+      if (retainedByTicket.size === 0 && bundleWorktreesByTicket.size === 0) return run;
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) {
         yield* Effect.logWarning("ticket worktree retention could not be persisted", {
           runId: run.id,
-          ticketIds: [...retainedByTicket.keys()],
+          ticketIds: [...retainedByTicket.keys(), ...bundleWorktreesByTicket.keys()],
         });
         return run;
       }
       const retainedRun: OrchestrationImplementationRun = {
         ...run,
-        ticketStates: run.ticketStates.map((state) => ({
-          ...state,
-          resourceCleanupRetention:
-            retainedByTicket.get(state.ticketId) ?? state.resourceCleanupRetention,
-        })),
+        ticketStates: run.ticketStates.map((state) => {
+          const remainingBundleWorktrees = bundleWorktreesByTicket.get(state.ticketId);
+          return {
+            ...state,
+            resourceCleanupRetention:
+              retainedByTicket.get(state.ticketId) ?? state.resourceCleanupRetention,
+            ...(remainingBundleWorktrees === undefined
+              ? {}
+              : { bundleWorktrees: remainingBundleWorktrees }),
+          };
+        }),
         updatedAt: input.createdAt,
       };
       yield* updateRun({
@@ -4639,14 +4747,28 @@ const make = Effect.gen(function* () {
       });
       return;
     }
+    const appStackShape = ticketAppStackRequest({
+      parts: configuredParts,
+      ticket,
+      worktreePath: state.worktreePath,
+      run: currentRun,
+    });
     const stackResult = yield* appStackManager
       .autoCreate({
         worktreePath: state.worktreePath,
         displayName: `Ticket ${ticket.key ?? ticket.id}`,
         gitBranch: state.branch ?? currentRun.orchestratorBranch,
         workflowId: orchestratorThread.workflowContext?.workflowId,
+        ...appStackShape,
       })
       .pipe(Effect.result);
+    // Worktrees created for bundled apps belong to the ticket from here on,
+    // whether or not the review launches, so cleanup can remove them.
+    const runWithBundleWorktrees = withTicketBundleWorktrees(
+      currentRun,
+      input.ticketId,
+      stackResult._tag === "Success" ? (stackResult.success.createdWorktrees ?? []) : [],
+    );
     const acceptedWorkflowIds = workflowIdsForRun(readModel, currentRun);
     if (
       stackResult._tag === "Success" &&
@@ -4658,7 +4780,7 @@ const make = Effect.gen(function* () {
     ) {
       yield* blockRun({
         sourceThreadId: input.sourceThreadId,
-        run: currentRun,
+        run: runWithBundleWorktrees,
         ticketId: input.ticketId,
         retryableStage: "app-dev-stack",
         haltStage: "app-review",
@@ -4670,13 +4792,14 @@ const make = Effect.gen(function* () {
     }
     const frontendUrl = stackResult._tag === "Success" ? stackResult.success.frontendUrl : null;
     if (frontendUrl === null) {
+      const omitsServices = Object.keys(appStackShape?.omitServices ?? {}).length > 0;
       yield* blockRun({
         sourceThreadId: input.sourceThreadId,
-        run: currentRun,
+        run: runWithBundleWorktrees,
         ticketId: input.ticketId,
         retryableStage: "app-dev-stack",
         haltStage: "app-review",
-        reasonMarkdown: `Ticket App Review cannot start because its App Stack did not provide a frontend URL${stackResult._tag === "Failure" ? `: ${errorDetail(stackResult.failure)}` : "."}`,
+        reasonMarkdown: `Ticket App Review cannot start because its App Stack did not provide a frontend URL${stackResult._tag === "Failure" ? `: ${errorDetail(stackResult.failure)}` : "."}${stackResult._tag === "Success" && omitsServices ? " The ticket's App Stack leaves services out; check that it keeps the frontend." : ""}`,
         updatedAt: input.createdAt,
         humanBlocked: true,
       });
@@ -4688,8 +4811,8 @@ const make = Effect.gen(function* () {
       `app-review-workflow-${controllerThreadId}`,
     );
     const claimedRun: OrchestrationImplementationRun = {
-      ...currentRun,
-      ticketStates: currentRun.ticketStates.map((candidate) =>
+      ...runWithBundleWorktrees,
+      ticketStates: runWithBundleWorktrees.ticketStates.map((candidate) =>
         candidate.ticketId === input.ticketId
           ? {
               ...candidate,
@@ -4741,7 +4864,7 @@ const make = Effect.gen(function* () {
       testPlatforms: resolveReviewTestPlatforms(configuredParts, input.ticketId),
       e2eCommands: ticket.appReviewCommands ?? [],
       briefMarkdown: ticket.appReviewPlanMarkdown,
-      supportingContextMarkdown: `Review only ticket ${input.ticketId}: ${ticket.title}. Treat its attached plan and acceptance criteria as authoritative.\n\n${workerValidationContext(state.workerResult)}\n\n${nativeVerificationEvidenceMarkdown(state.nativeVerification)}`,
+      supportingContextMarkdown: `Review only ticket ${input.ticketId}: ${ticket.title}. Treat its attached plan and acceptance criteria as authoritative.${appStackShape === null ? "" : `\n\nApp Stack: ${describeAppStackShape(resolveTicketAppStack(configuredParts, ticket))}`}\n\n${workerValidationContext(state.workerResult)}\n\n${nativeVerificationEvidenceMarkdown(state.nativeVerification)}`,
       previewTargets: [frontendUrl],
       appReviewScope: effectiveScope,
       cycleBudget: AppReviewWorkflowCycleBudget.make(
@@ -9958,14 +10081,53 @@ const make = Effect.gen(function* () {
         (candidate) => candidate.ticketId === input.ticketId,
       );
       if (orchestratorThread === null || state?.worktreePath == null) return;
+      // Resume keeps the ticket's shape; without it a bundled stack would come
+      // back standalone.
+      const sourceThreadId = findRunSourceThreadId({ readModel, run: input.run });
+      const sourceThread = sourceThreadId === null ? null : findThread(readModel, sourceThreadId);
+      const ticket =
+        (sourceThread === null ? undefined : ticketsById(sourceThread).get(input.ticketId)) ??
+        ticketsById(orchestratorThread).get(input.ticketId);
+      const settings = yield* serverSettingsService.getSettings.pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      const appStackShape =
+        ticket === undefined
+          ? null
+          : ticketAppStackRequest({
+              parts: resolveLayeredAppReviewStepParts({
+                threadOverrides: findWorkflowStepReviewParts(orchestratorThread, readModel.threads),
+                settingsOverrides: settings?.workflowStepReviewParts,
+                key: {
+                  workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+                  stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+                },
+              }),
+              ticket,
+              worktreePath: state.worktreePath,
+              run: input.run,
+            });
       const stackResult = yield* appStackManager
         .autoCreate({
           worktreePath: state.worktreePath,
           displayName: `Ticket ${input.ticketId}`,
           gitBranch: state.branch ?? input.run.orchestratorBranch,
           workflowId: orchestratorThread.workflowContext?.workflowId,
+          ...appStackShape,
         })
         .pipe(Effect.result);
+      const createdWorktrees =
+        stackResult._tag === "Success" ? (stackResult.success.createdWorktrees ?? []) : [];
+      if (createdWorktrees.length > 0 && sourceThreadId !== null) {
+        const latestRun =
+          findRunById(yield* projectionSnapshotQuery.getCommandReadModel(), input.run.id) ??
+          input.run;
+        yield* updateRun({
+          sourceThreadId,
+          run: withTicketBundleWorktrees(latestRun, input.ticketId, createdWorktrees),
+          createdAt: input.createdAt,
+        });
+      }
       const frontendUrl = stackResult._tag === "Success" ? stackResult.success.frontendUrl : null;
       if (frontendUrl === null) {
         yield* cancelTicketAppReview({

@@ -1,3 +1,9 @@
+import type {
+  AppStackBundleSelection,
+  AppStackOmittedServices,
+  AppStackShape,
+} from "@t3tools/contracts";
+
 const DNS_LABEL_MAX_LENGTH = 63;
 
 // The Stacks controller reports leased guests under these service names. They
@@ -173,4 +179,40 @@ export function appStackPreviewUrlForService(config: AppStackPreviewUrlConfig): 
     default:
       return null;
   }
+}
+
+/**
+ * What an auto-create request sends for a shape. `omitServices` is always set,
+ * so the controller treats the request as the exact shape and replaces a
+ * running stack that bundles or omits differently; `{}` means every service.
+ */
+export function appStackShapeRequest(shape: AppStackShape): {
+  readonly bundle?: AppStackBundleSelection;
+  readonly omitServices: AppStackOmittedServices;
+} {
+  const omitServices: Record<string, ReadonlyArray<string>> = {};
+  for (const [app, services] of Object.entries(shape.omitServices ?? {})) {
+    const unique = [...new Set(services)].sort();
+    if (unique.length > 0) omitServices[app] = unique;
+  }
+  const bundle = shape.bundle;
+  return bundle === "all" || (bundle !== undefined && bundle.length > 0)
+    ? { bundle, omitServices }
+    : { omitServices };
+}
+
+/** One line for a shape, shown to users and agents wherever a ticket's stack matters. */
+export function describeAppStackShape(shape: AppStackShape): string {
+  const apps =
+    shape.bundle === "all"
+      ? "Bundled with every platform app"
+      : shape.bundle !== undefined && shape.bundle.length > 0
+        ? `Bundled with ${shape.bundle.join(", ")}`
+        : "This app alone, against the standing dev apps";
+  const omitted = Object.entries(shape.omitServices ?? {}).flatMap(([app, services]) =>
+    services.map((service) => `${app}/${service}`),
+  );
+  return omitted.length === 0
+    ? `${apps}. Every service runs.`
+    : `${apps}. Leaves out ${omitted.join(", ")}.`;
 }

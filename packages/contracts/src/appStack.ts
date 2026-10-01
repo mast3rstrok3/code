@@ -29,6 +29,41 @@ export type AppStackStatus = typeof AppStackStatus.Type;
 export const AppStackVariant = Schema.Literals(["dev", "prod"]);
 export type AppStackVariant = typeof AppStackVariant.Type;
 
+/** A platform app, as a stack contract's `x-stacks-app-dev.app` names it. */
+export const AppStackAppName = TrimmedNonEmptyString.check(
+  Schema.isPattern(/^[a-z0-9][a-z0-9-]{0,62}$/),
+);
+export type AppStackAppName = typeof AppStackAppName.Type;
+
+/** The other apps a stack runs next to its own: every platform app, or a list. */
+export const AppStackBundleSelection = Schema.Union([
+  Schema.Literal("all"),
+  Schema.Array(AppStackAppName),
+]);
+export type AppStackBundleSelection = typeof AppStackBundleSelection.Type;
+
+/**
+ * Compose services each app leaves out, keyed by app. An omitted service is
+ * dropped like `x-stacks-exclude`: it does not start, and the services that
+ * depend on it start without it.
+ */
+export const AppStackOmittedServices = Schema.Record(
+  AppStackAppName,
+  Schema.Array(TrimmedNonEmptyString),
+);
+export type AppStackOmittedServices = typeof AppStackOmittedServices.Type;
+
+/**
+ * Which apps a stack bundles and which of their services it leaves out. An
+ * empty shape is the worktree's own app alone, with every service, wired to
+ * the standing dev copies of the other apps.
+ */
+export const AppStackShape = Schema.Struct({
+  bundle: Schema.optionalKey(AppStackBundleSelection),
+  omitServices: Schema.optionalKey(AppStackOmittedServices),
+});
+export type AppStackShape = typeof AppStackShape.Type;
+
 export const AppStackService = Schema.Struct({
   name: TrimmedNonEmptyString,
   status: TrimmedNonEmptyString,
@@ -96,6 +131,9 @@ export const AppStack = Schema.Struct({
   // and delete act on all of them.
   app: Schema.optionalKey(NullableTrimmedNonEmptyString),
   bundleId: Schema.optionalKey(NullableTrimmedNonEmptyString),
+  // The compose services this stack leaves out. Controllers that predate
+  // omitted services never send it.
+  omittedServices: Schema.optionalKey(Schema.NullOr(Schema.Array(TrimmedNonEmptyString))),
 });
 export type AppStack = typeof AppStack.Type;
 
@@ -175,7 +213,10 @@ export const AppStackAutoCreateInput = Schema.Struct({
   // Other platform apps to run from their same-branch worktrees next to this
   // one. Apps left out stay on their standing dev copies. Missing worktrees
   // are created before the bundle starts.
-  bundle: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  bundle: Schema.optional(AppStackBundleSelection),
+  // Set, even to {}, the request names the stack's exact shape: a running
+  // stack of the worktree that bundles or omits differently is replaced.
+  omitServices: Schema.optional(AppStackOmittedServices),
 });
 export type AppStackAutoCreateInput = typeof AppStackAutoCreateInput.Type;
 
@@ -195,6 +236,9 @@ export const AppStackBundlePlanMember = Schema.Struct({
   found: Schema.Boolean,
   // The branch a missing worktree starts from when the branch is not on origin.
   baseBranch: TrimmedNonEmptyString,
+  // The app's compose services, which a stack can leave out. Older
+  // controllers omit it.
+  services: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
 });
 export type AppStackBundlePlanMember = typeof AppStackBundlePlanMember.Type;
 
@@ -205,6 +249,12 @@ export const AppStackBundlePlan = Schema.Struct({
   members: Schema.Array(AppStackBundlePlanMember),
 });
 export type AppStackBundlePlan = typeof AppStackBundlePlan.Type;
+
+export const AppStackCreatedWorktree = Schema.Struct({
+  repositoryPath: TrimmedNonEmptyString,
+  worktreePath: TrimmedNonEmptyString,
+});
+export type AppStackCreatedWorktree = typeof AppStackCreatedWorktree.Type;
 
 export const AppStackAutoCreateResult = Schema.Struct({
   // Null only for reserved branches, which are served by a standing
@@ -220,6 +270,9 @@ export const AppStackAutoCreateResult = Schema.Struct({
   bundle: Schema.optionalKey(Schema.NullOr(Schema.Array(AppStack))),
   // Worktrees Code created for bundle members that had none on the branch.
   createdWorktreePaths: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+  // The same worktrees with the checkout each belongs to, which removing
+  // them needs.
+  createdWorktrees: Schema.optionalKey(Schema.Array(AppStackCreatedWorktree)),
 });
 export type AppStackAutoCreateResult = typeof AppStackAutoCreateResult.Type;
 

@@ -73,6 +73,13 @@ Each app runs in its own namespace. Stop, restart, and delete act on the whole b
 the same choice through the `bundle` argument of `app_stack_start`. Bundles need a Stacks
 controller and are not available in native mode.
 
+A stack can also leave compose services out, per app, for example Rudi without `codex-runner` or
+the Medical Repository without `seaweedfs`. A left-out service does not start, and services that
+depend on it start without it, so leave out only what the stack does not need. Agents pass
+`omitServices` to `app_stack_start`, and `app_stack_bundle_plan` lists every app with its services.
+A start that bundles or leaves out differently replaces the worktree's running stack. Restarts keep
+the bundle and the left-out services.
+
 ## Android and Windows checks
 
 On an environment connected to a Stacks controller, ask your thread's agent to test on

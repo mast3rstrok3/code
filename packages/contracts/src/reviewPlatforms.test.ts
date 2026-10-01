@@ -29,3 +29,33 @@ it("retains platform choices through the workflow settings command schema", () =
   });
   expect(command.type === "thread.workflow.step-review-parts.set" && command.parts).toEqual(parts);
 });
+
+it("retains ticket App Stacks through the command and rejects malformed app names", () => {
+  const parts = {
+    e2e: true,
+    browser: false,
+    ticketAppStacks: [
+      {
+        ticketId: "ticket-1",
+        appStack: { bundle: ["medical-repository"], omitServices: { rudi: ["codex-runner"] } },
+      },
+      { ticketId: "ticket-2", appStack: { bundle: "all" } },
+    ],
+  };
+  const command = {
+    type: "thread.workflow.step-review-parts.set",
+    commandId: "cmd-app-stacks",
+    threadId: "thread-root",
+    workflowPromptId: "implementation.browser-app-review.codex",
+    parts,
+    createdAt: "2026-10-01T00:00:00.000Z",
+  };
+  const decoded = decodeCommand(command);
+  expect(decoded.type === "thread.workflow.step-review-parts.set" && decoded.parts).toEqual(parts);
+  expect(() =>
+    decodeCommand({
+      ...command,
+      parts: { ...parts, ticketAppStacks: [{ ticketId: "t", appStack: { bundle: ["Cortex"] } }] },
+    }),
+  ).toThrow();
+});

@@ -1,4 +1,5 @@
 import { TicketTestPlatformPicker } from "./ReviewTestPlatformPicker";
+import { TicketAppStackPicker } from "./TicketAppStackPicker";
 import {
   FINAL_REGRESSION_MAX_CYCLES,
   isLegacyFinalRegressionFailure,
@@ -2022,13 +2023,24 @@ function TicketPhases(props: {
                   </div>
                   {open ? (
                     <div className="mb-2 ml-5 border-l border-border/70 pl-3">
-                      <div className="mb-3 rounded-md border border-border p-2">
+                      <div className="mb-3 space-y-3 rounded-md border border-border p-2">
                         <TicketTestPlatformPicker
                           ticketId={ticket.id}
                           overrides={props.stepReviewParts}
                           defaults={props.defaultStepReviewParts}
                           onSetStepReviewParts={props.onSetStepReviewParts}
                         />
+                        {ticket.appReviewEligible === true ? (
+                          <TicketAppStackPicker
+                            environmentId={props.environmentId}
+                            ticket={ticket}
+                            worktreePath={props.run.orchestratorWorktreePath}
+                            branch={props.run.orchestratorBranch}
+                            overrides={props.stepReviewParts}
+                            defaults={props.defaultStepReviewParts}
+                            onSetStepReviewParts={props.onSetStepReviewParts}
+                          />
+                        ) : null}
                       </div>
                       {state?.workerResult &&
                       (state.status !== "succeeded" || state.nativeVerification) ? (
@@ -2461,6 +2473,10 @@ function WorkflowGroupCard(props: {
     readonly title: string;
     readonly markdown: string;
   } | null>(null);
+  const openPlanningTicket =
+    openPlanningArtifact?.ticketId === undefined
+      ? undefined
+      : props.tickets.find((ticket) => ticket.id === openPlanningArtifact.ticketId);
   const phases = groupWorkflowStepsByPhase(steps);
   const toggleDisclosure = useCallback((id: string) => {
     setExpandedDisclosures((current) => ({ ...current, [id]: !(current[id] ?? false) }));
@@ -3308,13 +3324,24 @@ function WorkflowGroupCard(props: {
           </DialogHeader>
           <DialogPanel className="max-h-[70vh]">
             {openPlanningArtifact?.ticketId !== undefined ? (
-              <div className="mb-4 rounded-md border border-border p-3">
+              <div className="mb-4 space-y-3 rounded-md border border-border p-3">
                 <TicketTestPlatformPicker
                   ticketId={openPlanningArtifact.ticketId}
                   overrides={props.workflowRoot.workflowStepReviewParts}
                   defaults={props.defaultStepReviewParts}
                   onSetStepReviewParts={props.onSetStepReviewParts}
                 />
+                {openPlanningTicket?.appReviewEligible === true ? (
+                  <TicketAppStackPicker
+                    environmentId={props.workflowRoot.environmentId}
+                    ticket={openPlanningTicket}
+                    worktreePath={props.workflowRoot.worktreePath ?? null}
+                    branch={props.workflowRoot.branch ?? null}
+                    overrides={props.workflowRoot.workflowStepReviewParts}
+                    defaults={props.defaultStepReviewParts}
+                    onSetStepReviewParts={props.onSetStepReviewParts}
+                  />
+                ) : null}
               </div>
             ) : null}
             <ChatMarkdown text={openPlanningArtifact?.markdown ?? ""} cwd={undefined} />

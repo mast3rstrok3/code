@@ -3,7 +3,10 @@ import { expect, it } from "vite-plus/test";
 import {
   DEFAULT_APP_REVIEW_PARTS,
   resolveReviewTestPlatforms,
+  resolveTicketAppStack,
+  setTicketAppStack,
   setTicketTestPlatforms,
+  ticketAppStackSource,
   appReviewPartsForScope,
   appReviewScopeForParts,
   describeAppReviewParts,
@@ -124,4 +127,37 @@ it("keeps ticket platforms through settings resolution and restores the workflow
   ).toEqual(["web", "windows"]);
   expect(resolved.e2e).toBe(true);
   expect(resolved.browser).toBe(false);
+});
+
+it("runs the user's ticket App Stack over the planner's, and clears back to the plan", () => {
+  const planned = { id: "ticket-1", appStack: { bundle: ["medical-repository"] } };
+  const unplanned = { id: "ticket-2" };
+  expect(resolveTicketAppStack(DEFAULT_APP_REVIEW_PARTS, unplanned)).toEqual({});
+  expect(ticketAppStackSource(DEFAULT_APP_REVIEW_PARTS, unplanned)).toBe("default");
+  expect(resolveTicketAppStack(DEFAULT_APP_REVIEW_PARTS, planned)).toEqual({
+    bundle: ["medical-repository"],
+  });
+  expect(ticketAppStackSource(DEFAULT_APP_REVIEW_PARTS, planned)).toBe("plan");
+
+  const parts = setTicketAppStack(
+    setTicketTestPlatforms(DEFAULT_APP_REVIEW_PARTS, "ticket-1", ["web", "android"]),
+    "ticket-1",
+    { omitServices: { rudi: ["codex-runner"] } },
+  );
+  // The override travels through a saved entry like the platforms beside it.
+  const resolved = resolveLayeredAppReviewStepParts({
+    threadOverrides: setWorkflowStepReviewPartsOverride([], ticketKey, parts),
+    settingsOverrides: [],
+    key: ticketKey,
+  });
+  expect(resolveTicketAppStack(resolved, planned)).toEqual({
+    omitServices: { rudi: ["codex-runner"] },
+  });
+  expect(ticketAppStackSource(resolved, planned)).toBe("override");
+  expect(resolveTicketAppStack(resolved, unplanned)).toEqual({});
+
+  const cleared = setTicketAppStack(resolved, "ticket-1", null);
+  expect(resolveTicketAppStack(cleared, planned)).toEqual({ bundle: ["medical-repository"] });
+  // Clearing the stack keeps the ticket's platforms.
+  expect(resolveReviewTestPlatforms(cleared, "ticket-1")).toEqual(["web", "android"]);
 });

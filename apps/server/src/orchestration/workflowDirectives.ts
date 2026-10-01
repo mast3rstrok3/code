@@ -1,11 +1,14 @@
 import type {
   AppReviewWorkflowFixValidation,
+  AppStackShape as AppStackShapeType,
   OrchestrationImplementationValidationResult,
   OrchestrationImplementationWorkerResult,
   OrchestrationPlanningFileChange,
   OrchestrationThreadWorkflowRole,
 } from "@t3tools/contracts";
-import { ThreadId } from "@t3tools/contracts";
+import { AppStackShape, ThreadId } from "@t3tools/contracts";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 import { validatePlanningTicketFileChanges } from "./planningTicketFiles.ts";
 
@@ -55,6 +58,7 @@ export type WorkflowDirective =
         readonly appReviewScope?: "e2e" | "browser" | "both";
         readonly appReviewCommands?: ReadonlyArray<string>;
         readonly appReviewPlanMarkdown: string | null;
+        readonly appStack?: AppStackShapeType;
       }>;
     }
   | {
@@ -82,6 +86,7 @@ export type WorkflowDirective =
             readonly appReviewScope?: "e2e" | "browser" | "both";
             readonly appReviewCommands?: ReadonlyArray<string>;
             readonly appReviewPlanMarkdown?: string | null;
+            readonly appStack?: AppStackShapeType | null;
           }
         | {
             readonly type: "create";
@@ -94,6 +99,7 @@ export type WorkflowDirective =
             readonly appReviewScope?: "e2e" | "browser" | "both";
             readonly appReviewCommands?: ReadonlyArray<string>;
             readonly appReviewPlanMarkdown: string | null;
+            readonly appStack?: AppStackShapeType;
             readonly replacesPlanningTicketIds: ReadonlyArray<string>;
           }
         | { readonly type: "delete"; readonly ticketId: string }
@@ -506,6 +512,32 @@ function isAppReviewScope(value: unknown): value is ParsedAppReviewScope {
   return APP_REVIEW_SCOPES.includes(value as ParsedAppReviewScope);
 }
 
+const decodeAppStackShape = Schema.decodeUnknownOption(AppStackShape);
+
+/**
+ * A ticket's App Stack: `bundle` is "all" or a list of app names, and
+ * `omitServices` maps an app name to the compose services it leaves out.
+ * Unknown keys are rejected so a misspelled field cannot silently drop the
+ * planner's intent. Null reads as absent.
+ */
+function parseAppStackShape(value: unknown, field: string): AppStackShapeType | undefined | string {
+  if (value === undefined || value === null) return undefined;
+  const record = asRecord(value);
+  const unknownKey =
+    record === null
+      ? undefined
+      : Object.keys(record).find((key) => key !== "bundle" && key !== "omitServices");
+  const shape =
+    record === null || unknownKey !== undefined ? Option.none() : decodeAppStackShape(value);
+  return Option.getOrElse(
+    shape,
+    () =>
+      `${field} must be { bundle?: "all" | app names, omitServices?: { app: service names } } with lowercase app names${
+        unknownKey === undefined ? "" : `; unknown key ${unknownKey}`
+      }.`,
+  );
+}
+
 function parsePlanningTickets(value: unknown):
   | ReadonlyArray<{
       readonly key: string;
@@ -517,6 +549,7 @@ function parsePlanningTickets(value: unknown):
       readonly appReviewScope?: ParsedAppReviewScope;
       readonly appReviewCommands?: ReadonlyArray<string>;
       readonly appReviewPlanMarkdown: string | null;
+      readonly appStack?: AppStackShapeType;
     }>
   | string {
   if (!Array.isArray(value)) {
@@ -576,6 +609,8 @@ function parsePlanningTickets(value: unknown):
     if (appReviewScope !== undefined && !appReviewEligible) {
       return "planning-tickets-artifact appReviewScope requires appReviewEligible.";
     }
+    const appStack = parseAppStackShape(record["appStack"], "planning-tickets-artifact appStack");
+    if (typeof appStack === "string") return appStack;
     tickets.push({
       key,
       title,
@@ -586,6 +621,7 @@ function parsePlanningTickets(value: unknown):
       ...(appReviewScope === undefined ? {} : { appReviewScope }),
       ...(appReviewCommands === undefined ? {} : { appReviewCommands }),
       appReviewPlanMarkdown,
+      ...(appStack === undefined ? {} : { appStack }),
     });
   }
   return tickets;
@@ -687,6 +723,8 @@ function parsePlanningTicketEdits(
         return "ticket edit appReviewScope must be 'e2e', 'browser', or 'both'.";
       if (appReviewScope !== undefined && !appReviewEligible)
         return "ticket edit appReviewScope requires appReviewEligible.";
+      const appStack = parseAppStackShape(record["appStack"], "ticket edit appStack");
+      if (typeof appStack === "string") return appStack;
       edits.push({
         type,
         key,
@@ -699,6 +737,7 @@ function parsePlanningTicketEdits(
         ...(appReviewScope === undefined ? {} : { appReviewScope }),
         ...(appReviewCommands === undefined ? {} : { appReviewCommands }),
         appReviewPlanMarkdown,
+        ...(appStack === undefined ? {} : { appStack }),
       });
       continue;
     }
@@ -737,6 +776,12 @@ function parsePlanningTicketEdits(
       const appReviewScope = record["appReviewScope"];
       if (appReviewScope !== undefined && !isAppReviewScope(appReviewScope))
         return "ticket edit appReviewScope must be 'e2e', 'browser', or 'both'.";
+      // An update's null clears the ticket's App Stack; absent leaves it.
+      const appStack =
+        record["appStack"] === null
+          ? null
+          : parseAppStackShape(record["appStack"], "ticket edit appStack");
+      if (typeof appStack === "string") return appStack;
       edits.push({
         type,
         ticketId,
@@ -748,6 +793,7 @@ function parsePlanningTicketEdits(
         ...(appReviewScope === undefined ? {} : { appReviewScope }),
         ...(appReviewCommands === undefined ? {} : { appReviewCommands }),
         ...(appReviewPlanMarkdown === undefined ? {} : { appReviewPlanMarkdown }),
+        ...(appStack === undefined ? {} : { appStack }),
       });
       continue;
     }

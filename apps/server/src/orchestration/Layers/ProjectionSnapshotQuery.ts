@@ -9,6 +9,7 @@ import {
   DEFAULT_WORKSPACE_USER_ID,
   DEFAULT_WORKSPACE_USER_VIEW,
   AppReviewDocument,
+  AppStackShape,
   AppReviewEvidence,
   AppReviewWorkflowRun,
   AppReviewSourceProposedPlan,
@@ -178,6 +179,7 @@ const ProjectionThreadSpecDbRowSchema = ProjectionThreadSpec.mapFields(
 const ProjectionThreadPlanningTicketDbRowSchema = ProjectionThreadPlanningTicket.mapFields(
   Struct.assign({
     appReviewCommands: Schema.fromJsonString(Schema.Array(Schema.String)),
+    appStack: Schema.optionalKey(Schema.NullOr(Schema.fromJsonString(AppStackShape))),
     plannedFileChanges: Schema.fromJsonString(Schema.Array(OrchestrationPlanningFileChange)),
     dependencies: Schema.fromJsonString(Schema.Array(OrchestrationPlanningTicketDependency)),
   }),
@@ -1450,6 +1452,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           app_review_scope AS "appReviewScope",
           app_review_plan_markdown AS "appReviewPlanMarkdown",
         app_review_commands_json AS "appReviewCommands",
+        app_stack_json AS "appStack",
           status,
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -2273,6 +2276,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           app_review_scope AS "appReviewScope",
           app_review_plan_markdown AS "appReviewPlanMarkdown",
         app_review_commands_json AS "appReviewCommands",
+        app_stack_json AS "appStack",
           status,
           created_at AS "createdAt",
           updated_at AS "updatedAt"

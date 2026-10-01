@@ -3,6 +3,10 @@ import { expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
   AppStackError,
+  type AppStackBundleSelection,
+  type AppStackCreatedWorktree,
+  type AppStackOmittedServices,
+  type AppStackShape,
   CommandId,
   DEFAULT_WORKSPACE_USER_ID,
   AppReviewId,
@@ -682,6 +686,8 @@ interface ImplementationCalls {
       readonly worktreePath: string;
       readonly displayName: string;
       readonly workflowId?: string | null | undefined;
+      readonly bundle?: AppStackBundleSelection | undefined;
+      readonly omitServices?: AppStackOmittedServices | undefined;
     }>
   >;
   readonly workflowTeardownInputs: Ref.Ref<ReadonlyArray<{ readonly workflowId: string }>>;
@@ -785,6 +791,11 @@ function completeValidations(completedAt = "2026-01-01T00:00:06.000Z") {
   }));
 }
 
+const bundleWorktree: AppStackCreatedWorktree = {
+  repositoryPath: "/repos/medical-repository",
+  worktreePath: "/repos/medical-repository.worktrees/ticket-1",
+};
+
 function planningTicket(key: string, dependencyKeys: ReadonlyArray<string> = []) {
   return {
     key,
@@ -825,6 +836,7 @@ function makeTestLayer(
   projectFile?: T3ProjectFile,
   failIntegratedSetup = false,
   failDeleteStackAttempts = 0,
+  autoCreateCreatedWorktrees: ReadonlyArray<AppStackCreatedWorktree> = [],
 ) {
   const coreLayer = Layer.mergeAll(
     OrchestrationEngineLive.pipe(
@@ -1342,6 +1354,9 @@ function makeTestLayer(
                       created: true,
                       frontendUrl,
                       frontendServiceName: frontendUrl === null ? null : "frontend",
+                      ...(autoCreateCreatedWorktrees.length === 0
+                        ? {}
+                        : { createdWorktrees: autoCreateCreatedWorktrees }),
                       stack: {
                         id: "stack-1",
                         uuid: "stack-uuid-1",
@@ -1411,6 +1426,8 @@ function withSystem<A, E>(
     readonly projectFile?: T3ProjectFile;
     readonly failIntegratedSetup?: boolean;
     readonly failDeleteStackAttempts?: number;
+    /** Worktrees the controller's bundle plan made Code create on each auto-create. */
+    readonly autoCreateCreatedWorktrees?: ReadonlyArray<AppStackCreatedWorktree>;
   },
 ) {
   return Effect.gen(function* () {
@@ -1536,6 +1553,7 @@ function withSystem<A, E>(
           options?.projectFile,
           options?.failIntegratedSetup,
           options?.failDeleteStackAttempts,
+          options?.autoCreateCreatedWorktrees,
         ),
       ),
     );
@@ -1559,6 +1577,7 @@ function seedPlanning(
       readonly dependencyKeys: ReadonlyArray<string>;
       readonly appReviewEligible?: boolean;
       readonly appReviewPlanMarkdown?: string;
+      readonly appStack?: AppStackShape;
     }>;
   },
 ) {
@@ -1802,7 +1821,7 @@ function appendWorkerResult(
 }
 
 /** A run whose one ticket has passed its worker and is waiting on a live nested App Review. */
-function launchTicketAppReview(system: ImplementationSystem) {
+function launchTicketAppReview(system: ImplementationSystem, appStack?: AppStackShape) {
   return Effect.gen(function* () {
     const { run, ticket } = yield* launchRun(system, {
       appReviewStrategy: "nested-workflow",
@@ -1811,6 +1830,7 @@ function launchTicketAppReview(system: ImplementationSystem) {
           ...planningTicket("TICKET-1"),
           appReviewEligible: true,
           appReviewPlanMarkdown: "Open the page and check the header.",
+          ...(appStack === undefined ? {} : { appStack }),
         },
       ],
     });
@@ -4998,6 +5018,46 @@ describe("ImplementationWorkflowReactor", () => {
         expect(
           completed?.ticketStates.find((state) => state.ticketId === dependent.id)?.status,
         ).toBe("succeeded");
+      }),
+    ),
+  );
+
+  it.effect("removes the worktrees a ticket's bundled App Stack created once it succeeds", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+        yield* seedTicketStack(system, { run, ticketId: ticket.id });
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        const succeeded = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        );
+        if (succeeded === undefined) throw new Error("Implementation run missing.");
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("record-bundle-worktree"),
+          threadId: sourceThreadId,
+          run: {
+            ...succeeded,
+            ticketStates: succeeded.ticketStates.map((state) =>
+              state.ticketId === ticket.id
+                ? { ...state, bundleWorktrees: [bundleWorktree] }
+                : state,
+            ),
+          },
+          createdAt: now,
+        });
+        yield* system.reactor.drain;
+
+        yield* system.reactor.recoverIncompleteStages();
+        expect(yield* Ref.get(system.removeWorktreeInputs)).toContainEqual({
+          cwd: bundleWorktree.repositoryPath,
+          path: bundleWorktree.worktreePath,
+        });
+        expect(
+          (yield* system.query.getSnapshot()).implementationRuns
+            .find((entry) => entry.id === run.id)
+            ?.ticketStates.find((entry) => entry.ticketId === ticket.id)?.bundleWorktrees,
+        ).toEqual([]);
       }),
     ),
   );
@@ -11509,6 +11569,61 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("keeps a ticket's App Stack shape when its review resumes after a repair", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const appStack = {
+          bundle: ["medical-repository"],
+          omitServices: { rudi: ["codex-runner"] },
+        };
+        const { run, ticket, nestedRun } = yield* launchTicketAppReview(system, appStack);
+        const head = (yield* system.query.getSnapshot()).implementationRuns
+          .find((entry) => entry.id === run.id)
+          ?.ticketStates.find((state) => state.ticketId === ticket.id)?.workerResult?.commitSha;
+        if (head === undefined) throw new Error("Worker commit missing.");
+        const repairedAt = "2026-01-01T00:05:00.000Z";
+        const cycle = failedReviewRecoveryState(nestedRun, repairedAt, "repaired").cycle;
+        // A successful repair parks the review until its ticket stack is ensured again.
+        yield* system.engine.dispatch({
+          type: "thread.app-review-workflow.update",
+          commandId: commandId("park-repaired-ticket-review"),
+          threadId: nestedRun.controllerThreadId,
+          run: {
+            ...nestedRun,
+            status: "running",
+            activePhase: null,
+            activeThreadId: null,
+            cycles: [
+              {
+                ...cycle,
+                status: "completed",
+                failure: null,
+                fixResult: {
+                  runId: nestedRun.id,
+                  planId: "repair-plan",
+                  status: "succeeded",
+                  commitSha: head,
+                  notesMarkdown: "Repaired the header.",
+                  validations: [],
+                },
+              },
+            ],
+            updatedAt: repairedAt,
+          },
+          createdAt: repairedAt,
+        });
+        yield* system.reactor.drain;
+
+        const inputs = yield* Ref.get(system.autoCreateInputs);
+        expect(inputs).toHaveLength(2);
+        expect(inputs.map((input) => [input.bundle, input.omitServices])).toEqual([
+          [appStack.bundle, appStack.omitServices],
+          [appStack.bundle, appStack.omitServices],
+        ]);
+      }),
+    ),
+  );
+
   it.effect("collects shared ticket failures once for integrated validation", () =>
     withSystem((system) =>
       Effect.gen(function* () {
@@ -14105,6 +14220,91 @@ it.effect("launches ticket App Review with the user's selected test platforms", 
       const snapshot = yield* system.query.getSnapshot();
       expect(snapshot.appReviewWorkflowRuns?.[0]?.testPlatforms).toEqual(["web", "android", "ios"]);
       expect(snapshot.appReviewWorkflowRuns?.[0]?.appReviewScope).toBe("e2e");
+      // A ticket that names no App Stack still states its exact shape: its own
+      // app alone, so a stack left bundled by an earlier choice is replaced.
+      const stackInput = (yield* Ref.get(system.autoCreateInputs)).at(-1);
+      expect(stackInput?.omitServices).toEqual({});
+      expect(stackInput?.bundle).toBeUndefined();
+    }),
+  ),
+);
+
+it.effect("starts a ticket's App Stack in the shape its plan names", () =>
+  withSystem(
+    (system) =>
+      Effect.gen(function* () {
+        const { run, ticket } = yield* launchRun(system, {
+          appReviewStrategy: "nested-workflow",
+          tickets: [
+            {
+              ...planningTicket("TICKET-1"),
+              appReviewEligible: true,
+              appReviewPlanMarkdown: "Search a study the bundled Medical Repository serves.",
+              appStack: {
+                bundle: ["medical-repository"],
+                omitServices: { "medical-repository": ["seaweedfs"] },
+              },
+            },
+          ],
+        });
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          completeTicketReview: false,
+        });
+
+        const stackInput = (yield* Ref.get(system.autoCreateInputs)).at(-1);
+        expect(stackInput?.bundle).toEqual(["medical-repository"]);
+        expect(stackInput?.omitServices).toEqual({ "medical-repository": ["seaweedfs"] });
+        const snapshot = yield* system.query.getSnapshot();
+        expect(snapshot.appReviewWorkflowRuns?.[0]?.supportingContextMarkdown).toContain(
+          "App Stack: Bundled with medical-repository. Leaves out medical-repository/seaweedfs.",
+        );
+        // The worktree created for the bundled app is the ticket's to clean up.
+        expect(
+          snapshot.implementationRuns
+            .find((entry) => entry.id === run.id)
+            ?.ticketStates.find((entry) => entry.ticketId === ticket.id)?.bundleWorktrees,
+        ).toEqual([bundleWorktree]);
+      }),
+    { autoCreateCreatedWorktrees: [bundleWorktree] },
+  ),
+);
+
+it.effect("starts a ticket's App Stack in the user's shape over the planner's", () =>
+  withSystem((system) =>
+    Effect.gen(function* () {
+      const { run, ticket } = yield* launchRun(system, {
+        appReviewStrategy: "nested-workflow",
+        tickets: [
+          {
+            ...planningTicket("TICKET-1"),
+            appReviewEligible: true,
+            appReviewPlanMarkdown: "Verify checkout.",
+            appStack: { bundle: "all" },
+          },
+        ],
+      });
+      yield* system.engine.dispatch({
+        type: "thread.workflow.step-review-parts.set",
+        commandId: commandId("ticket-app-stack"),
+        threadId: sourceThreadId,
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+        stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+        parts: {
+          e2e: true,
+          browser: false,
+          ticketAppStacks: [
+            { ticketId: ticket.id, appStack: { omitServices: { rudi: ["codex-runner"] } } },
+          ],
+        },
+        createdAt: now,
+      });
+      yield* appendWorkerResult(system, { run, status: "succeeded", completeTicketReview: false });
+
+      const stackInput = (yield* Ref.get(system.autoCreateInputs)).at(-1);
+      expect(stackInput?.bundle).toBeUndefined();
+      expect(stackInput?.omitServices).toEqual({ rudi: ["codex-runner"] });
     }),
   ),
 );

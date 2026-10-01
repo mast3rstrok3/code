@@ -48,6 +48,7 @@ import { filesystemEnvironment } from "~/state/filesystem";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
+import { AppStackBundleAppChecklist } from "./AppStackBundleAppChecklist";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
@@ -1349,40 +1350,24 @@ export function AppStackPanel(props: AppStackPanelProps) {
                       Checked apps run from their worktrees on this branch and reach each other.
                       Unchecked apps stay on their standing dev copies.
                     </div>
-                    {bundlePlan.members.map((member) => {
-                      const own = member.app === bundlePlan.app;
-                      const selected = own || bundleSelection.has(member.app);
-                      return (
-                        <label
-                          key={member.app}
-                          className="grid cursor-pointer grid-cols-[auto_minmax(0,1fr)] items-start gap-2 rounded-md px-1 py-1 text-xs hover:bg-accent/50"
-                        >
-                          <Checkbox
-                            checked={selected}
-                            disabled={own}
-                            onCheckedChange={(checked) =>
-                              setBundleSelection((current) => {
-                                const next = new Set(current);
-                                if (checked) next.add(member.app);
-                                else next.delete(member.app);
-                                return next;
-                              })
-                            }
-                            className="mt-0.5"
-                          />
-                          <span className="min-w-0">
-                            <span className="block font-medium">{member.app}</span>
-                            <span className="block truncate text-muted-foreground">
-                              {appStackBundleMemberDescription(member, {
-                                own,
-                                selected,
-                                branch: bundlePlan.branch,
-                              })}
-                            </span>
-                          </span>
-                        </label>
-                      );
-                    })}
+                    <AppStackBundleAppChecklist
+                      plan={bundlePlan}
+                      selected={bundleSelection}
+                      onToggle={(app, checked) =>
+                        setBundleSelection((current) => {
+                          const next = new Set(current);
+                          if (checked) next.add(app);
+                          else next.delete(app);
+                          return next;
+                        })
+                      }
+                      describe={(member, state) =>
+                        appStackBundleMemberDescription(member, {
+                          ...state,
+                          branch: bundlePlan.branch,
+                        })
+                      }
+                    />
                   </div>
                 ) : null}
                 <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">

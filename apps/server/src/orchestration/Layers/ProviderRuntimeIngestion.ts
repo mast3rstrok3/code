@@ -2572,6 +2572,7 @@ const make = Effect.gen(function* () {
                 ? {}
                 : { appReviewCommands: ticket.appReviewCommands }),
               appReviewPlanMarkdown: ticket.appReviewPlanMarkdown,
+              ...(ticket.appStack === undefined ? {} : { appStack: ticket.appStack }),
             })),
             createdAt: input.createdAt,
           });
@@ -2653,6 +2654,7 @@ const make = Effect.gen(function* () {
                     ...(edit.appReviewPlanMarkdown === undefined
                       ? {}
                       : { appReviewPlanMarkdown: edit.appReviewPlanMarkdown }),
+                    ...(edit.appStack === undefined ? {} : { appStack: edit.appStack }),
                   };
                 case "create":
                   return {

@@ -1429,6 +1429,10 @@ describe("ProductWorkflowReactor", () => {
               type: "update",
               ticketId,
               bodyMarkdown: "Add a vertical checkout slice with explicit acceptance criteria.",
+              appStack: {
+                bundle: ["medical-repository"],
+                omitServices: { rudi: ["codex-runner"] },
+              },
             },
           ],
           passed: true,
@@ -1450,6 +1454,10 @@ describe("ProductWorkflowReactor", () => {
         expect(workflow?.tickets[0]?.plannedFileChanges).toEqual([
           { path: "src/checkout.ts", action: "update" },
         ]);
+        expect(workflow?.tickets[0]?.appStack).toEqual({
+          bundle: ["medical-repository"],
+          omitServices: { rudi: ["codex-runner"] },
+        });
         expect(workflow?.stage).toBe("completed");
         expect(workflow?.activeReview).toBeNull();
         expect(workflow?.reviewCycles).toHaveLength(1);

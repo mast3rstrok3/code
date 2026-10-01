@@ -569,6 +569,71 @@ ${JSON.stringify({ type: "planning-tickets-artifact", specId: "spec-1", tickets:
     }
   });
 
+  it("parses a ticket's App Stack and lets a reviewer update or clear it", () => {
+    const artifact = (appStack: unknown) => `\`\`\`json
+${JSON.stringify({
+  type: "planning-tickets-artifact",
+  specId: "spec-1",
+  tickets: [
+    {
+      key: "ticket-1",
+      title: "Search bundled studies",
+      bodyMarkdown: "Search studies from the bundled Medical Repository.",
+      plannedFileChanges: [{ path: "src/studies.ts", action: "update" }],
+      appReviewEligible: true,
+      appReviewCommands: ["pnpm exec playwright test studies.spec.ts"],
+      appReviewPlanMarkdown: "Search a study the bundled Medical Repository serves.",
+      appStack,
+    },
+  ],
+})}
+\`\`\``;
+    const appStack = {
+      bundle: ["medical-repository"],
+      omitServices: { rudi: ["codex-runner"] },
+    };
+    const parsed = parseWorkflowDirectiveFromMarkdown(artifact(appStack));
+    NodeAssert.equal(parsed.kind, "parsed");
+    if (parsed.kind === "parsed" && parsed.directive.type === "planning-tickets-artifact") {
+      NodeAssert.deepEqual(parsed.directive.tickets[0]?.appStack, appStack);
+    }
+    const all = parseWorkflowDirectiveFromMarkdown(artifact({ bundle: "all" }));
+    if (all.kind === "parsed" && all.directive.type === "planning-tickets-artifact") {
+      NodeAssert.deepEqual(all.directive.tickets[0]?.appStack, { bundle: "all" });
+    }
+    const absent = parseWorkflowDirectiveFromMarkdown(artifact(null));
+    if (absent.kind === "parsed" && absent.directive.type === "planning-tickets-artifact") {
+      NodeAssert.equal("appStack" in (absent.directive.tickets[0] ?? {}), false);
+    }
+    for (const invalid of [
+      { bundle: ["Medical Repository"] },
+      { bundle: "some" },
+      { omitServices: { rudi: "codex-runner" } },
+      { omittedServices: { rudi: ["codex-runner"] } },
+    ]) {
+      NodeAssert.equal(parseWorkflowDirectiveFromMarkdown(artifact(invalid)).kind, "error");
+    }
+
+    const edits = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+${JSON.stringify({
+  type: "planning-reviewer-verdict",
+  cycleNumber: 1,
+  passed: false,
+  ticketEdits: [
+    { type: "update", ticketId: "planning-ticket-1", appStack: { bundle: ["cortex"] } },
+    { type: "update", ticketId: "planning-ticket-2", appStack: null },
+  ],
+})}
+\`\`\``);
+    NodeAssert.equal(edits.kind, "parsed");
+    if (edits.kind === "parsed" && edits.directive.type === "planning-reviewer-verdict") {
+      NodeAssert.deepEqual(
+        edits.directive.ticketEdits.map((edit) => ("appStack" in edit ? edit.appStack : "absent")),
+        [{ bundle: ["cortex"] }, null],
+      );
+    }
+  });
+
   it("parses ticket-scoped Code Review results", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 {

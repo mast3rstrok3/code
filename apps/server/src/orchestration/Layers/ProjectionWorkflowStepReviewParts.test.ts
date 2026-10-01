@@ -87,6 +87,12 @@ layer("workflow step review parts projection", (it) => {
         browser: true,
         testPlatforms: ["web", "windows", "android"] as const,
         ticketTestPlatforms: [{ ticketId: "ticket-1", platforms: ["ios", "macos"] as const }],
+        ticketAppStacks: [
+          {
+            ticketId: "ticket-1",
+            appStack: { bundle: ["medical-repository"], omitServices: { rudi: ["codex-runner"] } },
+          },
+        ],
       };
       yield* engine.dispatch({
         type: "thread.workflow.step-review-parts.set",

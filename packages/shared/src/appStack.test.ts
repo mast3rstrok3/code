@@ -3,6 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   appStackComposePathForVariant,
   appStackServiceBlocksReadiness,
+  appStackShapeRequest,
+  describeAppStackShape,
   appStackPreviewUrlForService,
   appStackVariantForComposePath,
   appStackVariantForNamespace,
@@ -166,5 +168,40 @@ describe("app stack variants", () => {
     expect(appStackVariantForNamespace("hero-prod")).toBe("prod");
     expect(appStackVariantForNamespace("hero-dev")).toBe("dev");
     expect(appStackVariantForNamespace("rudi")).toBe("dev");
+  });
+});
+
+describe("App Stack shapes", () => {
+  it("always states the omissions, so an empty shape replaces a bundled stack", () => {
+    expect(appStackShapeRequest({})).toEqual({ omitServices: {} });
+    expect(appStackShapeRequest({ bundle: [] })).toEqual({ omitServices: {} });
+    expect(appStackShapeRequest({ bundle: "all" })).toEqual({ bundle: "all", omitServices: {} });
+    expect(
+      appStackShapeRequest({
+        bundle: ["medical-repository"],
+        omitServices: {
+          rudi: ["python-sandbox", "codex-runner", "codex-runner"],
+          cortex: [],
+        },
+      }),
+    ).toEqual({
+      bundle: ["medical-repository"],
+      omitServices: { rudi: ["codex-runner", "python-sandbox"] },
+    });
+  });
+
+  it("describes the apps and the left-out services in one line", () => {
+    expect(describeAppStackShape({})).toBe(
+      "This app alone, against the standing dev apps. Every service runs.",
+    );
+    expect(
+      describeAppStackShape({
+        bundle: ["cortex", "medical-repository"],
+        omitServices: { "medical-repository": ["seaweedfs"] },
+      }),
+    ).toBe("Bundled with cortex, medical-repository. Leaves out medical-repository/seaweedfs.");
+    expect(describeAppStackShape({ bundle: "all" })).toBe(
+      "Bundled with every platform app. Every service runs.",
+    );
   });
 });
