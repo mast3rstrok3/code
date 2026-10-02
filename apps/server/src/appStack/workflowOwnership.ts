@@ -45,8 +45,16 @@ export function appStackWorkflowConflicts(
     };
     for (const workflowId of workflowIds) {
       addExpected(workflowId, run.orchestratorWorktreePath, "shared");
+      // The shared stack bundles the run's other repositories from their worktrees.
+      for (const repository of run.repositories ?? []) {
+        addExpected(workflowId, repository.worktreePath, "shared");
+      }
       for (const state of run.ticketStates ?? []) {
         if (state.worktreePath !== null) addExpected(workflowId, state.worktreePath, "ticket");
+        // A ticket stack bundles apps from worktrees Code made for it in other repositories.
+        for (const worktree of state.bundleWorktrees ?? []) {
+          addExpected(workflowId, worktree.worktreePath, "ticket");
+        }
       }
     }
   }

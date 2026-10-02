@@ -28,6 +28,7 @@ import {
   type OrchestrationReadModel,
   PLANNING_REVIEW_MAX_CYCLES,
   type PlanningReviewerTicketEdit,
+  type ProjectId,
   ThreadId,
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
   WorkflowId,
@@ -73,6 +74,11 @@ import {
 import { WORKFLOW_PROMPT_IDS } from "../provider/WorkflowPromptRegistry.ts";
 import { appReviewPhaseStepPin, rerunTargetStepPin } from "./workflowSubagents.ts";
 import { validatePlanningTicketFileChanges } from "./planningTicketFiles.ts";
+import {
+  resolveTicketProjects,
+  ticketRepositoryChoices,
+  ticketRepositoryPromptLines,
+} from "./ticketRepositories.ts";
 import {
   PLANNING_REVIEWER_TICKET_EDIT_RULES,
   planningReviewerVerdictExampleJson,
@@ -209,6 +215,20 @@ function validatePlanningTicketGraph(
   return null;
 }
 
+/** Checks the repositories tickets name; passes an earlier error through. */
+function resolvePlanningTicketProjects(
+  readModel: OrchestrationReadModel,
+  workflowProjectId: ProjectId,
+  tickets: OrchestrationPlanningTicket[] | string,
+): OrchestrationPlanningTicket[] | string {
+  if (typeof tickets === "string") return tickets;
+  return resolveTicketProjects({
+    tickets,
+    workflowProjectId,
+    choices: ticketRepositoryChoices(readModel.projects, workflowProjectId),
+  });
+}
+
 function buildPlanningSpecFromArtifact(input: {
   readonly specId: string;
   readonly threadId: ThreadId;
@@ -281,6 +301,7 @@ function buildPlanningTicketsFromArtifact(input: {
         : { appReviewCommands: ticket.appReviewCommands }),
       appReviewPlanMarkdown: ticket.appReviewPlanMarkdown ?? null,
       ...(ticket.appStack === undefined ? {} : { appStack: ticket.appStack }),
+      ...(ticket.projectId === undefined ? {} : { projectId: ticket.projectId }),
       status: "open",
       createdAt: input.command.createdAt,
       updatedAt: input.command.createdAt,
@@ -372,6 +393,7 @@ function applyPlanningReviewerEdits(input: {
           : { appReviewCommands: edit.appReviewCommands }),
         appReviewPlanMarkdown: edit.appReviewPlanMarkdown,
         ...(edit.appStack === undefined ? {} : { appStack: edit.appStack }),
+        ...(edit.projectId === undefined ? {} : { projectId: edit.projectId }),
         status: "open",
         createdAt: input.updatedAt,
         updatedAt: input.updatedAt,
@@ -411,12 +433,20 @@ function applyPlanningReviewerEdits(input: {
           );
         }),
     );
-    // Null clears the ticket's App Stack back to its own app alone.
-    const { appStack: currentAppStack, ...ticketWithoutAppStack } = ticket;
+    // Null clears the ticket's App Stack back to its own app alone, and its
+    // project back to the workflow's own.
+    const {
+      appStack: currentAppStack,
+      projectId: currentProjectId,
+      ...ticketWithoutOptionalFields
+    } = ticket;
     const appStack = edit.appStack === undefined ? currentAppStack : (edit.appStack ?? undefined);
+    const projectId =
+      edit.projectId === undefined ? currentProjectId : (edit.projectId ?? undefined);
     tickets.set(edit.ticketId, {
-      ...ticketWithoutAppStack,
+      ...ticketWithoutOptionalFields,
       ...(appStack === undefined ? {} : { appStack }),
+      ...(projectId === undefined ? {} : { projectId }),
       ...(edit.title === undefined ? {} : { title: edit.title }),
       ...(edit.bodyMarkdown === undefined ? {} : { bodyMarkdown: edit.bodyMarkdown }),
       ...(edit.plannedFileChanges === undefined
@@ -516,7 +546,10 @@ function buildProductContextStagePrompt(
   ].join("\n");
 }
 
-function buildPlanningTicketsStagePrompt(spec: OrchestrationPlanningSpec): string {
+function buildPlanningTicketsStagePrompt(
+  spec: OrchestrationPlanningSpec,
+  repositoryLines: ReadonlyArray<string>,
+): string {
   return [
     "Decompose this Spec into implementation-ready planning tickets.",
     "",
@@ -527,6 +560,7 @@ function buildPlanningTicketsStagePrompt(spec: OrchestrationPlanningSpec): strin
     "",
     "Inspect the repository before naming planned files. Every ticket must include at least one exact repository-relative POSIX file path with action create, update, or delete. Do not use absolute paths, directories, guesses, or glob patterns. Represent renames as delete plus create.",
     "",
+    ...(repositoryLines.length === 0 ? [] : [...repositoryLines, ""]),
     'A ticket may add an optional appStack when its App Review needs other platform apps running from this branch ({"bundle": ["<app>"]}) or must leave services out ({"omitServices": {"<app>": ["<service>"]}}). Take app and service names from app_stack_bundle_plan. Leave it out otherwise.',
     "",
     "When ready, finish with exactly one fenced JSON block using this shape. Dependencies must reference ticket keys from the same JSON payload.",
@@ -589,6 +623,7 @@ function buildPlanningReviewerPrompt(input: {
   readonly mode: "full" | "targeted";
   readonly targetPlanningTicketIds: ReadonlyArray<string>;
   readonly previousCycle: OrchestrationPlanningReviewCycle | undefined;
+  readonly repositoryLines: ReadonlyArray<string>;
 }): string {
   const reviewScopeInstructions =
     input.mode === "full"
@@ -613,6 +648,13 @@ function buildPlanningReviewerPrompt(input: {
     "Review for missing Spec coverage, incorrect horizontal slicing, oversized or undersized slices, incorrect dependency ordering, hidden prefactoring/migration/contract work, vague acceptance criteria, and missing expected tests.",
     "Also verify every ticket has a complete, plausible plannedFileChanges list with exact repository-relative paths and correct create/update/delete actions. Missing lists on legacy tickets are findings and should be repaired with a ticket update. Reviewer-created tickets require a non-empty list; update edits may replace the list with plannedFileChanges.",
     "",
+    ...(input.repositoryLines.length === 0
+      ? []
+      : [
+          ...input.repositoryLines,
+          "Check that every ticket is in the repository its planned files belong to. An update edit sets `projectId`, or null to move the ticket back to this workflow's repository.",
+          "",
+        ]),
     "Fix what you can through ticketEdits. A ticket you correct and pass is finished — it is not reviewed again — so leave every edited ticket in the state you would approve. Fail a ticket only when the correction genuinely needs another cycle.",
     ...buildPlanningReviewCarryForward({
       previousCycle: input.previousCycle,
@@ -668,17 +710,37 @@ function buildImplementationRun(input: {
   const validationCommands = resolveImplementationValidationCommands({
     explicitCommands: input.command.validationCommands,
   });
-  const plannedWorkers = input.tickets.map((ticket) => ({
-    ticketId: ticket.id,
-    dependencyTicketIds: ticket.dependencies.map((dependency) => dependency.ticketId),
-    branch: `${input.command.orchestratorBranch}-ticket-${ticket.ordinal}`,
-    worktreePath: `${input.command.orchestratorWorktreePath}-ticket-${ticket.ordinal}`,
-  }));
-  const dependencyTicketIds = new Set(
-    input.tickets.flatMap((ticket) => ticket.dependencies.map((dependency) => dependency.ticketId)),
+  const repositories = input.command.repositories ?? [];
+  const repositoryOf = (ticket: OrchestrationPlanningTicket | undefined) =>
+    repositories.find((candidate) => candidate.projectId === ticket?.projectId);
+  // Every ticket branch carries the same name in whichever repository it is
+  // in, so an App Stack bundle finds a ticket's checkout in another repository.
+  const plannedWorkers = input.tickets.map((ticket) => {
+    const repository = repositoryOf(ticket);
+    return {
+      ticketId: ticket.id,
+      dependencyTicketIds: ticket.dependencies.map((dependency) => dependency.ticketId),
+      branch: `${input.command.orchestratorBranch}-ticket-${ticket.ordinal}`,
+      worktreePath: `${repository?.worktreePath ?? input.command.orchestratorWorktreePath}-ticket-${ticket.ordinal}`,
+      ...(repository === undefined ? {} : { projectId: repository.projectId }),
+    };
+  });
+  // A ticket is a tip of its repository's lineage when nothing in the same
+  // repository builds on it. Integration merges each repository's tips.
+  const dependedOnInRepository = new Set(
+    input.tickets.flatMap((ticket) =>
+      ticket.dependencies
+        .filter(
+          (dependency) =>
+            repositoryOf(
+              input.tickets.find((candidate) => candidate.id === dependency.ticketId),
+            ) === repositoryOf(ticket),
+        )
+        .map((dependency) => dependency.ticketId),
+    ),
   );
   const terminalLineageTicketIds = input.tickets
-    .filter((ticket) => !dependencyTicketIds.has(ticket.id))
+    .filter((ticket) => !dependedOnInRepository.has(ticket.id))
     .map((ticket) => ticket.id);
   return {
     id: input.runId,
@@ -693,6 +755,7 @@ function buildImplementationRun(input: {
     pinnedCommit: input.command.pinnedCommit,
     orchestratorBranch: input.command.orchestratorBranch,
     orchestratorWorktreePath: input.command.orchestratorWorktreePath,
+    repositories,
     launchSummary: {
       specId: input.command.specId,
       planningTicketIds: ticketIds,
@@ -3067,7 +3130,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ? buildPlanningGrillRestartPrompt()
           : command.stage === "spec"
             ? buildPlanningSpecStagePrompt()
-            : buildPlanningTicketsStagePrompt(spec!);
+            : buildPlanningTicketsStagePrompt(
+                spec!,
+                ticketRepositoryPromptLines(
+                  ticketRepositoryChoices(readModel.projects, thread.projectId),
+                ),
+              );
       // Nothing upstream of this command requires a preset: a thread reaches the
       // planning stage machine on its interaction mode alone. Pin the
       // Engineering Workflow preset here so the thread that runs planning is
@@ -3286,7 +3354,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: thread.id,
           messageId: ticketMessageId,
           role: "user",
-          text: buildPlanningTicketsStagePrompt(resolvedArtifact),
+          text: buildPlanningTicketsStagePrompt(
+            resolvedArtifact,
+            ticketRepositoryPromptLines(
+              ticketRepositoryChoices(readModel.projects, thread.projectId),
+            ),
+          ),
           turnId: null,
           streaming: false,
           createdAt: command.createdAt,
@@ -3347,11 +3420,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         const generatedTicketIds = yield* Effect.forEach(command.tickets, () =>
           crypto.randomUUIDv4.pipe(Effect.map((uuid) => `planning-ticket-${uuid}`)),
         );
-        const tickets = buildPlanningTicketsFromArtifact({
-          specId: promptSpec.id,
-          command,
-          generatedTicketIds,
-        });
+        const tickets = resolvePlanningTicketProjects(
+          readModel,
+          thread.projectId,
+          buildPlanningTicketsFromArtifact({
+            specId: promptSpec.id,
+            command,
+            generatedTicketIds,
+          }),
+        );
         if (typeof tickets === "string") {
           return yield* new OrchestrationCommandInvariantError({
             commandType: command.type,
@@ -3410,11 +3487,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const generatedTicketIds = yield* Effect.forEach(command.tickets, () =>
         crypto.randomUUIDv4.pipe(Effect.map((uuid) => `planning-ticket-${uuid}`)),
       );
-      const tickets = buildPlanningTicketsFromArtifact({
-        specId: targetArtifact.id,
-        command,
-        generatedTicketIds,
-      });
+      const tickets = resolvePlanningTicketProjects(
+        readModel,
+        thread.projectId,
+        buildPlanningTicketsFromArtifact({
+          specId: targetArtifact.id,
+          command,
+          generatedTicketIds,
+        }),
+      );
       if (typeof tickets === "string") {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -3595,6 +3676,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             mode,
             targetPlanningTicketIds,
             previousCycle,
+            repositoryLines: ticketRepositoryPromptLines(
+              ticketRepositoryChoices(readModel.projects, planningThread.projectId),
+            ),
           }),
           turnId: null,
           streaming: false,
@@ -3725,15 +3809,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ? crypto.randomUUIDv4.pipe(Effect.map((uuid) => `planning-ticket-${uuid}`))
           : Effect.succeed(""),
       );
-      const editedTickets = applyPlanningReviewerEdits({
-        specId: spec.id,
-        tickets: workflow.tickets,
-        edits,
-        targetPlanningTicketIds: activeReview.targetPlanningTicketIds,
-        mode: activeReview.mode,
-        generatedTicketIds,
-        updatedAt: command.createdAt,
-      });
+      const editedTickets = resolvePlanningTicketProjects(
+        readModel,
+        planningThread.projectId,
+        applyPlanningReviewerEdits({
+          specId: spec.id,
+          tickets: workflow.tickets,
+          edits,
+          targetPlanningTicketIds: activeReview.targetPlanningTicketIds,
+          mode: activeReview.mode,
+          generatedTicketIds,
+          updatedAt: command.createdAt,
+        }),
+      );
       if (typeof editedTickets === "string") {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -3947,6 +4035,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         pinnedCommit: command.pinnedCommit,
         orchestratorBranch: command.orchestratorBranch,
         orchestratorWorktreePath: command.orchestratorWorktreePath,
+        repositories: [],
         launchSummary: {
           specId: null,
           planningTicketIds: [],
@@ -4117,6 +4206,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Implementation Run '${duplicateRun.id}' already uses orchestrator branch '${command.orchestratorBranch}' for Spec '${command.specId}'.`,
+        });
+      }
+      const launchRepositoryIds = new Set<string>(
+        (command.repositories ?? []).map((repository) => repository.projectId),
+      );
+      const unplacedTicket = bundle.tickets.find(
+        (ticket) =>
+          ticket.projectId !== undefined &&
+          ticket.projectId !== launcherThread.projectId &&
+          !launchRepositoryIds.has(ticket.projectId),
+      );
+      if (unplacedTicket !== undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Planning Ticket '${unplacedTicket.id}' changes project '${unplacedTicket.projectId}', but the launch prepared no worktree for it.`,
         });
       }
       const crypto = yield* Crypto.Crypto;

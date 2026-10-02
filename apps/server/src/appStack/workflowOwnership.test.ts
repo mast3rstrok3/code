@@ -91,6 +91,47 @@ describe("appStackWorkflowConflicts", () => {
     ).toEqual([]);
   });
 
+  it("accepts bundle members in the run's other repositories", () => {
+    const readModel = {
+      threads: [
+        {
+          id: "orchestrator-1",
+          workflowContext: { workflowId: "workflow-1", rootThreadId: "root-1" },
+        },
+      ],
+      implementationRuns: [
+        {
+          id: "run-1",
+          orchestratorThreadId: "orchestrator-1",
+          orchestratorWorktreePath: "/worktrees/rudi/feature",
+          repositories: [{ worktreePath: "/worktrees/medical-repository/feature" }],
+          ticketStates: [
+            {
+              worktreePath: "/worktrees/rudi/feature-ticket-2",
+              bundleWorktrees: [
+                {
+                  repositoryPath: "/worktrees/medical-repository/feature",
+                  worktreePath: "/worktrees/medical-repository/feature-ticket-2",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    } as unknown as OrchestrationReadModel;
+
+    expect(
+      appStackWorkflowConflicts(
+        [
+          stack("stack-1", "/worktrees/rudi/feature", "workflow-1"),
+          stack("stack-2", "/worktrees/medical-repository/feature", "workflow-1"),
+          stack("stack-3", "/worktrees/medical-repository/feature-ticket-2", "workflow-1"),
+        ],
+        readModel,
+      ),
+    ).toEqual([]);
+  });
+
   it("accepts distinct explicit worktrees without run history", () => {
     expect(
       appStackWorkflowConflicts(

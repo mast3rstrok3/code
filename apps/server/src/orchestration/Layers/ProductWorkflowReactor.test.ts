@@ -209,6 +209,7 @@ function makeTestLayer(
       Layer.provide(
         Layer.mock(GitWorkflowService)({
           resolveCommit: () => Effect.succeed({ commitSha: "abc123" }),
+          remoteExists: () => Effect.succeed(false),
         }),
       ),
       Layer.provide(serverSettingsLayerTest(serverSettings)),
@@ -346,7 +347,12 @@ function lockProductIntent(system: ProductSystem) {
   });
 }
 
-function seedProductSpecAndTickets(system: ProductSystem, threadId: ThreadId, ticketCount = 1) {
+function seedProductSpecAndTickets(
+  system: ProductSystem,
+  threadId: ThreadId,
+  ticketCount = 1,
+  ticketProjectIds: ReadonlyArray<ProjectId | undefined> = [],
+) {
   return Effect.gen(function* () {
     yield* system.engine.dispatch({
       type: "thread.planning-spec.apply",
@@ -378,6 +384,7 @@ function seedProductSpecAndTickets(system: ProductSystem, threadId: ThreadId, ti
           },
         ],
         dependencyKeys: [],
+        ...(ticketProjectIds[index] === undefined ? {} : { projectId: ticketProjectIds[index] }),
       })),
       createdAt: now,
     });
@@ -775,6 +782,76 @@ describe("ProductWorkflowReactor", () => {
         const snapshot = yield* system.query.getSnapshot();
         expect(snapshot.implementationRuns.some((run) => run.specId === spec.id)).toBe(true);
       }),
+    ),
+  );
+
+  it.effect("launches Implementation with a worktree in each other repository it changes", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const medicalProjectId = ProjectId.make("project-medical-repository");
+          yield* seedProjectAndThread(system, {
+            interactionMode: "planning-workflow",
+            workflowPreset: "planning",
+            branch: "dev",
+            worktreePath: "/tmp/product-reactor.worktrees/engineering-planning",
+          });
+          yield* system.engine.dispatch({
+            type: "project.create",
+            commandId: commandId("project-create-medical"),
+            projectId: medicalProjectId,
+            ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+            title: "Medical Repository",
+            workspaceRoot: "/tmp/medical-repository",
+            createdAt: now,
+          });
+          const spec = yield* seedProductSpecAndTickets(system, productThreadId, 2, [
+            undefined,
+            medicalProjectId,
+          ]);
+          const beforeVerdict = yield* system.query.getSnapshot();
+          const activeReview = beforeVerdict.threads.find((thread) => thread.id === productThreadId)
+            ?.planningWorkflow?.activeReview;
+          if (activeReview == null) throw new Error("Review was not active.");
+          yield* system.engine.dispatch({
+            type: "thread.planning-reviewer-verdict.apply",
+            commandId: commandId("repositories-planning-pass"),
+            threadId: productThreadId,
+            reviewerThreadId: activeReview.reviewerThreadId,
+            reviewerMessageId: messageId("repositories-planning-reviewer"),
+            cycleNumber: activeReview.cycleNumber,
+            mode: activeReview.mode,
+            targetPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
+            verdictMarkdown: "passed",
+            passed: true,
+            createdAt: "2026-01-01T00:00:10.000Z",
+          });
+          yield* system.reactor.drain;
+
+          const snapshot = yield* system.query.getSnapshot();
+          const run = snapshot.implementationRuns.find((entry) => entry.specId === spec.id);
+          const worktreePath = run?.repositories[0]?.worktreePath ?? "";
+          expect(run?.repositories).toEqual([
+            expect.objectContaining({
+              projectId: medicalProjectId,
+              repositoryPath: "/tmp/medical-repository",
+              baseBranch: "dev",
+              pinnedCommit: "abc123",
+            }),
+          ]);
+          // Git's own worktree layout, on the orchestrator branch's name.
+          expect(worktreePath).toMatch(
+            /\/worktrees\/medical-repository\/implementation-checkout$/u,
+          );
+          expect(run?.launchSummary.validationCommands).toEqual([
+            "pnpm check:full",
+            `cd '${worktreePath}' && pnpm check:full`,
+          ]);
+          expect(run?.launchSummary.plannedWorkers[1]?.worktreePath).toBe(
+            `${worktreePath}-ticket-2`,
+          );
+        }),
+      { validationCommands: ["pnpm check:full"] },
     ),
   );
 

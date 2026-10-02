@@ -37,9 +37,15 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 
+import { ServerConfig } from "../../config.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import {
+  repositoryValidationCommands,
+  resolveImplementationRepositories,
+} from "../implementationRepositories.ts";
 import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
 import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -240,6 +246,8 @@ const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService;
   const projectFileLoader = yield* T3ProjectFileLoader;
   const serverSettingsService = yield* ServerSettingsService;
+  const serverConfig = yield* ServerConfig;
+  const path = yield* Path.Path;
 
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
@@ -477,6 +485,32 @@ const make = Effect.gen(function* () {
       );
     }
 
+    const repositories = yield* resolveImplementationRepositories({
+      gitWorkflow,
+      path,
+      projects: (yield* projectionSnapshotQuery.getCommandReadModel()).projects,
+      tickets: workflow.tickets,
+      workflowProjectId: context.productRootThread.projectId,
+      baseBranch: identity.baseBranch,
+      orchestratorBranch: identity.orchestratorBranch,
+      worktreesDir: serverConfig.worktreesDir,
+    }).pipe(Effect.result);
+    if (repositories._tag === "Failure") {
+      yield* appendActivity({
+        threadId: context.productRootThread.id,
+        tone: "error",
+        kind: "implementation-run-launch-failed",
+        summary: "Implementation could not prepare a ticket's repository",
+        payload: { specId: spec.id, detail: repositories.failure.message },
+        createdAt: input.occurredAt,
+      });
+      return;
+    }
+    const otherRepositoryValidationCommands = yield* repositoryValidationCommands(
+      projectFileLoader,
+      repositories.success,
+    );
+
     const settings = yield* serverSettingsService.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
     );
@@ -495,13 +529,17 @@ const make = Effect.gen(function* () {
       pinnedCommit,
       orchestratorBranch: identity.orchestratorBranch,
       orchestratorWorktreePath: identity.orchestratorWorktreePath,
-      validationCommands: [...resolveImplementationValidationCommands({ projectFile })],
+      validationCommands: [
+        ...resolveImplementationValidationCommands({ projectFile }),
+        ...otherRepositoryValidationCommands,
+      ],
       skips: [
         ...implementationWorkflowDefaultSkips(
           runSettings ?? undefined,
           workflow.tickets.map((ticket) => ticket.id),
         ),
       ],
+      ...(repositories.success.length === 0 ? {} : { repositories: repositories.success }),
       createdAt: input.occurredAt,
     });
   });

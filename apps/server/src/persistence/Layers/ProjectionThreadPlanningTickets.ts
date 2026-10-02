@@ -37,7 +37,8 @@ const makeProjectionThreadPlanningTicketRepository = Effect.gen(function* () {
       INSERT INTO projection_thread_planning_tickets (
         ticket_id, ticket_key, spec_id, thread_id, ordinal, title, body_markdown,
         planned_file_changes_json, dependencies_json, app_review_eligible,
-        app_review_scope, app_review_plan_markdown, app_review_commands_json, app_stack_json, status, created_at, updated_at
+        app_review_scope, app_review_plan_markdown, app_review_commands_json, app_stack_json,
+        project_id, status, created_at, updated_at
       )
       VALUES (
         ${row.ticketId}, ${row.ticketKey}, ${row.specId}, ${row.threadId}, ${row.ordinal},
@@ -45,7 +46,7 @@ const makeProjectionThreadPlanningTicketRepository = Effect.gen(function* () {
         ${JSON.stringify(row.dependencies)}, ${row.appReviewEligible},
         ${row.appReviewScope}, ${row.appReviewPlanMarkdown}, ${JSON.stringify(row.appReviewCommands ?? [])},
         ${row.appStack == null ? null : JSON.stringify(row.appStack)},
-        ${row.status}, ${row.createdAt}, ${row.updatedAt}
+        ${row.projectId ?? null}, ${row.status}, ${row.createdAt}, ${row.updatedAt}
       )
       ON CONFLICT (ticket_id)
       DO UPDATE SET
@@ -62,6 +63,7 @@ const makeProjectionThreadPlanningTicketRepository = Effect.gen(function* () {
         app_review_plan_markdown = excluded.app_review_plan_markdown,
         app_review_commands_json = excluded.app_review_commands_json,
         app_stack_json = excluded.app_stack_json,
+        project_id = excluded.project_id,
         status = excluded.status,
         created_at = excluded.created_at,
         updated_at = excluded.updated_at
@@ -87,6 +89,7 @@ const makeProjectionThreadPlanningTicketRepository = Effect.gen(function* () {
         app_review_plan_markdown AS "appReviewPlanMarkdown",
         app_review_commands_json AS "appReviewCommands",
         app_stack_json AS "appStack",
+        project_id AS "projectId",
         status,
         created_at AS "createdAt",
         updated_at AS "updatedAt"

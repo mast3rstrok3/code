@@ -24,6 +24,7 @@ import {
   MessageId,
   ProviderInstanceId,
   ProjectId,
+  type OrchestrationImplementationRepository,
   ThreadId,
   TurnId,
   type ModelSelection,
@@ -681,6 +682,8 @@ const decodeBuildContractExample = Schema.decodeUnknownEffect(
 
 interface ImplementationCalls {
   readonly workflowAccepting: Ref.Ref<boolean>;
+  /** Files `git diff --name-only` reports per worktree; every other worktree reports none. */
+  readonly changedFiles: Ref.Ref<ReadonlyMap<string, ReadonlyArray<string>>>;
   readonly autoCreateInputs: Ref.Ref<
     ReadonlyArray<{
       readonly worktreePath: string;
@@ -1120,7 +1123,8 @@ function makeTestLayer(
               totalCount: refs.length,
             });
           },
-          listChangedFiles: () => Effect.succeed([]),
+          listChangedFiles: (input) =>
+            Ref.get(calls.changedFiles).pipe(Effect.map((files) => files.get(input.cwd) ?? [])),
           isAncestor: (input) => Effect.succeed(input.ancestorRef !== nonAncestorCommitSha),
           mergeRef: (input) =>
             Ref.update(calls.mergeRefInputs, (inputs) => [...inputs, input]).pipe(
@@ -1327,6 +1331,39 @@ function makeTestLayer(
                 protected: input.protected,
               }),
             ),
+          // The workflow's app first, then the other platform apps; only the
+          // medical repository has a worktree on the run's branch.
+          bundlePlan: (input) =>
+            Effect.succeed({
+              app: "rudi",
+              branch: input.gitBranch ?? "implementation/checkout",
+              members: [
+                {
+                  app: "rudi",
+                  repository: "rudi",
+                  repositoryPath: "/tmp/implementation-reactor",
+                  worktreePath: input.worktreePath,
+                  found: true,
+                  baseBranch: "dev",
+                },
+                {
+                  app: "medical-repository",
+                  repository: "medical-repository",
+                  repositoryPath: "/tmp/medical-repository",
+                  worktreePath: "/tmp/medical-repository.worktrees/checkout",
+                  found: true,
+                  baseBranch: "dev",
+                },
+                {
+                  app: "chat",
+                  repository: "chat",
+                  repositoryPath: "/tmp/chat",
+                  worktreePath: "/tmp/chat.worktrees/implementation-checkout",
+                  found: false,
+                  baseBranch: "dev",
+                },
+              ],
+            }),
           autoCreate: (input) =>
             Ref.updateAndGet(calls.autoCreateInputs, (inputs) => [...inputs, input]).pipe(
               Effect.tap(() =>
@@ -1444,6 +1481,7 @@ function withSystem<A, E>(
 ) {
   return Effect.gen(function* () {
     const workflowAccepting = yield* Ref.make(true);
+    const changedFiles = yield* Ref.make<ReadonlyMap<string, ReadonlyArray<string>>>(new Map());
     const autoCreateInputs = yield* Ref.make<
       ReadonlyArray<{
         readonly worktreePath: string;
@@ -1496,6 +1534,7 @@ function withSystem<A, E>(
     const beforeTicketLocalStatus = yield* Ref.make<Effect.Effect<void> | null>(null);
     const calls = {
       workflowAccepting,
+      changedFiles,
       autoCreateInputs,
       workflowTeardownInputs,
       stopStackIds,
@@ -1593,6 +1632,12 @@ function seedPlanning(
       readonly appReviewEligible?: boolean;
       readonly appReviewPlanMarkdown?: string;
       readonly appStack?: AppStackShape;
+      readonly projectId?: ProjectId;
+    }>;
+    /** Other projects tickets can change, registered before the tickets are. */
+    readonly otherProjects?: ReadonlyArray<{
+      readonly projectId: ProjectId;
+      readonly workspaceRoot: string;
     }>;
   },
 ) {
@@ -1606,6 +1651,17 @@ function seedPlanning(
       workspaceRoot: "/tmp/implementation-reactor",
       createdAt: now,
     });
+    for (const other of options?.otherProjects ?? []) {
+      yield* system.engine.dispatch({
+        type: "project.create",
+        commandId: commandId(`project-create-${other.projectId}`),
+        projectId: other.projectId,
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        title: other.projectId,
+        workspaceRoot: other.workspaceRoot,
+        createdAt: now,
+      });
+    }
     yield* system.engine.dispatch({
       type: "thread.create",
       commandId: commandId("thread-create"),
@@ -1676,6 +1732,8 @@ function launchRun(
     readonly appReviewStrategy?: "legacy-inline" | "nested-workflow";
     readonly skips?: ReadonlyArray<OrchestrationImplementationSkipTarget>;
     readonly orchestratorWorktreePath?: string;
+    readonly repositories?: ReadonlyArray<OrchestrationImplementationRepository>;
+    readonly validationCommands?: ReadonlyArray<string>;
   },
 ) {
   return Effect.gen(function* () {
@@ -1690,8 +1748,9 @@ function launchRun(
       orchestratorBranch: "implementation/checkout",
       orchestratorWorktreePath:
         options?.orchestratorWorktreePath ?? "/tmp/implementation-reactor.worktrees/checkout",
-      validationCommands: ["vp check", "vp run typecheck"],
+      validationCommands: [...(options?.validationCommands ?? ["vp check", "vp run typecheck"])],
       skips: options?.skips ? [...options.skips] : [],
+      ...(options?.repositories === undefined ? {} : { repositories: [...options.repositories] }),
       createdAt: now,
     });
     yield* system.reactor.drain;
@@ -5869,6 +5928,302 @@ describe("ImplementationWorkflowReactor", () => {
       }),
     ),
   );
+
+  describe("tickets in other repositories", () => {
+    const medicalProjectId = ProjectId.make("project-medical-repository");
+    const medicalRepository: OrchestrationImplementationRepository = {
+      projectId: medicalProjectId,
+      repositoryPath: "/tmp/medical-repository",
+      worktreePath: "/tmp/medical-repository.worktrees/checkout",
+      baseBranch: "dev",
+      pinnedCommit: "fed321",
+      appReviewedHeadSha: null,
+      codeReviewedHeadSha: null,
+      validatedHeadSha: null,
+      changeRequest: null,
+    };
+    const launchAcrossRepositories = (
+      system: ImplementationSystem,
+      tickets: NonNullable<NonNullable<Parameters<typeof seedPlanning>[1]>["tickets"]>,
+    ) =>
+      launchRun(system, {
+        otherProjects: [
+          { projectId: medicalProjectId, workspaceRoot: medicalRepository.repositoryPath },
+        ],
+        repositories: [medicalRepository],
+        tickets,
+      });
+
+    it.effect("works each ticket in its repository and integrates each into its own worktree", () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run, tickets } = yield* launchAcrossRepositories(system, [
+            planningTicket("TICKET-1"),
+            { ...planningTicket("TICKET-2"), projectId: medicalProjectId },
+            { ...planningTicket("TICKET-3", ["TICKET-2"]), projectId: medicalProjectId },
+          ]);
+          const ticketIds = new Map(tickets.map((ticket) => [ticket.key, ticket.id] as const));
+          // The projection keeps each ticket's repository.
+          expect(tickets.map((ticket) => ticket.projectId)).toEqual([
+            undefined,
+            medicalProjectId,
+            medicalProjectId,
+          ]);
+          const workers = run.launchSummary.plannedWorkers;
+          expect(workers.map((worker) => [worker.worktreePath, worker.projectId])).toEqual([
+            [`${run.orchestratorWorktreePath}-ticket-1`, undefined],
+            [`${medicalRepository.worktreePath}-ticket-2`, medicalProjectId],
+            [`${medicalRepository.worktreePath}-ticket-3`, medicalProjectId],
+          ]);
+          // Each repository's lineage ends at its own tips.
+          expect(run.terminalLineageTicketIds).toEqual([
+            ticketIds.get("TICKET-1"),
+            ticketIds.get("TICKET-3"),
+          ]);
+          const launched = yield* Ref.get(system.createWorktreeInputs);
+          // The mock keeps one branch list for every repository, so the run's
+          // branch already "exists" here and the worktree attaches to it.
+          expect(launched).toContainEqual(
+            expect.objectContaining({
+              cwd: medicalRepository.repositoryPath,
+              refName: run.orchestratorBranch,
+              baseRefName: medicalRepository.baseBranch,
+              path: medicalRepository.worktreePath,
+            }),
+          );
+          expect(launched).toContainEqual(
+            expect.objectContaining({
+              cwd: medicalRepository.worktreePath,
+              refName: run.orchestratorBranch,
+              newRefName: workers[1]?.branch,
+              path: workers[1]?.worktreePath,
+            }),
+          );
+
+          for (const key of ["TICKET-1", "TICKET-2", "TICKET-3"]) {
+            yield* appendWorkerResult(system, {
+              run,
+              status: "succeeded",
+              ticketId: ticketIds.get(key),
+            });
+          }
+
+          expect(yield* Ref.get(system.mergeRefInputs)).toEqual([
+            { cwd: run.orchestratorWorktreePath, refName: `${workers[0]?.branch}@commit` },
+            { cwd: medicalRepository.worktreePath, refName: `${workers[2]?.branch}@commit` },
+          ]);
+          expect(
+            (yield* Ref.get(system.setupScriptInputs)).map((input) => [
+              input.projectId,
+              input.worktreePath,
+            ]),
+          ).toEqual([
+            [projectId, run.orchestratorWorktreePath],
+            [medicalProjectId, medicalRepository.worktreePath],
+          ]);
+          const snapshot = yield* system.query.getSnapshot();
+          const validator = snapshot.threads.find(
+            (thread) => thread.workflowRole === "implementation-validator",
+          );
+          expect(validator?.messages.at(-1)?.text).toContain(
+            `- ${medicalRepository.worktreePath} (base dev; diff: git -C ${medicalRepository.worktreePath} diff fed321...HEAD)`,
+          );
+        }),
+      ),
+    );
+
+    it.effect("checks out a dependency from another repository on the dependent's branch", () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run, tickets } = yield* launchAcrossRepositories(system, [
+            planningTicket("TICKET-1"),
+            { ...planningTicket("TICKET-2", ["TICKET-1"]), projectId: medicalProjectId },
+          ]);
+          const [base, dependent] = tickets;
+          const workers = run.launchSummary.plannedWorkers;
+          // Only an edge inside one repository makes a ticket stop being a tip.
+          expect(run.terminalLineageTicketIds).toEqual([base?.id, dependent?.id]);
+          yield* appendWorkerResult(system, { run, status: "succeeded", ticketId: base?.id });
+
+          const checkoutPath = `${run.orchestratorWorktreePath}-ticket-2`;
+          const created = yield* Ref.get(system.createWorktreeInputs);
+          // The dependent starts from its own repository's branch, not the dependency's commit.
+          expect(created).toContainEqual(
+            expect.objectContaining({
+              cwd: medicalRepository.worktreePath,
+              refName: run.orchestratorBranch,
+              newRefName: workers[1]?.branch,
+            }),
+          );
+          expect(created).toContainEqual(
+            expect.objectContaining({ cwd: run.orchestratorWorktreePath, path: checkoutPath }),
+          );
+          // Merging skips what the checkout already has, and brings in what it lacks.
+          expect(yield* Ref.get(system.mergeRefInputs)).toContainEqual({
+            cwd: checkoutPath,
+            refName: `${workers[0]?.branch}@commit`,
+          });
+          const snapshot = yield* system.query.getSnapshot();
+          const state = snapshot.implementationRuns
+            .find((entry) => entry.id === run.id)
+            ?.ticketStates.find((entry) => entry.ticketId === dependent?.id);
+          expect(state?.bundleWorktrees).toEqual([
+            { repositoryPath: run.orchestratorWorktreePath, worktreePath: checkoutPath },
+          ]);
+          const prompt = snapshot.threads.find((thread) => thread.id === state?.workerThreadId)
+            ?.messages[0]?.text;
+          expect(prompt).toContain(`- repository: ${medicalRepository.repositoryPath} (base dev)`);
+          expect(prompt).toContain(`- dependency checkout: ${checkoutPath} holds ${base?.id}`);
+
+          yield* appendWorkerResult(system, { run, status: "succeeded", ticketId: dependent?.id });
+          const merges = yield* Ref.get(system.mergeRefInputs);
+          expect(merges).toContainEqual({
+            cwd: run.orchestratorWorktreePath,
+            refName: `${workers[0]?.branch}@commit`,
+          });
+          expect(merges).toContainEqual({
+            cwd: medicalRepository.worktreePath,
+            refName: `${workers[1]?.branch}@commit`,
+          });
+        }),
+      ),
+    );
+
+    it.effect("bundles the other repositories' apps into the shared App Stack", () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run, tickets } = yield* launchAcrossRepositories(system, [
+            planningTicket("TICKET-1"),
+            { ...planningTicket("TICKET-2"), projectId: medicalProjectId },
+          ]);
+          for (const ticket of tickets) {
+            yield* appendWorkerResult(system, { run, status: "succeeded", ticketId: ticket.id });
+          }
+          yield* passMergeGate(system, run);
+
+          const shared = (yield* Ref.get(system.autoCreateInputs)).find(
+            (input) => input.worktreePath === run.orchestratorWorktreePath,
+          );
+          expect(shared?.bundle).toEqual(["medical-repository"]);
+        }),
+      ),
+    );
+
+    const publishingAcrossRepositories = (
+      system: ImplementationSystem,
+      repository: Partial<OrchestrationImplementationRepository>,
+    ) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchAcrossRepositories(system, [
+          planningTicket("TICKET-1"),
+          { ...planningTicket("TICKET-2"), projectId: medicalProjectId },
+        ]);
+        // The reactor is stopped, so stand up the integration worktree its launch makes.
+        yield* Ref.update(system.createWorktreeInputs, (inputs) => [
+          ...inputs,
+          {
+            cwd: medicalRepository.repositoryPath,
+            refName: medicalRepository.pinnedCommit,
+            newRefName: run.orchestratorBranch,
+            baseRefName: medicalRepository.baseBranch,
+            path: medicalRepository.worktreePath,
+          },
+        ]);
+        yield* Ref.update(system.activeWorktreePaths, (paths) =>
+          new Set(paths).add(medicalRepository.worktreePath),
+        );
+        yield* Ref.set(
+          system.changedFiles,
+          new Map([
+            [run.orchestratorWorktreePath, ["src/ticket-1.ts"]],
+            [medicalRepository.worktreePath, ["src/ticket-2.ts"]],
+          ]),
+        );
+        const current = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        );
+        if (current === undefined) throw new Error("Run missing.");
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("publishing-across-repositories"),
+          threadId: sourceThreadId,
+          run: {
+            ...current,
+            status: "publishing-change-request",
+            integrationHeadSha: "def456",
+            codeReviewedHeadSha: "def456",
+            validatedHeadSha: "def456",
+            finalValidationResults: completeValidations(),
+            repositories: current.repositories.map((entry) => ({
+              ...entry,
+              codeReviewedHeadSha: "def456",
+              validatedHeadSha: "def456",
+              ...repository,
+            })),
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+        yield* system.reactor.recoverIncompleteStages();
+        return run;
+      });
+
+    it.effect("files a pull request per repository and babysits them together", () =>
+      withSystem(
+        (system) =>
+          Effect.gen(function* () {
+            const run = yield* publishingAcrossRepositories(system, {});
+
+            expect(yield* Ref.get(system.createOrOpenChangeRequestInputs)).toEqual([
+              expect.objectContaining({
+                cwd: medicalRepository.worktreePath,
+                headRefName: run.orchestratorBranch,
+                expectedHeadSha: "def456",
+              }),
+              expect.objectContaining({
+                cwd: run.orchestratorWorktreePath,
+                headRefName: run.orchestratorBranch,
+                pullRequestBodyNote: expect.stringContaining(
+                  "This change continues in other repositories:\n\n- https://example.test/pr/1",
+                ),
+              }),
+            ]);
+            const snapshot = yield* system.query.getSnapshot();
+            const babysitting = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+            expect(babysitting?.status).toBe("babysitting-change-request");
+            expect(babysitting?.repositories[0]?.changeRequest?.url).toBe(
+              "https://example.test/pr/1",
+            );
+            const babysitter = snapshot.threads.find(
+              (thread) => thread.workflowRole === "implementation-change-request-babysitter",
+            );
+            expect(babysitter?.title).toBe("Babysit 2 pull requests");
+            expect(babysitter?.messages.at(-1)?.text).toContain(
+              `from ${medicalRepository.worktreePath}`,
+            );
+          }),
+        { startReactor: false },
+      ),
+    );
+
+    it.effect("does not publish a repository that moved after validation", () =>
+      withSystem(
+        (system) =>
+          Effect.gen(function* () {
+            const run = yield* publishingAcrossRepositories(system, {
+              validatedHeadSha: "older123",
+            });
+
+            expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
+            const snapshot = yield* system.query.getSnapshot();
+            const blocked = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+            expect(blocked?.status).toBe("needs-human-attention");
+            expect(blocked?.retryableFailure?.stage).toBe("merge-gate");
+          }),
+        { startReactor: false },
+      ),
+    );
+  });
 
   it.effect("derives terminal lineage for legacy runs where it was not persisted", () =>
     withSystem((system) =>

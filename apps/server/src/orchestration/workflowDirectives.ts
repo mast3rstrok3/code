@@ -59,6 +59,7 @@ export type WorkflowDirective =
         readonly appReviewCommands?: ReadonlyArray<string>;
         readonly appReviewPlanMarkdown: string | null;
         readonly appStack?: AppStackShapeType;
+        readonly projectId?: string;
       }>;
     }
   | {
@@ -87,6 +88,7 @@ export type WorkflowDirective =
             readonly appReviewCommands?: ReadonlyArray<string>;
             readonly appReviewPlanMarkdown?: string | null;
             readonly appStack?: AppStackShapeType | null;
+            readonly projectId?: string | null;
           }
         | {
             readonly type: "create";
@@ -100,6 +102,7 @@ export type WorkflowDirective =
             readonly appReviewCommands?: ReadonlyArray<string>;
             readonly appReviewPlanMarkdown: string | null;
             readonly appStack?: AppStackShapeType;
+            readonly projectId?: string;
             readonly replacesPlanningTicketIds: ReadonlyArray<string>;
           }
         | { readonly type: "delete"; readonly ticketId: string }
@@ -538,6 +541,17 @@ function parseAppStackShape(value: unknown, field: string): AppStackShapeType | 
   );
 }
 
+/** A ticket's repository: a projectId, or null for the workflow's own project. */
+function parseTicketProjectId(
+  value: unknown,
+  field: string,
+): { readonly projectId: string | null | undefined } | string {
+  if (value === undefined) return { projectId: undefined };
+  if (value === null) return { projectId: null };
+  if (typeof value === "string" && value.trim().length > 0) return { projectId: value.trim() };
+  return `${field} must be a projectId string or null.`;
+}
+
 function parsePlanningTickets(value: unknown):
   | ReadonlyArray<{
       readonly key: string;
@@ -550,6 +564,7 @@ function parsePlanningTickets(value: unknown):
       readonly appReviewCommands?: ReadonlyArray<string>;
       readonly appReviewPlanMarkdown: string | null;
       readonly appStack?: AppStackShapeType;
+      readonly projectId?: string;
     }>
   | string {
   if (!Array.isArray(value)) {
@@ -611,6 +626,11 @@ function parsePlanningTickets(value: unknown):
     }
     const appStack = parseAppStackShape(record["appStack"], "planning-tickets-artifact appStack");
     if (typeof appStack === "string") return appStack;
+    const project = parseTicketProjectId(
+      record["projectId"],
+      "planning-tickets-artifact projectId",
+    );
+    if (typeof project === "string") return project;
     tickets.push({
       key,
       title,
@@ -622,6 +642,7 @@ function parsePlanningTickets(value: unknown):
       ...(appReviewCommands === undefined ? {} : { appReviewCommands }),
       appReviewPlanMarkdown,
       ...(appStack === undefined ? {} : { appStack }),
+      ...(project.projectId == null ? {} : { projectId: project.projectId }),
     });
   }
   return tickets;
@@ -725,6 +746,8 @@ function parsePlanningTicketEdits(
         return "ticket edit appReviewScope requires appReviewEligible.";
       const appStack = parseAppStackShape(record["appStack"], "ticket edit appStack");
       if (typeof appStack === "string") return appStack;
+      const project = parseTicketProjectId(record["projectId"], "ticket edit projectId");
+      if (typeof project === "string") return project;
       edits.push({
         type,
         key,
@@ -738,6 +761,7 @@ function parsePlanningTicketEdits(
         ...(appReviewCommands === undefined ? {} : { appReviewCommands }),
         appReviewPlanMarkdown,
         ...(appStack === undefined ? {} : { appStack }),
+        ...(project.projectId == null ? {} : { projectId: project.projectId }),
       });
       continue;
     }
@@ -782,6 +806,9 @@ function parsePlanningTicketEdits(
           ? null
           : parseAppStackShape(record["appStack"], "ticket edit appStack");
       if (typeof appStack === "string") return appStack;
+      // Null moves the ticket back to the workflow's own project; absent leaves it.
+      const project = parseTicketProjectId(record["projectId"], "ticket edit projectId");
+      if (typeof project === "string") return project;
       edits.push({
         type,
         ticketId,
@@ -794,6 +821,7 @@ function parsePlanningTicketEdits(
         ...(appReviewCommands === undefined ? {} : { appReviewCommands }),
         ...(appReviewPlanMarkdown === undefined ? {} : { appReviewPlanMarkdown }),
         ...(appStack === undefined ? {} : { appStack }),
+        ...(project.projectId === undefined ? {} : { projectId: project.projectId }),
       });
       continue;
     }

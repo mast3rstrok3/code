@@ -634,6 +634,56 @@ ${JSON.stringify({
     }
   });
 
+  it("parses the repository a ticket changes and lets a reviewer move it back", () => {
+    const artifact = (projectId: unknown) => `\`\`\`json
+${JSON.stringify({
+  type: "planning-tickets-artifact",
+  specId: "spec-1",
+  tickets: [
+    {
+      key: "ticket-1",
+      title: "Serve studies",
+      bodyMarkdown: "Serve studies from the Medical Repository.",
+      plannedFileChanges: [{ path: "src/studies.ts", action: "update" }],
+      projectId,
+    },
+  ],
+})}
+\`\`\``;
+    const parsed = parseWorkflowDirectiveFromMarkdown(artifact("project-medical"));
+    NodeAssert.equal(parsed.kind, "parsed");
+    if (parsed.kind === "parsed" && parsed.directive.type === "planning-tickets-artifact") {
+      NodeAssert.equal(parsed.directive.tickets[0]?.projectId, "project-medical");
+    }
+    const own = parseWorkflowDirectiveFromMarkdown(artifact(null));
+    if (own.kind === "parsed" && own.directive.type === "planning-tickets-artifact") {
+      NodeAssert.equal("projectId" in (own.directive.tickets[0] ?? {}), false);
+    }
+    NodeAssert.equal(parseWorkflowDirectiveFromMarkdown(artifact(42)).kind, "error");
+
+    const edits = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+${JSON.stringify({
+  type: "planning-reviewer-verdict",
+  cycleNumber: 1,
+  passed: false,
+  ticketEdits: [
+    { type: "update", ticketId: "planning-ticket-1", projectId: "project-chat" },
+    { type: "update", ticketId: "planning-ticket-2", projectId: null },
+    { type: "update", ticketId: "planning-ticket-3", title: "Unmoved" },
+  ],
+})}
+\`\`\``);
+    NodeAssert.equal(edits.kind, "parsed");
+    if (edits.kind === "parsed" && edits.directive.type === "planning-reviewer-verdict") {
+      NodeAssert.deepEqual(
+        edits.directive.ticketEdits.map((edit) =>
+          "projectId" in edit ? edit.projectId : "absent",
+        ),
+        ["project-chat", null, "absent"],
+      );
+    }
+  });
+
   it("parses ticket-scoped Code Review results", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 {

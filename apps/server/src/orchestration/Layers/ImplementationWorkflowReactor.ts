@@ -46,6 +46,7 @@ import {
   type OrchestrationImplementationRerunRunStage,
   type OrchestrationImplementationRerunTarget,
   type OrchestrationImplementationRerunTicketStage,
+  type OrchestrationImplementationRepository,
   type OrchestrationImplementationRun,
   type OrchestrationImplementationTicketState,
   type OrchestrationImplementationValidationResult,
@@ -74,6 +75,7 @@ import {
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { proposedPlanTitle } from "@t3tools/shared/orchestrationPlanning";
 import { implementationWorkflowDefaultSkips } from "@t3tools/shared/workflowStepSkips";
+import { resolveImplementationValidationCommands } from "@t3tools/shared/t3ProjectFile";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
@@ -99,8 +101,10 @@ import {
 } from "../workflowValidation.ts";
 import { AppStackManager } from "../../appStack/AppStackManager.ts";
 import { normalizeWorkflowWorktreePath } from "../../appStack/workflowOwnership.ts";
+import { ServerConfig } from "../../config.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
+import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
 import {
   appendWorkflowSkillCommandSection,
   WORKFLOW_PROMPT_IDS,
@@ -139,6 +143,12 @@ import {
 import { ServerActivation } from "../../serverActivation.ts";
 import { WorkflowDrainCoordinator } from "../WorkflowDrainCoordinator.ts";
 import { implementationRerunTargetMatchesHalt } from "../implementationRerun.ts";
+import {
+  repositoryValidationCommands,
+  resolveImplementationRepositories,
+  ticketRepositoryWorktreePath,
+  ticketRunRepository,
+} from "../implementationRepositories.ts";
 import {
   runUpdateWouldOverwriteNewerTicketState,
   STALE_IMPLEMENTATION_TICKET_STATE_DETAIL,
@@ -330,6 +340,28 @@ type BranchIntegration = {
   readonly remainingTicketIds: ReadonlyArray<string>;
   readonly remainingRefNames: ReadonlyArray<string>;
 };
+
+/** How one other repository's tips merged into its integration worktree. */
+type RepositoryIntegration = {
+  readonly worktreePath: string;
+  readonly integration: BranchIntegration;
+};
+
+/**
+ * Tells a run-level agent about the run's other repositories. Their changes
+ * are part of the same work: the agent reviews, repairs and commits in them
+ * as in the orchestrator worktree. Empty for single-repository runs.
+ */
+function runRepositoryLines(run: OrchestrationImplementationRun): ReadonlyArray<string> {
+  if (run.repositories.length === 0) return [];
+  return [
+    `This run also changes other repositories, each in an integration worktree on branch '${run.orchestratorBranch}'. Their changes are part of this work: treat each exactly as this stage treats the orchestrator worktree, commit any change in the repository it belongs to, and leave them clean.`,
+    ...run.repositories.map(
+      (repository) =>
+        `- ${repository.worktreePath} (base ${repository.baseBranch}; diff: git -C ${repository.worktreePath} diff ${repository.pinnedCommit}...HEAD)`,
+    ),
+  ];
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -551,7 +583,10 @@ function ticketAppStackRequest(input: {
     : appStackShapeRequest(resolveTicketAppStack(input.parts, input.ticket));
 }
 
-/** Records the bundle worktrees a ticket's stack start created, so cleanup removes them. */
+/**
+ * Records worktrees Code created in other repositories for a ticket, by its
+ * stack start or as dependency checkouts, so cleanup removes them.
+ */
 function withTicketBundleWorktrees(
   run: OrchestrationImplementationRun,
   ticketId: string,
@@ -1086,7 +1121,7 @@ function clearRunStageForRerun(input: {
       };
     case "merge-gate":
       return {
-        ...base,
+        ...withRepositoryHeads(base, "validatedHeadSha", null),
         ...(isFinalValidatorLaunchHalt(input.run) && input.run.finalRegression
           ? { finalRegression: { ...input.run.finalRegression, launchCount: 0 } }
           : {}),
@@ -1102,7 +1137,7 @@ function clearRunStageForRerun(input: {
       };
     case "app-review":
       return {
-        ...base,
+        ...withRepositoryHeads(base, "appReviewedHeadSha", null),
         status: "qa-reviewing" as const,
         activeAppReviewThreadId: null,
         activeAppReviewHeadSha: null,
@@ -1112,7 +1147,7 @@ function clearRunStageForRerun(input: {
       };
     case "code-review":
       return {
-        ...base,
+        ...withRepositoryHeads(base, "codeReviewedHeadSha", null),
         status: "code-reviewing" as const,
         activeCodeReviewThreadId: null,
         activeCodeReviewHeadSha: null,
@@ -1197,9 +1232,90 @@ export function failImplementationTickets(
   };
 }
 
+type RepositoryHeadField = "appReviewedHeadSha" | "codeReviewedHeadSha" | "validatedHeadSha";
+
+/**
+ * Stamps every other repository's head into one of its head fields, the same
+ * moment the run stamps the orchestrator's. Null clears them.
+ */
+function withRepositoryHeads(
+  run: OrchestrationImplementationRun,
+  field: RepositoryHeadField,
+  heads: ReadonlyMap<string, string> | null,
+): OrchestrationImplementationRun {
+  if (run.repositories.length === 0) return run;
+  return {
+    ...run,
+    repositories: run.repositories.map((repository) => ({
+      ...repository,
+      [field]: heads?.get(repository.projectId) ?? null,
+    })),
+  };
+}
+
+/** Records the pull request filed for one other repository. */
+function withRepositoryChangeRequest(
+  run: OrchestrationImplementationRun,
+  projectId: string,
+  changeRequest: NonNullable<OrchestrationImplementationRepository["changeRequest"]>,
+  updatedAt: string,
+): OrchestrationImplementationRun {
+  return {
+    ...run,
+    repositories: run.repositories.map((repository) =>
+      repository.projectId === projectId ? { ...repository, changeRequest } : repository,
+    ),
+    updatedAt,
+  };
+}
+
+/** The other repositories whose head moved off the one a field recorded. */
+function repositoriesMovedFrom(
+  run: OrchestrationImplementationRun,
+  field: RepositoryHeadField,
+  heads: ReadonlyMap<string, string>,
+): ReadonlyArray<OrchestrationImplementationRepository> {
+  return run.repositories.filter(
+    (repository) => repository[field] !== heads.get(repository.projectId),
+  );
+}
+
+/** The dependencies of a ticket that are in its own repository, which git can merge. */
+function sameRepositoryDependencies(
+  run: OrchestrationImplementationRun,
+  ticketId: string,
+  dependencyTicketIds: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  const repository = ticketRunRepository(run, ticketId)?.projectId;
+  return dependencyTicketIds.filter(
+    (dependencyTicketId) => ticketRunRepository(run, dependencyTicketId)?.projectId === repository,
+  );
+}
+
 function terminalLineageTicketIds(run: OrchestrationImplementationRun): ReadonlyArray<string> {
+  // Each repository has its own lineage, since its tips merge into its own
+  // worktree. A run in one repository has a single lineage.
+  const repositoryKeys = [
+    ...new Set(
+      run.ticketStates.map((state) => ticketRunRepository(run, state.ticketId)?.projectId),
+    ),
+  ];
+  return repositoryKeys.flatMap((repositoryKey) =>
+    repositoryTerminalLineageTicketIds(
+      run,
+      run.ticketStates.filter(
+        (state) => ticketRunRepository(run, state.ticketId)?.projectId === repositoryKey,
+      ),
+    ),
+  );
+}
+
+function repositoryTerminalLineageTicketIds(
+  run: OrchestrationImplementationRun,
+  states: ReadonlyArray<OrchestrationImplementationTicketState>,
+): ReadonlyArray<string> {
   const succeeded = new Set(
-    run.ticketStates.filter((state) => state.status === "succeeded").map((state) => state.ticketId),
+    states.filter((state) => state.status === "succeeded").map((state) => state.ticketId),
   );
   const recorded = run.terminalLineageTicketIds.filter((ticketId) => succeeded.has(ticketId));
   if (recorded.length > 0) return recorded;
@@ -1209,11 +1325,11 @@ function terminalLineageTicketIds(run: OrchestrationImplementationRun): Readonly
   // every survivor look superseded. That empties the set, and integration then
   // merges nothing while reporting that it integrated the terminal branches.
   const dependencyIds = new Set(
-    run.ticketStates
+    states
       .filter((state) => succeeded.has(state.ticketId))
       .flatMap((state) => state.dependencyTicketIds),
   );
-  return run.ticketStates
+  return states
     .filter((state) => succeeded.has(state.ticketId) && !dependencyIds.has(state.ticketId))
     .map((state) => state.ticketId);
 }
@@ -1337,6 +1453,11 @@ function buildWorkerPrompt(input: {
   readonly branch: string;
   readonly worktreePath: string;
   readonly integration: BranchIntegration;
+  readonly dependencyCheckouts?: ReadonlyArray<{
+    readonly worktree: AppStackCreatedWorktree;
+    readonly ticketIds: ReadonlyArray<string>;
+    readonly integration: BranchIntegration;
+  }>;
   readonly inheritsPartialChanges: boolean;
   readonly continuationMarkdown: string | null;
   readonly resultProblem: string | null;
@@ -1374,6 +1495,22 @@ function buildWorkerPrompt(input: {
       "Reconcile the inherited partial changes, then merge each deferred dependency ref in order before completing the ticket.",
     );
   }
+  const repository = ticketRunRepository(input.run, input.ticketId);
+  const repositoryLines = [
+    ...(repository === undefined
+      ? []
+      : [
+          `- repository: ${repository.repositoryPath} (base ${repository.baseBranch}). Paths in the ticket are relative to it.`,
+        ]),
+    ...(input.dependencyCheckouts ?? []).flatMap((checkout) => [
+      `- dependency checkout: ${checkout.worktree.worktreePath} holds ${checkout.ticketIds.join(", ")} from another repository on this branch. Read their changes there; an App Stack bundling that repository's app runs it.`,
+      ...(checkout.integration.conflictedTicketId === null
+        ? []
+        : [
+            `  Merging ${checkout.integration.conflictedTicketId} there conflicted in ${checkout.integration.conflictedFiles.join(", ") || "unknown files"}. Resolve and commit that merge in the checkout, then merge ${checkout.integration.remainingRefNames.join(", ") || "nothing else"}. Make no other changes there.`,
+          ]),
+    ]),
+  ];
   const continuationLines =
     input.inheritsPartialChanges || input.continuationMarkdown !== null
       ? [
@@ -1400,6 +1537,7 @@ function buildWorkerPrompt(input: {
     "Branch/worktree:",
     `- branch: ${input.branch}`,
     `- worktree: ${input.worktreePath}`,
+    ...repositoryLines,
     ...integrationLines,
     ...continuationLines,
     "",
@@ -1418,8 +1556,19 @@ function buildWorkerPrompt(input: {
 function buildMergeGatePrompt(input: {
   readonly run: OrchestrationImplementationRun;
   readonly integration: BranchIntegration;
+  readonly repositoryIntegrations?: ReadonlyArray<RepositoryIntegration>;
   readonly kind: "integration" | "final";
 }): string {
+  const repositoryConflictInstructions =
+    input.kind === "final"
+      ? []
+      : (input.repositoryIntegrations ?? []).flatMap(({ worktreePath, integration }) =>
+          integration.conflictedTicketId === null
+            ? []
+            : [
+                `Programmatic integration in ${worktreePath} stopped while merging ${integration.conflictedTicketId} (${integration.conflictedRefName}). Conflicted files: ${integration.conflictedFiles.join(", ") || "unknown"}. Resolve and commit that merge there, then merge these remaining terminal branches there in order: ${integration.remainingRefNames.join(", ") || "none"}.`,
+              ],
+        );
   const integrationInstructions =
     input.kind === "final"
       ? [
@@ -1473,6 +1622,8 @@ function buildMergeGatePrompt(input: {
     `Run ${input.kind} gate for implementation run ${input.run.id}.`,
     "",
     ...integrationInstructions,
+    ...runRepositoryLines(input.run),
+    ...repositoryConflictInstructions,
     "Use the repository's existing focused validation setup. Do not start a competing development server or replace dependency paths in the shared worktree: start the workflow-owned App Stack with app_stack_start only when a check needs running services, and stop it with app_stack_stop when those checks finish. If validation cannot run with the prepared workspace, report the setup failure explicitly.",
     "",
     ...validationInstructions,
@@ -1550,6 +1701,12 @@ export function buildBrowserAppReviewPrompt(input: {
     "The Feature URL above is the authoritative frontend for the App Stack associated with this implementation worktree. Do not substitute a deployment URL from repository documentation, source-thread messages, browser history, or environment conventions. If the authoritative target is unavailable, mark the review blocked.",
     `Worktree: ${input.run.orchestratorWorktreePath}`,
     `Diff command: git diff ${input.run.pinnedCommit}...HEAD`,
+    ...runRepositoryLines(input.run),
+    ...(input.run.repositories.length === 0
+      ? []
+      : [
+          "The App Stack bundles the other repositories' apps from those worktrees, so the Feature URL runs every repository's change together.",
+        ]),
     "",
     input.run.artifactSource === "proposed-plan"
       ? `Review against the locked product intent and proposed plan below, as well as the actual diff and app behavior.\n\n${input.artifactMarkdown ?? "Proposed-plan context unavailable."}`
@@ -1568,6 +1725,7 @@ function buildFixPrompt(input: {
     `Fix browser app-review failures for implementation run ${input.run.id}.`,
     "",
     `This is QA repair ${input.run.qaCycleCount} of ${IMPLEMENTATION_RUN_MAX_QA_REPAIRS}. Do not ask the user questions. Use a focused red-green TDD loop, make the smallest implementation changes needed in the orchestrator worktree, run focused validation only, commit the repair, and report the fix result.`,
+    ...runRepositoryLines(input.run),
     "",
     input.run.artifactSource === "proposed-plan"
       ? `Retrieve App Review ${input.reviewId} with workflow_app_review_get before applying its findings. Review against the proposed-plan context below; do not load a missing Spec or tickets.\n\n${input.artifactMarkdown ?? "Proposed-plan context unavailable."}`
@@ -1593,6 +1751,7 @@ function buildAppStackFixPrompt(input: {
     "",
     "Programmatic AppStack diagnostics:",
     input.diagnosticsMarkdown,
+    ...runRepositoryLines(input.run),
     "",
     "Run focused validation or a documented sub-minute fast check. Do not run launch-level complete validation commands or full test suites. The final gate owns complete validation on the reviewed HEAD.",
     "",
@@ -1616,6 +1775,7 @@ function buildCodeReviewPrompt(input: {
     `Branch: ${input.run.orchestratorBranch}`,
     `Review base: ${reviewBaseSha}`,
     `Diff command: git diff ${reviewBaseSha}...HEAD`,
+    ...runRepositoryLines(input.run),
     ...(input.run.changeRequest ? [`Change request: ${input.run.changeRequest.url}`] : []),
     input.run.artifactSource === "proposed-plan"
       ? `Spec source: the locked proposed plan below.\n\n${input.artifactMarkdown ?? "Proposed-plan context unavailable."}`
@@ -1640,6 +1800,7 @@ function buildCodeReviewFixPrompt(input: {
     `Fix code-review findings for implementation run ${input.run.id}.`,
     "",
     "Do not ask the user questions. Apply the code-review findings with the smallest reliable changes in the orchestrator worktree, run focused validation, and report the fix result.",
+    ...runRepositoryLines(input.run),
     "",
     "Latest code review report:",
     input.reportMarkdown,
@@ -1660,6 +1821,7 @@ function buildMergeGateFixPrompt(input: {
     `Fix ${gateName} failures for implementation run ${input.run.id}.`,
     "",
     "Do not ask the user questions. Resolve integration conflicts or validation failures in the orchestrator worktree, commit the result, and report the fix.",
+    ...runRepositoryLines(input.run),
     "",
     "Latest merge-gate report:",
     input.reportMarkdown,
@@ -2317,6 +2479,8 @@ const make = Effect.gen(function* () {
   const ingestionBacklog = yield* Effect.serviceOption(ProviderIngestionBacklog);
   const appStackManager = yield* AppStackManager;
   const serverSettingsService = yield* ServerSettingsService;
+  const serverConfig = yield* ServerConfig;
+  const projectFileLoader = yield* T3ProjectFileLoader;
   const httpClient = yield* HttpClient.HttpClient;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -2806,6 +2970,8 @@ const make = Effect.gen(function* () {
       const state = input.run.ticketStates.find(
         (candidate) => candidate.ticketId === input.ticketId,
       );
+      // The dependency's branch lives in its own repository.
+      const cwd = ticketRepositoryWorktreePath(input.run, input.ticketId);
       // A skipped ticket carries no work and so reports no commit. Its branch
       // still exists and still holds its own dependencies, so it can be built
       // on; the branch itself is what says where it ended up.
@@ -2814,12 +2980,12 @@ const make = Effect.gen(function* () {
           return yield* new GitCommandError({
             operation: "ImplementationWorkflowReactor.verifiedDependency",
             command: "git rev-parse",
-            cwd: input.run.orchestratorWorktreePath,
+            cwd,
             detail: `Skipped dependency ticket '${input.ticketId}' has no branch yet.`,
           });
         }
         const skippedHead = yield* gitWorkflow.resolveCommit({
-          cwd: input.run.orchestratorWorktreePath,
+          cwd,
           ref: state.branch,
         });
         return {
@@ -2836,23 +3002,23 @@ const make = Effect.gen(function* () {
         return yield* new GitCommandError({
           operation: "ImplementationWorkflowReactor.verifiedDependency",
           command: "git rev-parse",
-          cwd: input.run.orchestratorWorktreePath,
+          cwd,
           detail: `Dependency ticket '${input.ticketId}' does not have a successful committed branch.`,
         });
       }
       const [resolved, reported] = yield* Effect.all([
         gitWorkflow.resolveCommit({
-          cwd: input.run.orchestratorWorktreePath,
+          cwd,
           ref: state.branch,
         }),
         gitWorkflow.resolveCommit({
-          cwd: input.run.orchestratorWorktreePath,
+          cwd,
           ref: state.workerResult.commitSha,
         }),
       ]);
       if (resolved.commitSha !== reported.commitSha) {
         const advanced = yield* gitWorkflow.isAncestor({
-          cwd: input.run.orchestratorWorktreePath,
+          cwd,
           ancestorRef: reported.commitSha,
           descendantRef: resolved.commitSha,
         });
@@ -2860,7 +3026,7 @@ const make = Effect.gen(function* () {
           return yield* new GitCommandError({
             operation: "ImplementationWorkflowReactor.verifiedDependency",
             command: "git merge-base --is-ancestor",
-            cwd: input.run.orchestratorWorktreePath,
+            cwd,
             detail: `Dependency ticket '${input.ticketId}' branch '${state.branch}' diverged from reported commit '${reported.commitSha}' at '${resolved.commitSha}'.`,
           });
         }
@@ -2899,15 +3065,10 @@ const make = Effect.gen(function* () {
       });
     }
 
+    const repositoryCwd = ticketRepositoryWorktreePath(input.run, state.ticketId);
     const [reported, branchHead, worktreeHead, worktreeStatus] = yield* Effect.all([
-      gitWorkflow.resolveCommit({
-        cwd: input.run.orchestratorWorktreePath,
-        ref: input.directive.commitSha,
-      }),
-      gitWorkflow.resolveCommit({
-        cwd: input.run.orchestratorWorktreePath,
-        ref: state.branch,
-      }),
+      gitWorkflow.resolveCommit({ cwd: repositoryCwd, ref: input.directive.commitSha }),
+      gitWorkflow.resolveCommit({ cwd: repositoryCwd, ref: state.branch }),
       gitWorkflow.resolveCommit({ cwd: state.worktreePath, ref: "HEAD" }),
       gitWorkflow.localStatus({ cwd: state.worktreePath }),
     ]);
@@ -2935,7 +3096,13 @@ const make = Effect.gen(function* () {
       });
     }
 
-    for (const dependencyTicketId of state.dependencyTicketIds) {
+    // A dependency in another repository only orders the work; its commit
+    // cannot be in this branch.
+    for (const dependencyTicketId of sameRepositoryDependencies(
+      input.run,
+      state.ticketId,
+      state.dependencyTicketIds,
+    )) {
       const dependency = yield* verifiedDependency({
         run: input.run,
         ticketId: dependencyTicketId,
@@ -3029,6 +3196,117 @@ const make = Effect.gen(function* () {
     },
   );
 
+  /**
+   * Materialise another repository's integration worktree on the run's branch.
+   * It may exist already when a launch is retried; then it has to be on that
+   * branch.
+   */
+  const ensureRepositoryWorktree = Effect.fn(
+    "ImplementationWorkflowReactor.ensureRepositoryWorktree",
+  )(function* (input: {
+    readonly run: OrchestrationImplementationRun;
+    readonly repository: OrchestrationImplementationRepository;
+  }) {
+    const existing = yield* gitWorkflow
+      .resolveCommit({ cwd: input.repository.worktreePath, ref: "HEAD" })
+      .pipe(Effect.option);
+    if (Option.isNone(existing)) {
+      yield* ensureTicketWorktree({
+        cwd: input.repository.repositoryPath,
+        branch: input.run.orchestratorBranch,
+        path: input.repository.worktreePath,
+        startRef: input.repository.pinnedCommit,
+        baseRefName: input.repository.baseBranch,
+      });
+      return;
+    }
+    const status = yield* gitWorkflow.localStatus({ cwd: input.repository.worktreePath });
+    if (!status.isRepo || status.refName !== input.run.orchestratorBranch) {
+      return yield* new GitCommandError({
+        operation: "ImplementationWorkflowReactor.ensureRepositoryWorktree",
+        command: "git status --short --branch",
+        cwd: input.repository.worktreePath,
+        detail: `The worktree for ${input.repository.repositoryPath} must be on '${input.run.orchestratorBranch}', but Git reports '${status.refName ?? "detached HEAD"}'.`,
+      });
+    }
+  });
+
+  /**
+   * Checks out a ticket's dependencies from other repositories on the ticket's
+   * own branch name, one worktree per repository. The worker reads the
+   * dependency's change there, and an App Stack bundling that repository's app
+   * finds it by branch name. Several dependencies in one repository are merged,
+   * as in the ticket's own worktree.
+   */
+  const ensureDependencyCheckouts = Effect.fn(
+    "ImplementationWorkflowReactor.ensureDependencyCheckouts",
+  )(function* (input: {
+    readonly run: OrchestrationImplementationRun;
+    readonly ticketId: string;
+    readonly branch: string;
+    readonly dependencyTicketIds: ReadonlyArray<string>;
+  }) {
+    const ownRepository = ticketRunRepository(input.run, input.ticketId)?.projectId;
+    const byRepository = new Map<string | undefined, string[]>();
+    for (const dependencyTicketId of input.dependencyTicketIds) {
+      const repository = ticketRunRepository(input.run, dependencyTicketId)?.projectId;
+      if (repository === ownRepository) continue;
+      byRepository.set(repository, [...(byRepository.get(repository) ?? []), dependencyTicketId]);
+    }
+    const ticketSuffix = input.branch.slice(input.run.orchestratorBranch.length);
+    return yield* Effect.forEach([...byRepository], ([repositoryProjectId, ticketIds]) =>
+      Effect.gen(function* () {
+        const repository = input.run.repositories.find(
+          (candidate) => candidate.projectId === repositoryProjectId,
+        );
+        const repositoryWorktree = repository?.worktreePath ?? input.run.orchestratorWorktreePath;
+        const worktreePath = `${repositoryWorktree}${ticketSuffix}`;
+        const dependencies = yield* Effect.forEach(ticketIds, (ticketId) =>
+          verifiedDependency({ run: input.run, ticketId }),
+        );
+        const first = dependencies[0]!;
+        const existingHead = yield* gitWorkflow
+          .resolveCommit({ cwd: worktreePath, ref: "HEAD" })
+          .pipe(Effect.option);
+        if (Option.isNone(existingHead)) {
+          yield* ensureTicketWorktree({
+            cwd: repositoryWorktree,
+            branch: input.branch,
+            path: worktreePath,
+            startRef: first.commitSha,
+            baseRefName: repository?.baseBranch ?? input.run.baseBranch,
+          });
+        } else {
+          const status = yield* gitWorkflow.localStatus({ cwd: worktreePath });
+          if (!status.isRepo || status.refName !== input.branch) {
+            return yield* new GitCommandError({
+              operation: "ImplementationWorkflowReactor.ensureDependencyCheckouts",
+              command: "git status --short --branch",
+              cwd: worktreePath,
+              detail: `The dependency checkout for ticket '${input.ticketId}' must be on '${input.branch}', but Git reports '${status.refName ?? "detached HEAD"}'.`,
+            });
+          }
+        }
+        // Merging skips commits the branch already has, so this also catches up
+        // an existing checkout, or a branch that existed before it.
+        const integration = yield* integrateRefs({
+          cwd: worktreePath,
+          baseTicketId: first.ticketId,
+          baseRefName: first.branch,
+          refs: dependencies.map((dependency) => ({
+            ticketId: dependency.ticketId,
+            refName: dependency.commitSha,
+          })),
+        });
+        return {
+          worktree: { repositoryPath: repositoryWorktree, worktreePath },
+          ticketIds,
+          integration,
+        };
+      }),
+    );
+  });
+
   const createWorker = Effect.fn("ImplementationWorkflowReactor.createWorker")(function* (input: {
     readonly sourceThreadId: ThreadId;
     readonly orchestratorThread: OrchestrationThread;
@@ -3053,12 +3331,14 @@ const make = Effect.gen(function* () {
       return input.run;
     }
 
-    const dependencies = yield* Effect.forEach(existing.dependencyTicketIds, (ticketId) =>
-      verifiedDependency({ run: input.run, ticketId }),
+    const dependencies = yield* Effect.forEach(
+      sameRepositoryDependencies(input.run, input.ticketId, existing.dependencyTicketIds),
+      (ticketId) => verifiedDependency({ run: input.run, ticketId }),
     );
     const baseDependency = dependencies[0];
     const baseRefName = baseDependency?.branch ?? input.run.orchestratorBranch;
     const worktreeStartRef = baseDependency?.commitSha ?? input.run.orchestratorBranch;
+    const repository = ticketRunRepository(input.run, input.ticketId);
 
     const existingWorktreeHead = yield* gitWorkflow
       .resolveCommit({ cwd: plannedWorker.worktreePath, ref: "HEAD" })
@@ -3100,13 +3380,21 @@ const make = Effect.gen(function* () {
       }
     } else {
       yield* ensureTicketWorktree({
-        cwd: input.run.orchestratorWorktreePath,
+        cwd: repository?.worktreePath ?? input.run.orchestratorWorktreePath,
         branch: plannedWorker.branch,
         path: plannedWorker.worktreePath,
         startRef: worktreeStartRef,
-        baseRefName: input.run.baseBranch,
+        baseRefName: repository?.baseBranch ?? input.run.baseBranch,
       });
     }
+    const dependencyCheckouts = skipped
+      ? []
+      : yield* ensureDependencyCheckouts({
+          run: input.run,
+          ticketId: input.ticketId,
+          branch: plannedWorker.branch,
+          dependencyTicketIds: existing.dependencyTicketIds,
+        });
 
     let integration: BranchIntegration;
     if (worktreeExisted && inheritsPartialChanges) {
@@ -3270,6 +3558,7 @@ const make = Effect.gen(function* () {
       branch: plannedWorker.branch,
       worktreePath: plannedWorker.worktreePath,
       integration,
+      dependencyCheckouts,
       inheritsPartialChanges,
       resultProblem,
       continuationMarkdown:
@@ -3313,22 +3602,26 @@ const make = Effect.gen(function* () {
       createdAt: input.createdAt,
     });
 
-    return {
-      ...input.run,
-      ticketStates: input.run.ticketStates.map((state) =>
-        state.ticketId === input.ticketId
-          ? {
-              ...state,
-              status: "running" as const,
-              workerThreadId,
-              branch: plannedWorker.branch,
-              worktreePath: plannedWorker.worktreePath,
-              updatedAt: input.createdAt,
-            }
-          : state,
-      ),
-      updatedAt: input.createdAt,
-    } satisfies OrchestrationImplementationRun;
+    return withTicketBundleWorktrees(
+      {
+        ...input.run,
+        ticketStates: input.run.ticketStates.map((state) =>
+          state.ticketId === input.ticketId
+            ? {
+                ...state,
+                status: "running" as const,
+                workerThreadId,
+                branch: plannedWorker.branch,
+                worktreePath: plannedWorker.worktreePath,
+                updatedAt: input.createdAt,
+              }
+            : state,
+        ),
+        updatedAt: input.createdAt,
+      } satisfies OrchestrationImplementationRun,
+      input.ticketId,
+      dependencyCheckouts.map((checkout) => checkout.worktree),
+    );
   });
 
   const ticketConcurrencyLimits = Effect.fn(
@@ -4039,7 +4332,8 @@ const make = Effect.gen(function* () {
     readonly cleanupRequestedAt: string;
     readonly createdAt: string;
   }) {
-    if (!input.worktreePath.startsWith(`${input.run.orchestratorWorktreePath}-ticket-`)) return;
+    const repositoryWorktree = ticketRepositoryWorktreePath(input.run, input.ticketId);
+    if (!input.worktreePath.startsWith(`${repositoryWorktree}-ticket-`)) return;
     if (!(yield* isUnregisteredWorktreeLeftover(input.worktreePath))) return;
     const removed = yield* fileSystem
       .remove(input.worktreePath, { recursive: true, force: true })
@@ -4158,7 +4452,7 @@ const make = Effect.gen(function* () {
             }
             const removed = yield* gitWorkflow
               .removeWorktree({
-                cwd: run.orchestratorWorktreePath,
+                cwd: ticketRepositoryWorktreePath(run, state.ticketId),
                 path: state.worktreePath,
               })
               .pipe(Effect.result);
@@ -4440,12 +4734,13 @@ const make = Effect.gen(function* () {
     // The claim records the branch before `createWorker` creates it, so a server
     // that died in that window leaves a ticket whose branch is named but absent.
     // Restoring has to be able to create it, not only attach to it.
+    const repository = ticketRunRepository(input.run, input.ticketId);
     yield* ensureTicketWorktree({
-      cwd: input.run.orchestratorWorktreePath,
+      cwd: repository?.worktreePath ?? input.run.orchestratorWorktreePath,
       branch: state.branch,
       path: state.worktreePath,
       startRef: input.run.orchestratorBranch,
-      baseRefName: input.run.baseBranch,
+      baseRefName: repository?.baseBranch ?? input.run.baseBranch,
     });
   });
 
@@ -4772,12 +5067,19 @@ const make = Effect.gen(function* () {
           createdAt: claimedAt,
         });
       }
+      const repositoryPinnedCommit =
+        ticketRunRepository(input.run, input.ticketId)?.pinnedCommit ?? input.run.pinnedCommit;
+      const baseDependencyTicketId = sameRepositoryDependencies(
+        input.run,
+        input.ticketId,
+        state.dependencyTicketIds,
+      )[0];
       const baseRef =
-        state.dependencyTicketIds.length === 0
-          ? input.run.pinnedCommit
+        baseDependencyTicketId === undefined
+          ? repositoryPinnedCommit
           : (input.run.ticketStates.find(
-              (candidate) => candidate.ticketId === state.dependencyTicketIds[0],
-            )?.workerResult?.commitSha ?? input.run.pinnedCommit);
+              (candidate) => candidate.ticketId === baseDependencyTicketId,
+            )?.workerResult?.commitSha ?? repositoryPinnedCommit);
       yield* orchestrationEngine.dispatch({
         type: "thread.turn.start",
         commandId: yield* serverCommandId("implementation-ticket-code-review-turn"),
@@ -5275,6 +5577,9 @@ const make = Effect.gen(function* () {
    *
    * Returns true when it committed. A false result does not prove the tree
    * stayed dirty because another recovery may have committed it first.
+   *
+   * `cwd` names another repository's integration worktree. The same run-level
+   * threads write there, so they decide for it too.
    */
   const commitAbandonedOrchestratorWork = Effect.fn(
     "ImplementationWorkflowReactor.commitAbandonedOrchestratorWork",
@@ -5282,6 +5587,7 @@ const make = Effect.gen(function* () {
     readonly run: OrchestrationImplementationRun;
     readonly readModel: OrchestrationReadModel;
     readonly createdAt: string;
+    readonly cwd?: string;
   }) {
     const nowMs = Date.parse(input.createdAt);
     // Ask the threads, not the run's active pointers. A pointer is cleared as
@@ -5303,8 +5609,9 @@ const make = Effect.gen(function* () {
       (thread) => !stageThreadIsFinished({ thread, threads: input.readModel.threads, nowMs }),
     );
     if (ownerStillWorking) return false;
+    const cwd = input.cwd ?? input.run.orchestratorWorktreePath;
     const committed = yield* gitWorkflow.commitWorktree({
-      cwd: input.run.orchestratorWorktreePath,
+      cwd,
       message:
         "chore: recover work left by an interrupted agent\n\nCommitted by recovery so the run can continue. The agent writing these\nchanges stopped before committing them.",
     });
@@ -5318,6 +5625,7 @@ const make = Effect.gen(function* () {
         runId: input.run.id,
         branch: input.run.orchestratorBranch,
         commitSha: committed.commitSha,
+        ...(input.cwd === undefined ? {} : { worktreePath: input.cwd }),
       },
       createdAt: input.createdAt,
     });
@@ -5368,8 +5676,52 @@ const make = Effect.gen(function* () {
       head = yield* gitWorkflow.resolveCommit({ cwd, ref: "HEAD" });
       status = yield* gitWorkflow.localStatus({ cwd });
     }
-    return { head, status };
+    const repositories = yield* readRunRepositories(input);
+    return { head, status, ...repositories };
   });
+
+  /**
+   * Reads every other repository's integration worktree the same way: rescue
+   * abandoned work, then require it clean on the run's branch. The heads are
+   * keyed by project, and `repositoryProblem` names the first worktree that
+   * is not clean there.
+   */
+  const readRunRepositories = Effect.fn("ImplementationWorkflowReactor.readRunRepositories")(
+    function* (input: {
+      readonly run: OrchestrationImplementationRun;
+      readonly readModel: OrchestrationReadModel;
+      readonly rescueAbandonedWork: boolean;
+      readonly createdAt: string;
+    }) {
+      const repositoryHeads = new Map<string, string>();
+      for (const repository of input.run.repositories) {
+        const cwd = repository.worktreePath;
+        let status = yield* gitWorkflow.localStatus({ cwd });
+        if (
+          input.rescueAbandonedWork &&
+          status.isRepo &&
+          status.refName === input.run.orchestratorBranch &&
+          status.hasWorkingTreeChanges
+        ) {
+          yield* commitAbandonedOrchestratorWork({ ...input, cwd });
+          status = yield* gitWorkflow.localStatus({ cwd });
+        }
+        if (
+          !status.isRepo ||
+          status.refName !== input.run.orchestratorBranch ||
+          status.hasWorkingTreeChanges
+        ) {
+          return {
+            repositoryHeads,
+            repositoryProblem: `${cwd} must be clean on '${input.run.orchestratorBranch}', but Git reports '${status.refName ?? "detached HEAD"}'${status.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`,
+          };
+        }
+        const head = yield* gitWorkflow.resolveCommit({ cwd, ref: "HEAD" });
+        repositoryHeads.set(repository.projectId, head.commitSha);
+      }
+      return { repositoryHeads, repositoryProblem: null as string | null };
+    },
+  );
 
   const startRegressionRepair = Effect.fn("ImplementationWorkflowReactor.startRegressionRepair")(
     function* (input: {
@@ -5411,6 +5763,8 @@ const make = Effect.gen(function* () {
       readonly sourceThreadId: ThreadId;
       readonly run: OrchestrationImplementationRun;
       readonly integration: BranchIntegration;
+      /** How each other repository's tips merged, when this gate follows integration. */
+      readonly repositoryIntegrations?: ReadonlyArray<RepositoryIntegration>;
       readonly kind: "integration" | "final";
       readonly preserveCodeReviewedHead?: boolean;
       readonly createdAt: string;
@@ -5493,7 +5847,12 @@ const make = Effect.gen(function* () {
       }
 
       const validatorThreadId = yield* serverThreadId("implementation-validator");
-      const { head: validationHead, status: validationStatus } = yield* readOrchestratorWorktree({
+      const {
+        head: validationHead,
+        status: validationStatus,
+        repositoryHeads,
+        repositoryProblem,
+      } = yield* readOrchestratorWorktree({
         run: input.run,
         readModel,
         rescueAbandonedWork: input.kind === "integration",
@@ -5532,6 +5891,30 @@ const make = Effect.gen(function* () {
           run: input.run,
           retryableStage: "merge-gate",
           reasonMarkdown: `${input.kind === "final" ? "Final validation" : "Merge Gate"} requires clean expected HEAD '${expectedValidationHead ?? validationHead.commitSha}' on '${input.run.orchestratorBranch}', but Git reports '${validationStatus.refName ?? "detached HEAD"}' at '${validationHead.commitSha}'${validationStatus.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`,
+          updatedAt: input.createdAt,
+          humanBlocked: true,
+        });
+        return;
+      }
+      // Final validation covers exactly what Code Review accepted in every
+      // repository, compared like the orchestrator's: only once it recorded one.
+      const unreviewedRepositories =
+        input.kind === "final"
+          ? repositoriesMovedFrom(input.run, "codeReviewedHeadSha", repositoryHeads).filter(
+              (repository) => repository.codeReviewedHeadSha !== null,
+            )
+          : [];
+      if (repositoryProblem !== null || unreviewedRepositories.length > 0) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          retryableStage: "merge-gate",
+          reasonMarkdown: `${input.kind === "final" ? "Final validation" : "Merge Gate"} ${
+            repositoryProblem ??
+            `requires the commits Code Review accepted, but ${unreviewedRepositories
+              .map((repository) => repository.worktreePath)
+              .join(", ")} moved after it.`
+          }`,
           updatedAt: input.createdAt,
           humanBlocked: true,
         });
@@ -5585,6 +5968,18 @@ const make = Effect.gen(function* () {
       }
       const validatingRun: OrchestrationImplementationRun = {
         ...input.run,
+        // Other repositories forget what the run forgets below.
+        repositories: input.run.repositories.map((repository) => ({
+          ...repository,
+          validatedHeadSha: null,
+          changeRequest: null,
+          ...(input.kind === "integration"
+            ? {
+                appReviewedHeadSha: null,
+                ...(input.preserveCodeReviewedHead ? {} : { codeReviewedHeadSha: null }),
+              }
+            : {}),
+        })),
         status: "validating",
         ...(finalRegression
           ? {
@@ -5662,6 +6057,7 @@ const make = Effect.gen(function* () {
             buildMergeGatePrompt({
               run: validatingRun,
               integration: input.integration,
+              repositoryIntegrations: input.repositoryIntegrations ?? [],
               kind: input.kind,
             }),
             WORKFLOW_PROMPT_IDS.implementationMergeGateCodex,
@@ -5697,17 +6093,19 @@ const make = Effect.gen(function* () {
     for (const state of run.ticketStates.filter((candidate) => candidate.status === "succeeded")) {
       if (state.workerResult?.status !== "succeeded") continue;
       const accepted = yield* verifiedDependency({ run, ticketId: state.ticketId });
+      // Each ticket integrates into its own repository's worktree.
+      const cwd = ticketRepositoryWorktreePath(run, state.ticketId);
       const integrated = yield* gitWorkflow.isAncestor({
-        cwd: run.orchestratorWorktreePath,
+        cwd,
         ancestorRef: accepted.commitSha,
-        descendantRef: head.commitSha,
+        descendantRef: "HEAD",
       });
       if (!integrated) {
         return yield* new GitCommandError({
           operation: "ImplementationWorkflowReactor.verifyIntegratedWorkerCommits",
           command: "git merge-base --is-ancestor",
-          cwd: run.orchestratorWorktreePath,
-          detail: `Integrated HEAD '${head.commitSha}' does not contain ticket '${state.ticketId}' at '${accepted.commitSha}'.`,
+          cwd,
+          detail: `Integrated HEAD in ${cwd} does not contain ticket '${state.ticketId}' at '${accepted.commitSha}'.`,
         });
       }
     }
@@ -5757,14 +6155,18 @@ const make = Effect.gen(function* () {
         return;
       }
       const terminalBranches = terminalBranchesResult.success;
+      const repositoryTerminals = (projectId: string | undefined) =>
+        terminalBranches
+          .filter(
+            (terminal) =>
+              ticketRunRepository(integratingRun, terminal.ticketId)?.projectId === projectId,
+          )
+          .map((terminal) => ({ ticketId: terminal.ticketId, refName: terminal.commitSha }));
       const integrationResult = yield* integrateRefs({
         cwd: integratingRun.orchestratorWorktreePath,
         baseTicketId: null,
         baseRefName: integratingRun.orchestratorBranch,
-        refs: terminalBranches.map((terminal) => ({
-          ticketId: terminal.ticketId,
-          refName: terminal.commitSha,
-        })),
+        refs: repositoryTerminals(undefined),
       }).pipe(Effect.result);
       if (integrationResult._tag === "Failure") {
         const detail = `Ticket integration failed: ${errorDetail(integrationResult.failure)}`;
@@ -5808,23 +6210,53 @@ const make = Effect.gen(function* () {
         return;
       }
       const integration = integrationResult.success;
+      // Every other repository merges its own tips into its own worktree. A
+      // conflict there goes to the gate like the orchestrator's does.
+      const repositoryIntegrationsResult = yield* Effect.forEach(
+        integratingRun.repositories,
+        (repository) =>
+          integrateRefs({
+            cwd: repository.worktreePath,
+            baseTicketId: null,
+            baseRefName: integratingRun.orchestratorBranch,
+            refs: repositoryTerminals(repository.projectId),
+          }).pipe(Effect.map((repositoryIntegration) => ({ repository, repositoryIntegration }))),
+      ).pipe(Effect.result);
+      if (repositoryIntegrationsResult._tag === "Failure") {
+        yield* blockIntegration(
+          `Ticket integration in another repository failed: ${errorDetail(repositoryIntegrationsResult.failure)}`,
+        );
+        return;
+      }
+      const repositoryIntegrations = repositoryIntegrationsResult.success.map(
+        ({ repository, repositoryIntegration }) => ({
+          worktreePath: repository.worktreePath,
+          integration: repositoryIntegration,
+        }),
+      );
+      const conflicted =
+        integration.conflictedTicketId !== null ||
+        repositoryIntegrations.some((entry) => entry.integration.conflictedTicketId !== null);
 
       yield* appendActivity({
         threadId: integratingRun.orchestratorThreadId,
-        tone: integration.conflictedTicketId === null ? "info" : "error",
+        tone: conflicted ? "error" : "info",
         kind: "implementation-terminal-branches-integrated",
-        summary:
-          integration.conflictedTicketId === null
-            ? "Terminal worker branches integrated"
-            : "Terminal branch merge needs resolution",
-        payload: { runId: integratingRun.id, terminalTicketIds: terminalIds, ...integration },
+        summary: conflicted
+          ? "Terminal branch merge needs resolution"
+          : "Terminal worker branches integrated",
+        payload: {
+          runId: integratingRun.id,
+          terminalTicketIds: terminalIds,
+          ...integration,
+          ...(repositoryIntegrations.length === 0 ? {} : { repositoryIntegrations }),
+        },
         createdAt: input.createdAt,
       });
 
-      const verified =
-        integration.conflictedTicketId === null
-          ? yield* verifyIntegratedWorkerCommits(integratingRun).pipe(Effect.result)
-          : null;
+      const verified = !conflicted
+        ? yield* verifyIntegratedWorkerCommits(integratingRun).pipe(Effect.result)
+        : null;
       if (verified !== null && verified._tag === "Failure") {
         yield* blockIntegration(
           `Integration verification failed: ${errorDetail(verified.failure)}`,
@@ -5858,33 +6290,54 @@ const make = Effect.gen(function* () {
         });
         return;
       }
-      const setupResult = yield* projectSetupScriptRunner
-        .runForThread({
-          threadId: integratedRun.orchestratorThreadId,
+      // Every integrated worktree refreshes its dependencies with its own
+      // project's setup, one after another.
+      const setupTargets = [
+        {
           projectId: orchestratorThread.projectId,
           worktreePath: integratedRun.orchestratorWorktreePath,
-          observeCompletion: {},
-        })
-        .pipe(
-          Effect.flatMap((result) => {
-            if (result.status !== "started" || !result.completion) return Effect.void;
-            return result.completion.pipe(
-              Effect.flatMap((completion) =>
-                completion.exitCode === 0
-                  ? Effect.void
-                  : Effect.fail(
-                      new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
-                        threadId: integratedRun.orchestratorThreadId,
-                        worktreePath: integratedRun.orchestratorWorktreePath,
-                        operation: "executeCommand",
-                        cause: `Setup command exited with code ${completion.exitCode ?? "unknown"}.`,
-                      }),
-                    ),
-              ),
-            );
-          }),
-          Effect.result,
-        );
+          preferredTerminalId: undefined,
+        },
+        ...integratedRun.repositories.map((repository) => ({
+          projectId: repository.projectId,
+          worktreePath: repository.worktreePath,
+          preferredTerminalId: `setup-${repository.projectId}`,
+        })),
+      ];
+      const setupResult = yield* Effect.forEach(
+        setupTargets,
+        (target) =>
+          projectSetupScriptRunner
+            .runForThread({
+              threadId: integratedRun.orchestratorThreadId,
+              projectId: target.projectId,
+              worktreePath: target.worktreePath,
+              ...(target.preferredTerminalId === undefined
+                ? {}
+                : { preferredTerminalId: target.preferredTerminalId }),
+              observeCompletion: {},
+            })
+            .pipe(
+              Effect.flatMap((result) => {
+                if (result.status !== "started" || !result.completion) return Effect.void;
+                return result.completion.pipe(
+                  Effect.flatMap((completion) =>
+                    completion.exitCode === 0
+                      ? Effect.void
+                      : Effect.fail(
+                          new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
+                            threadId: integratedRun.orchestratorThreadId,
+                            worktreePath: target.worktreePath,
+                            operation: "executeCommand",
+                            cause: `Setup command exited with code ${completion.exitCode ?? "unknown"}.`,
+                          }),
+                        ),
+                  ),
+                );
+              }),
+            ),
+        { discard: true },
+      ).pipe(Effect.result);
       if (setupResult._tag === "Failure") {
         yield* blockRun({
           sourceThreadId: input.sourceThreadId,
@@ -5900,11 +6353,61 @@ const make = Effect.gen(function* () {
         sourceThreadId: input.sourceThreadId,
         run: integratedRun,
         integration,
+        repositoryIntegrations,
         kind: "integration",
         createdAt: input.createdAt,
       });
     },
   );
+
+  /**
+   * The platform apps of the run's other repositories, which the shared stack
+   * bundles so the review runs every repository's change together. Their
+   * integration worktrees sit on the run's branch, which is how the bundle
+   * finds them. Without a plan the stack runs the orchestrator's app alone,
+   * and the run says so.
+   */
+  const runRepositoryBundleApps = Effect.fn(
+    "ImplementationWorkflowReactor.runRepositoryBundleApps",
+  )(function* (input: {
+    readonly run: OrchestrationImplementationRun;
+    readonly createdAt: string;
+  }) {
+    if (input.run.repositories.length === 0) return [] as ReadonlyArray<string>;
+    const plan = yield* appStackManager
+      .bundlePlan({
+        worktreePath: input.run.orchestratorWorktreePath,
+        gitBranch: input.run.orchestratorBranch,
+      })
+      .pipe(Effect.result);
+    if (plan._tag === "Failure") {
+      yield* appendActivity({
+        threadId: input.run.orchestratorThreadId,
+        tone: "error",
+        kind: "implementation-app-stack-bundle-unavailable",
+        summary: "The shared App Stack cannot run the other repositories' apps",
+        payload: { runId: input.run.id, detail: errorDetail(plan.failure) },
+        createdAt: input.createdAt,
+      });
+      return [] as ReadonlyArray<string>;
+    }
+    const runPaths = new Set(
+      input.run.repositories.flatMap((repository) => [
+        normalizeWorkflowWorktreePath(repository.worktreePath),
+        normalizeWorkflowWorktreePath(repository.repositoryPath),
+      ]),
+    );
+    return plan.success.members
+      .filter(
+        (member) =>
+          member.app !== plan.success.app &&
+          [member.worktreePath, member.repositoryPath].some(
+            (memberPath) =>
+              memberPath != null && runPaths.has(normalizeWorkflowWorktreePath(memberPath)),
+          ),
+      )
+      .map((member) => member.app);
+  });
 
   const startBrowserReview = Effect.fn("ImplementationWorkflowReactor.startBrowserReview")(
     function* (input: {
@@ -6006,6 +6509,10 @@ const make = Effect.gen(function* () {
       const inheritedLookup = yield* appStackManager
         .getByWorktree({ worktreePath: cycleRun.orchestratorWorktreePath })
         .pipe(Effect.result);
+      const bundleApps =
+        inheritedLookup._tag === "Failure"
+          ? []
+          : yield* runRepositoryBundleApps({ run: cycleRun, createdAt: input.createdAt });
       const stackResult =
         inheritedLookup._tag === "Failure"
           ? null
@@ -6018,6 +6525,7 @@ const make = Effect.gen(function* () {
                     : `Implementation ${cycleRun.id}`,
                 gitBranch: cycleRun.orchestratorBranch,
                 workflowId: orchestratorThread.workflowContext?.workflowId,
+                ...(bundleApps.length === 0 ? {} : { bundle: bundleApps }),
               })
               .pipe(Effect.result);
 
@@ -6216,7 +6724,11 @@ const make = Effect.gen(function* () {
         }
       }
 
-      const { head: reviewHead, status: reviewStatus } = yield* readOrchestratorWorktree({
+      const {
+        head: reviewHead,
+        status: reviewStatus,
+        repositoryProblem: reviewRepositoryProblem,
+      } = yield* readOrchestratorWorktree({
         run: cycleRun,
         readModel,
         rescueAbandonedWork: true,
@@ -6225,13 +6737,17 @@ const make = Effect.gen(function* () {
       if (
         !reviewStatus.isRepo ||
         reviewStatus.refName !== input.run.orchestratorBranch ||
-        reviewStatus.hasWorkingTreeChanges
+        reviewStatus.hasWorkingTreeChanges ||
+        reviewRepositoryProblem !== null
       ) {
         yield* blockRun({
           sourceThreadId: input.sourceThreadId,
           run: input.run,
           retryableStage: "app-review",
-          reasonMarkdown: `App Review requires a clean worktree on '${input.run.orchestratorBranch}', but Git reports '${reviewStatus.refName ?? "detached HEAD"}'${reviewStatus.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`,
+          reasonMarkdown:
+            reviewRepositoryProblem === null
+              ? `App Review requires a clean worktree on '${input.run.orchestratorBranch}', but Git reports '${reviewStatus.refName ?? "detached HEAD"}'${reviewStatus.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`
+              : `App Review requires ${reviewRepositoryProblem}`,
           updatedAt: input.createdAt,
           humanBlocked: true,
         });
@@ -6576,7 +7092,11 @@ const make = Effect.gen(function* () {
       ) {
         return;
       }
-      const { head: reviewHead, status: preflight } = yield* readOrchestratorWorktree({
+      const {
+        head: reviewHead,
+        status: preflight,
+        repositoryProblem: preflightRepositoryProblem,
+      } = yield* readOrchestratorWorktree({
         run: input.run,
         readModel,
         rescueAbandonedWork: true,
@@ -6585,13 +7105,17 @@ const make = Effect.gen(function* () {
       if (
         !preflight.isRepo ||
         preflight.refName !== input.run.orchestratorBranch ||
-        preflight.hasWorkingTreeChanges
+        preflight.hasWorkingTreeChanges ||
+        preflightRepositoryProblem !== null
       ) {
         yield* blockRun({
           sourceThreadId: input.sourceThreadId,
           run: input.run,
           retryableStage: "code-review",
-          reasonMarkdown: `Code Review requires a clean worktree on '${input.run.orchestratorBranch}', but Git reports '${preflight.refName ?? "detached HEAD"}'${preflight.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`,
+          reasonMarkdown:
+            preflightRepositoryProblem === null
+              ? `Code Review requires a clean worktree on '${input.run.orchestratorBranch}', but Git reports '${preflight.refName ?? "detached HEAD"}'${preflight.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`
+              : `Code Review requires ${preflightRepositoryProblem}`,
           updatedAt: input.createdAt,
           humanBlocked: true,
         });
@@ -6901,8 +7425,25 @@ const make = Effect.gen(function* () {
     readonly run: OrchestrationImplementationRun;
     readonly createdAt: string;
   }) {
+    // The orchestrator's pull request first, then each other repository's.
+    const changeRequests = [
+      ...(input.run.changeRequest === null
+        ? []
+        : [
+            {
+              changeRequest: input.run.changeRequest,
+              worktreePath: input.run.orchestratorWorktreePath,
+            },
+          ]),
+      ...input.run.repositories.flatMap((repository) =>
+        repository.changeRequest === null
+          ? []
+          : [{ changeRequest: repository.changeRequest, worktreePath: repository.worktreePath }],
+      ),
+    ];
+    const firstChangeRequest = changeRequests[0]?.changeRequest;
     if (
-      input.run.changeRequest === null ||
+      firstChangeRequest === undefined ||
       (input.run.status !== "publishing-change-request" &&
         input.run.status !== "babysitting-change-request")
     ) {
@@ -6952,7 +7493,7 @@ const make = Effect.gen(function* () {
       createdAt: input.createdAt,
       expectedChangeRequestClaim: {
         status: input.run.status,
-        changeRequestNumber: input.run.changeRequest.number,
+        changeRequestNumber: input.run.changeRequest?.number ?? null,
         activeBabysitterThreadId: input.run.activeChangeRequestBabysitterThreadId,
       },
     });
@@ -6969,7 +7510,10 @@ const make = Effect.gen(function* () {
         ownerUserId: orchestratorThread.ownerUserId,
         parentThreadId: input.run.orchestratorThreadId,
         workflowRole: "implementation-change-request-babysitter",
-        title: `Babysit PR #${input.run.changeRequest.number}`,
+        title:
+          changeRequests.length === 1
+            ? `Babysit PR #${firstChangeRequest.number}`
+            : `Babysit ${changeRequests.length} pull requests`,
         modelSelection: yield* modelForStep({
           workflowPromptId: WORKFLOW_PROMPT_IDS.implementationChangeRequestBabysitterCodex,
           orchestratorThread,
@@ -6991,11 +7535,25 @@ const make = Effect.gen(function* () {
         role: "user",
         text: appendWorkflowSkillCommandSection(
           [
-            `Babysit GitHub pull request #${input.run.changeRequest.number} (${input.run.changeRequest.url}) for implementation run ${input.run.id}.`,
-            "",
-            "Watch the checks and review feedback on the latest pushed commit. Use gh to inspect GitHub Actions failures and unresolved actionable review threads. Verify every finding against the source. Fix real failures in this worktree, run the smallest relevant local checks, commit, and push the branch. After every push, restart monitoring against the new latest commit.",
-            "",
-            "Stay active until all required GitHub checks on the latest commit pass and no actionable review feedback remains. Do not merge the pull request. Do not report success for an older commit. If access, infrastructure, or a required external decision makes progress impossible, report blocked with the concrete reason.",
+            ...(changeRequests.length === 1
+              ? [
+                  `Babysit GitHub pull request #${firstChangeRequest.number} (${firstChangeRequest.url}) for implementation run ${input.run.id}.`,
+                  "",
+                  "Watch the checks and review feedback on the latest pushed commit. Use gh to inspect GitHub Actions failures and unresolved actionable review threads. Verify every finding against the source. Fix real failures in this worktree, run the smallest relevant local checks, commit, and push the branch. After every push, restart monitoring against the new latest commit.",
+                  "",
+                  "Stay active until all required GitHub checks on the latest commit pass and no actionable review feedback remains. Do not merge the pull request. Do not report success for an older commit. If access, infrastructure, or a required external decision makes progress impossible, report blocked with the concrete reason.",
+                ]
+              : [
+                  `Babysit these GitHub pull requests for implementation run ${input.run.id}. They are one change across repositories:`,
+                  ...changeRequests.map(
+                    ({ changeRequest, worktreePath }) =>
+                      `- #${changeRequest.number} (${changeRequest.url}) from ${worktreePath}`,
+                  ),
+                  "",
+                  "Watch the checks and review feedback on each pull request's latest pushed commit. Use gh to inspect GitHub Actions failures and unresolved actionable review threads. Verify every finding against the source. Fix real failures in the worktree of the pull request they belong to, run the smallest relevant local checks, commit, and push that branch. After every push, restart monitoring against the new latest commit.",
+                  "",
+                  "Stay active until all required GitHub checks on every pull request's latest commit pass and no actionable review feedback remains. Do not merge any pull request. Do not report success for an older commit. Report the orchestrator worktree's HEAD as headSha. If access, infrastructure, or a required external decision makes progress impossible, report blocked with the concrete reason.",
+                ]),
             "",
             "Finish with exactly one fenced JSON block:",
             "```json",
@@ -7027,10 +7585,53 @@ const make = Effect.gen(function* () {
       threadId: input.run.orchestratorThreadId,
       tone: "info",
       kind: "implementation-change-request-babysit-started",
-      summary: `Watching checks and reviews for PR #${input.run.changeRequest.number}`,
+      summary:
+        changeRequests.length === 1
+          ? `Watching checks and reviews for PR #${firstChangeRequest.number}`
+          : `Watching checks and reviews for ${changeRequests.length} pull requests`,
       payload: { runId: input.run.id, babysitterThreadId },
       createdAt: input.createdAt,
     });
+  });
+
+  /**
+   * The remote branch a pull request from `cwd` targets: the run's base branch
+   * when the remote has it, otherwise the remote's default branch.
+   */
+  const resolvePublicationBaseBranch = Effect.fn(
+    "ImplementationWorkflowReactor.resolvePublicationBaseBranch",
+  )(function* (input: { readonly cwd: string; readonly baseBranch: string }) {
+    const remoteRefsResult = yield* gitWorkflow
+      .listRefs({
+        cwd: input.cwd,
+        query: input.baseBranch,
+        includeMatchingRemoteRefs: true,
+        refKind: "remote",
+        refresh: true,
+      })
+      .pipe(Effect.result);
+    const fallbackRefsResult =
+      remoteRefsResult._tag === "Success" &&
+      selectPublicationBaseBranch(input.baseBranch, remoteRefsResult.success.refs) === null
+        ? yield* gitWorkflow
+            .listRefs({
+              cwd: input.cwd,
+              includeMatchingRemoteRefs: true,
+              refKind: "remote",
+              refresh: true,
+            })
+            .pipe(Effect.result)
+        : remoteRefsResult;
+    const branch =
+      fallbackRefsResult._tag === "Success"
+        ? selectPublicationBaseBranch(input.baseBranch, fallbackRefsResult.success.refs)
+        : null;
+    const lookupFailure =
+      fallbackRefsResult._tag === "Failure" ? ` ${errorDetail(fallbackRefsResult.failure)}` : "";
+    return {
+      branch,
+      failureMarkdown: `Cannot publish because remote base branch '${input.baseBranch}' does not exist and the repository default branch could not be resolved.${lookupFailure}`,
+    };
   });
 
   const fileChangeRequestUnlocked = Effect.fn(
@@ -7136,39 +7737,46 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    const remoteRefsResult = yield* gitWorkflow
-      .listRefs({
-        cwd: input.run.orchestratorWorktreePath,
-        query: input.run.baseBranch,
-        includeMatchingRemoteRefs: true,
-        refKind: "remote",
-        refresh: true,
-      })
-      .pipe(Effect.result);
-    const fallbackRefsResult =
-      remoteRefsResult._tag === "Success" &&
-      selectPublicationBaseBranch(input.run.baseBranch, remoteRefsResult.success.refs) === null
-        ? yield* gitWorkflow
-            .listRefs({
-              cwd: input.run.orchestratorWorktreePath,
-              includeMatchingRemoteRefs: true,
-              refKind: "remote",
-              refresh: true,
-            })
-            .pipe(Effect.result)
-        : remoteRefsResult;
-    const publicationBaseBranch =
-      fallbackRefsResult._tag === "Success"
-        ? selectPublicationBaseBranch(input.run.baseBranch, fallbackRefsResult.success.refs)
-        : null;
+    // Every other repository publishes exactly what was reviewed and validated.
+    const {
+      repositoryHeads: publishedRepositoryHeads,
+      repositoryProblem: publishRepositoryProblem,
+    } = yield* readRunRepositories({
+      run: input.run,
+      readModel,
+      rescueAbandonedWork: false,
+      createdAt: input.createdAt,
+    });
+    const unvalidatedRepositories = input.run.repositories.filter(
+      (repository) =>
+        repository.codeReviewedHeadSha === null ||
+        repository.codeReviewedHeadSha !== publishedRepositoryHeads.get(repository.projectId) ||
+        repository.validatedHeadSha !== repository.codeReviewedHeadSha,
+    );
+    if (publishRepositoryProblem !== null || unvalidatedRepositories.length > 0) {
+      yield* blockRun({
+        sourceThreadId: input.sourceThreadId,
+        run: input.run,
+        retryableStage: "merge-gate",
+        reasonMarkdown: `Cannot publish because ${
+          publishRepositoryProblem ??
+          `${unvalidatedRepositories.map((repository) => repository.worktreePath).join(", ")} lack passing Code Review and validation for their current HEAD.`
+        }`,
+        updatedAt: input.createdAt,
+      });
+      return;
+    }
+    const publicationBase = yield* resolvePublicationBaseBranch({
+      cwd: input.run.orchestratorWorktreePath,
+      baseBranch: input.run.baseBranch,
+    });
+    const publicationBaseBranch = publicationBase.branch;
     if (publicationBaseBranch === null) {
-      const lookupFailure =
-        fallbackRefsResult._tag === "Failure" ? ` ${errorDetail(fallbackRefsResult.failure)}` : "";
       yield* blockRun({
         sourceThreadId: input.sourceThreadId,
         run: input.run,
         retryableStage: "change-request",
-        reasonMarkdown: `Cannot publish because remote base branch '${input.run.baseBranch}' does not exist and the repository default branch could not be resolved.${lookupFailure}`,
+        reasonMarkdown: publicationBase.failureMarkdown,
         updatedAt: input.createdAt,
         humanBlocked: true,
       });
@@ -7216,95 +7824,177 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    const result = yield* gitWorkflow
-      .createOrOpenChangeRequest({
-        cwd: claimedRun.orchestratorWorktreePath,
-        actionId: claimedRun.id,
-        baseRefName: publicationBaseBranch,
-        headRefName: claimedRun.orchestratorBranch,
-        expectedHeadSha,
-        threadId: claimedRun.orchestratorThreadId,
-        commitMessage: `${commitTitle}\n\n${reviewOutcomeNote}`,
-        pullRequestBodyNote: reviewOutcomeNote,
-      })
-      .pipe(Effect.result);
-
-    if (result._tag === "Failure") {
-      yield* updateRun({
-        sourceThreadId: input.sourceThreadId,
-        run: {
-          ...claimedRun,
-          status: "needs-human-attention",
-          changeRequestFailure: changeRequestFailure({
-            detail: errorDetail(result.failure),
-            failedAt: input.createdAt,
-          }),
-          retryableFailure: {
-            stage: "change-request",
-            detail: errorDetail(result.failure),
-            failedAt: input.createdAt,
-            attemptCount:
-              claimedRun.retryableFailure?.stage === "change-request"
-                ? claimedRun.retryableFailure.attemptCount + 1
-                : 1,
-            maxAttempts: 3,
-            humanBlocked: false,
+    // A failed publication leaves the run for a human, keeping every pull
+    // request already filed so a retry files only the rest.
+    const recordPublicationFailure = (run: OrchestrationImplementationRun, failure: unknown) =>
+      Effect.gen(function* () {
+        yield* updateRun({
+          sourceThreadId: input.sourceThreadId,
+          run: {
+            ...run,
+            status: "needs-human-attention",
+            changeRequestFailure: changeRequestFailure({
+              detail: errorDetail(failure),
+              failedAt: input.createdAt,
+            }),
+            retryableFailure: {
+              stage: "change-request",
+              detail: errorDetail(failure),
+              failedAt: input.createdAt,
+              attemptCount:
+                run.retryableFailure?.stage === "change-request"
+                  ? run.retryableFailure.attemptCount + 1
+                  : 1,
+              maxAttempts: 3,
+              humanBlocked: false,
+            },
+            updatedAt: input.createdAt,
           },
-          updatedAt: input.createdAt,
-        },
-        createdAt: input.createdAt,
-        expectedChangeRequestClaim: {
-          status: "publishing-change-request",
-          changeRequestNumber: null,
-          activeBabysitterThreadId: null,
-        },
+          createdAt: input.createdAt,
+          expectedChangeRequestClaim: {
+            status: "publishing-change-request",
+            changeRequestNumber: null,
+            activeBabysitterThreadId: null,
+          },
+        });
+        yield* appendActivity({
+          threadId: run.orchestratorThreadId,
+          tone: "error",
+          kind: "implementation-change-request-filed",
+          summary: "Change request publication failed",
+          payload: {
+            runId: run.id,
+            status: "failed",
+            detail: errorDetail(failure),
+          },
+          createdAt: input.createdAt,
+        });
       });
-      yield* appendActivity({
-        threadId: claimedRun.orchestratorThreadId,
-        tone: "error",
-        kind: "implementation-change-request-filed",
-        summary: "Change request publication failed",
-        payload: {
-          runId: claimedRun.id,
-          status: "failed",
-          detail: errorDetail(result.failure),
-        },
+    const recordFiled = (
+      run: OrchestrationImplementationRun,
+      changeRequest: NonNullable<OrchestrationImplementationRun["changeRequest"]>,
+    ) =>
+      Effect.gen(function* () {
+        yield* updateRun({
+          sourceThreadId: input.sourceThreadId,
+          run,
+          createdAt: input.createdAt,
+          expectedChangeRequestClaim: {
+            status: "publishing-change-request",
+            changeRequestNumber: null,
+            activeBabysitterThreadId: null,
+          },
+        });
+        yield* appendActivity({
+          threadId: run.orchestratorThreadId,
+          tone: workInProgress ? "error" : "info",
+          kind: "implementation-change-request-filed",
+          summary: `${workInProgress ? "Work-in-progress change request" : "Change request"} filed (#${changeRequest.number})`,
+          payload: {
+            runId: run.id,
+            status: "filed",
+            workInProgress,
+            url: changeRequest.url,
+            number: changeRequest.number,
+          },
+          createdAt: input.createdAt,
+        });
+      });
+
+    // Every other repository with changes gets its own pull request first, so
+    // the orchestrator's can name them all.
+    let filingRun = claimedRun;
+    for (const repository of claimedRun.repositories) {
+      if (repository.changeRequest !== null) continue;
+      const repositoryHead = publishedRepositoryHeads.get(repository.projectId);
+      if (repositoryHead === undefined) continue;
+      const repositoryChanges = yield* gitWorkflow.listChangedFiles({
+        cwd: repository.worktreePath,
+        baseRef: repository.pinnedCommit,
+        headRef: repositoryHead,
+      });
+      if (repositoryChanges.length === 0) continue;
+      const repositoryBase = yield* resolvePublicationBaseBranch({
+        cwd: repository.worktreePath,
+        baseBranch: repository.baseBranch,
+      });
+      if (repositoryBase.branch === null) {
+        yield* recordPublicationFailure(
+          filingRun,
+          `${repository.worktreePath}: ${repositoryBase.failureMarkdown}`,
+        );
+        return;
+      }
+      const repositoryResult = yield* gitWorkflow
+        .createOrOpenChangeRequest({
+          cwd: repository.worktreePath,
+          actionId: `${claimedRun.id}:${repository.projectId}`,
+          baseRefName: repositoryBase.branch,
+          headRefName: claimedRun.orchestratorBranch,
+          expectedHeadSha: repositoryHead,
+          threadId: claimedRun.orchestratorThreadId,
+          commitMessage: `${commitTitle}\n\n${reviewOutcomeNote}`,
+          pullRequestBodyNote: reviewOutcomeNote,
+        })
+        .pipe(Effect.result);
+      if (repositoryResult._tag === "Failure") {
+        yield* recordPublicationFailure(filingRun, repositoryResult.failure);
+        return;
+      }
+      filingRun = withRepositoryChangeRequest(
+        filingRun,
+        repository.projectId,
+        repositoryResult.success,
+        input.createdAt,
+      );
+      yield* recordFiled(filingRun, repositoryResult.success);
+    }
+    const relatedChangeRequests = filingRun.repositories.flatMap((repository) =>
+      repository.changeRequest === null ? [] : [repository.changeRequest],
+    );
+    // A run whose own repository did not change publishes only the others.
+    if (changedFiles.length === 0 && relatedChangeRequests.length > 0) {
+      yield* startChangeRequestBabysitter({
+        sourceThreadId: input.sourceThreadId,
+        run: filingRun,
         createdAt: input.createdAt,
       });
       return;
     }
+    const pullRequestBodyNote =
+      relatedChangeRequests.length === 0
+        ? reviewOutcomeNote
+        : [
+            reviewOutcomeNote,
+            "This change continues in other repositories:",
+            ...relatedChangeRequests.map((changeRequest) => `- ${changeRequest.url}`),
+          ].join("\n\n");
+    const result = yield* gitWorkflow
+      .createOrOpenChangeRequest({
+        cwd: filingRun.orchestratorWorktreePath,
+        actionId: filingRun.id,
+        baseRefName: publicationBaseBranch,
+        headRefName: filingRun.orchestratorBranch,
+        expectedHeadSha,
+        threadId: filingRun.orchestratorThreadId,
+        commitMessage: `${commitTitle}\n\n${reviewOutcomeNote}`,
+        pullRequestBodyNote,
+      })
+      .pipe(Effect.result);
+
+    if (result._tag === "Failure") {
+      yield* recordPublicationFailure(filingRun, result.failure);
+      return;
+    }
 
     const filedRun: OrchestrationImplementationRun = {
-      ...claimedRun,
+      ...filingRun,
       changeRequest: result.success,
       changeRequestFailure: null,
       retryableFailure: null,
       updatedAt: input.createdAt,
     };
-    yield* updateRun({
-      sourceThreadId: input.sourceThreadId,
-      run: filedRun,
-      createdAt: input.createdAt,
-      expectedChangeRequestClaim: {
-        status: "publishing-change-request",
-        changeRequestNumber: null,
-        activeBabysitterThreadId: null,
-      },
-    });
-    yield* appendActivity({
-      threadId: claimedRun.orchestratorThreadId,
-      tone: workInProgress ? "error" : "info",
-      kind: "implementation-change-request-filed",
-      summary: `${workInProgress ? "Work-in-progress change request" : "Change request"} filed (#${result.success.number})`,
-      payload: {
-        runId: claimedRun.id,
-        status: "filed",
-        workInProgress,
-        url: result.success.url,
-        number: result.success.number,
-      },
-      createdAt: input.createdAt,
-    });
+    yield* recordFiled(filedRun, result.success);
     yield* startChangeRequestBabysitter({
       sourceThreadId: input.sourceThreadId,
       run: filedRun,
@@ -7544,6 +8234,31 @@ const make = Effect.gen(function* () {
     const settings = yield* serverSettingsService.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
     );
+    const repositories = yield* resolveImplementationRepositories({
+      gitWorkflow,
+      path,
+      projects: readModel.projects,
+      tickets: event.payload.tickets,
+      workflowProjectId: thread.projectId,
+      baseBranch: thread.branch,
+      orchestratorBranch: thread.branch,
+      worktreesDir: serverConfig.worktreesDir,
+    }).pipe(Effect.result);
+    if (repositories._tag === "Failure") {
+      yield* appendActivity({
+        threadId: thread.id,
+        tone: "error",
+        kind: "implementation-run-launch-failed",
+        summary: "Implementation could not prepare a ticket's repository",
+        payload: { specId: event.payload.specId, detail: repositories.failure.message },
+        createdAt: event.occurredAt,
+      });
+      return;
+    }
+    const otherRepositoryValidationCommands = yield* repositoryValidationCommands(
+      projectFileLoader,
+      repositories.success,
+    );
     yield* orchestrationEngine.dispatch({
       type: "thread.implementation-run.launch",
       commandId: yield* serverCommandId("implementation-prompt-tickets-launch"),
@@ -7553,8 +8268,13 @@ const make = Effect.gen(function* () {
       pinnedCommit: head.commitSha,
       orchestratorBranch: thread.branch,
       orchestratorWorktreePath: thread.worktreePath,
-      validationCommands: [],
+      // Empty keeps the orchestrator's default commands; other repositories add theirs to them.
+      validationCommands:
+        otherRepositoryValidationCommands.length === 0
+          ? []
+          : [...resolveImplementationValidationCommands({}), ...otherRepositoryValidationCommands],
       skips: [...implementationWorkflowDefaultSkips(settings?.implementation)],
+      ...(repositories.success.length === 0 ? {} : { repositories: repositories.success }),
       createdAt: event.occurredAt,
     });
   });
@@ -7624,6 +8344,9 @@ const make = Effect.gen(function* () {
           baseRefName: event.payload.run.baseBranch,
           path: event.payload.run.orchestratorWorktreePath,
         });
+      }
+      for (const repository of event.payload.run.repositories) {
+        yield* ensureRepositoryWorktree({ run: event.payload.run, repository });
       }
 
       yield* orchestrationEngine.dispatch({
@@ -8197,6 +8920,24 @@ const make = Effect.gen(function* () {
       });
       const requiredCommands = completeValidationCommandsForFiles(run, changedFiles);
       const gateKind = run.activeValidationKind ?? "integration";
+      const { repositoryHeads, repositoryProblem } = yield* readRunRepositories({
+        run,
+        readModel,
+        rescueAbandonedWork: false,
+        createdAt: event.createdAt,
+      });
+      // Final validation may not change code in any repository.
+      const movedAfterReview =
+        gateKind === "final"
+          ? repositoriesMovedFrom(run, "codeReviewedHeadSha", repositoryHeads).filter(
+              (repository) => repository.codeReviewedHeadSha !== null,
+            )
+          : [];
+      const repositoryFailure =
+        repositoryProblem ??
+        (movedAfterReview.length > 0
+          ? `${movedAfterReview.map((repository) => repository.worktreePath).join(", ")} moved after Code Review.`
+          : null);
       const regression =
         gateKind === "final"
           ? recordRegressionCycle({
@@ -8245,6 +8986,7 @@ const make = Effect.gen(function* () {
         status.isRepo &&
         status.refName === run.orchestratorBranch &&
         !status.hasWorkingTreeChanges &&
+        repositoryFailure === null &&
         integrated &&
         validationsPassed;
 
@@ -8271,6 +9013,7 @@ const make = Effect.gen(function* () {
               `- Git is on '${status.refName ?? "detached HEAD"}', expected '${run.orchestratorBranch}'.`,
             ]),
         ...(status.hasWorkingTreeChanges ? ["- The orchestrator worktree is dirty."] : []),
+        ...(repositoryFailure === null ? [] : [`- ${repositoryFailure}`]),
         ...(integratedResult?._tag === "Failure"
           ? [`- ${errorDetail(integratedResult.failure)}`]
           : integrated
@@ -8315,6 +9058,7 @@ const make = Effect.gen(function* () {
             status.isRepo &&
             status.refName === run.orchestratorBranch &&
             !status.hasWorkingTreeChanges &&
+            repositoryFailure === null &&
             integrated;
           if (
             structurallyValid &&
@@ -8400,7 +9144,7 @@ const make = Effect.gen(function* () {
 
       if (gateKind === "final") {
         const validatedRun: OrchestrationImplementationRun = {
-          ...run,
+          ...withRepositoryHeads(run, "validatedHeadSha", repositoryHeads),
           status: "publishing-change-request",
           finalValidation: regressionSummary,
           finalValidationResults: regressionResults,
@@ -9373,6 +10117,26 @@ const make = Effect.gen(function* () {
         });
         return;
       }
+      const {
+        repositoryHeads: reviewedRepositoryHeads,
+        repositoryProblem: reviewedRepositoryProblem,
+      } = yield* readRunRepositories({
+        run,
+        readModel,
+        rescueAbandonedWork: false,
+        createdAt: updatedAt,
+      });
+      if (reviewedRepositoryProblem !== null) {
+        yield* blockRun({
+          sourceThreadId,
+          run,
+          retryableStage: "code-review",
+          reasonMarkdown: `Code Review must finish with committed, clean worktrees: ${reviewedRepositoryProblem}`,
+          updatedAt,
+          humanBlocked: true,
+        });
+        return;
+      }
 
       const changedFiles = yield* gitWorkflow.listChangedFiles({
         cwd: run.orchestratorWorktreePath,
@@ -9452,7 +10216,15 @@ const make = Effect.gen(function* () {
           ? "The complete validation did not pass exactly once for every configured command."
           : "The findings cycle did not report passing focused validation.";
         const reviewedRun: OrchestrationImplementationRun = {
-          ...run,
+          // Other repositories record the review and validation their heads got,
+          // the same as the orchestrator's below.
+          ...withRepositoryHeads(
+            withRepositoryHeads(run, "codeReviewedHeadSha", reviewedRepositoryHeads),
+            "validatedHeadSha",
+            completeValidationRequired && (completeValidationPassed || atCeiling)
+              ? reviewedRepositoryHeads
+              : null,
+          ),
           retryableFailure:
             run.retryableFailure?.stage === "code-review" &&
             run.retryableFailure.ticketId === undefined
@@ -9530,15 +10302,18 @@ const make = Effect.gen(function* () {
           return;
         }
 
+        // A change in any repository after App Review passed needs App Review again.
+        const appReviewedRepositoriesMoved =
+          repositoriesMovedFrom(run, "appReviewedHeadSha", reviewedRepositoryHeads).length > 0;
         if (
           run.appReviewE2eCommands !== undefined &&
-          run.appReviewedHeadSha !== head.commitSha &&
+          (run.appReviewedHeadSha !== head.commitSha || appReviewedRepositoriesMoved) &&
           directive.status !== "blocked" &&
           (directive.status === "clean" || atCeiling) &&
           validationPassed
         ) {
           const retestRun = {
-            ...reviewedRun,
+            ...withRepositoryHeads(reviewedRun, "appReviewedHeadSha", null),
             status: "qa-reviewing" as const,
             appReviewedHeadSha: null,
           };
@@ -9556,12 +10331,13 @@ const make = Effect.gen(function* () {
           run.appReviewE2eCommands !== undefined &&
           requiredCompleteCommands.length === 0 &&
           run.appReviewedHeadSha === head.commitSha &&
+          !appReviewedRepositoriesMoved &&
           directive.status === "clean"
         ) {
           yield* fileChangeRequest({
             sourceThreadId,
             run: {
-              ...reviewedRun,
+              ...withRepositoryHeads(reviewedRun, "validatedHeadSha", reviewedRepositoryHeads),
               status: "publishing-change-request",
               validatedHeadSha: head.commitSha,
               finalRegression: { checks: [], cycles: [], reviewBaseSha: null },
@@ -9662,7 +10438,7 @@ const make = Effect.gen(function* () {
           `Latest report:\n\n${directive.reportMarkdown}`,
         ].join("\n\n");
         const exhaustedRun: OrchestrationImplementationRun = {
-          ...reviewedRun,
+          ...withRepositoryHeads(reviewedRun, "validatedHeadSha", reviewedRepositoryHeads),
           status: "publishing-change-request",
           codeReviewExhaustedAt: updatedAt,
           codeReviewExhaustionReason: exhaustionReason,
@@ -9738,7 +10514,7 @@ const make = Effect.gen(function* () {
           return;
         }
         const reviewedRun: OrchestrationImplementationRun = {
-          ...run,
+          ...withRepositoryHeads(run, "codeReviewedHeadSha", reviewedRepositoryHeads),
           retryableFailure:
             run.retryableFailure?.stage === "code-review" &&
             run.retryableFailure.ticketId === undefined
@@ -9822,7 +10598,7 @@ const make = Effect.gen(function* () {
       }
 
       const reviewedRun: OrchestrationImplementationRun = {
-        ...run,
+        ...withRepositoryHeads(run, "codeReviewedHeadSha", reviewedRepositoryHeads),
         retryableFailure:
           run.retryableFailure?.stage === "code-review" &&
           run.retryableFailure.ticketId === undefined
@@ -11270,8 +12046,14 @@ const make = Effect.gen(function* () {
     }
     if (nestedRun.status === "passed") {
       const reviewedHeadSha = nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha;
+      const { repositoryHeads } = yield* readRunRepositories({
+        run,
+        readModel,
+        rescueAbandonedWork: false,
+        createdAt: event.occurredAt,
+      });
       const passedRun: OrchestrationImplementationRun = {
-        ...linkedRun,
+        ...withRepositoryHeads(linkedRun, "appReviewedHeadSha", repositoryHeads),
         // Claim the next stage before starting it. The nested run's terminal
         // event can arrive ahead of its read-model projection, and Code Review
         // correctly waits while that projection still calls the review active.

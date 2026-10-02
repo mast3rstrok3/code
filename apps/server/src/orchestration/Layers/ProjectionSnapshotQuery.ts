@@ -1453,6 +1453,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           app_review_plan_markdown AS "appReviewPlanMarkdown",
         app_review_commands_json AS "appReviewCommands",
         app_stack_json AS "appStack",
+        project_id AS "projectId",
           status,
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -2277,6 +2278,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           app_review_plan_markdown AS "appReviewPlanMarkdown",
         app_review_commands_json AS "appReviewCommands",
         app_stack_json AS "appStack",
+        project_id AS "projectId",
           status,
           created_at AS "createdAt",
           updated_at AS "updatedAt"

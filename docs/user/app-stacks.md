@@ -70,7 +70,8 @@ your Rudi instead of the standing one. A standing app never calls a bundle membe
 If a checked app has no worktree on the branch, T3 Code creates one where the form shows. The new
 worktree tracks `origin/<branch>` when the branch was pushed and otherwise starts from `origin/dev`.
 Each app runs in its own namespace. Stop, restart, and delete act on the whole bundle. Agents get
-the same choice through the `bundle` argument of `app_stack_start`. Bundles need a Stacks
+the same choice through the `bundle` argument of `app_stack_start`. A workflow whose tickets change
+other repositories bundles those repositories into its shared stack by itself. Bundles need a Stacks
 controller and are not available in native mode.
 
 A stack can also leave compose services out, per app, for example Rudi without `codex-runner` or

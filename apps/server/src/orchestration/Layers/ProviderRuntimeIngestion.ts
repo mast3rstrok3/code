@@ -16,7 +16,7 @@ import {
   TurnId,
   type OrchestrationCheckpointSummary,
   type OrchestrationThreadActivity,
-  type ProjectId,
+  ProjectId,
   type ProviderRequestKind,
   type ProviderRuntimeEvent,
   AppReviewId,
@@ -2573,6 +2573,9 @@ const make = Effect.gen(function* () {
                 : { appReviewCommands: ticket.appReviewCommands }),
               appReviewPlanMarkdown: ticket.appReviewPlanMarkdown,
               ...(ticket.appStack === undefined ? {} : { appStack: ticket.appStack }),
+              ...(ticket.projectId === undefined
+                ? {}
+                : { projectId: ProjectId.make(ticket.projectId) }),
             })),
             createdAt: input.createdAt,
           });
@@ -2655,14 +2658,23 @@ const make = Effect.gen(function* () {
                       ? {}
                       : { appReviewPlanMarkdown: edit.appReviewPlanMarkdown }),
                     ...(edit.appStack === undefined ? {} : { appStack: edit.appStack }),
+                    ...(edit.projectId === undefined
+                      ? {}
+                      : {
+                          projectId:
+                            edit.projectId === null ? null : ProjectId.make(edit.projectId),
+                        }),
                   };
-                case "create":
+                case "create": {
+                  const { projectId, ...created } = edit;
                   return {
-                    ...edit,
+                    ...created,
                     plannedFileChanges: edit.plannedFileChanges.map((change) => ({ ...change })),
                     dependencyKeys: [...edit.dependencyKeys],
                     replacesPlanningTicketIds: [...edit.replacesPlanningTicketIds],
+                    ...(projectId === undefined ? {} : { projectId: ProjectId.make(projectId) }),
                   };
+                }
                 case "update-dependencies":
                   return { ...edit, dependencyKeys: [...edit.dependencyKeys] };
                 case "delete":

@@ -337,16 +337,17 @@ export function implementationRunPublicationStageProgress(
   run: {
     readonly status: OrchestrationImplementationRunStatus;
     readonly changeRequest: unknown | null;
+    readonly repositories?: ReadonlyArray<{ readonly changeRequest: unknown | null }>;
     readonly retryableFailure?: OrchestrationImplementationRetryableFailure | null | undefined;
   },
   stage: "change-request" | "change-request-babysit",
 ): "completed" | "current" | "upcoming" {
-  if (stage === "change-request" && run.changeRequest !== null) return "completed";
-  if (
-    stage === "change-request-babysit" &&
-    run.status === "completed" &&
-    run.changeRequest !== null
-  ) {
+  // A run that changed only other repositories files only their pull requests.
+  const filed =
+    run.changeRequest !== null ||
+    (run.repositories ?? []).some((repository) => repository.changeRequest !== null);
+  if (stage === "change-request" && filed) return "completed";
+  if (stage === "change-request-babysit" && run.status === "completed" && filed) {
     return "completed";
   }
   return implementationRunCurrentStage(run) === stage ? "current" : "upcoming";

@@ -113,6 +113,7 @@ import {
   type WorkflowModelPinKey,
 } from "./WorkflowModelPins";
 import { workflowRoleShortLabel } from "./Sidebar.logic";
+import { basenameOfPath } from "~/pierre-icons";
 
 const STATUS_VISUALS: Record<
   WorkflowThreadStatus,
@@ -2063,6 +2064,11 @@ function TicketPhases(props: {
                 },
               ] as const;
               const ticketLabel = ticket.key ?? `Ticket ${ticket.ordinal + 1}`;
+              // A ticket in another repository names it; the workflow's own goes unnamed.
+              // Older servers send runs without repositories.
+              const ticketRepository = (props.run.repositories ?? []).find(
+                (repository) => repository.projectId === ticket.projectId,
+              );
               const ticketPause = workflowPauseOf(runThreads, linkedThreads);
               const ticketStatus = resolveWorkflowTicketStatus({
                 ticketState: state?.status ?? null,
@@ -2109,6 +2115,11 @@ function TicketPhases(props: {
                       >
                         {ticketLabel} · {ticket.title}
                       </span>
+                      {ticketRepository === undefined ? null : (
+                        <span className="shrink-0 text-3xs text-muted-foreground">
+                          {basenameOfPath(ticketRepository.repositoryPath)}
+                        </span>
+                      )}
                       <span
                         className={cn("text-3xs capitalize", STEP_VISUALS[ticketStatus].textClass)}
                       >
@@ -2180,7 +2191,9 @@ function TicketPhases(props: {
                           <TicketAppStackPicker
                             environmentId={props.environmentId}
                             ticket={ticket}
-                            worktreePath={props.run.orchestratorWorktreePath}
+                            worktreePath={
+                              ticketRepository?.worktreePath ?? props.run.orchestratorWorktreePath
+                            }
                             branch={props.run.orchestratorBranch}
                             overrides={props.stepReviewParts}
                             defaults={props.defaultStepReviewParts}

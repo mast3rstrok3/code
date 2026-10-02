@@ -1383,6 +1383,17 @@ describe("buildWorkflowViewModel", () => {
         "change-request-babysit",
       ),
     ).toBe("completed");
+    // A run that changed only other repositories filed only their pull requests.
+    expect(
+      implementationRunPublicationStageProgress(
+        {
+          status: "babysitting-change-request",
+          changeRequest: null,
+          repositories: [{ changeRequest: null }, { changeRequest: { number: 7 } }],
+        },
+        "change-request",
+      ),
+    ).toBe("completed");
   });
 
   it("calculates thread, step, and parent workflow timing across nested work", () => {

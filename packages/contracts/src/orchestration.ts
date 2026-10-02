@@ -858,6 +858,11 @@ export const OrchestrationPlanningTicket = Schema.Struct({
    * app alone, with every service.
    */
   appStack: Schema.optionalKey(AppStackShape),
+  /**
+   * The project whose repository the ticket changes. Absent means the
+   * workflow's own project.
+   */
+  projectId: Schema.optionalKey(ProjectId),
   status: TrimmedNonEmptyString.pipe(Schema.withDecodingDefault(Effect.succeed("open"))),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -1106,9 +1111,43 @@ export const OrchestrationImplementationPlannedWorker = Schema.Struct({
   ),
   branch: TrimmedNonEmptyString,
   worktreePath: TrimmedNonEmptyString,
+  /** The run repository the ticket works in. Absent means the orchestrator's. */
+  projectId: Schema.optionalKey(ProjectId),
 });
 export type OrchestrationImplementationPlannedWorker =
   typeof OrchestrationImplementationPlannedWorker.Type;
+
+/**
+ * Another repository an implementation run changes, beside the orchestrator's.
+ *
+ * Its integration worktree sits on the run's `orchestratorBranch`, so App Stack
+ * bundles find it by branch name, and the run's tickets in it branch from that
+ * worktree. Integration, the merge gates, Final App Review and Final Code
+ * Review cover it with the orchestrator worktree, and it gets its own pull
+ * request. The head fields mirror the run's fields of the same name.
+ */
+export const OrchestrationImplementationRepository = Schema.Struct({
+  projectId: ProjectId,
+  /** The project's checkout the worktrees are added from. */
+  repositoryPath: TrimmedNonEmptyString,
+  worktreePath: TrimmedNonEmptyString,
+  baseBranch: TrimmedNonEmptyString,
+  pinnedCommit: TrimmedNonEmptyString,
+  appReviewedHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  codeReviewedHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  validatedHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  changeRequest: Schema.NullOr(OrchestrationImplementationChangeRequest).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+});
+export type OrchestrationImplementationRepository =
+  typeof OrchestrationImplementationRepository.Type;
 
 export const OrchestrationImplementationFinalAppReviewPlan = Schema.Struct({
   required: Schema.Boolean,
@@ -1573,6 +1612,10 @@ export const OrchestrationImplementationRun = Schema.Struct({
   pinnedCommit: TrimmedNonEmptyString,
   orchestratorBranch: TrimmedNonEmptyString,
   orchestratorWorktreePath: TrimmedNonEmptyString,
+  /** Other repositories the run's tickets change. Empty for single-repository runs. */
+  repositories: Schema.Array(OrchestrationImplementationRepository).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   launchSummary: OrchestrationImplementationLaunchSummary,
   ticketStates: Schema.Array(OrchestrationImplementationTicketState).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
@@ -2808,6 +2851,7 @@ export const ThreadPlanningTicketArtifactInput = Schema.Struct({
   appReviewCommands: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   appReviewPlanMarkdown: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   appStack: Schema.optionalKey(AppStackShape),
+  projectId: Schema.optionalKey(ProjectId),
 });
 export type ThreadPlanningTicketArtifactInput = typeof ThreadPlanningTicketArtifactInput.Type;
 
@@ -2825,6 +2869,8 @@ export const PlanningReviewerTicketEdit = Schema.Union([
     appReviewPlanMarkdown: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     /** Null clears the ticket's App Stack back to its own app alone. */
     appStack: Schema.optional(Schema.NullOr(AppStackShape)),
+    /** Null moves the ticket back to the workflow's own project. */
+    projectId: Schema.optional(Schema.NullOr(ProjectId)),
   }),
   Schema.Struct({
     type: Schema.Literal("create"),
@@ -2842,6 +2888,7 @@ export const PlanningReviewerTicketEdit = Schema.Union([
       Schema.withDecodingDefault(Effect.succeed(null)),
     ),
     appStack: Schema.optionalKey(AppStackShape),
+    projectId: Schema.optionalKey(ProjectId),
     replacesPlanningTicketIds: Schema.Array(OrchestrationPlanningTicketId).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
     ),
@@ -2918,6 +2965,8 @@ const ThreadImplementationRunLaunchCommand = Schema.Struct({
   orchestratorWorktreePath: TrimmedNonEmptyString,
   validationCommands: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   skips: Schema.optional(Schema.Array(OrchestrationImplementationSkipTarget)),
+  /** One entry per other project the tickets name; see `OrchestrationImplementationRepository`. */
+  repositories: Schema.optional(Schema.Array(OrchestrationImplementationRepository)),
   createdAt: IsoDateTime,
 });
 
