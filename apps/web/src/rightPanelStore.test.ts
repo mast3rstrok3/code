@@ -455,6 +455,45 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("folds persisted Test replays surfaces into App Review", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "test-replays",
+            surfaces: [{ id: "test-replays", kind: "test-replays" }],
+          },
+          "env-1:thread-B": {
+            isOpen: true,
+            activeSurfaceId: "test-replays",
+            surfaces: [
+              { id: "review", kind: "review" },
+              { id: "diff", kind: "diff" },
+              { id: "test-replays", kind: "test-replays" },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "review",
+          surfaces: [{ id: "review", kind: "review" }],
+        },
+        "env-1:thread-B": {
+          isOpen: true,
+          activeSurfaceId: "review",
+          surfaces: [
+            { id: "review", kind: "review" },
+            { id: "diff", kind: "diff" },
+          ],
+        },
+      },
+    });
+  });
+
   it("open sets the active panel for a thread", () => {
     useRightPanelStore.getState().open(refA, "preview");
     expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe("preview");

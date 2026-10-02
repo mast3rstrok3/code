@@ -17,7 +17,9 @@ import type {
   AppReviewWorkflowLaunchRequest,
 } from "./ChatView.logic";
 import {
+  appReviewCycleReplayCount,
   appReviewCycleStepStatuses,
+  appReviewRunReplayCount,
   appReviewRunStatusLabel,
   appReviewRunTicketLabel,
   selectAppReviewRunsForPanel,
@@ -26,18 +28,12 @@ import {
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
-import {
-  AppReviewDocument,
-  AppReviewCycleDocument,
-  type AppReviewCycleView,
-} from "./AppReviewDocument";
+import { AppReviewDocument, AppReviewCycleDocument } from "./AppReviewDocument";
 import { AppReviewLaunchDialog } from "./AppReviewLaunchDialog";
 import { cn } from "~/lib/utils";
 
 export function AppReviewPanel(props: {
   mode: DiffPanelMode;
-  /** The App Review tab shows the written review; the Test replays tab shows the recorded tests. */
-  view: AppReviewCycleView;
   threadRef: ScopedThreadRef;
   launchInFlight: boolean;
   launchDisabled: boolean;
@@ -87,11 +83,7 @@ export function AppReviewPanel(props: {
         <>
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold">
-              {props.view === "replays"
-                ? "Test replays"
-                : relevantRuns.length > 1
-                  ? `App Reviews · ${relevantRuns.length}`
-                  : "App Review"}
+              {relevantRuns.length > 1 ? `App Reviews · ${relevantRuns.length}` : "App Review"}
             </h2>
             <p className="truncate text-xs text-muted-foreground">
               {currentRun ? appReviewRunStatusLabel(currentRun) : "No workflow launched"}
@@ -130,7 +122,6 @@ export function AppReviewPanel(props: {
               <RunDetails
                 key={run.id}
                 run={run}
-                view={props.view}
                 records={records}
                 environmentId={props.threadRef.environmentId}
                 onOpenThread={props.onOpenThread}
@@ -138,9 +129,12 @@ export function AppReviewPanel(props: {
                   appReviewRunTicketLabel(run, planningWorkflow?.tickets ?? []) ??
                   (relevantRuns.length > 1 ? `App Review ${String(index + 1)}` : "App Review")
                 }
-                open={expandedRunIds[run.id] ?? false}
+                open={expandedRunIds[run.id] ?? run.id === currentRun.id}
                 onToggle={() =>
-                  setExpandedRunIds((current) => ({ ...current, [run.id]: !current[run.id] }))
+                  setExpandedRunIds((current) => ({
+                    ...current,
+                    [run.id]: !(current[run.id] ?? run.id === currentRun.id),
+                  }))
                 }
               />
             ))}
@@ -156,7 +150,7 @@ export function AppReviewPanel(props: {
           </div>
         )}
 
-        {props.view === "review" && planningWorkflow?.spec ? (
+        {planningWorkflow?.spec ? (
           <div className="border-t border-border px-4 py-3">
             <Button
               type="button"
@@ -169,7 +163,7 @@ export function AppReviewPanel(props: {
           </div>
         ) : null}
 
-        {props.view === "review" && legacyRecords.length > 0 ? (
+        {legacyRecords.length > 0 ? (
           <section className="border-t border-border">
             <div className="px-4 py-3">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -206,12 +200,12 @@ export function AppReviewPanel(props: {
 
 /**
  * One App Review run, folded down to its ticket and status. A workflow can
- * carry a review per ticket plus its own, so every run and every cycle inside
- * it starts closed and the panel opens as a list the user can scan.
+ * carry a review per ticket plus its own, so the panel opens as a list the
+ * user can scan: only the headline run starts open, and inside a run only the
+ * newest cycle does, which puts the latest test replays one click away.
  */
 function RunDetails(props: {
   readonly run: AppReviewWorkflowRun;
-  readonly view: AppReviewCycleView;
   readonly records: WorkflowArtifactsSnapshot["appReviews"];
   readonly environmentId: ScopedThreadRef["environmentId"];
   readonly onOpenThread: (threadId: ThreadId) => void;
@@ -221,6 +215,8 @@ function RunDetails(props: {
 }) {
   const [expandedCycles, setExpandedCycles] = useState<Record<number, boolean>>({});
   const recordById = new Map(props.records.map((record) => [record.id, record] as const));
+  const newestCycleNumber = props.run.cycles.at(-1)?.cycleNumber;
+  const runReplayCount = appReviewRunReplayCount(props.run);
   return (
     <section>
       <button
@@ -235,6 +231,7 @@ function RunDetails(props: {
           <ChevronRight className="size-3.5 shrink-0" />
         )}
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{props.label}</span>
+        {runReplayCount > 0 ? <ReplayCountBadge count={runReplayCount} /> : null}
         <Badge variant="outline" size="sm">
           {appReviewRunStatusLabel(props.run)}
         </Badge>
@@ -242,12 +239,7 @@ function RunDetails(props: {
 
       {props.open ? (
         <>
-          <div
-            className={cn(
-              "space-y-3 border-b border-t border-border px-4 py-3",
-              props.view === "replays" && "hidden",
-            )}
-          >
+          <div className="space-y-3 border-b border-t border-border px-4 py-3">
             <p className="text-xs text-muted-foreground">
               {props.run.cyclesUsed} of {props.run.cycleBudget} cycles used
             </p>
@@ -275,7 +267,9 @@ function RunDetails(props: {
               const record = recordById.get(cycle.reviewId);
               const e2eRecord =
                 cycle.e2eReviewId == null ? undefined : recordById.get(cycle.e2eReviewId);
-              const cycleOpen = expandedCycles[cycle.cycleNumber] ?? false;
+              const cycleOpen =
+                expandedCycles[cycle.cycleNumber] ?? cycle.cycleNumber === newestCycleNumber;
+              const cycleReplayCount = appReviewCycleReplayCount(cycle);
               const [e2eStatus, reviewStatus, planningStatus, implementationStatus] =
                 appReviewCycleStepStatuses(cycle);
               return (
@@ -301,18 +295,16 @@ function RunDetails(props: {
                         Cycle {cycle.cycleNumber} of {props.run.cycleBudget}
                       </span>
                     </span>
-                    <Badge variant="outline" size="sm">
-                      {cycle.status}
-                    </Badge>
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      {cycleReplayCount > 0 ? <ReplayCountBadge count={cycleReplayCount} /> : null}
+                      <Badge variant="outline" size="sm">
+                        {cycle.status}
+                      </Badge>
+                    </span>
                   </button>
                   {cycleOpen ? (
                     <>
-                      <ol
-                        className={cn(
-                          "space-y-2 border-b border-t px-3 py-3",
-                          props.view === "replays" && "hidden",
-                        )}
-                      >
+                      <ol className="space-y-2 border-b border-t px-3 py-3">
                         <CycleStep
                           number={1}
                           title="End-to-end test"
@@ -371,7 +363,6 @@ function RunDetails(props: {
                       <AppReviewCycleDocument
                         runId={props.run.id}
                         cycle={cycle}
-                        view={props.view}
                         e2eRecord={e2eRecord}
                         browserRecord={record}
                         environmentId={props.environmentId}
@@ -385,6 +376,14 @@ function RunDetails(props: {
         </>
       ) : null}
     </section>
+  );
+}
+
+function ReplayCountBadge(props: { readonly count: number }) {
+  return (
+    <Badge variant="outline" size="sm">
+      {props.count} {props.count === 1 ? "replay" : "replays"}
+    </Badge>
   );
 }
 

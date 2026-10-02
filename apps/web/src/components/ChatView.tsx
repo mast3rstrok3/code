@@ -2516,9 +2516,7 @@ export default function ChatView(props: ChatViewProps) {
     isServerThread &&
       activeThread !== undefined &&
       activeProject !== null &&
-      (activeRightPanelKind === "review" ||
-        activeRightPanelKind === "test-replays" ||
-        activeRightPanelKind === "workflows")
+      (activeRightPanelKind === "review" || activeRightPanelKind === "workflows")
       ? reviewEnvironment.workflowArtifacts({
           environmentId: activeThread.environmentId,
           input: { projectId: activeProject.id, threadId: activeThread.id },
@@ -5529,10 +5527,6 @@ export default function ChatView(props: ChatViewProps) {
     },
     [cancelAppReviewWorkflow, appReviewLaunchInFlight, appReviewWorkflowRuns, environmentId],
   );
-  const addTestReplaysSurface = useCallback(() => {
-    if (!activeThreadRef || !isServerThread || !isGitRepo) return;
-    useRightPanelStore.getState().open(activeThreadRef, "test-replays");
-  }, [activeThreadRef, isGitRepo, isServerThread]);
   const addLogsSurface = useCallback(() => {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "logs");
@@ -10709,12 +10703,10 @@ export default function ChatView(props: ChatViewProps) {
           workspaceMutationId={workspaceMutationId}
         />
       </Suspense>
-    ) : renderedRightPanelSurface?.kind === "review" ||
-      renderedRightPanelSurface?.kind === "test-replays" ? (
+    ) : renderedRightPanelSurface?.kind === "review" ? (
       <Suspense fallback={null}>
         <AppReviewPanel
           mode="embedded"
-          view={renderedRightPanelSurface.kind === "review" ? "review" : "replays"}
           threadRef={activeThreadRef}
           launchInFlight={appReviewLaunchInFlight}
           launchDisabled={activeWorktreeAppReviewRun !== null}
@@ -11554,7 +11546,6 @@ export default function ChatView(props: ChatViewProps) {
           onAddBrowserInProfile={createBrowserSurface}
           onAddTerminal={addTerminalSurface}
           onAddReview={addReviewSurface}
-          onAddTestReplays={addTestReplaysSurface}
           onAddLogs={addLogsSurface}
           onAddDiff={addDiffSurface}
           onAddFiles={addFilesSurface}
@@ -11624,7 +11615,6 @@ export default function ChatView(props: ChatViewProps) {
             onAddBrowserInProfile={createBrowserSurface}
             onAddTerminal={addTerminalSurface}
             onAddReview={addReviewSurface}
-            onAddTestReplays={addTestReplaysSurface}
             onAddLogs={addLogsSurface}
             onAddDiff={addDiffSurface}
             onAddFiles={addFilesSurface}

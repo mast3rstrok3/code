@@ -353,27 +353,18 @@ export function AppReviewDocument(props: {
   );
 }
 
-/** Which half of a cycle the panel shows: the agent's written review, or the recorded test replays. */
-export type AppReviewCycleView = "review" | "replays";
-
+/**
+ * One cycle: its result, the E2E tests it ran with their recordings, and any
+ * review an agent wrote for it.
+ */
 export function AppReviewCycleDocument(props: {
   runId: AppReviewWorkflowRunId;
   cycle: AppReviewWorkflowCycle;
-  view: AppReviewCycleView;
   e2eRecord?: AppReviewRecord | undefined;
   browserRecord?: AppReviewRecord | undefined;
   environmentId: EnvironmentId;
 }) {
   const testResults = props.cycle.e2eExecution?.results ?? [];
-  if (props.view === "replays") {
-    return (
-      <TestRecordingsList
-        runId={props.runId}
-        results={testResults}
-        environmentId={props.environmentId}
-      />
-    );
-  }
   const summaryRecords = [props.e2eRecord, props.browserRecord].filter(
     (record): record is AppReviewRecord => Boolean(record?.document.summary),
   );
@@ -397,6 +388,16 @@ export function AppReviewCycleDocument(props: {
           </p>
         ) : null}
       </section>
+      {props.cycle.e2eExecution ? (
+        <section className="border-b border-border">
+          <h3 className="px-4 pt-3 text-sm font-semibold">End-to-end tests</h3>
+          <TestRecordingsList
+            runId={props.runId}
+            results={testResults}
+            environmentId={props.environmentId}
+          />
+        </section>
+      ) : null}
       {props.e2eRecord !== undefined ? (
         <ReviewEvidenceSection
           title="Agent review · end-to-end tests"

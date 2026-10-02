@@ -2110,7 +2110,6 @@ function PullRequestsRouteView() {
             onAddBrowserInProfile={() => undefined}
             onAddTerminal={() => undefined}
             onAddReview={() => undefined}
-            onAddTestReplays={() => undefined}
             onAddLogs={() => undefined}
             onAddDiff={() => undefined}
             onAddFiles={() => undefined}

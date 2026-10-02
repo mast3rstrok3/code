@@ -109,6 +109,21 @@ export function selectHeadlineAppReviewRun(
   return runs.find((run) => run.status === "running") ?? runs.at(-1) ?? null;
 }
 
+/** How many recorded E2E tests a cycle can replay. */
+export function appReviewCycleReplayCount(
+  cycle: Pick<AppReviewWorkflowCycle, "e2eExecution">,
+): number {
+  return (cycle.e2eExecution?.results ?? []).reduce(
+    (count, result) => count + (result.recordings?.length ?? 0),
+    0,
+  );
+}
+
+/** How many recorded E2E tests a run can replay across its cycles. */
+export function appReviewRunReplayCount(run: Pick<AppReviewWorkflowRun, "cycles">): number {
+  return run.cycles.reduce((count, cycle) => count + appReviewCycleReplayCount(cycle), 0);
+}
+
 export function appReviewRunStatusLabel(run: AppReviewWorkflowRun): string {
   if (run.status !== "running") return run.outcome ?? run.status;
   if (run.prerequisiteCheck != null) return "Waiting for test prerequisites";

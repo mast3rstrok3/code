@@ -119,7 +119,6 @@ function renderTabs(
       onAddBrowserInProfile={() => undefined}
       onAddTerminal={() => undefined}
       onAddReview={() => undefined}
-      onAddTestReplays={() => undefined}
       onAddLogs={() => undefined}
       onAddAppStack={() => undefined}
       onAddPullRequest={() => undefined}

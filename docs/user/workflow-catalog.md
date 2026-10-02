@@ -81,7 +81,7 @@ Supply a read-only readiness script that loads the same managed configuration as
 
 ### Test recordings
 
-An App Review fills two tabs in the right panel. **App Review** holds what a reviewing agent wrote: its summary, checks, findings, screenshots and its own browser recording. **Test replays**, opened from the add-tab menu or with `E`, lists every test the E2E commands recorded; open one to replay it and scrub through it like a video.
+Open **App Review** in the right panel, or choose **Results** beside a ticket's App Review in the Workflows panel. Each cycle lists its E2E commands and every test they recorded; open a test to replay it and scrub through it like a video. The current run's newest cycle starts open, and a run or cycle with recordings shows how many it holds. A browser review an agent wrote adds its summary, checks, findings, screenshots and recording to the same tab.
 
 Your suite launches its own browsers, so it has to attach the recorder. T3 sets three variables for every E2E command:
 

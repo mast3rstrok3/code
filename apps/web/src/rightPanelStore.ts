@@ -21,7 +21,6 @@ import { resolveStorage } from "./lib/storage";
 
 export const RIGHT_PANEL_KINDS = [
   "review",
-  "test-replays",
   "logs",
   "diff",
   "files",
@@ -72,7 +71,6 @@ export type RightPanelSurface =
       attachment?: ChatFileAttachment;
     }
   | { id: "review"; kind: "review" }
-  | { id: "test-replays"; kind: "test-replays" }
   | { id: "logs"; kind: "logs" }
   | {
       /**
@@ -106,7 +104,8 @@ const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 // v13 adds prompt-specific workflow instruction surfaces.
 // v14 removes the legacy Plan surface now that plans render in the transcript.
 // v15 renames the app-dev-stack surface to app-stack.
-const RIGHT_PANEL_STORAGE_VERSION = 15;
+// v16 folds the Test replays surface into App Review.
+const RIGHT_PANEL_STORAGE_VERSION = 16;
 
 /** A fixed workspace-level ref: each PR surface carries its own real environment. */
 export const PULL_REQUESTS_PANEL_REF = scopeThreadRef(
@@ -206,8 +205,6 @@ const singletonSurface = (
       return { id: "app-stack", kind };
     case "review":
       return { id: "review", kind };
-    case "test-replays":
-      return { id: "test-replays", kind };
     case "logs":
       return { id: "logs", kind };
     case "agents":
@@ -387,11 +384,14 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
             .map(([threadKey, threadState]) => {
               const validThreadState =
                 threadState && typeof threadState === "object" ? threadState : null;
-              const surfaces = Array.isArray(validThreadState?.surfaces)
+              const migratedSurfaces = Array.isArray(validThreadState?.surfaces)
                 ? validThreadState.surfaces.flatMap<RightPanelSurface>((surface) => {
                     if ((surface as { kind?: unknown }).kind === "plan") return [];
                     if ((surface as { kind?: unknown }).kind === "app-dev-stack") {
                       return [{ id: "app-stack", kind: "app-stack" }];
+                    }
+                    if ((surface as { kind?: unknown }).kind === "test-replays") {
+                      return [{ id: "review", kind: "review" }];
                     }
                     if (surface.kind === "file") {
                       const revealLine =
@@ -470,7 +470,15 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                     ];
                   })
                 : [];
-              const rawActiveSurfaceId = validThreadState?.activeSurfaceId;
+              // A thread that had both App Review and Test replays keeps one review tab.
+              const surfaces = migratedSurfaces.filter(
+                (surface, index) =>
+                  migratedSurfaces.findIndex((other) => other.id === surface.id) === index,
+              );
+              const rawActiveSurfaceId =
+                validThreadState?.activeSurfaceId === "test-replays"
+                  ? "review"
+                  : validThreadState?.activeSurfaceId;
               const persistedActiveSurfaceId = surfaces.some(
                 (surface) => surface.id === rawActiveSurfaceId,
               )

@@ -10,8 +10,10 @@ import {
 
 import {
   appReviewRunContainsThread,
+  appReviewCycleReplayCount,
   appReviewCycleStepStatuses,
   appReviewRunFailureSummary,
+  appReviewRunReplayCount,
   appReviewRunStatusLabel,
   appReviewRunTicketLabel,
   isValidAppReviewWorkflowLaunch,
@@ -368,6 +370,49 @@ describe("App Review workflow panel logic", () => {
       "App Review automation failed.\nVcsRepositoryDetectionError: Workspace rejected.",
     );
     expect(appReviewRunFailureSummary(run)).toBeNull();
+  });
+
+  it("counts the recorded tests a cycle and its run can replay", () => {
+    const run = makeAppReviewWorkflowRun();
+    const recording = (id: string) => ({
+      id,
+      label: `test-${id}`,
+      path: `/recordings/${id}.rrweb.jsonl`,
+      sizeBytes: 1024,
+    });
+    const result = (command: string, recordings?: ReturnType<typeof recording>[]) => ({
+      command,
+      executedCommand: command,
+      status: "failed" as const,
+      outputMarkdown: "",
+      ...(recordings === undefined ? {} : { recordings }),
+      completedAt: "2026-08-11T00:02:00.000Z",
+    });
+    const firstCycle = {
+      ...run.cycles[0]!,
+      e2eExecution: {
+        id: "execution-1",
+        commands: [
+          { command: "pnpm e2e web", retryCommand: "pnpm e2e web" },
+          { command: "pnpm e2e api", retryCommand: "pnpm e2e api" },
+        ],
+        results: [result("pnpm e2e web", [recording("1"), recording("2")]), result("pnpm e2e api")],
+      },
+    };
+    const secondCycle = {
+      ...run.cycles[0]!,
+      cycleNumber: 2,
+      e2eExecution: {
+        id: "execution-2",
+        commands: [{ command: "pnpm e2e web", retryCommand: "pnpm e2e web" }],
+        results: [result("pnpm e2e web", [recording("3")])],
+      },
+    };
+
+    expect(appReviewCycleReplayCount(firstCycle)).toBe(2);
+    expect(appReviewCycleReplayCount(run.cycles[0]!)).toBe(0);
+    expect(appReviewRunReplayCount({ cycles: [firstCycle, secondCycle] })).toBe(3);
+    expect(appReviewRunReplayCount(run)).toBe(0);
   });
 });
 

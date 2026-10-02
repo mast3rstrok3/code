@@ -16,7 +16,6 @@ import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
   Bot,
   Boxes,
-  CirclePlayIcon,
   EyeIcon,
   Smartphone,
   ChevronDown,
@@ -128,7 +127,6 @@ export interface RightPanelTabsProps {
   onAddBrowserInProfile: (profileId: string) => void;
   onAddTerminal: () => void;
   onAddReview: () => void;
-  onAddTestReplays: () => void;
   onAddLogs: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
@@ -347,7 +345,6 @@ function RightPanelEmptyState(props: {
   browserProfiles: ReadonlyArray<{ readonly id: string; readonly name: string }>;
   onAddTerminal: () => void;
   onAddReview: () => void;
-  onAddTestReplays: () => void;
   onAddLogs: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
@@ -379,22 +376,12 @@ function RightPanelEmptyState(props: {
   const actions = [
     {
       label: "App Review",
-      description: "Inspect and annotate the current implementation diff.",
+      description: "Replay recorded E2E tests and read review findings.",
       icon: EyeIcon,
       shortcut: "R",
       available: props.reviewAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.review,
       onClick: props.onAddReview,
-      badgeCount: 0,
-    },
-    {
-      label: "Test replays",
-      description: "Replay the E2E tests an App Review recorded.",
-      icon: CirclePlayIcon,
-      shortcut: "E",
-      available: props.reviewAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.review,
-      onClick: props.onAddTestReplays,
       badgeCount: 0,
     },
     {
@@ -718,8 +705,6 @@ function surfaceTitle(
       );
     case "review":
       return "App Review";
-    case "test-replays":
-      return "Test replays";
     case "logs":
       return "Logs";
     case "pull-request":
@@ -809,8 +794,6 @@ function SurfaceIcon({
       return <TerminalSquare className="size-3 shrink-0" />;
     case "review":
       return <EyeIcon className="size-3.5 shrink-0" />;
-    case "test-replays":
-      return <CirclePlayIcon className="size-3.5 shrink-0" />;
     case "logs":
       return <ScrollTextIcon className="size-3.5 shrink-0" />;
     case "pull-request":
@@ -1006,14 +989,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       available: props.reviewAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.review,
       onClick: props.onAddReview,
-    },
-    {
-      label: "Test replays",
-      icon: CirclePlayIcon,
-      shortcut: "E",
-      available: props.reviewAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.review,
-      onClick: props.onAddTestReplays,
     },
     {
       label: "Logs",
@@ -1566,7 +1541,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             browserProfiles={browserProfiles}
             onAddTerminal={props.onAddTerminal}
             onAddReview={props.onAddReview}
-            onAddTestReplays={props.onAddTestReplays}
             onAddLogs={props.onAddLogs}
             onAddDiff={props.onAddDiff}
             onAddFiles={props.onAddFiles}
