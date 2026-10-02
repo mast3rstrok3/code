@@ -21,6 +21,7 @@ import type {
   OrchestrationImplementationRerunTicketStage,
   OrchestrationImplementationSkipRunStage,
   OrchestrationImplementationSkipTarget,
+  OrchestrationImplementationTicketState,
   ThreadId,
   OrchestrationImplementationRun,
   OrchestrationPlanningSpec,
@@ -1667,6 +1668,158 @@ export function implementationRunWorkflowIds(
   return workflowIds;
 }
 
+/**
+ * The review outcome that colors a ticket: App Review's while the ticket is in
+ * one or held back by one, Code Review's otherwise.
+ */
+function ticketReviewOutcome(state: OrchestrationImplementationTicketState | undefined) {
+  return state?.status === "app-reviewing" || state?.status === "blocked"
+    ? state.appReviewOutcome
+    : state?.codeReviewOutcome;
+}
+
+/**
+ * The status of every ticket the workflow's implementation runs hold, for the
+ * progress bar at the top of the panel.
+ *
+ * Each ticket reads the status its own row shows. A ticket held by more than
+ * one run counts once, under the newest run, which is the one still able to
+ * finish it.
+ */
+export function workflowTicketStatuses(input: {
+  readonly runs: readonly OrchestrationImplementationRun[];
+  readonly tickets: readonly OrchestrationPlanningTicket[];
+  readonly threads: readonly EnvironmentThreadShell[];
+  readonly appReviewWorkflowRuns: readonly AppReviewWorkflowRun[];
+}): readonly WorkflowStepStatus[] {
+  const counted = new Set<string>();
+  const statuses: WorkflowStepStatus[] = [];
+  const newestFirst = input.runs.toSorted((left, right) =>
+    right.createdAt.localeCompare(left.createdAt),
+  );
+  for (const run of newestFirst) {
+    const runTickets = input.tickets.filter(
+      (ticket) => run.planningTicketIds.includes(ticket.id) && !counted.has(ticket.id),
+    );
+    if (runTickets.length === 0) continue;
+    const runWorkflowIds = implementationRunWorkflowIds(run, input.appReviewWorkflowRuns);
+    const runThreads = input.threads.filter((thread) =>
+      runWorkflowIds.has(thread.workflowContext?.workflowId ?? ""),
+    );
+    for (const ticket of runTickets) {
+      counted.add(ticket.id);
+      const state = run.ticketStates.find((candidate) => candidate.ticketId === ticket.id);
+      const ticketThreads = runThreads.filter(
+        (thread) => thread.workflowContext?.ticketScope.includes(ticket.id) === true,
+      );
+      statuses.push(
+        resolveWorkflowTicketStatus({
+          ticketState: state?.status ?? null,
+          reviewOutcome: ticketReviewOutcome(state),
+          threadStatuses: ticketThreads.map(resolveWorkflowThreadStatus),
+          skipped: isTicketSkipped(run.skips, ticket.id),
+          paused: workflowPauseOf(runThreads, ticketThreads).paused,
+        }),
+      );
+    }
+  }
+  return statuses;
+}
+
+type TicketProgressSegment =
+  | "succeeded"
+  | "skipped"
+  | "running"
+  | "awaiting"
+  | "failed"
+  | "paused"
+  | "ready"
+  | "waiting";
+
+/** Stopping a ticket pauses it, so a stopped ticket counts as paused. */
+const TICKET_PROGRESS_SEGMENT_BY_STATUS: Record<WorkflowStepStatus, TicketProgressSegment> = {
+  done: "succeeded",
+  skipped: "skipped",
+  running: "running",
+  awaiting: "awaiting",
+  blocked: "failed",
+  failed: "failed",
+  paused: "paused",
+  stopped: "paused",
+  pending: "ready",
+  queued: "waiting",
+};
+
+/** The bar fills in this order: finished work, live work, then work not begun. */
+const TICKET_PROGRESS_SEGMENTS: readonly {
+  readonly key: TicketProgressSegment;
+  readonly label: string;
+  readonly fillClass: string;
+}[] = [
+  { key: "succeeded", label: "Succeeded", fillClass: "bg-emerald-500" },
+  { key: "skipped", label: "Skipped", fillClass: "bg-emerald-500/30" },
+  { key: "running", label: "Running", fillClass: "bg-sky-500" },
+  { key: "awaiting", label: "Needs you", fillClass: "bg-amber-500" },
+  { key: "failed", label: "Failed", fillClass: "bg-red-500" },
+  { key: "paused", label: "Paused", fillClass: "bg-violet-500" },
+  { key: "ready", label: "Ready", fillClass: "bg-muted-foreground/40" },
+  { key: "waiting", label: "Waiting on dependencies", fillClass: "bg-muted-foreground/15" },
+];
+
+function TicketProgress(props: { readonly statuses: readonly WorkflowStepStatus[] }) {
+  const counts = new Map<TicketProgressSegment, number>();
+  for (const status of props.statuses) {
+    const segment = TICKET_PROGRESS_SEGMENT_BY_STATUS[status];
+    counts.set(segment, (counts.get(segment) ?? 0) + 1);
+  }
+  const segments = TICKET_PROGRESS_SEGMENTS.flatMap((segment) => {
+    const count = counts.get(segment.key) ?? 0;
+    return count === 0 ? [] : [{ ...segment, count }];
+  });
+  return (
+    <div className="mb-3 rounded-lg border border-border/80 bg-card p-2">
+      <div className="mb-2 flex items-baseline justify-between gap-2">
+        <span className="text-3xs font-medium uppercase tracking-wider text-muted-foreground">
+          Tickets
+        </span>
+        <span className="text-2xs tabular-nums text-muted-foreground">
+          <span className="font-medium text-foreground">{counts.get("succeeded") ?? 0}</span> of{" "}
+          {props.statuses.length} succeeded
+        </span>
+      </div>
+      <div aria-hidden className="flex h-2 gap-0.5 overflow-hidden rounded-full">
+        {segments.map((segment) => (
+          <Tooltip key={segment.key}>
+            <TooltipTrigger
+              render={
+                <span
+                  className={cn("h-full min-w-1 basis-0", segment.fillClass)}
+                  style={{ flexGrow: segment.count }}
+                />
+              }
+            />
+            <TooltipPopup>
+              {segment.count} {segment.label}
+            </TooltipPopup>
+          </Tooltip>
+        ))}
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+        {segments.map((segment) => (
+          <span
+            key={segment.key}
+            className="inline-flex items-center gap-1.5 text-2xs text-muted-foreground"
+          >
+            <span aria-hidden className={cn("size-1.5 rounded-full", segment.fillClass)} />
+            <span className="font-medium tabular-nums text-foreground">{segment.count}</span>
+            {segment.label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function TicketPhases(props: {
   readonly stepReviewParts: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
   readonly defaultStepReviewParts: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
@@ -1736,11 +1889,7 @@ function TicketPhases(props: {
           wave.map((ticket) =>
             resolveWorkflowTicketStatus({
               ticketState: states.get(ticket.id)?.status ?? null,
-              reviewOutcome:
-                states.get(ticket.id)?.status === "app-reviewing" ||
-                states.get(ticket.id)?.status === "blocked"
-                  ? states.get(ticket.id)?.appReviewOutcome
-                  : states.get(ticket.id)?.codeReviewOutcome,
+              reviewOutcome: ticketReviewOutcome(states.get(ticket.id)),
               threadStatuses: (threadsByTicketId.get(ticket.id) ?? []).map(
                 resolveWorkflowThreadStatus,
               ),
@@ -1917,10 +2066,7 @@ function TicketPhases(props: {
               const ticketPause = workflowPauseOf(runThreads, linkedThreads);
               const ticketStatus = resolveWorkflowTicketStatus({
                 ticketState: state?.status ?? null,
-                reviewOutcome:
-                  state?.status === "app-reviewing" || state?.status === "blocked"
-                    ? state.appReviewOutcome
-                    : state?.codeReviewOutcome,
+                reviewOutcome: ticketReviewOutcome(state),
                 threadStatuses: linkedThreads.map(resolveWorkflowThreadStatus),
                 skipped: isTicketSkipped(props.skips, ticket.id),
                 paused: ticketPause.paused,
@@ -3461,12 +3607,29 @@ export function WorkflowsPanel(props: {
   const workflow = props.workflow;
   const rootTimeRange = resolveWorkflowThreadTimeRange(workflow.root);
   const topLevelGroups = groups.filter((group) => group.parentGroupId === null);
+  const implementationRunByGroupId = new Map(
+    topLevelGroups.map(
+      (group) =>
+        [
+          group.id,
+          resolveGroupImplementationRun(group, groups, props.implementationRuns, {
+            specId: props.spec?.id ?? null,
+            rootThreadId: workflow.root.id,
+          }),
+        ] as const,
+    ),
+  );
+  const ticketStatuses = workflowTicketStatuses({
+    runs: [...new Set(implementationRunByGroupId.values())].flatMap((run) =>
+      run === null ? [] : [run],
+    ),
+    tickets: props.tickets,
+    threads: [workflow.root, ...workflow.members],
+    appReviewWorkflowRuns: props.appReviewWorkflowRuns,
+  });
   const currentPathByGroupId = new Map(
     topLevelGroups.map((group) => {
-      const run = resolveGroupImplementationRun(group, groups, props.implementationRuns, {
-        specId: props.spec?.id ?? null,
-        rootThreadId: workflow.root.id,
-      });
+      const run = implementationRunByGroupId.get(group.id) ?? null;
       const steps = buildWorkflowSteps(group, groups, workflow.root, {
         flattenNestedWorkflows: true,
       });
@@ -3505,6 +3668,7 @@ export function WorkflowsPanel(props: {
   return (
     <ScrollArea className="min-h-0 flex-1">
       <div className="p-3">
+        {ticketStatuses.length > 0 ? <TicketProgress statuses={ticketStatuses} /> : null}
         {groups.length > 0 ? (
           <div className="mb-3 rounded-lg border border-border/80 bg-card p-2">
             <div className="mb-2 text-3xs font-medium uppercase tracking-wider text-muted-foreground">
