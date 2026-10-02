@@ -95,6 +95,8 @@ const RECOVERY_BACKUP_PIN_KEY: WorkflowModelPinKey = {
 
 export function WorkflowSettingsBody(props: {
   readonly maxParallelTickets?: number | undefined;
+  readonly maxParallelAppReviews?: number | undefined;
+  readonly onSetMaxParallelAppReviews?: ((value: number) => void) | undefined;
   readonly onSetMaxParallelTickets?: ((value: number) => void) | undefined;
   readonly environmentId: EnvironmentId;
   readonly preset: WorkflowPreset | null;
@@ -125,10 +127,18 @@ export function WorkflowSettingsBody(props: {
       ? (maxParallelTickets: number) =>
           onSetImplementationSettings({ ...implementationSettings, maxParallelTickets })
       : undefined);
+  const onSetAppReviewConcurrency =
+    props.onSetMaxParallelAppReviews ??
+    (implementationSettings && onSetImplementationSettings
+      ? (maxParallelAppReviews: number) =>
+          onSetImplementationSettings({ ...implementationSettings, maxParallelAppReviews })
+      : undefined);
   const concurrencyControl = onSetConcurrency ? (
     <WorkflowTicketConcurrency
       value={props.maxParallelTickets ?? implementationSettings?.maxParallelTickets}
       onChange={onSetConcurrency}
+      appReviewValue={props.maxParallelAppReviews ?? implementationSettings?.maxParallelAppReviews}
+      onAppReviewChange={onSetAppReviewConcurrency}
     />
   ) : null;
   const steps = pinnableSteps(props.preset);
@@ -296,6 +306,8 @@ export function WorkflowSettingsBody(props: {
  */
 export function WorkflowSettingsMenu(props: {
   readonly maxParallelTickets?: number | undefined;
+  readonly maxParallelAppReviews?: number | undefined;
+  readonly onSetMaxParallelAppReviews?: ((value: number) => void) | undefined;
   readonly onSetMaxParallelTickets?: ((value: number) => void) | undefined;
   readonly environmentId: EnvironmentId;
   readonly preset: WorkflowPreset | null;
@@ -351,6 +363,8 @@ export function WorkflowSettingsMenu(props: {
         {open && onSetStepModel !== undefined ? (
           <WorkflowSettingsBody
             maxParallelTickets={props.maxParallelTickets}
+            maxParallelAppReviews={props.maxParallelAppReviews}
+            onSetMaxParallelAppReviews={props.onSetMaxParallelAppReviews}
             onSetMaxParallelTickets={props.onSetMaxParallelTickets}
             environmentId={props.environmentId}
             preset={props.preset}

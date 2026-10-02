@@ -692,6 +692,7 @@ interface ImplementationCalls {
   >;
   readonly workflowTeardownInputs: Ref.Ref<ReadonlyArray<{ readonly workflowId: string }>>;
   readonly stopStackIds: Ref.Ref<ReadonlyArray<string>>;
+  readonly beforeStackLookup: Ref.Ref<Effect.Effect<void> | null>;
   readonly deleteStackIds: Ref.Ref<ReadonlyArray<string>>;
   readonly deletedStackIds: Ref.Ref<ReadonlySet<string>>;
   readonly protectionInputs: Ref.Ref<
@@ -838,6 +839,7 @@ function makeTestLayer(
   failDeleteStackAttempts = 0,
   autoCreateCreatedWorktrees: ReadonlyArray<AppStackCreatedWorktree> = [],
 ) {
+  const stoppedStacks = new Set<string>();
   const coreLayer = Layer.mergeAll(
     OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
@@ -1177,6 +1179,8 @@ function makeTestLayer(
         Layer.mock(AppStackManager)({
           getByWorktree: (input) =>
             Effect.gen(function* () {
+              const beforeLookup = yield* Ref.getAndSet(calls.beforeStackLookup, null);
+              if (beforeLookup !== null) yield* beforeLookup;
               const isTicketWorktree = input.worktreePath.includes("-ticket-");
               const stackId = isTicketWorktree ? "stack-ticket" : "stack-1";
               const deletedStackIds = yield* Ref.get(calls.deletedStackIds);
@@ -1211,7 +1215,7 @@ function makeTestLayer(
                       composePath: "/tmp/compose.yml",
                       displayName: "Implementation test",
                       description: null,
-                      status: autoCreateStackStatus,
+                      status: stoppedStacks.has(stackId) ? "stopped" : autoCreateStackStatus,
                       services: null,
                       serviceCount: 0,
                       lastError: null,
@@ -1268,6 +1272,7 @@ function makeTestLayer(
             ),
           stop: (input) =>
             Ref.update(calls.stopStackIds, (stackIds) => [...stackIds, input.stackId]).pipe(
+              Effect.tap(() => Effect.sync(() => stoppedStacks.add(input.stackId))),
               Effect.as({
                 id: input.stackId,
                 uuid: `${input.stackId}-uuid`,
@@ -1324,6 +1329,13 @@ function makeTestLayer(
             ),
           autoCreate: (input) =>
             Ref.updateAndGet(calls.autoCreateInputs, (inputs) => [...inputs, input]).pipe(
+              Effect.tap(() =>
+                Effect.sync(() =>
+                  stoppedStacks.delete(
+                    input.worktreePath.includes("-ticket-") ? "stack-ticket" : "stack-1",
+                  ),
+                ),
+              ),
               Effect.tap(() =>
                 autoCreateGate === undefined
                   ? Effect.void
@@ -1443,6 +1455,7 @@ function withSystem<A, E>(
       [],
     );
     const stopStackIds = yield* Ref.make<ReadonlyArray<string>>([]);
+    const beforeStackLookup = yield* Ref.make<Effect.Effect<void> | null>(null);
     const deleteStackIds = yield* Ref.make<ReadonlyArray<string>>([]);
     const deletedStackIds = yield* Ref.make<ReadonlySet<string>>(new Set());
     const protectionInputs = yield* Ref.make<
@@ -1486,6 +1499,7 @@ function withSystem<A, E>(
       autoCreateInputs,
       workflowTeardownInputs,
       stopStackIds,
+      beforeStackLookup,
       deleteStackIds,
       deletedStackIds,
       protectionInputs,
@@ -1564,6 +1578,7 @@ function seedPlanning(
   system: ImplementationSystem,
   options?: {
     readonly maxParallelTickets?: number;
+    readonly maxParallelAppReviews?: number;
     readonly modelSelection?: ModelSelection;
     readonly sourceBranch?: string;
     readonly tickets?: ReadonlyArray<{
@@ -1600,12 +1615,17 @@ function seedPlanning(
       parentThreadId: null,
       workflowRole: null,
       title: "Planning",
-      ...(options?.maxParallelTickets === undefined
+      ...(options?.maxParallelTickets === undefined && options?.maxParallelAppReviews === undefined
         ? {}
         : {
             workflowImplementationSettings: {
               ...implementationDefaultsForWorkflowPreset("planning")!,
-              maxParallelTickets: options.maxParallelTickets,
+              ...(options.maxParallelTickets === undefined
+                ? {}
+                : { maxParallelTickets: options.maxParallelTickets }),
+              ...(options.maxParallelAppReviews === undefined
+                ? {}
+                : { maxParallelAppReviews: options.maxParallelAppReviews }),
             },
           }),
       modelSelection: options?.modelSelection ?? {
@@ -3795,7 +3815,7 @@ describe("ImplementationWorkflowReactor", () => {
           if (!implementer) throw new Error("Fast feature implementer missing.");
           expect(implementer.messages.at(-1)?.text).toContain("# Fast checkout");
           expect(implementer.messages.at(-1)?.text).toContain(
-            "App Stack: created by workflow workspace bootstrap after dependency setup; Build reuses it",
+            "App Stack: starts on demand for App Review or checks that need running services",
           );
           expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
 
@@ -4144,11 +4164,12 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("blocks instead of creating a replacement when the inherited stack is missing", () =>
+  it.effect("starts the Fast Feature stack for the first time at App Review", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
           const run = yield* launchFastFeatureRun(system);
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
           const snapshot = yield* system.query.getSnapshot();
           const implementer = snapshot.threads.find(
             (thread) => thread.workflowRole === "fast-feature-implementer",
@@ -4180,13 +4201,15 @@ describe("ImplementationWorkflowReactor", () => {
           yield* system.reactor.drain;
 
           const settled = (yield* system.query.getSnapshot()).implementationRuns[0];
-          expect(settled?.status).toBe("needs-human-attention");
-          expect(settled?.retryableFailure?.stage).toBe("app-dev-stack");
-          expect(settled?.retryableFailure?.humanBlocked).toBe(true);
-          expect(settled?.lastQaFailure?.detailMarkdown).toContain(
-            "workflow-owned App Stack is missing",
-          );
-          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
+          expect(settled?.status).toBe("qa-reviewing");
+          expect(settled?.automationHalt).toBeNull();
+          expect(settled?.appReviewIds).toHaveLength(1);
+          expect(yield* Ref.get(system.autoCreateInputs)).toEqual([
+            expect.objectContaining({
+              worktreePath: run.orchestratorWorktreePath,
+              gitBranch: run.orchestratorBranch,
+            }),
+          ]);
         }),
       { inheritedStackMissing: true },
     ),
@@ -4649,7 +4672,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("keeps parallel ticket slots occupied through App Review and Code Review", () =>
+  it.effect("uses separate capacity for App Review while Code Review holds a ticket slot", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run, tickets } = yield* launchRun(system, {
@@ -4679,14 +4702,14 @@ describe("ImplementationWorkflowReactor", () => {
         expect(snapshot.implementationRuns[0]?.ticketStates.map((state) => state.status)).toEqual([
           "app-reviewing",
           "code-reviewing",
-          "ready",
+          "running",
         ]);
-        expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(3);
+        expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(4);
       }),
     ),
   );
 
-  for (const phase of ["implementation", "app-review", "code-review"] as const) {
+  for (const phase of ["implementation", "code-review"] as const) {
     it.effect(`releases parallel ticket slots while ${phase} is paused`, () =>
       withSystem((system) =>
         Effect.gen(function* () {
@@ -4696,7 +4719,7 @@ describe("ImplementationWorkflowReactor", () => {
             tickets: [
               {
                 ...planningTicket("TICKET-1"),
-                appReviewEligible: phase === "app-review",
+                appReviewEligible: false,
                 appReviewPlanMarkdown: "Review the app.",
               },
               planningTicket("TICKET-2"),
@@ -4712,15 +4735,8 @@ describe("ImplementationWorkflowReactor", () => {
           }
           let snapshot = yield* system.query.getSnapshot();
           const state = snapshot.implementationRuns[0]!.ticketStates[0]!;
-          const controller = snapshot.appReviewWorkflowRuns?.find(
-            (review) => review.id === state.appReviewWorkflowRunId,
-          )?.controllerThreadId;
           const threadId =
-            phase === "app-review"
-              ? controller
-              : phase === "code-review"
-                ? state.codeReviewThreadId
-                : state.workerThreadId;
+            phase === "code-review" ? state.codeReviewThreadId : state.workerThreadId;
           if (!threadId) throw new Error("Ticket phase thread missing.");
           expect(snapshot.implementationRuns[0]?.ticketStates[1]?.status).toBe("ready");
           yield* system.engine.dispatch({
@@ -4758,23 +4774,428 @@ describe("ImplementationWorkflowReactor", () => {
           ).toBeNull();
           expect(snapshot.implementationRuns[0]?.ticketStates[0]?.resumeQueuedAt).toBe(now);
           expect(snapshot.implementationRuns[0]?.ticketStates[0]?.status).toBe(state.status);
-          yield* appendWorkerResult(system, {
-            run,
-            ticketId: run.ticketStates[1]!.ticketId,
-            status: "succeeded",
-            reportedAt: testClockStart,
-          });
-          yield* system.reactor.recoverIncompleteStages();
-          yield* system.reactor.drain;
-          snapshot = yield* system.query.getSnapshot();
-          expect(snapshot.implementationRuns[0]?.ticketStates[0]?.resumeQueuedAt).toBeNull();
-          expect(snapshot.implementationRuns[0]?.ticketStates[1]?.status).toBe("succeeded");
+          expect(snapshot.implementationRuns[0]?.ticketStates[1]?.status).toBe("running");
           expect(snapshot.implementationRuns[0]?.ticketStates[2]?.status).toBe("ready");
           expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(3);
         }),
       ),
     );
   }
+
+  for (const waitingStage of ["ready", "blocked", "failed", "queued-review"] as const) {
+    it.effect(`recovery stops a retained idle ticket stack: ${waitingStage}`, () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run, ticket } = yield* launchRun(system);
+          yield* seedTicketStack(system, { run, ticketId: ticket.id });
+          yield* system.engine.dispatch({
+            type: "thread.workflow.pause",
+            commandId: commandId("pause-before-idle-stack-sweep"),
+            threadId: sourceThreadId,
+            createdAt: testClockStart,
+          });
+          yield* system.reactor.drain;
+          const current = (yield* system.query.getSnapshot()).implementationRuns[0]!;
+          const state = current.ticketStates[0]!;
+          yield* system.engine.dispatch({
+            type: "thread.session.set",
+            commandId: commandId("idle-stack-worker-stopped"),
+            threadId: state.workerThreadId!,
+            session: {
+              threadId: state.workerThreadId!,
+              status: "stopped",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: testClockStart,
+            },
+            createdAt: testClockStart,
+          });
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.update",
+            commandId: commandId("persist-retained-idle-stack"),
+            threadId: sourceThreadId,
+            run: {
+              ...current,
+              ticketStates: [
+                {
+                  ...state,
+                  status: waitingStage === "queued-review" ? "app-reviewing" : waitingStage,
+                  resumeQueuedAt: waitingStage === "queued-review" ? testClockStart : null,
+                },
+              ],
+            },
+            createdAt: testClockStart,
+          });
+          yield* system.reactor.drain;
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
+          expect(yield* Ref.get(system.stopStackIds)).toEqual(["stack-ticket"]);
+          expect(yield* Ref.get(system.deleteStackIds)).toEqual([]);
+          expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([]);
+          yield* system.reactor.recoverIncompleteStages();
+          expect(yield* Ref.get(system.stopStackIds)).toEqual(["stack-ticket"]);
+        }),
+      ),
+    );
+  }
+
+  for (const stackGuard of ["protected", "foreign-owner", "ownerless", "active-worker"] as const) {
+    it.effect(`recovery preserves a retained ticket stack with ${stackGuard}`, () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run, ticket } = yield* launchRun(system);
+          yield* seedTicketStack(system, {
+            run,
+            ticketId: ticket.id,
+            ...(stackGuard === "foreign-owner"
+              ? { workflowId: "another-workflow" }
+              : stackGuard === "ownerless"
+                ? { workflowId: null }
+                : {}),
+          });
+          if (stackGuard === "protected")
+            yield* Ref.update(system.protectionInputs, (inputs) => [
+              ...inputs,
+              { stackId: "stack-ticket", protected: true },
+            ]);
+          yield* system.engine.dispatch({
+            type: "thread.workflow.pause",
+            commandId: commandId("pause-protected-idle-stack-sweep"),
+            threadId: sourceThreadId,
+            createdAt: testClockStart,
+          });
+          yield* system.reactor.drain;
+          const current = (yield* system.query.getSnapshot()).implementationRuns[0]!;
+          const state = current.ticketStates[0]!;
+          yield* system.engine.dispatch({
+            type: "thread.session.set",
+            commandId: commandId("guarded-idle-stack-worker"),
+            threadId: state.workerThreadId!,
+            session: {
+              threadId: state.workerThreadId!,
+              status: stackGuard === "active-worker" ? "running" : "stopped",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: testClockStart,
+            },
+            createdAt: testClockStart,
+          });
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.update",
+            commandId: commandId("persist-guarded-idle-stack"),
+            threadId: sourceThreadId,
+            run: { ...current, ticketStates: [{ ...state, status: "ready" }] },
+            createdAt: testClockStart,
+          });
+          yield* system.reactor.drain;
+          yield* system.reactor.recoverIncompleteStages();
+          expect(yield* Ref.get(system.stopStackIds)).toEqual([]);
+          expect(yield* Ref.get(system.deleteStackIds)).toEqual([]);
+        }),
+      ),
+    );
+  }
+
+  it.effect("recovery rechecks admission after an idle stack lookup", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket } = yield* launchRun(system);
+        yield* seedTicketStack(system, { run, ticketId: ticket.id });
+        yield* system.engine.dispatch({
+          type: "thread.workflow.pause",
+          commandId: commandId("pause-stack-lookup-race"),
+          threadId: sourceThreadId,
+          createdAt: testClockStart,
+        });
+        yield* system.reactor.drain;
+        const current = (yield* system.query.getSnapshot()).implementationRuns[0]!;
+        const state = current.ticketStates[0]!;
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("queue-stack-lookup-race"),
+          threadId: sourceThreadId,
+          run: {
+            ...current,
+            ticketStates: [{ ...state, status: "app-reviewing", resumeQueuedAt: testClockStart }],
+          },
+          createdAt: testClockStart,
+        });
+        yield* system.reactor.drain;
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        yield* Ref.set(
+          system.beforeStackLookup,
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        );
+        const recovery = yield* system.reactor.recoverIncompleteStages().pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("admit-during-stack-lookup"),
+          threadId: sourceThreadId,
+          run: {
+            ...current,
+            ticketStates: [{ ...state, status: "app-reviewing", resumeQueuedAt: null }],
+          },
+          createdAt: testClockStart,
+        });
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(recovery);
+        expect(yield* Ref.get(system.stopStackIds)).toEqual([]);
+      }),
+    ),
+  );
+
+  it.effect("stops an agent-started stack while its ticket waits for App Review", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, tickets } = yield* launchRun(system, {
+          appReviewStrategy: "nested-workflow",
+          maxParallelTickets: 2,
+          maxParallelAppReviews: 1,
+          tickets: [1, 2].map((index) => ({
+            ...planningTicket(`LAZY-${index}`),
+            appReviewEligible: true,
+            appReviewPlanMarkdown: "Review the app.",
+          })),
+        });
+        expect(yield* Ref.get(system.autoCreateInputs)).toEqual([]);
+        yield* appendWorkerResult(system, {
+          run,
+          ticketId: tickets[0]!.id,
+          status: "succeeded",
+          completeTicketReview: false,
+        });
+        yield* seedTicketStack(system, { run, ticketId: tickets[1]!.id });
+        yield* appendWorkerResult(system, {
+          run,
+          ticketId: tickets[1]!.id,
+          status: "succeeded",
+          completeTicketReview: false,
+        });
+        let snapshot = yield* system.query.getSnapshot();
+        expect(snapshot.appReviewWorkflowRuns).toHaveLength(1);
+        expect(snapshot.implementationRuns[0]?.ticketStates[1]?.resumeQueuedAt).not.toBeNull();
+        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(2);
+        expect(yield* Ref.get(system.stopStackIds)).toEqual(["stack-ticket"]);
+        expect(yield* Ref.get(system.deleteStackIds)).toEqual([]);
+        yield* system.engine.dispatch({
+          type: "thread.composer-mode.set",
+          commandId: commandId("admit-agent-started-stack-review"),
+          threadId: sourceThreadId,
+          interactionMode: "planning-workflow",
+          workflowPreset: "planning",
+          workflowImplementationSettings: {
+            ...implementationDefaultsForWorkflowPreset("planning")!,
+            maxParallelTickets: 2,
+            maxParallelAppReviews: 2,
+          },
+          createdAt: testClockStart,
+        });
+        yield* system.reactor.drain;
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+        snapshot = yield* system.query.getSnapshot();
+        expect(snapshot.appReviewWorkflowRuns).toHaveLength(2);
+        expect(snapshot.implementationRuns[0]?.ticketStates[1]?.resumeQueuedAt).toBeNull();
+        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(3);
+      }),
+    ),
+  );
+
+  for (const owner of ["workflow", "protected", "other-workflow"] as const) {
+    it.effect(`releases an agent-started stack after implementation failure: ${owner}`, () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run, ticket } = yield* launchRun(system);
+          yield* seedTicketStack(system, {
+            run,
+            ticketId: ticket.id,
+            ...(owner === "other-workflow" ? { workflowId: "another-workflow" } : {}),
+          });
+          if (owner === "protected") {
+            yield* Ref.update(system.protectionInputs, (inputs) => [
+              ...inputs,
+              { stackId: "stack-ticket", protected: true },
+            ]);
+          }
+          yield* appendWorkerResult(system, { run, status: "failed" });
+          expect(yield* Ref.get(system.stopStackIds)).toEqual(
+            owner === "workflow" ? ["stack-ticket"] : [],
+          );
+          expect(yield* Ref.get(system.deleteStackIds)).toEqual([]);
+        }),
+      ),
+    );
+  }
+
+  it.effect("queues App Reviews before stack allocation and applies live review budgets", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, tickets } = yield* launchRun(system, {
+          appReviewStrategy: "nested-workflow",
+          maxParallelTickets: 3,
+          maxParallelAppReviews: 1,
+          tickets: [1, 2, 3].map((index) => ({
+            ...planningTicket(`REVIEW-${index}`),
+            appReviewEligible: true,
+            appReviewPlanMarkdown: "Review the app.",
+          })),
+        });
+        for (const ticket of tickets) {
+          yield* appendWorkerResult(system, {
+            run,
+            ticketId: ticket.id,
+            status: "succeeded",
+            completeTicketReview: false,
+          });
+        }
+        let snapshot = yield* system.query.getSnapshot();
+        let states = snapshot.implementationRuns[0]!.ticketStates;
+        expect(snapshot.appReviewWorkflowRuns).toHaveLength(1);
+        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
+        expect(states.slice(1).every((state) => state.resumeQueuedAt != null)).toBe(true);
+        expect(states.slice(1).map((state) => state.appReviewLaunchCount)).toEqual([0, 0]);
+        const setLimit = (maxParallelAppReviews: number, tag: string) =>
+          system.engine.dispatch({
+            type: "thread.composer-mode.set",
+            commandId: commandId(`review-budget-${tag}`),
+            threadId: sourceThreadId,
+            interactionMode: "planning-workflow",
+            workflowPreset: "planning",
+            workflowImplementationSettings: {
+              ...implementationDefaultsForWorkflowPreset("planning")!,
+              maxParallelTickets: 3,
+              maxParallelAppReviews,
+            },
+            createdAt: testClockStart,
+          });
+        yield* setLimit(2, "increase");
+        yield* system.reactor.drain;
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+        snapshot = yield* system.query.getSnapshot();
+        states = snapshot.implementationRuns[0]!.ticketStates;
+        expect(snapshot.appReviewWorkflowRuns).toHaveLength(2);
+        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(2);
+        expect(states[2]?.resumeQueuedAt).not.toBeNull();
+        expect(states[2]?.appReviewLaunchCount).toBe(0);
+        yield* setLimit(1, "lower");
+        yield* system.reactor.drain;
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+        snapshot = yield* system.query.getSnapshot();
+        expect(snapshot.appReviewWorkflowRuns).toHaveLength(2);
+        expect(snapshot.implementationRuns[0]?.ticketStates[2]?.appReviewLaunchCount).toBe(0);
+        const activeReview = snapshot.appReviewWorkflowRuns![0]!;
+        yield* system.engine.dispatch({
+          type: "thread.workflow.pause",
+          commandId: commandId("pause-review-pool"),
+          threadId: activeReview.controllerThreadId,
+          createdAt: testClockStart,
+        });
+        yield* system.reactor.drain;
+        yield* setLimit(2, "paused-capacity");
+        yield* system.reactor.drain;
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+        snapshot = yield* system.query.getSnapshot();
+        expect(snapshot.appReviewWorkflowRuns).toHaveLength(3);
+        expect(snapshot.implementationRuns[0]?.ticketStates[2]?.resumeQueuedAt).toBeNull();
+        expect(snapshot.implementationRuns[0]?.ticketStates[2]?.appReviewLaunchCount).toBe(1);
+        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(3);
+      }),
+    ),
+  );
+
+  it.effect(
+    "queues completed App Reviews for ticket capacity without charging a Code Review launch",
+    () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run, tickets } = yield* launchRun(system, {
+            appReviewStrategy: "nested-workflow",
+            maxParallelTickets: 1,
+            maxParallelAppReviews: 1,
+            tickets: [
+              {
+                ...planningTicket("REVIEW"),
+                appReviewEligible: true,
+                appReviewPlanMarkdown: "Review the app.",
+              },
+              planningTicket("IMPLEMENT"),
+            ],
+          });
+          yield* appendWorkerResult(system, {
+            run,
+            ticketId: tickets[0]!.id,
+            status: "succeeded",
+            completeTicketReview: false,
+          });
+          let snapshot = yield* system.query.getSnapshot();
+          const nested = snapshot.appReviewWorkflowRuns![0]!;
+          const head = snapshot.implementationRuns[0]!.ticketStates[0]!.workerResult!.commitSha;
+          const completedAt = "2026-01-01T00:05:00.000Z";
+          yield* system.engine.dispatch({
+            type: "thread.app-review-workflow.update",
+            commandId: commandId("pass-review-with-busy-ticket-pool"),
+            threadId: nested.controllerThreadId,
+            run: {
+              ...nested,
+              status: "passed",
+              cyclesUsed: 1,
+              activePhase: null,
+              activeThreadId: null,
+              outcome: "passed",
+              finalHeadSha: head,
+              updatedAt: completedAt,
+              completedAt,
+            },
+            createdAt: completedAt,
+          });
+          yield* system.reactor.drain;
+          snapshot = yield* system.query.getSnapshot();
+          expect(snapshot.implementationRuns[0]?.ticketStates[0]).toMatchObject({
+            status: "code-reviewing",
+            appReviewOutcome: "passed",
+            codeReviewLaunchCount: 0,
+            resumeQueuedAt: completedAt,
+          });
+          expect(
+            snapshot.implementationRuns[0]?.ticketStates[0]?.codeReviewThreadId ?? null,
+          ).toBeNull();
+          expect(snapshot.implementationRuns[0]?.ticketStates[1]?.status).toBe("running");
+          expect(yield* Ref.get(system.stopStackIds)).toEqual(["stack-ticket"]);
+          yield* appendWorkerResult(system, {
+            run,
+            ticketId: tickets[1]!.id,
+            status: "succeeded",
+            completeTicketReview: false,
+            reportedAt: "2026-01-01T00:05:30.000Z",
+          });
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
+          snapshot = yield* system.query.getSnapshot();
+          expect(snapshot.implementationRuns[0]?.ticketStates[0]).toMatchObject({
+            status: "code-reviewing",
+            appReviewOutcome: "passed",
+            codeReviewLaunchCount: 1,
+            resumeQueuedAt: null,
+          });
+          expect(
+            snapshot.implementationRuns[0]?.ticketStates[0]?.codeReviewThreadId,
+          ).not.toBeNull();
+          expect(snapshot.implementationRuns[0]?.ticketStates[1]).toMatchObject({
+            status: "code-reviewing",
+            codeReviewLaunchCount: 0,
+          });
+        }),
+      ),
+  );
 
   it.effect("applies live parallel ticket limits without interrupting active tickets", () =>
     withSystem(
@@ -5208,7 +5629,7 @@ describe("ImplementationWorkflowReactor", () => {
           expect(yield* Ref.get(system.removeWorktreeInputs)).toHaveLength(1);
           yield* system.reactor.recoverIncompleteStages();
           expect(yield* Ref.get(system.removeWorktreeInputs)).toHaveLength(2);
-          expect(yield* Ref.get(system.stopStackIds)).toEqual([]);
+          expect(yield* Ref.get(system.stopStackIds)).toEqual(["stack-ticket"]);
         }),
       { failRemoveWorktreeAttempts: 1 },
     ),
@@ -8415,7 +8836,7 @@ describe("ImplementationWorkflowReactor", () => {
         );
         expect(validator).toBeDefined();
         expect(validator?.messages.at(-1)?.text).toContain(
-          "its workflow-owned AppStack was created during workspace bootstrap and is reused here",
+          "start the workflow-owned App Stack with app_stack_start only when a check needs running services",
         );
         expect(validator?.messages.at(-1)?.text).toContain(
           "integration gate before App Review and Code Review",
@@ -8447,6 +8868,7 @@ describe("ImplementationWorkflowReactor", () => {
         const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         const autoCreateInputs = yield* Ref.get(system.autoCreateInputs);
         expect(autoCreateInputs).toHaveLength(1);
+        expect(yield* Ref.get(system.stopStackIds)).toEqual([]);
         expect(reviewingRun?.status).toBe("qa-reviewing");
         expect(reviewingRun?.appReviewIds).toHaveLength(1);
         const reviewThread = snapshot.threads.find(
@@ -8471,6 +8893,7 @@ describe("ImplementationWorkflowReactor", () => {
           system.createOrOpenChangeRequestCount,
         );
         expect(createOrOpenChangeRequestCount).toBe(0);
+        expect(yield* Ref.get(system.stopStackIds)).toEqual(["stack-1"]);
         expect(codeReviewingRun?.status).toBe("code-reviewing");
         expect(codeReviewingRun?.codeReviewAttemptCount).toBe(1);
         expect(codeReviewingRun?.changeRequest).toBeNull();
@@ -10584,40 +11007,44 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("starts more than two ticket App Reviews in parallel", () =>
-    withSystem((system) =>
-      Effect.gen(function* () {
-        const { run, tickets } = yield* launchRun(system, {
-          appReviewStrategy: "nested-workflow",
-          maxParallelTickets: 3,
-          tickets: ["TICKET-1", "TICKET-2", "TICKET-3"].map((key) => ({
-            ...planningTicket(key),
-            appReviewEligible: true,
-            appReviewPlanMarkdown: `Review ${key}.`,
-          })),
-        });
-
-        for (const ticket of tickets) {
-          yield* appendWorkerResult(system, {
-            run,
-            status: "succeeded",
-            ticketId: ticket.id,
-            completeTicketReview: false,
+  it.effect("inherits the server App Review budget independently of ticket concurrency", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run, tickets } = yield* launchRun(system, {
+            appReviewStrategy: "nested-workflow",
+            maxParallelTickets: 3,
+            tickets: ["TICKET-1", "TICKET-2", "TICKET-3"].map((key) => ({
+              ...planningTicket(key),
+              appReviewEligible: true,
+              appReviewPlanMarkdown: `Review ${key}.`,
+            })),
           });
-        }
 
-        const snapshot = yield* system.query.getSnapshot();
-        const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-        const reviewIds = current?.ticketStates.flatMap((state) =>
-          state.appReviewWorkflowRunId == null ? [] : [state.appReviewWorkflowRunId],
-        );
+          for (const ticket of tickets) {
+            yield* appendWorkerResult(system, {
+              run,
+              status: "succeeded",
+              ticketId: ticket.id,
+              completeTicketReview: false,
+            });
+          }
 
-        expect(reviewIds).toHaveLength(3);
-        expect(new Set(reviewIds).size).toBe(3);
-        expect(
-          (snapshot.appReviewWorkflowRuns ?? []).filter((review) => reviewIds?.includes(review.id)),
-        ).toHaveLength(3);
-      }),
+          const snapshot = yield* system.query.getSnapshot();
+          const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          const reviewIds = current?.ticketStates.flatMap((state) =>
+            state.appReviewWorkflowRunId == null ? [] : [state.appReviewWorkflowRunId],
+          );
+
+          expect(reviewIds).toHaveLength(3);
+          expect(new Set(reviewIds).size).toBe(3);
+          expect(
+            (snapshot.appReviewWorkflowRuns ?? []).filter((review) =>
+              reviewIds?.includes(review.id),
+            ),
+          ).toHaveLength(3);
+        }),
+      { serverSettings: { implementation: { maxParallelAppReviews: 3 } } },
     ),
   );
 
@@ -11896,6 +12323,7 @@ describe("ImplementationWorkflowReactor", () => {
           const reviewersBeforeRecovery = afterNormalContinuation.threads.filter(
             (thread) => thread.workflowRole === "implementation-code-reviewer",
           ).length;
+          yield* TestClock.adjust(Duration.minutes(1));
           yield* system.engine.dispatch({
             type: "thread.implementation-run.update",
             commandId: commandId("restore-interrupted-ticket-app-review-result"),
@@ -11914,9 +12342,9 @@ describe("ImplementationWorkflowReactor", () => {
                     }
                   : state,
               ),
-              updatedAt: "2026-01-01T00:05:01.000Z",
+              updatedAt: "2026-01-01T00:07:00.000Z",
             },
-            createdAt: "2026-01-01T00:05:01.000Z",
+            createdAt: "2026-01-01T00:07:00.000Z",
           });
           yield* system.reactor.drain;
 
@@ -13080,6 +13508,188 @@ describe("ImplementationWorkflowReactor", () => {
       }),
     ),
   );
+
+  for (const scenario of [
+    {
+      name: "clears its stale halt",
+      haltStage: "implementation",
+      paused: false,
+      ticketStatus: "ready",
+    },
+    { name: "holds its concurrency slot", haltStage: null, paused: false, ticketStatus: "ready" },
+    {
+      name: "preserves an unrelated halt",
+      haltStage: "code-review",
+      paused: false,
+      ticketStatus: "ready",
+    },
+    {
+      name: "respects a workflow pause",
+      haltStage: "implementation",
+      paused: true,
+      ticketStatus: "ready",
+    },
+    {
+      name: "repairs its stale halted execution",
+      haltStage: null,
+      paused: false,
+      ticketStatus: "running",
+    },
+    {
+      name: "counts its active claim without a recovery warning",
+      haltStage: null,
+      paused: false,
+      ticketStatus: "ready",
+      omitRecoveryWarning: true,
+    },
+    {
+      name: "settles its resumed claim after a planned restart",
+      haltStage: null,
+      paused: false,
+      ticketStatus: "ready",
+      omitRecoveryWarning: true,
+      reconciling: true,
+    },
+  ] as const) {
+    it.effect(`recovery of an active worker ${scenario.name} without another launch`, () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system, {
+            maxParallelTickets: 1,
+            tickets: [planningTicket("RECOVERED"), planningTicket("WAITING")],
+          });
+          const state = run.ticketStates[0]!;
+          const threadId = state.workerThreadId!;
+          const createdAt = DateTime.formatIso(yield* DateTime.now);
+          const turnId = TurnId.make("recovered-active-worker-turn");
+          yield* system.engine.dispatch({
+            type: "thread.session.set",
+            commandId: commandId("recovered-active-worker-session"),
+            threadId,
+            session: {
+              threadId,
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: turnId,
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          });
+          yield* system.reactor.drain;
+          if (scenario.paused) {
+            yield* system.engine.dispatch({
+              type: "thread.workflow.pause",
+              commandId: commandId("pause-recovered-active-worker"),
+              threadId: sourceThreadId,
+              createdAt,
+            });
+            yield* system.reactor.drain;
+          }
+          const before = yield* system.query.getSnapshot();
+          const workerMessages = before.threads.find((thread) => thread.id === threadId)!.messages;
+          const automationHalt =
+            scenario.haltStage === null
+              ? null
+              : {
+                  stage: scenario.haltStage,
+                  category: "retry-exhausted" as const,
+                  ticketId: state.ticketId,
+                  detail: "Stage launch budget exhausted.",
+                  haltedAt: createdAt,
+                };
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.update",
+            commandId: commandId("recovered-active-worker-ready"),
+            threadId: sourceThreadId,
+            run: {
+              ...run,
+              status: automationHalt === null ? "running" : "needs-human-attention",
+              automationHalt,
+              ticketStates: run.ticketStates.map((entry) =>
+                entry.ticketId !== state.ticketId
+                  ? entry
+                  : {
+                      ...entry,
+                      status: scenario.ticketStatus,
+                      attemptCount: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+                      workerResult: null,
+                      warningMarkdown:
+                        scenario.ticketStatus === "ready" && !("omitRecoveryWarning" in scenario)
+                          ? "Recovery continued the existing Implementation thread after its provider session stopped."
+                          : null,
+                      stageExecutions: entry.stageExecutions.map((execution) => ({
+                        ...execution,
+                        ...("reconciling" in scenario
+                          ? {
+                              state: "reconciling" as const,
+                              failure: {
+                                category: "planned-restart" as const,
+                                detail:
+                                  "The server planned this restart and will resume the same execution.",
+                                failedAt: createdAt,
+                                nextAction: "continue-stage" as const,
+                              },
+                            }
+                          : {}),
+                        ...(scenario.ticketStatus === "running"
+                          ? {
+                              state: "halted" as const,
+                              failure: {
+                                category: "provider-terminal" as const,
+                                detail: "Implementation launch budget exhausted.",
+                                failedAt: createdAt,
+                                nextAction: "rerun-stage" as const,
+                              },
+                            }
+                          : {}),
+                      })),
+                      updatedAt: createdAt,
+                    },
+              ),
+              updatedAt: createdAt,
+            },
+            createdAt,
+          });
+          yield* system.reactor.drain;
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
+
+          const snapshot = yield* system.query.getSnapshot();
+          const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
+          const preservesHalt = scenario.paused || scenario.haltStage === "code-review";
+          expect(recovered.status).toBe(preservesHalt ? "needs-human-attention" : "running");
+          expect(recovered.automationHalt).toEqual(preservesHalt ? automationHalt : null);
+          expect(recovered.ticketStates[0]).toMatchObject({
+            status: scenario.paused ? "ready" : "running",
+            workerThreadId: threadId,
+            workerResult: null,
+            attemptCount: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+            implementationGeneration: state.implementationGeneration,
+          });
+          expect(recovered.ticketStates[1]?.status).toBe("ready");
+          if (!preservesHalt) {
+            const execution = recovered.ticketStates[0]?.stageExecutions.findLast(
+              (entry) =>
+                entry.target.kind === "ticket" &&
+                entry.target.stage === "implementation" &&
+                entry.generation === state.implementationGeneration,
+            );
+            expect(execution?.state).toBe("running");
+            expect(execution?.failure).toBeNull();
+            expect(execution?.executionId).toBe(state.stageExecutions.at(-1)?.executionId);
+          }
+          const worker = snapshot.threads.find((thread) => thread.id === threadId)!;
+          expect(worker.messages).toEqual(workerMessages);
+          expect(worker.session?.activeTurnId).toBe(turnId);
+          expect(
+            snapshot.threads.filter((thread) => thread.workflowRole === "implementation-worker"),
+          ).toHaveLength(1);
+        }),
+      ),
+    );
+  }
 
   // A restart's crash recovery can clear the halt and leave only the `ready`
   // ticket that recovery gave up on.

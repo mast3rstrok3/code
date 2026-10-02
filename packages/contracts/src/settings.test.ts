@@ -49,6 +49,33 @@ describe("parallel ticket limits", () => {
   );
 });
 
+describe("parallel App Review limits", () => {
+  it("persists independent limits in workflow settings and server defaults", () => {
+    const limits = { maxParallelTickets: 6, maxParallelAppReviews: 2 };
+    expect(Schema.decodeUnknownSync(ImplementationWorkflowSettings)(limits)).toMatchObject(limits);
+    expect(encodeServerSettings(decodeServerSettings({ implementation: limits }))).toMatchObject({
+      implementation: limits,
+    });
+    expect(decodeServerSettingsPatch({ implementation: { maxParallelAppReviews: 1 } })).toEqual({
+      implementation: { maxParallelAppReviews: 1 },
+    });
+    expect(
+      Schema.decodeUnknownSync(ImplementationWorkflowSettings)({}).maxParallelAppReviews,
+    ).toBeUndefined();
+  });
+  it.each([0, -1, 1.5, 33, Infinity, "2"])(
+    "rejects invalid App Review limit %s",
+    (maxParallelAppReviews) => {
+      expect(() =>
+        Schema.decodeUnknownSync(ImplementationWorkflowSettings)({ maxParallelAppReviews }),
+      ).toThrow();
+      expect(() =>
+        decodeServerSettingsPatch({ implementation: { maxParallelAppReviews } }),
+      ).toThrow();
+    },
+  );
+});
+
 describe("storage cleanup settings", () => {
   it("keeps cleanup disabled for existing installations", () => {
     expect(decodeServerSettings({}).worktreeCleanup).toBeNull();

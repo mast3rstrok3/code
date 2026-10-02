@@ -19,12 +19,12 @@ it("admits queued reviews only after dependencies finish and a slot opens", () =
   });
   const active = ticket({ ticketId: "active", status: "code-reviewing", updatedAt: now });
   const run = { skips: [], ticketStates: [dependency, review, active] };
-  expect(readyTicketsWithinLimit(run, 5, readModel)).toEqual([]);
+  expect(readyTicketsWithinLimit(run, 5, readModel, 4)).toEqual([]);
   const unblocked = {
     ...run,
     ticketStates: [{ ...dependency, status: "succeeded" as const }, review, active],
   };
-  expect(readyTicketsWithinLimit(unblocked, 1, readModel)).toEqual([]);
+  expect(readyTicketsWithinLimit(unblocked, 1, readModel, 1)).toEqual(["review"]);
   expect(readyTicketsWithinLimit(unblocked, 2, readModel)).toEqual(["review"]);
 });
 
@@ -41,18 +41,44 @@ it("admits only the available number of reviews after a bulk resume", () => {
     skips: [],
     ticketStates: [...queued, ticket({ ticketId: "active", status: "running", updatedAt: now })],
   };
-  expect(readyTicketsWithinLimit(run, 5, readModel)).toEqual([
+  expect(readyTicketsWithinLimit(run, 5, readModel, 4)).toEqual([
     "review-0",
     "review-1",
     "review-2",
     "review-3",
   ]);
-  const admitted = new Set(readyTicketsWithinLimit(run, 5, readModel));
+  const admitted = new Set(readyTicketsWithinLimit(run, 5, readModel, 4));
   const persisted = {
     ...run,
     ticketStates: run.ticketStates.map((state) =>
       admitted.has(state.ticketId) ? { ...state, resumeQueuedAt: null } : state,
     ),
   };
-  expect(readyTicketsWithinLimit(persisted, 5, readModel)).toEqual([]);
+  expect(readyTicketsWithinLimit(persisted, 5, readModel, 4)).toEqual([]);
+});
+
+it("keeps ticket capacity available when the App Review pool is full", () => {
+  const run = {
+    skips: [],
+    ticketStates: [
+      ticket({ ticketId: "review", status: "app-reviewing", updatedAt: now }),
+      ticket({ ticketId: "native", status: "awaiting-native-verification", updatedAt: now }),
+      ticket({
+        ticketId: "waiting-review",
+        status: "app-reviewing",
+        resumeQueuedAt: now,
+        updatedAt: now,
+      }),
+      ticket({ ticketId: "ready", status: "ready", updatedAt: now }),
+      ticket({
+        ticketId: "code-review",
+        status: "code-reviewing",
+        resumeQueuedAt: now,
+        updatedAt: now,
+      }),
+    ],
+  };
+  expect(readyTicketsWithinLimit(run, 1, readModel, 2)).toEqual(["code-review"]);
+  expect(readyTicketsWithinLimit(run, 2, readModel, 1)).toEqual(["code-review", "ready"]);
+  expect(readyTicketsWithinLimit(run, 1, readModel, 3)).toEqual(["waiting-review", "code-review"]);
 });

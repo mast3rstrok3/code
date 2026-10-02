@@ -11756,12 +11756,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   );
 
   it.effect(
-    "bootstraps first-send worktree turns on the server before dispatching turn start",
+    "prepares first-send workflow dependencies without allocating an App Stack during bootstrap",
     () =>
       Effect.gen(function* () {
         const dispatchedCommands: Array<OrchestrationCommand> = [];
-        const workflowEvents = yield* PubSub.unbounded<OrchestrationEvent>();
-        const renameSubscribed = yield* Deferred.make<void>();
+        const setupRecorded = yield* Deferred.make<void>();
         const bootstrapGitOperations: string[] = [];
         const refreshStatus = vi.fn((_: string) =>
           Effect.succeed({
@@ -11837,20 +11836,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               async: true,
             }),
         );
-        const stackProvisioned = yield* Deferred.make<void>();
         const autoCreateAppStack = vi.fn(
           (_: Parameters<AppStackManager.AppStackManager["Service"]["autoCreate"]>[0]) =>
-            Deferred.succeed(stackProvisioned, undefined).pipe(
-              Effect.as({
-                stack: null,
-                created: false,
-                alreadyRunning: true,
-                reserved: true,
-                message: "Workflow preview is ready.",
-                frontendUrl: "https://fast-feature.example.test",
-                frontendServiceName: "frontend",
-              }),
-            ),
+            Effect.die("Workflow bootstrap must not allocate an App Stack."),
         );
 
         yield* buildAppUnderTest({
@@ -11871,18 +11859,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             },
             orchestrationEngine: {
               dispatch: (command) =>
-                Effect.sync(() => {
+                Effect.gen(function* () {
                   dispatchedCommands.push(command);
+                  if (
+                    command.type === "thread.activity.append" &&
+                    command.activity.kind === "setup-script.completed"
+                  ) {
+                    yield* Deferred.succeed(setupRecorded, undefined);
+                  }
                   return { sequence: dispatchedCommands.length };
                 }),
               readEvents: () => Stream.empty,
-              streamDomainEvents: Stream.unwrap(
-                Effect.gen(function* () {
-                  const subscription = yield* PubSub.subscribe(workflowEvents);
-                  yield* Deferred.succeed(renameSubscribed, undefined);
-                  return Stream.fromEffectRepeat(PubSub.take(subscription));
-                }),
-              ),
+              streamDomainEvents: Stream.empty,
             },
             projectSetupScriptRunner: {
               runForThread,
@@ -11941,33 +11929,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(autoCreateAppStack.mock.calls.length, 0);
         assert.equal(dispatchedCommands[6]?.type, "thread.turn.start");
         yield* Deferred.succeed(setupCompleted, undefined);
-        yield* Effect.yieldNow;
+        yield* Deferred.await(setupRecorded);
         assert.equal(autoCreateAppStack.mock.calls.length, 0);
-
-        yield* Deferred.await(renameSubscribed);
-
-        yield* PubSub.publish(workflowEvents, {
-          sequence: 5,
-          eventId: EventId.make("event-workflow-branch-renamed"),
-          aggregateKind: "thread",
-          aggregateId: ThreadId.make("thread-bootstrap"),
-          occurredAt: "2026-01-01T00:00:01.000Z",
-          commandId: CommandId.make("cmd-workflow-branch-renamed"),
-          causationEventId: null,
-          correlationId: null,
-          metadata: {},
-          type: "thread.meta-updated",
-          payload: {
-            threadId: ThreadId.make("thread-bootstrap"),
-            branch: "verify-email-capabilities",
-            worktreePath: "/tmp/bootstrap-worktree",
-            updatedAt: "2026-01-01T00:00:01.000Z",
-          },
-        });
-
-        yield* Deferred.await(stackProvisioned);
-
-        yield* Effect.yieldNow;
 
         assert.deepEqual(
           dispatchedCommands.map((command) => command.type),
@@ -11979,8 +11942,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             "thread.meta.update",
             "thread.activity.append",
             "thread.turn.start",
-            "thread.activity.append",
-            "thread.activity.append",
             "thread.activity.append",
             "thread.activity.append",
             "thread.activity.append",
@@ -12039,16 +12000,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             "setup-script.requested",
             "setup-script.started",
             "setup-script.completed",
-            "workflow-app-dev-stack.requested",
-            "workflow-app-dev-stack.ready",
           ],
         );
-        assert.equal(autoCreateAppStack.mock.calls.length, 1);
-        assert.deepEqual(autoCreateAppStack.mock.calls[0]?.[0], {
-          worktreePath: "/tmp/bootstrap-worktree",
-          displayName: "verify-email-capabilities",
-          gitBranch: "verify-email-capabilities",
-        });
         assert.deepEqual(activities[1]?.activity.payload, {
           baseBranch: "main",
           branch: "worktree/deadbeef",

@@ -26,6 +26,7 @@ import {
   AppReviewWorkflowRunId,
   CommandId,
   DEFAULT_MAX_PARALLEL_TICKETS,
+  DEFAULT_MAX_PARALLEL_APP_REVIEWS,
   AppReviewId,
   isRunStageSkipped,
   isTicketSkipped,
@@ -1312,6 +1313,9 @@ export function deferredTicketAppReviewInstructions(
   ].join("\n\n");
 }
 
+const ON_DEMAND_APP_STACK_INSTRUCTION =
+  "Keep the App Stack stopped during implementation and Code Review unless a focused check needs running services. Use app_stack_start for this worktree when needed, then app_stack_stop as soon as those checks finish. App Review starts or restarts its own stack when admitted. Do not start a stack merely to prepare for a later review.";
+
 const WORKER_RESULT_REJECTED_PREFIX = "The completed worker report was rejected:";
 
 function workerResultProblem(thread: OrchestrationThread | null): string | null {
@@ -1388,6 +1392,7 @@ function buildWorkerPrompt(input: {
     WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
     `Implement planning ticket ${input.ticketId} for implementation run ${input.run.id}.`,
     deferredTicketAppReviewInstructions(input.run, input.ticketId),
+    ON_DEMAND_APP_STACK_INSTRUCTION,
     "",
     "Do not ask the user questions. Run one focused failing test before implementation. Work in behavioral slices, rerunning the relevant focused test after each slice, then finish with affected-file formatting, linting, typing, and focused tests only.",
     "Do not run launch-level complete validation commands or full test suites. A documented sub-minute fast check such as `pnpm check` is allowed. The separate validation stage owns complete validation. Do not rerun an unchanged passing command without a new code change that could affect it.",
@@ -1468,7 +1473,7 @@ function buildMergeGatePrompt(input: {
     `Run ${input.kind} gate for implementation run ${input.run.id}.`,
     "",
     ...integrationInstructions,
-    "Use the repository's existing focused validation setup. Do not start a competing development server or replace dependency paths in the shared worktree: its workflow-owned AppStack was created during workspace bootstrap and is reused here. If validation cannot run with the prepared workspace, report the setup failure explicitly.",
+    "Use the repository's existing focused validation setup. Do not start a competing development server or replace dependency paths in the shared worktree: start the workflow-owned App Stack with app_stack_start only when a check needs running services, and stop it with app_stack_stop when those checks finish. If validation cannot run with the prepared workspace, report the setup failure explicitly.",
     "",
     ...validationInstructions,
     ...(input.kind === "final" ? [WORKFLOW_PARALLEL_VALIDATION_INSTRUCTION] : []),
@@ -1606,6 +1611,7 @@ function buildCodeReviewPrompt(input: {
     input.run.finalRegression?.reviewBaseSha ?? input.reviewBaseSha ?? input.run.pinnedCommit;
   return [
     `Use the Matt Pocock code-review skill for run ${input.run.id}. Cycle ${input.cycleNumber} of ${input.cycleBudget}.`,
+    ON_DEMAND_APP_STACK_INSTRUCTION,
     `Worktree: ${input.run.orchestratorWorktreePath}`,
     `Branch: ${input.run.orchestratorBranch}`,
     `Review base: ${reviewBaseSha}`,
@@ -1755,9 +1761,9 @@ function fastFeatureExecutionContract(
     `- branch: ${run.orchestratorBranch}`,
     `- worktree: ${run.orchestratorWorktreePath}`,
     `- fixed source commit: ${run.pinnedCommit}`,
-    "- App Stack: created by workflow workspace bootstrap after dependency setup; Build reuses it",
+    "- App Stack: starts on demand for App Review or checks that need running services",
     "",
-    "Use the repository dependencies prepared during workflow workspace bootstrap. Do not start a competing development server or replace dependency paths mounted by the workflow-owned App Stack.",
+    "Use the repository dependencies prepared during workflow workspace bootstrap. Keep the App Stack stopped during code-only work. If a check needs services, use app_stack_start for this worktree and app_stack_stop when it finishes. Do not start a competing development server or replace prepared dependency paths.",
     "",
     "## Build validation",
     "Run focused tests and affected-file checks. A documented sub-minute fast command such as `pnpm check` is allowed.",
@@ -2157,6 +2163,111 @@ export function workerHaltAwaitsResult(
   );
 }
 
+/** Reconcile a resumed worker and its current execution without spending another launch. */
+function reconcileActiveRecoveredWorkers(input: {
+  readonly run: OrchestrationImplementationRun;
+  readonly threads: ReadonlyArray<OrchestrationThread>;
+  readonly createdAt: string;
+}): OrchestrationImplementationRun {
+  const { run, threads, createdAt } = input;
+  if (
+    run.status === "completed" ||
+    run.status === "canceled" ||
+    isWorkflowThreadPaused(threads, run.orchestratorThreadId)
+  ) {
+    return run;
+  }
+  const restoredIds = new Set<string>();
+  const ticketStates = run.ticketStates.map((state) => {
+    const currentExecution = state.stageExecutions.findLast(
+      (execution) =>
+        execution.target.kind === "ticket" &&
+        execution.target.runId === run.id &&
+        execution.target.ticketId === state.ticketId &&
+        execution.target.stage === "implementation" &&
+        execution.generation === state.implementationGeneration,
+    );
+    const recoveredReady =
+      state.status === "ready" &&
+      (state.warningMarkdown === RECOVERED_WORKER_WARNING ||
+        currentExecution?.state === "running" ||
+        currentExecution?.state === "starting" ||
+        currentExecution?.state === "reconciling");
+    const staleExecution =
+      state.status === "running" &&
+      currentExecution?.state === "halted" &&
+      run.automationHalt?.ticketId !== state.ticketId;
+    if (
+      (!recoveredReady && !staleExecution) ||
+      state.workerResult !== null ||
+      state.workerThreadId === null ||
+      state.resumeQueuedAt != null ||
+      isWorkflowThreadPaused(threads, state.workerThreadId)
+    ) {
+      return state;
+    }
+    const worker = threads.find((thread) => thread.id === state.workerThreadId);
+    if (
+      worker?.workflowRole !== "implementation-worker" ||
+      worker.branch !== state.branch ||
+      worker.worktreePath !== state.worktreePath ||
+      !worker.workflowContext?.ticketScope?.includes(state.ticketId) ||
+      !stageClaimBlocksRestart(
+        stageClaimState({ thread: worker, threads, nowMs: Date.parse(createdAt) }),
+      )
+    ) {
+      return state;
+    }
+    restoredIds.add(state.ticketId);
+    const stageExecutions = state.stageExecutions.map((execution) =>
+      (execution.state === "halted" || execution.state === "reconciling") &&
+      execution === currentExecution
+        ? {
+            ...execution,
+            state:
+              worker.session?.status === "starting" ? ("starting" as const) : ("running" as const),
+            claimedAt: execution.claimedAt ?? createdAt,
+            leaseRenewedAt: createdAt,
+            leaseExpiresAt: DateTime.formatIso(
+              DateTime.add(DateTime.makeUnsafe(Date.parse(createdAt)), {
+                milliseconds: WORKFLOW_PROVIDER_LEASE_MS,
+              }),
+            ),
+            lastProgressAt: createdAt,
+            failure: null,
+            recovery: null,
+            updatedAt: createdAt,
+          }
+        : execution,
+    );
+    return {
+      ...state,
+      status: "running" as const,
+      stageExecutions,
+      warningMarkdown:
+        state.warningMarkdown === RECOVERED_WORKER_WARNING ? null : (state.warningMarkdown ?? null),
+      updatedAt: createdAt,
+    };
+  });
+  if (restoredIds.size === 0) return run;
+  const answersHalt = [...restoredIds].some((ticketId) => workerHaltAwaitsResult(run, ticketId));
+  return {
+    ...run,
+    ticketStates,
+    ...(answersHalt
+      ? {
+          status: "running" as const,
+          automationHalt: null,
+          retryableFailure:
+            run.retryableFailure?.ticketId === run.automationHalt?.ticketId
+              ? null
+              : run.retryableFailure,
+        }
+      : {}),
+    updatedAt: createdAt,
+  };
+}
+
 function discardedWorkerResult(
   run: OrchestrationImplementationRun,
   state: OrchestrationImplementationTicketState,
@@ -2216,6 +2327,7 @@ const make = Effect.gen(function* () {
     new Map<string, { readonly semaphore: Semaphore.Semaphore; readonly users: number }>(),
   );
   const ticketAppReviewAdmission = yield* Semaphore.make(1);
+  const ticketStageAdmission = yield* Semaphore.make(1);
   const fixerLaunchAdmission = yield* Semaphore.make(1);
 
   /**
@@ -3219,6 +3331,120 @@ const make = Effect.gen(function* () {
     } satisfies OrchestrationImplementationRun;
   });
 
+  const ticketConcurrencyLimits = Effect.fn(
+    "ImplementationWorkflowReactor.ticketConcurrencyLimits",
+  )(function* (
+    readModel: OrchestrationReadModel,
+    run: OrchestrationImplementationRun,
+    sourceThreadId: ThreadId,
+  ) {
+    const orchestrator = findThread(readModel, run.orchestratorThreadId);
+    const root = findThread(
+      readModel,
+      orchestrator?.workflowContext?.rootThreadId ?? sourceThreadId,
+    );
+    const settings = yield* serverSettingsService.getSettings;
+    return {
+      tickets:
+        root?.workflowImplementationSettings?.maxParallelTickets ??
+        settings.implementation.maxParallelTickets ??
+        DEFAULT_MAX_PARALLEL_TICKETS,
+      appReviews:
+        root?.workflowImplementationSettings?.maxParallelAppReviews ??
+        settings.implementation.maxParallelAppReviews ??
+        DEFAULT_MAX_PARALLEL_APP_REVIEWS,
+    };
+  });
+
+  const admitTicketStage = Effect.fn("ImplementationWorkflowReactor.admitTicketStage")(
+    function* (input: {
+      readonly sourceThreadId: ThreadId;
+      readonly run: OrchestrationImplementationRun;
+      readonly ticketId: string;
+      readonly status: "app-reviewing" | "code-reviewing";
+      readonly createdAt: string;
+      readonly warningMarkdown?: string;
+      readonly appReviewOutcome?: "skipped" | "failed";
+    }) {
+      return yield* ticketStageAdmission.withPermit(
+        Effect.gen(function* () {
+          const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+          const run = currentRunForQueuedRerun(
+            readModel,
+            input.run.id,
+            input.run,
+            yield* Clock.currentTimeMillis,
+          );
+          const state = run.ticketStates.find((candidate) => candidate.ticketId === input.ticketId);
+          if (
+            state === undefined ||
+            state.resumeQueuedAt != null ||
+            run.automationHalt !== null ||
+            run.status !== "running" ||
+            ticketIsPaused(state, readModel)
+          )
+            return null;
+          const limits = yield* ticketConcurrencyLimits(readModel, run, input.sourceThreadId);
+          const queued = {
+            ...run,
+            ticketStates: run.ticketStates.map((candidate) =>
+              candidate.ticketId === input.ticketId
+                ? { ...candidate, status: input.status, resumeQueuedAt: input.createdAt }
+                : candidate,
+            ),
+          };
+          const admitted = readyTicketsWithinLimit(
+            queued,
+            limits.tickets,
+            readModel,
+            limits.appReviews,
+          ).includes(input.ticketId);
+          const resumeQueuedAt = admitted ? null : input.createdAt;
+          if (state.status === input.status && (state.resumeQueuedAt ?? null) === resumeQueuedAt)
+            return run;
+          const createdAt = DateTime.formatIso(
+            DateTime.makeUnsafe(
+              Math.max(
+                yield* Clock.currentTimeMillis,
+                Date.parse(input.createdAt),
+                Date.parse(state.updatedAt) + 1,
+              ),
+            ),
+          );
+          const next: OrchestrationImplementationRun = {
+            ...run,
+            ticketStates: run.ticketStates.map((candidate) =>
+              candidate.ticketId === input.ticketId
+                ? {
+                    ...candidate,
+                    status: input.status,
+                    resumeQueuedAt,
+                    ...(input.status === "code-reviewing"
+                      ? { codeReviewThreadId: candidate.codeReviewThreadId ?? null }
+                      : {}),
+                    warningMarkdown: input.warningMarkdown ?? candidate.warningMarkdown ?? null,
+                    appReviewOutcome:
+                      candidate.appReviewOutcome ??
+                      input.appReviewOutcome ??
+                      (input.status === "code-reviewing"
+                        ? input.warningMarkdown === undefined
+                          ? "skipped"
+                          : "failed"
+                        : null),
+                    updatedAt: createdAt,
+                  }
+                : candidate,
+            ),
+            updatedAt: createdAt,
+          };
+          if (!(yield* updateRun({ sourceThreadId: input.sourceThreadId, run: next, createdAt })))
+            return null;
+          return admitted ? next : null;
+        }),
+      );
+    },
+  );
+
   const startReadyWorkers = Effect.fn("ImplementationWorkflowReactor.startReadyWorkers")(
     function* (input: {
       readonly sourceThreadId: ThreadId;
@@ -3229,23 +3455,22 @@ const make = Effect.gen(function* () {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
       if (orchestratorThread === null) return input.run;
-      if (input.run.automationHalt !== null) return input.run;
       if (isWorkflowThreadPaused(readModel.threads, orchestratorThread.id)) return input.run;
-      const root = findThread(
-        readModel,
-        orchestratorThread.workflowContext?.rootThreadId ?? input.sourceThreadId,
-      );
-      const settings = yield* serverSettingsService.getSettings;
-      const limit =
-        root?.workflowImplementationSettings?.maxParallelTickets ??
-        settings.implementation.maxParallelTickets ??
-        DEFAULT_MAX_PARALLEL_TICKETS;
+      let workingRun = reconcileActiveRecoveredWorkers({
+        run: input.run,
+        threads: readModel.threads,
+        createdAt: input.createdAt,
+      });
+      if (workingRun !== input.run && !(yield* updateRun({ ...input, run: workingRun }))) {
+        return input.run;
+      }
+      if (workingRun.automationHalt !== null) return workingRun;
+      const limits = yield* ticketConcurrencyLimits(readModel, workingRun, input.sourceThreadId);
 
       // Passes rather than one sweep, because a skipped ticket is terminal the
       // moment it takes its branch: what waited on it becomes ready inside this
       // call and deserves to start now. Each pass strictly shrinks the set of
       // tickets that are neither started nor terminal, so this ends.
-      let workingRun = input.run;
       const startResults: {
         readonly ticketId: string;
         readonly result: { readonly _tag: "Success" | "Failure"; readonly failure?: unknown };
@@ -3275,7 +3500,12 @@ const make = Effect.gen(function* () {
             updatedAt: input.createdAt,
           });
         }
-        const admittedIds = readyTicketsWithinLimit(workingRun, limit, readModel);
+        const admittedIds = readyTicketsWithinLimit(
+          workingRun,
+          limits.tickets,
+          readModel,
+          limits.appReviews,
+        );
         const resumedIds = new Set(
           workingRun.ticketStates
             .filter((state) => state.resumeQueuedAt != null && admittedIds.includes(state.ticketId))
@@ -4243,7 +4473,7 @@ const make = Effect.gen(function* () {
         (state.status !== "app-reviewing" && state.status !== "code-reviewing")
       )
         return;
-      const currentRun = currentRunForQueuedRerun(
+      let currentRun = currentRunForQueuedRerun(
         readModel,
         input.run.id,
         input.run,
@@ -4268,6 +4498,27 @@ const make = Effect.gen(function* () {
           isWorkflowThreadPaused(readModel.threads, state.codeReviewThreadId))
       )
         return;
+      // Release services before Code Review waits for a ticket slot.
+      if (state.status === "app-reviewing" || state.codeReviewLaunchCount === 0) {
+        yield* stopUnusedAppStack({
+          run: input.run,
+          worktreePath: state.worktreePath,
+          ticketId: input.ticketId,
+        });
+      }
+      if (
+        state.status !== "code-reviewing" &&
+        !isTicketStageSkipped(currentRun.skips, input.ticketId, "code-review")
+      ) {
+        const admitted = yield* admitTicketStage({
+          ...input,
+          run: currentRun,
+          status: "code-reviewing",
+        });
+        if (admitted === null) return;
+        currentRun = admitted;
+        input = { ...input, run: admitted };
+      }
       const createdAt = DateTime.formatIso(
         DateTime.makeUnsafe(
           Math.max(
@@ -4432,7 +4683,9 @@ const make = Effect.gen(function* () {
         claimRun.status === "completed" ||
         claimRun.automationHalt !== null ||
         claimState === undefined ||
-        claimState.updatedAt !== state.updatedAt ||
+        claimState.updatedAt !==
+          currentRun.ticketStates.find((candidate) => candidate.ticketId === input.ticketId)
+            ?.updatedAt ||
         isTicketStageSkipped(claimRun.skips, input.ticketId, "code-review") ||
         isWorkflowThreadPaused(claimReadModel.threads, state.workerThreadId) ||
         (state.codeReviewThreadId != null &&
@@ -4492,43 +4745,6 @@ const make = Effect.gen(function* () {
           ticketIds: [input.ticketId],
         });
         return;
-      }
-      // Code Review works from the ticket branch. Stop its services after App
-      // Review; a rerun can restart the preserved stack.
-      if (
-        state.status === "app-reviewing" &&
-        !readModel.appReviewWorkflowRuns?.some(
-          (review) =>
-            review.status === "running" &&
-            review.caller.type === "implementation" &&
-            review.caller.implementationRunId === input.run.id &&
-            review.caller.ticketId === input.ticketId,
-        )
-      ) {
-        const worktreePath = state.worktreePath;
-        yield* Effect.gen(function* () {
-          const { stack } = yield* appStackManager.getByWorktree({
-            worktreePath,
-          });
-          if (
-            stack === null ||
-            stack.protected === true ||
-            stack.workflowId == null ||
-            !workflowIdsForRun(readModel, input.run).includes(stack.workflowId) ||
-            stack.status === "stopped" ||
-            stack.status === "stopping"
-          )
-            return;
-          yield* appStackManager.stop({ stackId: stack.id });
-        }).pipe(
-          Effect.catch((error) =>
-            Effect.logWarning("Could not stop ticket App Stack after App Review", {
-              runId: input.run.id,
-              ticketId: input.ticketId,
-              detail: errorDetail(error),
-            }),
-          ),
-        );
       }
       if (existingReviewer === null) {
         yield* orchestrationEngine.dispatch({
@@ -4597,6 +4813,108 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const stopUnusedAppStack = Effect.fn("ImplementationWorkflowReactor.stopUnusedAppStack")(
+    function* (input: {
+      readonly run: OrchestrationImplementationRun;
+      readonly worktreePath: string;
+      readonly ticketId?: string;
+      readonly onlyIfIdle?: boolean;
+      readonly taskActivitiesByThread?: ReadonlyMap<
+        ThreadId,
+        ReadonlyArray<OrchestrationThreadActivity>
+      >;
+    }) {
+      let readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      if (
+        readModel.appReviewWorkflowRuns?.some(
+          (review) =>
+            review.status === "running" &&
+            review.caller.type === "implementation" &&
+            review.caller.implementationRunId === input.run.id &&
+            (review.caller.ticketId ?? null) === (input.ticketId ?? null),
+        )
+      )
+        return;
+      const { stack } = yield* appStackManager.getByWorktree({ worktreePath: input.worktreePath });
+      if (
+        stack === null ||
+        normalizeWorkflowWorktreePath(stack.worktreePath) !==
+          normalizeWorkflowWorktreePath(input.worktreePath) ||
+        stack.protected === true ||
+        !workflowOwnsStack(readModel, input.run, stack.workflowId) ||
+        stack.status === "stopped" ||
+        stack.status === "stopping"
+      )
+        return;
+      if (input.onlyIfIdle) {
+        // Admission may finish while the lookup waits on the controller.
+        readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+        const currentRun = findRunById(readModel, input.run.id);
+        const state = currentRun?.ticketStates.find((ticket) => ticket.ticketId === input.ticketId);
+        if (
+          state === undefined ||
+          state.worktreePath === null ||
+          normalizeWorkflowWorktreePath(state.worktreePath) !==
+            normalizeWorkflowWorktreePath(input.worktreePath) ||
+          !(state.resumeQueuedAt != null || ["ready", "blocked", "failed"].includes(state.status))
+        )
+          return;
+        const nowMs = yield* Clock.currentTimeMillis;
+        const hasWork = readModel.threads.some((thread) => {
+          if (
+            thread.worktreePath === null ||
+            normalizeWorkflowWorktreePath(thread.worktreePath) !==
+              normalizeWorkflowWorktreePath(input.worktreePath)
+          )
+            return false;
+          const claim = stageClaimState({
+            thread: {
+              ...thread,
+              activities: input.taskActivitiesByThread?.get(thread.id) ?? thread.activities,
+            },
+            threads: readModel.threads,
+            nowMs,
+          });
+          return thread.id === state.workerThreadId && state.workerResult != null
+            ? stageClaimBlocksRestart(claim)
+            : !stageClaimIsReleased(claim);
+        });
+        if (
+          hasWork ||
+          readModel.appReviewWorkflowRuns?.some(
+            (review) =>
+              review.status === "running" &&
+              review.caller.type === "implementation" &&
+              review.caller.implementationRunId === input.run.id &&
+              review.caller.ticketId === input.ticketId,
+          )
+        )
+          return;
+      }
+      yield* appStackManager.stop({ stackId: stack.id });
+      if (input.onlyIfIdle) {
+        yield* appendActivity({
+          threadId: input.run.orchestratorThreadId,
+          tone: "info",
+          kind: "implementation-ticket-stack-stop-requested",
+          summary: `Ticket ${input.ticketId} App Stack stop requested while idle`,
+          payload: {
+            runId: input.run.id,
+            ticketId: input.ticketId,
+            stackId: stack.id,
+            worktreePath: input.worktreePath,
+          },
+          createdAt: DateTime.formatIso(yield* DateTime.now),
+        });
+      }
+    },
+    Effect.catch((error) =>
+      Effect.logWarning("Could not stop unused workflow App Stack", {
+        detail: errorDetail(error),
+      }),
+    ),
+  );
+
   const startTicketCodeReview = Effect.fn("ImplementationWorkflowReactor.startTicketCodeReview")(
     function* (input: Parameters<typeof launchTicketCodeReview>[0]) {
       const key = `code-review:${input.run.id}:${input.ticketId}`;
@@ -4617,7 +4935,7 @@ const make = Effect.gen(function* () {
   }) {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const nowMs = yield* Clock.currentTimeMillis;
-    const currentRun = currentRunForQueuedRerun(readModel, input.run.id, input.run, nowMs);
+    let currentRun = currentRunForQueuedRerun(readModel, input.run.id, input.run, nowMs);
     if (currentRun.automationHalt !== null) return;
     if (
       ticketAppReviewClaimIsAhead({
@@ -4746,6 +5064,15 @@ const make = Effect.gen(function* () {
         createdAt: input.createdAt,
       });
       return;
+    }
+    if (state.appReviewWorkflowRunId == null) {
+      const admitted = yield* admitTicketStage({
+        ...input,
+        run: currentRun,
+        status: "app-reviewing",
+      });
+      if (admitted === null) return;
+      currentRun = admitted;
     }
     const appStackShape = ticketAppStackRequest({
       parts: configuredParts,
@@ -5674,23 +6001,13 @@ const make = Effect.gen(function* () {
         updatedAt: input.createdAt,
       };
 
-      // Planning, Full Feature, or Fast Feature owns stack creation during workspace bootstrap.
-      // Implementation may re-ensure that exact registered stack after integration or repair, but
-      // it must never silently manufacture a second runtime when the inherited one is missing.
+      // App Review starts the stack for this worktree only when it needs services.
+      // A lookup failure must not send review to a different runtime.
       const inheritedLookup = yield* appStackManager
         .getByWorktree({ worktreePath: cycleRun.orchestratorWorktreePath })
         .pipe(Effect.result);
-      const inheritedStackMissing =
-        inheritedLookup._tag === "Success" && inheritedLookup.success.stack === null;
-      // Planning-spec runs create their orchestrator worktree inside this reactor, after the
-      // outer Planning workspace bootstrap has already finished. Once integration has prepared
-      // that worktree's dependencies, this is the first point where its authoritative stack can
-      // exist. Fast Feature reuses a workspace whose bootstrap already owns stack creation.
-      const mayCreateInitialPlanningSpecStack =
-        inheritedStackMissing && cycleRun.artifactSource === "planning-spec";
       const stackResult =
-        inheritedLookup._tag === "Failure" ||
-        (inheritedStackMissing && !mayCreateInitialPlanningSpecStack)
+        inheritedLookup._tag === "Failure"
           ? null
           : yield* appStackManager
               .autoCreate({
@@ -5707,15 +6024,12 @@ const make = Effect.gen(function* () {
       const stackFailureDetail =
         inheritedLookup._tag === "Failure"
           ? errorDetail(inheritedLookup.failure)
-          : inheritedStackMissing && !mayCreateInitialPlanningSpecStack
-            ? `The workflow-owned App Stack is missing for '${cycleRun.orchestratorWorktreePath}'. Planning, Full Feature, or Fast Feature must create it after workspace dependency setup; Implementation will not create a replacement.`
-            : stackResult?._tag === "Failure"
-              ? errorDetail(stackResult.failure)
-              : null;
+          : stackResult?._tag === "Failure"
+            ? errorDetail(stackResult.failure)
+            : null;
       const stack = stackResult?._tag === "Success" ? stackResult.success : null;
       if (stackFailureDetail !== null) {
-        const infrastructureBlocked =
-          inheritedStackMissing || isAppStackInfrastructureFailure(stackFailureDetail);
+        const infrastructureBlocked = isAppStackInfrastructureFailure(stackFailureDetail);
         const diagnostics = yield* appStackDiagnostics({
           run: ensuringRun,
           stackId: ensuringRun.appDevStack.stackId,
@@ -6179,6 +6493,24 @@ const make = Effect.gen(function* () {
         })
       ) {
         return;
+      }
+      const activeCodeReviewer =
+        input.run.activeCodeReviewThreadId === null
+          ? undefined
+          : (findThread(readModel, input.run.activeCodeReviewThreadId) ?? undefined);
+      if (
+        !stageClaimBlocksRestart(
+          stageClaimState({
+            thread: activeCodeReviewer ?? undefined,
+            threads: readModel.threads,
+            nowMs: Date.parse(input.createdAt),
+          }),
+        )
+      ) {
+        yield* stopUnusedAppStack({
+          run: input.run,
+          worktreePath: input.run.orchestratorWorktreePath,
+        });
       }
       const finalPass = isFinalCodeReviewPass(input.run);
       const cycleBudget = finalPass
@@ -7187,8 +7519,7 @@ const make = Effect.gen(function* () {
         createdAt: input.createdAt,
       });
 
-      // Workspace bootstrap already owns App Stack creation. `startBrowserReview` requires and
-      // probes that inherited stack after Build reports a clean committed HEAD.
+      // App Review starts the worktree stack after Build reports a clean committed HEAD.
     },
   );
 
@@ -7447,6 +7778,12 @@ const make = Effect.gen(function* () {
         return;
       }
 
+      yield* stopUnusedAppStack({
+        run,
+        worktreePath: directive.worktreePath,
+        ticketId: directive.ticketId,
+      });
+
       if (directive.status === "failed") {
         const warningMarkdown = directive.notesMarkdown || `Worker '${directive.ticketId}' failed.`;
         const failedRun = failImplementationTickets(
@@ -7647,6 +7984,11 @@ const make = Effect.gen(function* () {
         ticketId: directive.ticketId,
         createdAt: writeAt,
       });
+      const afterReviewLaunch = yield* projectionSnapshotQuery.getCommandReadModel();
+      const afterReviewRun = findRunById(afterReviewLaunch, succeededRun.id);
+      if (afterReviewRun !== null) {
+        yield* startReadyWorkers({ sourceThreadId, run: afterReviewRun, createdAt: writeAt });
+      }
     },
   );
 
@@ -7679,6 +8021,7 @@ const make = Effect.gen(function* () {
       }
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) return;
+      yield* stopUnusedAppStack({ run, worktreePath: run.orchestratorWorktreePath });
       const completesAfterBuild =
         findThread(readModel, sourceThreadId)?.workflowPreset === "quick-plan";
       const updatedAt = input.updatedAt;
@@ -8698,6 +9041,11 @@ const make = Effect.gen(function* () {
           state.status !== "code-reviewing"
         )
           return;
+        yield* stopUnusedAppStack({
+          run,
+          worktreePath: state.worktreePath,
+          ticketId: state.ticketId,
+        });
         // Stamp writes with when they happen, not when the result was reported.
         // A result handled late (a queue backlog, a recovery replay) is older
         // than what other stages wrote to this ticket meanwhile, and
@@ -8956,6 +9304,7 @@ const make = Effect.gen(function* () {
       }
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) return;
+      yield* stopUnusedAppStack({ run, worktreePath: run.orchestratorWorktreePath });
       const updatedAt = input.createdAt;
       const finalPass = isFinalCodeReviewPass(run);
       if (
@@ -11959,11 +12308,69 @@ const make = Effect.gen(function* () {
     return byThread;
   });
 
+  const cleanupIdleTicketStacks = Effect.fn(
+    "ImplementationWorkflowReactor.cleanupIdleTicketStacks",
+  )(function* (input: {
+    readonly run: OrchestrationImplementationRun;
+    readonly taskActivitiesByThread: ReadonlyMap<
+      ThreadId,
+      ReadonlyArray<OrchestrationThreadActivity>
+    >;
+  }) {
+    yield* Effect.forEach(
+      input.run.ticketStates,
+      (state) =>
+        Effect.gen(function* () {
+          if (
+            state.worktreePath === null ||
+            normalizeWorkflowWorktreePath(state.worktreePath) ===
+              normalizeWorkflowWorktreePath(input.run.orchestratorWorktreePath) ||
+            !(state.resumeQueuedAt != null || ["ready", "blocked", "failed"].includes(state.status))
+          )
+            return;
+          const key = `${input.run.id}:${state.ticketId}`;
+          const semaphore = yield* getTicketReviewSemaphore(key);
+          yield* semaphore
+            .withPermit(
+              stopUnusedAppStack({
+                run: input.run,
+                worktreePath: state.worktreePath,
+                ticketId: state.ticketId,
+                onlyIfIdle: true,
+                taskActivitiesByThread: input.taskActivitiesByThread,
+              }),
+            )
+            .pipe(Effect.ensuring(releaseTicketReviewSemaphore(key)));
+        }),
+      { concurrency: 4, discard: true },
+    );
+  });
+
   const recoverIncompleteStages = Effect.fn(
     "ImplementationWorkflowReactor.recoverIncompleteStages",
   )(function* (recoverPersistedLaunchFallout = false) {
     let readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     let createdAt = DateTime.formatIso(yield* DateTime.now);
+    let restoredActiveWorkers = false;
+    for (const run of readModel.implementationRuns) {
+      const reconciled = reconcileActiveRecoveredWorkers({
+        run,
+        threads: readModel.threads,
+        createdAt,
+      });
+      if (reconciled === run) continue;
+      const sourceThreadId = findRunSourceThreadId({ readModel, run });
+      if (
+        sourceThreadId !== null &&
+        (yield* updateRun({ sourceThreadId, run: reconciled, createdAt }))
+      ) {
+        restoredActiveWorkers = true;
+      }
+    }
+    if (restoredActiveWorkers) {
+      readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      createdAt = DateTime.formatIso(yield* DateTime.now);
+    }
     if (
       yield* recoverInterruptedWorktreeHalts({
         readModel,
@@ -11979,6 +12386,7 @@ const make = Effect.gen(function* () {
     const pendingIngestion = yield* pendingIngestionThreadIds(ingestionBacklog);
     for (const persistedRun of readModel.implementationRuns) {
       let run = yield* cleanupTicketResources({ run: persistedRun, createdAt });
+      yield* cleanupIdleTicketStacks({ run, taskActivitiesByThread });
       const isolated = isolateTicketReviewBlocks(run);
       if (isolated !== run) {
         const sourceThreadId = findRunSourceThreadId({ readModel, run });
@@ -12563,6 +12971,25 @@ const make = Effect.gen(function* () {
         let recoveredTicketCodeReview = false;
         for (const state of run.ticketStates) {
           if (state.status !== "code-reviewing" || ticketStagePaused(state)) continue;
+          if (state.codeReviewThreadId == null && state.codeReviewLaunchCount === 0) {
+            const launches = yield* SynchronizedRef.get(ticketReviewLocks);
+            if (launches.has(`code-review:${run.id}:${state.ticketId}`)) continue;
+            yield* recoverRunStage(
+              run.id,
+              "ticket-code-review-admission",
+              startTicketCodeReview({
+                sourceThreadId,
+                run,
+                ticketId: state.ticketId,
+                ...(state.warningMarkdown == null
+                  ? {}
+                  : { warningMarkdown: state.warningMarkdown }),
+                createdAt,
+              }),
+            );
+            recoveredTicketCodeReview = true;
+            break;
+          }
           const thread =
             state.codeReviewThreadId == null
               ? undefined

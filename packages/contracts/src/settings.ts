@@ -1630,6 +1630,7 @@ export const ServerSettingsPatch = Schema.Struct({
   implementation: Schema.optionalKey(
     Schema.Struct({
       maxParallelTickets: Schema.optionalKey(MaxParallelTickets),
+      maxParallelAppReviews: Schema.optionalKey(MaxParallelTickets),
       appReviewEnabled: Schema.optionalKey(Schema.Boolean),
       finalCodeReviewEnabled: Schema.optionalKey(Schema.Boolean),
       pullRequestCreationEnabled: Schema.optionalKey(Schema.Boolean),

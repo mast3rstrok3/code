@@ -1,4 +1,5 @@
 import {
+  DEFAULT_MAX_PARALLEL_APP_REVIEWS,
   isTicketSkipped,
   isWorkflowThreadPaused,
   type OrchestrationImplementationRun,
@@ -39,30 +40,39 @@ export function appReviewWaitsForAdmission(
   );
 }
 
-/** A ticket holds its slot through implementation and review, except while paused or queued. */
+/** Paused and queued stages release capacity in their respective pools. */
 export function readyTicketsWithinLimit(
   run: Pick<OrchestrationImplementationRun, "ticketStates" | "skips">,
   limit: number,
   readModel: Pick<OrchestrationReadModel, "threads" | "appReviewWorkflowRuns">,
+  appReviewLimit = DEFAULT_MAX_PARALLEL_APP_REVIEWS,
 ) {
   const pausedTicketIds = new Set(
     run.ticketStates
       .filter((ticket) => ticketIsPaused(ticket, readModel))
       .map((ticket) => ticket.ticketId),
   );
-  let available = Math.max(
-    0,
-    limit -
-      run.ticketStates.filter(
-        (ticket) =>
-          !pausedTicketIds.has(ticket.ticketId) &&
-          ticket.resumeQueuedAt == null &&
-          ["running", "app-reviewing", "code-reviewing", "awaiting-native-verification"].includes(
-            ticket.status,
-          ),
-      ).length,
-  );
-  return run.ticketStates
+  const poolFor = (ticket: OrchestrationImplementationTicketState) =>
+    ticket.status === "app-reviewing" || ticket.status === "awaiting-native-verification"
+      ? "appReview"
+      : "ticket";
+  const available = { ticket: limit, appReview: appReviewLimit };
+  for (const ticket of run.ticketStates) {
+    if (
+      !pausedTicketIds.has(ticket.ticketId) &&
+      ticket.resumeQueuedAt == null &&
+      ["running", "app-reviewing", "code-reviewing", "awaiting-native-verification"].includes(
+        ticket.status,
+      )
+    ) {
+      available[poolFor(ticket)] -= 1;
+    }
+  }
+  // Finish admitted tickets before starting more implementation work.
+  return [...run.ticketStates]
+    .sort(
+      (left, right) => Number(right.resumeQueuedAt != null) - Number(left.resumeQueuedAt != null),
+    )
     .filter((ticket) => {
       if (
         (ticket.status !== "ready" && ticket.resumeQueuedAt == null) ||
@@ -76,8 +86,9 @@ export function readyTicketsWithinLimit(
       )
         return false;
       if (isTicketSkipped(run.skips, ticket.ticketId)) return true;
-      if (available === 0) return false;
-      available -= 1;
+      const pool = poolFor(ticket);
+      if (available[pool] <= 0) return false;
+      available[pool] -= 1;
       return true;
     })
     .map((ticket) => ticket.ticketId);

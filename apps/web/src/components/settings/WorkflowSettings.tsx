@@ -225,10 +225,17 @@ function WorkflowStepModelDefaultsBody(props: {
       </SettingsRow>
       <SettingsRow
         title="Ticket scheduling"
-        description="Default limit for workflows without their own setting."
+        description="Default budgets for workflows without their own settings."
       >
         <WorkflowTicketConcurrency
           value={props.implementationSettings.maxParallelTickets}
+          appReviewValue={props.implementationSettings.maxParallelAppReviews}
+          onAppReviewChange={(maxParallelAppReviews) =>
+            props.onSetImplementationSettings({
+              ...props.implementationSettings,
+              maxParallelAppReviews,
+            })
+          }
           onChange={(maxParallelTickets) =>
             props.onSetImplementationSettings({
               ...props.implementationSettings,

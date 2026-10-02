@@ -26,12 +26,13 @@ const resolveWorkspace = Effect.fn("AppStackToolkit.resolveWorkspace")(function*
     const thread = yield* query.getThreadShellById(scope.threadId);
     if (Option.isNone(thread)) return undefined;
     const branch = thread.value.branch;
+    const workflowId = thread.value.workflowContext?.workflowId;
     if (thread.value.worktreePath?.trim()) {
-      return { worktreePath: thread.value.worktreePath.trim(), branch };
+      return { worktreePath: thread.value.worktreePath.trim(), branch, workflowId };
     }
     const project = yield* query.getProjectShellById(thread.value.projectId);
     const worktreePath = Option.getOrUndefined(project)?.workspaceRoot.trim();
-    return worktreePath ? { worktreePath, branch } : undefined;
+    return worktreePath ? { worktreePath, branch, workflowId } : undefined;
   }).pipe(
     Effect.mapError(
       (cause) =>
@@ -235,12 +236,14 @@ export const handlers = {
       }
       return { ...existing, created: false, alreadyRunning: true };
     }
+    const workflowId = existing.stack?.workflowId ?? workspace.workflowId;
     const result = yield* manager.autoCreate({
       worktreePath: workspace.worktreePath,
       gitBranch: workspace.branch,
       displayName:
         input.displayName ?? appStackDisplayName(workspace.worktreePath, workspace.branch),
       variant,
+      ...(workflowId === undefined ? {} : { workflowId }),
       ...(bundle.length === 0 ? {} : { bundle }),
       ...(input.omitServices === undefined ? {} : { omitServices: input.omitServices }),
     });

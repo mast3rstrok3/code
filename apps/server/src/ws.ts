@@ -91,7 +91,6 @@ import {
   type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
-import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import {
   WORKFLOW_WORKSPACE_PREPARED_ACTIVITY_KIND,
   resolveWorkflowWorkspaceIdentity,
@@ -975,41 +974,6 @@ const makeWsRpcLayer = (
       }) =>
         Effect.all({
           commandId: serverCommandId("workflow-workspace-activity"),
-          activityId: serverEventId,
-        }).pipe(
-          Effect.flatMap(({ commandId, activityId }) =>
-            orchestrationEngine.dispatch({
-              type: "thread.activity.append",
-              commandId,
-              threadId: input.threadId,
-              activity: {
-                id: activityId,
-                tone: input.tone,
-                kind: input.kind,
-                summary: input.summary,
-                payload: input.payload,
-                turnId: null,
-                createdAt: input.createdAt,
-              },
-              createdAt: input.createdAt,
-            }),
-          ),
-        );
-
-      const appendWorkflowAppStackActivity = (input: {
-        readonly threadId: ThreadId;
-        readonly kind:
-          | "workflow-app-dev-stack.requested"
-          | "workflow-app-dev-stack.starting"
-          | "workflow-app-dev-stack.ready"
-          | "workflow-app-dev-stack.failed";
-        readonly summary: string;
-        readonly createdAt: string;
-        readonly payload: Record<string, unknown>;
-        readonly tone: "info" | "error";
-      }) =>
-        Effect.all({
-          commandId: serverCommandId("workflow-app-dev-stack-activity"),
           activityId: serverEventId,
         }).pipe(
           Effect.flatMap(({ commandId, activityId }) =>
@@ -2028,119 +1992,6 @@ const makeWsRpcLayer = (
               }
             }
 
-            const awaitFinalWorkflowBranch = () => {
-              if (preparedWorkflowWorkspace === null) {
-                return Effect.never;
-              }
-              if (!isTemporaryWorktreeBranch(preparedWorkflowWorkspace.branch)) {
-                return Effect.succeed(preparedWorkflowWorkspace.branch);
-              }
-
-              const currentBranch = projectionSnapshotQuery.getThreadDetailById(threadId).pipe(
-                Effect.map(Option.getOrUndefined),
-                Effect.map((thread) => {
-                  const branch = thread?.branch;
-                  return branch && !isTemporaryWorktreeBranch(branch) ? branch : null;
-                }),
-                Effect.orElseSucceed(() => null),
-              );
-              const renamedBranches = orchestrationEngine.streamDomainEvents.pipe(
-                Stream.filter(
-                  (event): event is Extract<OrchestrationEvent, { type: "thread.meta-updated" }> =>
-                    event.type === "thread.meta-updated" &&
-                    event.payload.threadId === threadId &&
-                    event.payload.branch !== undefined &&
-                    event.payload.branch !== null &&
-                    !isTemporaryWorktreeBranch(event.payload.branch),
-                ),
-                Stream.map((event) => event.payload.branch as string),
-              );
-
-              // Subscribe to the hot rename stream alongside the authoritative read so a rename
-              // landing at this boundary cannot be missed.
-              return Stream.merge(Stream.fromEffect(currentBranch), renamedBranches).pipe(
-                Stream.filter((branch): branch is string => branch !== null),
-                Stream.runHead,
-                Effect.flatMap(
-                  Option.match({
-                    onNone: () => Effect.never,
-                    onSome: (branch) => Effect.succeed(branch),
-                  }),
-                ),
-              );
-            };
-
-            const provisionWorkflowAppStack = (finalBranch: string) =>
-              preparedWorkflowWorkspace === null
-                ? Effect.void
-                : Effect.gen(function* () {
-                    const requestedAt = yield* nowIso;
-                    const workflowId =
-                      threadDetail?.workflowContext?.workflowId ??
-                      bootstrap?.createThread?.workflowContext?.workflowId;
-                    const identity = {
-                      worktreePath: preparedWorkflowWorkspace.worktreePath,
-                      branch: finalBranch,
-                      workflowPreset: workflowPreset ?? null,
-                      workflowId: workflowId ?? null,
-                    };
-                    yield* appendWorkflowAppStackActivity({
-                      threadId,
-                      kind: "workflow-app-dev-stack.requested",
-                      summary: "Starting workflow App Stack",
-                      createdAt: requestedAt,
-                      payload: identity,
-                      tone: "info",
-                    }).pipe(Effect.ignoreCause({ log: true }));
-                    const outcome = yield* appStackManager
-                      .autoCreate({
-                        worktreePath: preparedWorkflowWorkspace.worktreePath,
-                        displayName: finalBranch,
-                        gitBranch: finalBranch,
-                        ...(workflowId === undefined ? {} : { workflowId }),
-                      })
-                      .pipe(Effect.result);
-                    const updatedAt = yield* nowIso;
-                    if (outcome._tag === "Failure") {
-                      yield* appendWorkflowAppStackActivity({
-                        threadId,
-                        kind: "workflow-app-dev-stack.failed",
-                        summary: "Workflow App Stack failed to start",
-                        createdAt: updatedAt,
-                        payload: { ...identity, detail: outcome.failure.message },
-                        tone: "error",
-                      }).pipe(Effect.ignoreCause({ log: true }));
-                      return;
-                    }
-                    const result = outcome.success;
-                    const unhealthyService = result.stack?.services?.find(
-                      (service) =>
-                        (service.error !== null && service.error !== undefined) ||
-                        service.health === "unhealthy" ||
-                        service.status === "error" ||
-                        service.status === "stopped",
-                    );
-                    const ready =
-                      result.frontendUrl !== null &&
-                      (result.stack === null || result.stack.status === "running") &&
-                      unhealthyService === undefined;
-                    yield* appendWorkflowAppStackActivity({
-                      threadId,
-                      kind: ready
-                        ? "workflow-app-dev-stack.ready"
-                        : "workflow-app-dev-stack.starting",
-                      summary: ready ? "Workflow App Stack ready" : "Workflow App Stack starting",
-                      createdAt: updatedAt,
-                      payload: {
-                        ...identity,
-                        stackId: result.stack?.id ?? null,
-                        stackStatus: result.stack?.status ?? null,
-                        frontendUrl: result.frontendUrl,
-                      },
-                      tone: "info",
-                    }).pipe(Effect.ignoreCause({ log: true }));
-                  });
-
             // Ordinary worktrees retain their setup-before-turn ordering. Workflow roots start
             // Product or Engineering Grill as soon as their canonical worktree identity is
             // durable; setup may initialize that worktree alongside the non-implementation turn.
@@ -2179,11 +2030,6 @@ const makeWsRpcLayer = (
               yield* runSetupProgram().pipe(
                 Effect.flatMap((setup) =>
                   setup.pending === null ? Effect.succeed(setup.ready) : Fiber.join(setup.pending),
-                ),
-                Effect.flatMap((dependenciesReady) =>
-                  dependenciesReady
-                    ? awaitFinalWorkflowBranch().pipe(Effect.flatMap(provisionWorkflowAppStack))
-                    : Effect.void,
                 ),
                 Effect.ignoreCause({ log: true }),
                 Effect.forkDetach,

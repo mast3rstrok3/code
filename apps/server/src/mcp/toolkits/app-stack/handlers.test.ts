@@ -8,6 +8,7 @@ import {
   OrchestrationThreadShell,
   ProviderInstanceId,
   ThreadId,
+  WorkflowId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -99,6 +100,7 @@ const invocation = Layer.succeed(McpInvocationContext, {
 function harness(
   input: {
     worktreePath?: string;
+    workflowId?: string;
     missing?: boolean;
     missingProject?: boolean;
     enabled?: boolean;
@@ -130,6 +132,15 @@ function harness(
             : Option.some({
                 ...thread,
                 worktreePath: input.worktreePath ?? null,
+                ...(input.workflowId === undefined
+                  ? {}
+                  : {
+                      workflowContext: {
+                        workflowId: WorkflowId.make(input.workflowId),
+                        rootThreadId: thread.id,
+                        ticketScope: [],
+                      },
+                    }),
               }),
         );
       },
@@ -470,6 +481,28 @@ it.effect("starts the authenticated worktree with its branch and explicit varian
   }).pipe(Effect.provide(test.layer));
 });
 
+for (const variant of ["dev", "prod"] as const) {
+  it.effect(`keeps the calling workflow as owner when creating its ${variant} stack`, () => {
+    const test = harness({
+      worktreePath: "/worktrees/ticket-1",
+      workflowId: "implementation-run-1",
+    });
+    return Effect.gen(function* () {
+      yield* handlers.app_stack_start({ variant });
+      expect(test.operations).toMatchObject([
+        {
+          operation: "autoCreate",
+          input: {
+            worktreePath: "/worktrees/ticket-1",
+            workflowId: "implementation-run-1",
+            variant,
+          },
+        },
+      ]);
+    }).pipe(Effect.provide(test.layer));
+  });
+}
+
 it.effect("reuses an existing stack without provisioning or changing its owner", () => {
   const test = harness({ stack });
   return Effect.gen(function* () {
@@ -480,6 +513,16 @@ it.effect("reuses an existing stack without provisioning or changing its owner",
       stack: { workflowId: "workflow-1" },
     });
     expect(test.operations).toEqual([]);
+  }).pipe(Effect.provide(test.layer));
+});
+
+it.effect("keeps an existing stack's owner when changing its shape", () => {
+  const test = harness({ stack, workflowId: "another-calling-workflow" });
+  return Effect.gen(function* () {
+    yield* handlers.app_stack_start({ bundle: ["cortex"] });
+    expect(test.operations).toMatchObject([
+      { operation: "autoCreate", input: { workflowId: stack.workflowId, bundle: ["cortex"] } },
+    ]);
   }).pipe(Effect.provide(test.layer));
 });
 

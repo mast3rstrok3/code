@@ -3500,6 +3500,8 @@ function WorkflowGroupCard(props: {
 
 export function WorkflowsPanel(props: {
   readonly defaultMaxParallelTickets?: number | undefined;
+  readonly defaultMaxParallelAppReviews?: number | undefined;
+  readonly onSetMaxParallelAppReviews?: ((value: number) => void) | undefined;
   readonly onSetMaxParallelTickets?: ((value: number) => void) | undefined;
   readonly workflow: WorkflowRoot<EnvironmentThreadShell> | null;
   readonly activeThreadKey: string | null;
@@ -3747,6 +3749,11 @@ export function WorkflowsPanel(props: {
               props.defaultMaxParallelTickets
             }
             onSetMaxParallelTickets={props.onSetMaxParallelTickets}
+            maxParallelAppReviews={
+              workflow.root.workflowImplementationSettings?.maxParallelAppReviews ??
+              props.defaultMaxParallelAppReviews
+            }
+            onSetMaxParallelAppReviews={props.onSetMaxParallelAppReviews}
             environmentId={workflow.root.environmentId}
             preset={workflow.root.workflowPreset ?? null}
             pinFor={(key) =>

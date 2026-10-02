@@ -1,4 +1,8 @@
-import { DEFAULT_MAX_PARALLEL_TICKETS, MAX_PARALLEL_TICKETS } from "@t3tools/contracts";
+import {
+  DEFAULT_MAX_PARALLEL_TICKETS,
+  DEFAULT_MAX_PARALLEL_APP_REVIEWS,
+  MAX_PARALLEL_TICKETS,
+} from "@t3tools/contracts";
 import { useId, useState } from "react";
 
 import { Input } from "./ui/input";
@@ -6,8 +10,39 @@ import { Input } from "./ui/input";
 export function WorkflowTicketConcurrency(props: {
   readonly value?: number | undefined;
   readonly onChange: (value: number) => void;
+  readonly appReviewValue?: number | undefined;
+  readonly onAppReviewChange?: ((value: number) => void) | undefined;
 }) {
-  const value = props.value ?? DEFAULT_MAX_PARALLEL_TICKETS;
+  return (
+    <div className="space-y-4">
+      <ConcurrencyInput
+        value={props.value ?? DEFAULT_MAX_PARALLEL_TICKETS}
+        onChange={props.onChange}
+        label="Parallel tickets"
+        description="Limits implementation and code review. App Review uses its own budget."
+      />
+      {props.onAppReviewChange && (
+        <ConcurrencyInput
+          value={props.appReviewValue ?? DEFAULT_MAX_PARALLEL_APP_REVIEWS}
+          onChange={props.onAppReviewChange}
+          label="Parallel App Reviews"
+          description="Limits ticket App Reviews, including tests and repair cycles."
+        />
+      )}
+      <p className="text-2xs leading-relaxed text-muted-foreground">
+        Lowering a limit lets active work finish before more starts.
+      </p>
+    </div>
+  );
+}
+
+function ConcurrencyInput(props: {
+  readonly value: number;
+  readonly onChange: (value: number) => void;
+  readonly label: string;
+  readonly description: string;
+}) {
+  const value = props.value;
   const [editing, setEditing] = useState({ value, text: String(value) });
   if (editing.value !== value) setEditing({ value, text: String(value) });
   const draft = editing.value === value ? editing.text : String(value);
@@ -26,7 +61,7 @@ export function WorkflowTicketConcurrency(props: {
   return (
     <div className="space-y-2">
       <label htmlFor={id} className="text-xs font-medium text-foreground">
-        Parallel tickets
+        {props.label}
       </label>
       <Input
         id={id}
@@ -47,8 +82,7 @@ export function WorkflowTicketConcurrency(props: {
         }}
       />
       <p id={`${id}-description`} className="text-2xs leading-relaxed text-muted-foreground">
-        Each ticket holds a slot through implementation and review. Lowering the limit lets active
-        tickets finish before more start. Choose 1 to work on one ticket at a time.
+        {props.description}
       </p>
     </div>
   );
