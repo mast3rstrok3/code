@@ -679,12 +679,40 @@ export function automationHaltMatchesTicketRerun(input: {
   readonly halt: NonNullable<OrchestrationImplementationRun["automationHalt"]>;
   readonly ticketId: string;
   readonly stage: OrchestrationImplementationRerunTicketStage;
+  readonly ticketStates?: ReadonlyArray<
+    Pick<OrchestrationImplementationTicketState, "ticketId" | "dependencyTicketIds">
+  >;
 }): boolean {
-  return implementationRerunTargetMatchesHalt(input.halt, {
-    kind: "ticket",
-    ticketId: input.ticketId,
-    stage: input.stage,
-  });
+  if (
+    implementationRerunTargetMatchesHalt(input.halt, {
+      kind: "ticket",
+      ticketId: input.ticketId,
+      stage: input.stage,
+    })
+  )
+    return true;
+  if (
+    input.stage !== "implementation" ||
+    input.halt.stage !== "implementation" ||
+    input.halt.category !== "stage-failed" ||
+    input.halt.ticketId === undefined
+  )
+    return false;
+
+  // An assembly failure can require a repair in an upstream owner ticket.
+  const pending = [input.halt.ticketId];
+  const seen = new Set<string>();
+  while (pending.length > 0) {
+    const ticketId = pending.pop()!;
+    if (seen.has(ticketId)) continue;
+    seen.add(ticketId);
+    const ticket = input.ticketStates?.find((state) => state.ticketId === ticketId);
+    for (const dependencyId of ticket?.dependencyTicketIds ?? []) {
+      if (dependencyId === input.ticketId) return true;
+      pending.push(dependencyId);
+    }
+  }
+  return false;
 }
 
 /**
@@ -1021,6 +1049,7 @@ function reopenTicketForRerun(input: {
         halt: input.run.automationHalt,
         ticketId: input.ticketId,
         stage: input.stage,
+        ticketStates: input.run.ticketStates,
       })
         ? null
         : input.run.automationHalt,
@@ -11363,6 +11392,7 @@ const make = Effect.gen(function* () {
               halt: run.automationHalt,
               ticketId: target.ticketId,
               stage: target.stage,
+              ticketStates: run.ticketStates,
             })
           : !automationHaltMatchesRunRerun({
               halt: run.automationHalt,
@@ -11487,7 +11517,9 @@ const make = Effect.gen(function* () {
                   : appReviewFailureContinuationMarkdown(priorAppReviewRun)) ??
                 ticketState?.warningMarkdown ??
                 null)
-              : null,
+              : target.stage === "implementation" && run.automationHalt?.ticketId !== ticketId
+                ? (run.automationHalt?.detail ?? null)
+                : null,
         });
       }
       const latestBeforeRerun = yield* projectionSnapshotQuery.getCommandReadModel();

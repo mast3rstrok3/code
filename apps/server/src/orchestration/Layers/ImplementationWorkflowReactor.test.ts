@@ -323,6 +323,61 @@ it("matches legacy ticket final Code Review halts to the Code Review stage", () 
   ).toBe(false);
 });
 
+it("keeps unrelated and structural halts when restarting a dependency", () => {
+  const ticketStates = [
+    { ticketId: "assembly", dependencyTicketIds: ["bridge"] },
+    { ticketId: "bridge", dependencyTicketIds: ["owner"] },
+    { ticketId: "owner", dependencyTicketIds: ["bridge"] },
+  ];
+  const halt = {
+    ticketId: "assembly",
+    stage: "implementation",
+    category: "stage-failed",
+    detail: "Missing owner fixture.",
+    haltedAt: now,
+  } as const;
+  expect(
+    automationHaltMatchesTicketRerun({
+      halt,
+      ticketStates,
+      ticketId: "owner",
+      stage: "implementation",
+    }),
+  ).toBe(true);
+  expect(
+    automationHaltMatchesTicketRerun({
+      halt,
+      ticketStates,
+      ticketId: "unrelated",
+      stage: "implementation",
+    }),
+  ).toBe(false);
+  expect(
+    automationHaltMatchesTicketRerun({
+      halt,
+      ticketStates,
+      ticketId: "owner",
+      stage: "code-review",
+    }),
+  ).toBe(false);
+  expect(
+    automationHaltMatchesTicketRerun({
+      halt: { ...halt, category: "structural-invariant" },
+      ticketStates,
+      ticketId: "owner",
+      stage: "implementation",
+    }),
+  ).toBe(false);
+  expect(
+    automationHaltMatchesTicketRerun({
+      halt: { ...halt, stage: "app-review" },
+      ticketStates,
+      ticketId: "owner",
+      stage: "implementation",
+    }),
+  ).toBe(false);
+});
+
 it("identifies only the obsolete dirty worker launch halt", () => {
   const dirtyWorkerHalt = {
     ticketId: "ticket-1",
@@ -12839,6 +12894,76 @@ describe("ImplementationWorkflowReactor", () => {
         );
         expect(latestWorker?.messages.at(-1)?.text).toContain(
           "merge each deferred dependency ref in order before completing the ticket",
+        );
+      }),
+    ),
+  );
+
+  it.effect("re-running an upstream implementation repairs a downstream halt", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { tickets, run } = yield* launchRun(system, {
+          tickets: [
+            planningTicket("OWNER"),
+            planningTicket("BRIDGE", ["OWNER"]),
+            planningTicket("ASSEMBLY", ["BRIDGE"]),
+          ],
+        });
+        const owner = tickets.find((ticket) => ticket.key === "OWNER")!;
+        const bridge = tickets.find((ticket) => ticket.key === "BRIDGE")!;
+        const assembly = tickets.find((ticket) => ticket.key === "ASSEMBLY")!;
+        yield* appendWorkerResult(system, { run, status: "succeeded", ticketId: owner.id });
+        yield* appendWorkerResult(system, { run, status: "succeeded", ticketId: bridge.id });
+        const handoff = "OWNER must supply the source fixture before ASSEMBLY can complete.";
+        yield* appendWorkerResult(system, {
+          run,
+          status: "failed",
+          ticketId: assembly.id,
+          notesMarkdown: handoff,
+        });
+        const before = (yield* system.query.getSnapshot()).implementationRuns[0]!;
+        expect(before.automationHalt?.ticketId).toBe(assembly.id);
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.rerun",
+          commandId: commandId("rerun-upstream-owner"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "ticket", ticketId: owner.id, stage: "implementation" },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const restarted = snapshot.implementationRuns[0]!;
+        const state = restarted.ticketStates.find((ticket) => ticket.ticketId === owner.id)!;
+        expect(restarted.automationHalt).toBeNull();
+        expect(state.status).toBe("running");
+        expect(state.workerResult).toBeNull();
+        expect(
+          snapshot.threads.find((thread) => thread.id === state.workerThreadId)?.messages.at(-1)
+            ?.text,
+        ).toContain(handoff);
+        expect(restarted.ticketStates.find((ticket) => ticket.ticketId === bridge.id)?.status).toBe(
+          "blocked",
+        );
+        expect(
+          restarted.ticketStates.find((ticket) => ticket.ticketId === assembly.id)?.status,
+        ).toBe("blocked");
+
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          ticketId: owner.id,
+          tag: "repaired",
+          reportedAt: "2026-01-01T00:06:01.000Z",
+        });
+        const resumed = (yield* system.query.getSnapshot()).implementationRuns[0]!;
+        expect(resumed.ticketStates.find((ticket) => ticket.ticketId === bridge.id)?.status).toBe(
+          "running",
+        );
+        expect(resumed.ticketStates.find((ticket) => ticket.ticketId === assembly.id)?.status).toBe(
+          "blocked",
         );
       }),
     ),
