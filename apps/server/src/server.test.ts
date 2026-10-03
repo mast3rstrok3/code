@@ -1,4 +1,8 @@
 import * as VcsProcess from "./vcs/VcsProcess.ts";
+import {
+  OrchestrationCommandInvariantError,
+  OrchestrationProjectorDecodeError,
+} from "./orchestration/Errors.ts";
 import type { OrchestrationShellStreamItem } from "@t3tools/contracts";
 import { OrchestrationShellSnapshot, type OrchestrationThreadActivity } from "@t3tools/contracts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
@@ -3251,6 +3255,65 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(catchUpRequests, 2);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
+
+  for (const conflict of [true, false]) {
+    it.effect(
+      `HTTP orchestration dispatch ${conflict ? "reports workflow conflicts" : "hides internal failures"}`,
+      () =>
+        Effect.gen(function* () {
+          const detail = "App Review Workflow 'review-1' currently owns this worktree.";
+          yield* buildAppUnderTest({
+            layers: {
+              orchestrationEngine: {
+                dispatch: () =>
+                  Effect.fail(
+                    conflict
+                      ? new OrchestrationCommandInvariantError({
+                          commandType: "thread.turn.start",
+                          detail,
+                        })
+                      : new OrchestrationProjectorDecodeError({
+                          eventType: "thread.workflow-paused",
+                          ticket: "Private projector diagnostic.",
+                        }),
+                  ),
+              },
+            },
+          });
+          const response = yield* fetchEffect(
+            yield* getHttpServerUrl("/api/orchestration/dispatch"),
+            {
+              method: "POST",
+              headers: {
+                cookie: yield* getAuthenticatedSessionCookieHeader(),
+                "content-type": "application/json",
+              },
+              body: jsonRequestBody({
+                type: "thread.workflow.pause",
+                commandId: "http-dispatch-rejection",
+                threadId: "thread-1",
+                createdAt: "2026-01-01T00:00:00.000Z",
+              }),
+            },
+          );
+          const body = yield* responseJsonEffect<{
+            readonly _tag?: string;
+            readonly message?: string;
+            readonly reason?: string;
+          }>(response);
+          assert.equal(response.status, conflict ? 409 : 500);
+          assert.equal(
+            body._tag,
+            conflict ? "EnvironmentHttpConflictError" : "EnvironmentInternalError",
+          );
+          if (conflict) assert.equal(body.message, detail);
+          else {
+            assert.equal(body.reason, "orchestration_dispatch_failed");
+            assert.equal(body.message, undefined);
+          }
+        }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    );
+  }
 
   it.effect("rejects relay config with an invalid cloud mint public key", () =>
     Effect.gen(function* () {

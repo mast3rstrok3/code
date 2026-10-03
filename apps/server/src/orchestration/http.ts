@@ -2,6 +2,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  EnvironmentHttpConflictError,
   NativeVerificationError,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -21,6 +22,7 @@ import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { executeNativeVerification } from "./nativeVerificationService.ts";
+import { isOrchestrationCommandRejection } from "./Errors.ts";
 import * as Semaphore from "effect/Semaphore";
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
@@ -129,7 +131,17 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
             ),
             Effect.catch((cause) =>
-              failEnvironmentInternal("orchestration_dispatch_failed", cause),
+              Effect.gen(function* () {
+                if (isOrchestrationCommandRejection(cause)) {
+                  return yield* new EnvironmentHttpConflictError({
+                    message:
+                      cause._tag === "OrchestrationCommandInvariantError"
+                        ? cause.detail
+                        : cause.message,
+                  });
+                }
+                return yield* failEnvironmentInternal("orchestration_dispatch_failed", cause);
+              }),
             ),
           );
           yield* ProjectCloneTracker.discardCloneForDeletedProject(
