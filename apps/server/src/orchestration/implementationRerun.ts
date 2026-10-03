@@ -219,6 +219,19 @@ export function queueImplementationRerun(input: {
     return {
       ...ticket,
       status: "blocked" as const,
+      workerResult: null,
+      appReviewWorkflowRunId: null,
+      appReviewOutcome: null,
+      appReviewLaunchCount: 0,
+      codeReviewThreadId: null,
+      codeReviewOutcome: null,
+      codeReviewLaunchCount: 0,
+      codeReviewPassCount: 0,
+      appDevStackTierDownAt: null,
+      resourceCleanupAt: null,
+      resourceCleanupRetention: null,
+      warningMarkdown: null,
+      attemptCount: 0,
       implementationGeneration: generation,
       stageExecutions: [...(ticket.stageExecutions ?? []), dependencyExecution],
       updatedAt: input.createdAt,
@@ -227,6 +240,13 @@ export function queueImplementationRerun(input: {
   if (targetExecution === null) throw new Error(`Missing re-run ticket '${target.ticketId}'.`);
   return {
     execution: targetExecution,
-    run: { ...input.run, ticketStates, updatedAt: input.createdAt },
+    run: {
+      ...input.run,
+      ticketStates,
+      workerResults: (input.run.workerResults ?? []).filter(
+        (result) => !dependents.has(result.ticketId),
+      ),
+      updatedAt: input.createdAt,
+    },
   };
 }

@@ -13111,6 +13111,89 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("an upstream rerun waits for fresh dependent results in their durable threads", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { tickets, run } = yield* launchRun(system, {
+          tickets: [
+            {
+              key: "TICKET-1",
+              title: "Base",
+              bodyMarkdown: "Base work.",
+              plannedFileChanges: [{ path: "src/base.ts", action: "create" }],
+              dependencyKeys: [],
+            },
+            {
+              key: "TICKET-2",
+              title: "Dependent",
+              bodyMarkdown: "Dependent work.",
+              plannedFileChanges: [{ path: "src/dependent.ts", action: "create" }],
+              dependencyKeys: ["TICKET-1"],
+            },
+            {
+              key: "TICKET-3",
+              title: "Independent",
+              bodyMarkdown: "Independent work.",
+              plannedFileChanges: [{ path: "src/independent.ts", action: "create" }],
+              dependencyKeys: [],
+            },
+          ],
+        });
+        const base = tickets.find((ticket) => ticket.key === "TICKET-1")!;
+        const dependent = tickets.find((ticket) => ticket.key === "TICKET-2")!;
+        yield* appendWorkerResult(system, { run, status: "succeeded", ticketId: base.id });
+        yield* appendWorkerResult(system, { run, status: "succeeded", ticketId: dependent.id });
+        const completed = (yield* system.query.getSnapshot()).implementationRuns[0]!;
+        const oldDependent = completed.ticketStates.find(
+          (state) => state.ticketId === dependent.id,
+        )!;
+        expect(oldDependent.workerResult?.status).toBe("succeeded");
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.rerun",
+          commandId: commandId("rerun-base-before-dependent-result"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "ticket", ticketId: base.id, stage: "implementation" },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+        const waiting = (yield* system.query.getSnapshot()).implementationRuns[0]!;
+        expect(waiting.ticketStates.find((state) => state.ticketId === dependent.id)).toMatchObject(
+          {
+            status: "blocked",
+            workerResult: null,
+            codeReviewThreadId: null,
+            codeReviewOutcome: null,
+            appReviewOutcome: null,
+          },
+        );
+        expect(waiting.workerResults.some((result) => result.ticketId === dependent.id)).toBe(
+          false,
+        );
+
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          ticketId: base.id,
+          tag: "repaired-base",
+          reportedAt: "2026-01-01T00:06:00.000Z",
+        });
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+        const resumed = (yield* system.query.getSnapshot()).implementationRuns[0]!;
+        expect(resumed.ticketStates.find((state) => state.ticketId === dependent.id)).toMatchObject(
+          {
+            status: "running",
+            workerThreadId: oldDependent.workerThreadId,
+            branch: oldDependent.branch,
+            workerResult: null,
+          },
+        );
+      }),
+    ),
+  );
+
   it.effect("re-running a failed ticket resets only that ticket's generation", () =>
     withSystem((system) =>
       Effect.gen(function* () {
