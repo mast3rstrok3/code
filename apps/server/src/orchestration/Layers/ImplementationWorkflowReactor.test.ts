@@ -12899,6 +12899,148 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("manual worker setup retry clears its halt in the existing worker thread", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        const state = run.ticketStates[0]!;
+        const threadId = state.workerThreadId!;
+        const createdAt = "2026-01-01T00:05:00.000Z";
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("manual-setup-repair-active"),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: TurnId.make("manual-setup-repair-turn"),
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        });
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("manual-setup-repair-halt"),
+          threadId: sourceThreadId,
+          run: {
+            ...run,
+            status: "needs-human-attention",
+            automationHalt: {
+              ticketId: state.ticketId,
+              stage: "implementation",
+              category: "structural-invariant",
+              detail: "Ticket worker setup failed: git worktree add failed.",
+              haltedAt: createdAt,
+            },
+            retryableFailure: {
+              ticketId: state.ticketId,
+              stage: "worker-setup",
+              detail: "Ticket worker setup failed: git worktree add failed.",
+              failedAt: createdAt,
+              attemptCount: 1,
+              maxAttempts: 2,
+              humanBlocked: true,
+            },
+            ticketStates: run.ticketStates.map((ticket) => ({
+              ...ticket,
+              status: "failed" as const,
+              updatedAt: createdAt,
+            })),
+            updatedAt: createdAt,
+          },
+          createdAt,
+        });
+        yield* system.reactor.drain;
+        const before = yield* system.query.getSnapshot();
+        expect(before.threads.find((thread) => thread.id === threadId)?.session?.status).toBe(
+          "running",
+        );
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.retry",
+          commandId: commandId("manual-setup-repair-retry"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          createdAt: "2026-01-01T00:05:30.000Z",
+        });
+        yield* system.reactor.drain;
+        const snapshot = yield* system.query.getSnapshot();
+        const resumed = snapshot.implementationRuns[0]!;
+        expect(resumed.automationHalt).toBeNull();
+        expect(resumed.ticketStates[0]?.status).toBe("running");
+        expect(resumed.ticketStates[0]?.workerThreadId).toBe(threadId);
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-worker"),
+        ).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("recreates a retired worker checkout while preserving leftover files", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "ticket-restart-" });
+        const { run } = yield* launchRun(system, {
+          orchestratorWorktreePath: path.join(root, "repo.worktrees", "checkout"),
+        });
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        const state = run.ticketStates[0]!;
+        const worktreePath = state.worktreePath!;
+        yield* fileSystem.makeDirectory(path.join(worktreePath, "node_modules"), {
+          recursive: true,
+        });
+        yield* fileSystem.writeFileString(
+          path.join(worktreePath, "node_modules", "leftover"),
+          "preserve dependencies",
+        );
+        yield* fileSystem.writeFileString(
+          path.join(worktreePath, "notes.txt"),
+          "preserve unknown files too",
+        );
+        yield* Ref.update(system.activeWorktreePaths, (paths) => {
+          const active = new Set(paths);
+          active.delete(worktreePath);
+          return active;
+        });
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.rerun",
+          commandId: commandId("rerun-retired-worker-checkout"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "ticket", ticketId: state.ticketId, stage: "implementation" },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+        const snapshot = yield* system.query.getSnapshot();
+        const activity = snapshot.threads
+          .find((thread) => thread.id === run.orchestratorThreadId)!
+          .activities.find(
+            (entry) => entry.kind === "implementation-ticket-worktree-leftovers-preserved",
+          );
+        const payload = activity?.payload;
+        const backupPath =
+          typeof payload === "object" && payload !== null && "backupPath" in payload
+            ? payload.backupPath
+            : undefined;
+        expect(typeof backupPath).toBe("string");
+        if (typeof backupPath !== "string") throw new Error("Missing preserved checkout path.");
+        expect(
+          yield* fileSystem.readFileString(path.join(backupPath, "node_modules", "leftover")),
+        ).toBe("preserve dependencies");
+        expect(yield* fileSystem.readFileString(path.join(backupPath, "notes.txt"))).toBe(
+          "preserve unknown files too",
+        );
+        expect(snapshot.implementationRuns[0]?.ticketStates[0]?.status).toBe("running");
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+
   it.effect("re-running an upstream implementation repairs a downstream halt", () =>
     withSystem((system) =>
       Effect.gen(function* () {

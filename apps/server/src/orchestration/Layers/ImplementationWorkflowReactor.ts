@@ -3374,6 +3374,7 @@ const make = Effect.gen(function* () {
       .pipe(Effect.option);
     const worktreeExisted = Option.isSome(existingWorktreeHead);
     let inheritsPartialChanges = false;
+    let preservedLeftoversPath: string | null = null;
     if (worktreeExisted) {
       const [status, expectedWorktreeHead] = yield* Effect.all([
         gitWorkflow.localStatus({ cwd: plannedWorker.worktreePath }),
@@ -3408,6 +3409,35 @@ const make = Effect.gen(function* () {
         });
       }
     } else {
+      if (
+        plannedWorker.worktreePath.startsWith(
+          `${ticketRepositoryWorktreePath(input.run, input.ticketId)}-ticket-`,
+        ) &&
+        (yield* isUnregisteredWorktreeLeftover(plannedWorker.worktreePath))
+      ) {
+        const backupDirectory = yield* fileSystem.makeTempDirectory({
+          directory: path.dirname(plannedWorker.worktreePath),
+          prefix: `${path.basename(plannedWorker.worktreePath)}-leftovers-`,
+        });
+        preservedLeftoversPath = path.join(backupDirectory, "checkout");
+        yield* fileSystem.rename(plannedWorker.worktreePath, preservedLeftoversPath);
+        yield* appendActivity({
+          threadId: input.run.orchestratorThreadId,
+          tone: "info",
+          kind: "implementation-ticket-worktree-leftovers-preserved",
+          summary: "Preserved retired ticket checkout files before recreating its worktree",
+          payload: {
+            runId: input.run.id,
+            ticketId: input.ticketId,
+            worktreePath: plannedWorker.worktreePath,
+            backupPath: preservedLeftoversPath,
+          },
+          createdAt: input.createdAt,
+        });
+        yield* gitWorkflow.pruneWorktrees({
+          cwd: repository?.worktreePath ?? input.run.orchestratorWorktreePath,
+        });
+      }
       yield* ensureTicketWorktree({
         cwd: repository?.worktreePath ?? input.run.orchestratorWorktreePath,
         branch: plannedWorker.branch,
@@ -3591,8 +3621,15 @@ const make = Effect.gen(function* () {
       inheritsPartialChanges,
       resultProblem,
       continuationMarkdown:
-        existing.warningMarkdown ??
-        (isContinuation ? "Continue the ticket from its existing durable state." : null),
+        preservedLeftoversPath === null
+          ? (existing.warningMarkdown ??
+            (isContinuation ? "Continue the ticket from its existing durable state." : null))
+          : [
+              existing.warningMarkdown,
+              `The retired worktree was recreated from its saved branch. Its leftover files remain preserved at ${preservedLeftoversPath}.`,
+            ]
+              .filter(Boolean)
+              .join("\n\n"),
     });
     yield* orchestrationEngine.dispatch({
       type: "thread.turn.start",
@@ -11108,6 +11145,16 @@ const make = Effect.gen(function* () {
         const resumedRun: OrchestrationImplementationRun = {
           ...input.run,
           status: "running",
+          automationHalt:
+            input.run.automationHalt !== null &&
+            failure.ticketId !== undefined &&
+            automationHaltMatchesTicketRerun({
+              halt: input.run.automationHalt,
+              ticketId: failure.ticketId,
+              stage: "implementation",
+            })
+              ? null
+              : input.run.automationHalt,
           ticketStates: input.run.ticketStates.map((state) =>
             state.status === "failed"
               ? {
