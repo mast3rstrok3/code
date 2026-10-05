@@ -98,7 +98,7 @@ describe("WorkflowPromptRegistry", () => {
     );
     NodeAssert.equal(
       catalog.skills.filter((skill) => skill.id.startsWith("matt-pocock.")).length,
-      18,
+      19,
     );
     NodeAssert.deepEqual(
       catalog.skills.map((skill) => skill.title),

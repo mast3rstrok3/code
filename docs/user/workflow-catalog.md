@@ -3,7 +3,7 @@
 The Settings catalog separates workflow automation into three layers:
 
 - **Workflows** contains the Engineering workflow variants. **Wayfinder** is visible while it is under development but cannot start yet.
-- **Skills** are focused engineering instructions. The catalog includes all 18 skills from Matt Pocock's engineering collection plus T3-native orchestration skills.
+- **Skills** are focused engineering instructions. The catalog includes 19 skills from Matt Pocock's engineering collection plus T3-native orchestration skills.
 - **Docs** are supporting references used by those skills, such as ADR, context, testing, and browser-QA formats.
 
 The Skills catalog shows the instructions the application uses, including T3 additions. In Settings → Skills, save your default additions below a skill to apply them whenever that skill runs. Open a workflow step's instructions to add defaults for that specific step. Clear additions to restore the defaults. These instructions live in the application; no repository-local skill installation is required. Skills are sorted alphabetically. Each skill shows a **Build** pill when it can be invoked directly and workflow pills for every guided workflow that uses it. Document pills link to the supporting references associated with that skill.

@@ -190,8 +190,19 @@
     ]
   },
   {
-    "id": "matt-pocock.research",
+    "id": "matt-pocock.pr",
     "order": 109,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "PR",
+    "description": "Write a PR body that's fast to review",
+    "file": "skills/pr.md",
+    "associatedDocs": []
+  },
+  {
+    "id": "matt-pocock.research",
+    "order": 110,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
@@ -202,7 +213,7 @@
   },
   {
     "id": "matt-pocock.resolving-merge-conflicts",
-    "order": 110,
+    "order": 111,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
@@ -213,7 +224,7 @@
   },
   {
     "id": "matt-pocock.setup-matt-pocock-skills",
-    "order": 111,
+    "order": 112,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
@@ -255,7 +266,7 @@
   },
   {
     "id": "matt-pocock.tdd",
-    "order": 112,
+    "order": 113,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
@@ -279,7 +290,7 @@
   },
   {
     "id": "matt-pocock.to-spec",
-    "order": 113,
+    "order": 114,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
@@ -290,7 +301,7 @@
   },
   {
     "id": "matt-pocock.to-tickets",
-    "order": 114,
+    "order": 115,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
@@ -301,7 +312,7 @@
   },
   {
     "id": "matt-pocock.triage",
-    "order": 115,
+    "order": 116,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
@@ -325,7 +336,7 @@
   },
   {
     "id": "matt-pocock.wayfinder",
-    "order": 116,
+    "order": 117,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
@@ -336,7 +347,7 @@
   },
   {
     "id": "matt-pocock.wizard",
-    "order": 117,
+    "order": 118,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
