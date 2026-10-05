@@ -231,7 +231,20 @@
     "title": "Retro",
     "description": "Conduct a retrospective on a coding session",
     "file": "skills/retro.md",
-    "associatedDocs": []
+    "associatedDocs": [
+      {
+        "id": "matt-pocock.retro.writing-for-agents",
+        "title": "Writing for Agents",
+        "path": "writing-for-agents/SKILL.md",
+        "file": "documents/matt-pocock.writing-for-agents.md"
+      },
+      {
+        "id": "matt-pocock.retro.skill-mechanics",
+        "title": "Skill Mechanics",
+        "path": "writing-for-agents/SKILL-MECHANICS.md",
+        "file": "documents/matt-pocock.writing-for-agents.skill-mechanics.md"
+      }
+    ]
   },
   {
     "id": "matt-pocock.setup-matt-pocock-skills",

@@ -153,6 +153,10 @@ describe("WorkflowPromptRegistry", () => {
     );
     NodeAssert.match(resolveWorkflowPromptText("matt-pocock.tdd"), /supporting-skill-docs/);
     NodeAssert.match(resolveWorkflowPromptText("matt-pocock.tdd"), /# When to Mock/);
+    const retro = resolveWorkflowPromptText("matt-pocock.retro");
+    NodeAssert.match(retro, /<skill-doc id="matt-pocock\.retro\.writing-for-agents"/);
+    NodeAssert.match(retro, /<skill-doc id="matt-pocock\.retro\.skill-mechanics"/);
+    NodeAssert.doesNotMatch(retro, /Call the Skill tool/);
     const renderedDomainModeling = resolveWorkflowPromptText(
       WORKFLOW_PROMPT_IDS.planningDomainModelingCodex,
     );
