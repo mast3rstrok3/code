@@ -1219,6 +1219,52 @@ describe("ProviderCommandReactor", () => {
       }),
   );
 
+  for (const workflowRole of ["implementation-worker", "fast-feature-implementer"] as const) {
+    effectIt.effect(`preserves workflow tools for a manual ${workflowRole} follow-up`, () =>
+      Effect.gen(function* () {
+        const sent = yield* Deferred.make<void>();
+        const instruction = "Read the assigned ticket before repairing its fixtures.";
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            threadWorkflowRole: workflowRole,
+            unreadableHistory: true,
+            workflowStepInstructions: {
+              [WORKFLOW_PROMPT_IDS.implementationTddCodex]: instruction,
+            },
+          }),
+        );
+        harness.sendTurn.mockImplementation(() =>
+          Deferred.succeed(sent, undefined).pipe(
+            Effect.as({ threadId: ThreadId.make("thread-1"), turnId: asTurnId("turn-1") }),
+          ),
+        );
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(`cmd-manual-${workflowRole}`),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId(`message-manual-${workflowRole}`),
+            role: "user",
+            text: "Continue with the repaired owner fixtures.",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        });
+        yield* Deferred.await(sent);
+        yield* Effect.promise(() => harness.drain());
+        expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+        });
+        expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+          input: expect.stringContaining(instruction),
+        });
+      }),
+    );
+  }
+
   effectIt.effect(
     "delivers oversized workflow repairs through a complete durable prompt file",
     () =>

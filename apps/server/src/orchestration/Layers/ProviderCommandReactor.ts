@@ -1064,9 +1064,18 @@ const make = Effect.gen(function* () {
         new Error(`Thread '${input.threadId}' was not found in read model.`),
       );
     }
+    const workflowPromptId = resolveWorkflowPromptId({
+      workflowPromptId:
+        input.workflowPromptId ??
+        (thread.workflowRole === "fast-feature-implementer" ||
+        thread.workflowRole === "implementation-worker"
+          ? "implementation.tdd.codex"
+          : undefined),
+      interactionMode: input.interactionMode ?? thread.interactionMode,
+    });
     yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
-      ...(input.workflowPromptId !== undefined ? { workflowPromptId: input.workflowPromptId } : {}),
+      ...(workflowPromptId !== undefined ? { workflowPromptId } : {}),
       ...(input.titleSeed !== undefined ? { titleSeed: input.titleSeed } : {}),
       pendingTurnStart: true,
       ...(input.freshProviderSession !== undefined
@@ -1082,14 +1091,6 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.map((sessions) => sessions.find((session) => session.threadId === input.threadId)),
       );
-    const workflowPromptId = resolveWorkflowPromptId({
-      workflowPromptId:
-        input.workflowPromptId ??
-        (thread.workflowRole === "fast-feature-implementer"
-          ? "implementation.tdd.codex"
-          : undefined),
-      interactionMode: input.interactionMode ?? thread.interactionMode,
-    });
     const settings = yield* serverSettingsService.getSettings;
     let normalizedInput = toNonEmptyProviderInput(
       appendWorkflowStepInstructions(
@@ -1143,7 +1144,7 @@ const make = Effect.gen(function* () {
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
-      ...(input.workflowPromptId !== undefined ? { workflowPromptId: input.workflowPromptId } : {}),
+      ...(workflowPromptId !== undefined ? { workflowPromptId } : {}),
     };
   });
 
