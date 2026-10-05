@@ -121,6 +121,12 @@ export const T3ProjectFile = Schema.Struct({
         "Concurrent E2E commands, default 1. Use 2 only for independent suites whose setup, databases, accounts and reports are isolated. APP_REVIEW_EXECUTION_ID identifies the run.",
     }),
   ),
+  e2eTimeoutMinutes: Schema.optionalKey(
+    Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 180 })).annotate({
+      description:
+        "Time limit for each App Review E2E command, default 45 minutes. APP_REVIEW_TEST_TIMEOUT_MS gives the runner the same budget so it can retain results and clean up before the deadline.",
+    }),
+  ),
   e2ePreflight: Schema.optionalKey(
     Schema.Struct({
       command: trimmedNonEmpty(

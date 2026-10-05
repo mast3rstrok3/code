@@ -6,6 +6,15 @@ import { T3ProjectFile } from "./t3ProjectFile.ts";
 const decode = Schema.decodeUnknownSync(T3ProjectFile);
 
 describe("T3ProjectFile", () => {
+  it("accepts bounded E2E timeouts and preserves the default when omitted", () => {
+    expect(decode({}).e2eTimeoutMinutes).toBeUndefined();
+    for (const minutes of [1, 45, 120, 180]) {
+      expect(decode({ e2eTimeoutMinutes: minutes }).e2eTimeoutMinutes).toBe(minutes);
+    }
+    for (const minutes of [0, -1, 181, 1.5, Infinity, "120"]) {
+      expect(() => decode({ e2eTimeoutMinutes: minutes })).toThrow();
+    }
+  });
   it("requires an executable readiness check and a useful blocker explanation", () => {
     const e2ePreflight = {
       command: " node scripts/check-e2e.mjs ",

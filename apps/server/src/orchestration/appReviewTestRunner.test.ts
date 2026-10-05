@@ -29,6 +29,88 @@ const selections = ["calendar", "lists", "chat"].map((command) => ({
   retryCommand: command,
 }));
 
+it.effect("retains published builds after a failed command and worktree disposal", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fs.makeTempDirectoryScoped();
+    const cwd = path.join(root, "worktree");
+    const artifactsDir = path.join(root, "server-state", "workflow-build-artifacts", "review-1");
+    yield* fs.makeDirectory(cwd);
+    yield* fs.writeFileString(
+      path.join(cwd, "publish.cjs"),
+      `const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const apk = Buffer.from('review APK');
+const dir = process.env.APP_REVIEW_ARTIFACT_DIR;
+fs.writeFileSync(path.join(dir, 'candidate.apk'), apk);
+fs.writeFileSync(path.join(dir, 'recipe.json'), JSON.stringify({sha256: crypto.createHash('sha256').update(apk).digest('hex')}));
+process.exitCode = 1;`,
+    );
+    const input = {
+      command: "suite",
+      retryCommand: "node publish.cjs",
+      cwd,
+      previewUrl: null,
+      executionId: "publish",
+      artifactsDir,
+      env: { APP_REVIEW_ARTIFACT_DIR: path.join(cwd, "wrong-directory") },
+    };
+    const failed = yield* runAppReviewTest(input);
+    expect(failed.status).toBe("failed");
+    expect(failed.outputMarkdown).toContain(artifactsDir);
+    yield* fs.remove(cwd, { recursive: true });
+    yield* fs.makeDirectory(cwd);
+    yield* fs.writeFileString(
+      path.join(cwd, "restore.cjs"),
+      `const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const dir = process.env.APP_REVIEW_ARTIFACT_DIR;
+const apk = fs.readFileSync(path.join(dir, 'candidate.apk'));
+const recipe = JSON.parse(fs.readFileSync(path.join(dir, 'recipe.json'), 'utf8'));
+if (crypto.createHash('sha256').update(apk).digest('hex') !== recipe.sha256) throw new Error('Checksum mismatch');
+fs.writeFileSync('restored.apk', apk);`,
+    );
+    const restored = yield* runAppReviewTest({
+      ...input,
+      retryCommand: "node restore.cjs",
+      executionId: "restore",
+    });
+    expect(restored.status).toBe("passed");
+    expect(yield* fs.readFileString(path.join(cwd, "restored.apk"))).toBe("review APK");
+    expect(yield* fs.readFileString(path.join(artifactsDir, "candidate.apk"))).toBe("review APK");
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(processRunnerLayer.pipe(Layer.provideMerge(NodeServices.layer))),
+  ),
+);
+
+it.effect("fails before launching a suite when its artifact directory cannot be created", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const root = yield* fs.makeTempDirectoryScoped();
+    const path = yield* Path.Path;
+    const file = path.join(root, "file");
+    yield* fs.writeFileString(file, "occupied");
+    const result = yield* runAppReviewTest({
+      command: "suite",
+      retryCommand: "suite",
+      cwd: root,
+      previewUrl: null,
+      executionId: "unavailable-store",
+      artifactsDir: path.join(file, "builds"),
+    }).pipe(
+      Effect.provideService(ProcessRunner, {
+        run: () => Effect.die("Suite launched without its artifact directory"),
+      }),
+    );
+    expect(result.status).toBe("failed");
+    expect(result.outputMarkdown).toContain("makeDirectory");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect("retains failure output beyond the inline limit in private logs", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -318,58 +400,69 @@ it("matches actual executions and ignores duplicate or unrelated results", () =>
   ).toEqual(execution.commands);
 });
 
-for (const [code, timedOut, status] of [
-  [0, false, "passed"],
-  [1, false, "failed"],
-  [null, true, "failed"],
+for (const [code, timedOut, status, timeoutMinutes] of [
+  [0, false, "passed", undefined],
+  [1, false, "failed", undefined],
+  [null, true, "failed", undefined],
+  [0, false, "passed", 120],
+  [null, true, "failed", 120],
 ] as const) {
-  it.effect(`records command exit ${code}, timeout ${timedOut} without an agent`, () =>
-    Effect.gen(function* () {
-      const calls: ProcessRunInput[] = [];
-      const result = yield* runAppReviewTest({
-        command: "suite",
-        retryCommand: "suite --grep failed",
-        cwd: "/assigned",
-        previewUrl: "https://assigned.example",
-        executionId: "cycle-2",
-        stackId: "stack-assigned",
-        testPlatforms: ["web", "android"],
-        env: { APP_REVIEW_TEST_PLATFORMS: "ios" },
-      }).pipe(
-        Effect.provideService(ProcessRunner, {
-          run: (input) => {
-            calls.push(input);
-            return Effect.succeed({
-              code: code === null ? null : ChildProcessSpawner.ExitCode(code),
-              timedOut,
-              stdout: "test output",
-              stderr: "",
-              stdoutTruncated: false,
-              stderrTruncated: false,
-              stdoutInvalidUtf8: false,
-              stderrInvalidUtf8: false,
-            });
+  it.effect(
+    `records command exit ${code}, timeout ${timedOut} with a ${timeoutMinutes ?? 45} minute limit`,
+    () =>
+      Effect.gen(function* () {
+        const calls: ProcessRunInput[] = [];
+        const result = yield* runAppReviewTest({
+          command: "suite",
+          retryCommand: "suite --grep failed",
+          cwd: "/assigned",
+          previewUrl: "https://assigned.example",
+          executionId: "cycle-2",
+          stackId: "stack-assigned",
+          testPlatforms: ["web", "android"],
+          env: { APP_REVIEW_TEST_PLATFORMS: "ios", APP_REVIEW_TEST_TIMEOUT_MS: "1" },
+          timeoutMinutes,
+        }).pipe(
+          Effect.provideService(ProcessRunner, {
+            run: (input) => {
+              calls.push(input);
+              return Effect.succeed({
+                code: code === null ? null : ChildProcessSpawner.ExitCode(code),
+                timedOut,
+                stdout: "test output",
+                stderr: "",
+                stdoutTruncated: false,
+                stderrTruncated: false,
+                stdoutInvalidUtf8: false,
+                stderrInvalidUtf8: false,
+              });
+            },
+          }),
+        );
+        expect(result).toMatchObject({
+          command: "suite",
+          executedCommand: "suite --grep failed",
+          status,
+        });
+        expect(calls).toHaveLength(1);
+        if (timedOut) {
+          expect(result.outputMarkdown).toContain(
+            `exceeded the ${timeoutMinutes ?? 45} minute limit`,
+          );
+        }
+        expect(calls[0]).toMatchObject({
+          cwd: "/assigned",
+          env: {
+            APP_REVIEW_PREVIEW_URL: "https://assigned.example",
+            APP_REVIEW_EXECUTION_ID: "cycle-2",
+            APP_REVIEW_STACK_ID: "stack-assigned",
+            APP_REVIEW_TEST_PLATFORMS: "web,android",
+            APP_REVIEW_TEST_TIMEOUT_MS: String((timeoutMinutes ?? 45) * 60_000),
           },
-        }),
-      );
-      expect(result).toMatchObject({
-        command: "suite",
-        executedCommand: "suite --grep failed",
-        status,
-      });
-      expect(calls).toHaveLength(1);
-      expect(calls[0]).toMatchObject({
-        cwd: "/assigned",
-        env: {
-          APP_REVIEW_PREVIEW_URL: "https://assigned.example",
-          APP_REVIEW_EXECUTION_ID: "cycle-2",
-          APP_REVIEW_STACK_ID: "stack-assigned",
-          APP_REVIEW_TEST_PLATFORMS: "web,android",
-        },
-        timeout: "45 minutes",
-        maxOutputBytes: 8192,
-      });
-    }).pipe(Effect.provide(NodeServices.layer)),
+          timeout: `${timeoutMinutes ?? 45} minutes`,
+          maxOutputBytes: 8192,
+        });
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 }
 

@@ -21,6 +21,7 @@ import * as Schema from "effect/Schema";
 import { TestClock } from "effect/testing";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { ProcessRunner, type ProcessRunInput } from "../../processRunner.ts";
+import { layerTest as serverConfigLayerTest } from "../../config.ts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   AppReviewId,
@@ -4910,6 +4911,13 @@ for (const scenario of [
         Layer.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            ...(scenario === "combined"
+              ? [
+                  serverConfigLayerTest("/assigned/worktree", {
+                    prefix: "t3-review-artifacts-",
+                  }).pipe(Layer.provide(NodeServices.layer)),
+                ]
+              : []),
             Layer.mock(ProcessRunner)({
               run: (input) =>
                 Effect.gen(function* () {
@@ -4926,6 +4934,16 @@ for (const scenario of [
                   ).toBe(true);
                   executions.push(command);
                   executionEnvironments.push(input.env);
+                  if (scenario === "combined") {
+                    expect(input.timeout).toBe("120 minutes");
+                    expect(input.env?.APP_REVIEW_TEST_TIMEOUT_MS).toBe("7200000");
+                    expect(
+                      input.env?.APP_REVIEW_ARTIFACT_DIR?.replaceAll("\\", "/").endsWith(
+                        `workflow-build-artifacts/${storedRun.id}`,
+                      ),
+                    ).toBe(true);
+                    expect(input.env?.APP_REVIEW_ARTIFACT_DIR).not.toContain("/assigned/worktree");
+                  }
                   return {
                     code: ChildProcessSpawner.ExitCode(
                       !embedded && command.startsWith("suite-b") && cycle.cycleNumber < 3 ? 1 : 0,
@@ -5078,7 +5096,11 @@ for (const scenario of [
             Layer.mock(T3ProjectFileLoader)({
               loadStrict: () =>
                 Effect.succeed(
-                  Option.some({ e2eCommands: ["suite-a", "suite-b"], e2eConcurrency: 4 }),
+                  Option.some({
+                    e2eCommands: ["suite-a", "suite-b"],
+                    e2eConcurrency: 4,
+                    ...(scenario === "combined" ? { e2eTimeoutMinutes: 120 } : {}),
+                  }),
                 ),
             }),
           ),
@@ -5206,7 +5228,7 @@ for (const scenario of [
             return;
           }
           if (embedded) {
-            expect(executions).toEqual(
+            expect(scenario === "combined" ? executions.toSorted() : executions).toEqual(
               splitRetry ? retryCommands : ticket ? ticketCommands : ["suite-a", "suite-b"],
             );
             if (splitRetry) {

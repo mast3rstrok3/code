@@ -6,6 +6,7 @@ import type {
   ReviewTestPlatforms,
 } from "@t3tools/contracts";
 import {
+  APP_REVIEW_ARTIFACT_DIR_ENV,
   APP_REVIEW_PREVIEW_URL_ENV,
   APP_REVIEW_STACK_ID_ENV,
   APP_REVIEW_TEST_PLATFORMS_ENV,
@@ -88,6 +89,10 @@ const prepareTestLogs = Effect.fn("prepareTestLogs")(function* (runDir: string) 
 /** Where a run's collected test recordings live, below `stateDir/preview-artifacts`. */
 export const appReviewTestRecordingsDir = (path: Path.Path, stateDir: string, runId: string) =>
   path.join(stateDir, "preview-artifacts", "app-review-e2e", runId);
+
+/** Suites publish here so builds survive disposal of the reviewed worktree. */
+export const appReviewBuildArtifactsDir = (path: Path.Path, stateDir: string, runId: string) =>
+  path.join(stateDir, "workflow-build-artifacts", runId);
 
 /**
  * Give one command an empty directory to record into and the recorder script
@@ -271,11 +276,14 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
   readonly executionId: string;
   /** Directory for this run's test recordings; omitted where the server has no state dir. */
   readonly recordingsDir?: string | undefined;
+  readonly artifactsDir?: string | undefined;
   /** Extra environment the server grants every suite, such as its Stacks controller access. */
   readonly env?: Readonly<Record<string, string>> | undefined;
+  readonly timeoutMinutes?: number | undefined;
 }) {
   const runner = yield* ProcessRunner;
   const platform = yield* HostProcessPlatform;
+  const timeoutMinutes = input.timeoutMinutes ?? 45;
   // Recording is evidence, not the test: a full disk must not fail the suite.
   const recording =
     input.recordingsDir === undefined
@@ -291,47 +299,59 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
           Effect.tapError((error) => Effect.logWarning("E2E test logs unavailable", error)),
           Effect.orElseSucceed(() => null),
         );
-  const result = yield* runner
-    .run({
-      command: platform === "win32" ? "cmd.exe" : "/bin/sh",
-      args:
-        platform === "win32" ? ["/d", "/s", "/c", input.retryCommand] : ["-c", input.retryCommand],
-      cwd: input.cwd,
-      env: {
-        ...input.env,
-        [APP_REVIEW_PREVIEW_URL_ENV]: input.previewUrl ?? "",
-        [APP_REVIEW_TEST_PLATFORMS_ENV]: (input.testPlatforms ?? ["web"]).join(","),
-        APP_REVIEW_EXECUTION_ID: input.executionId,
-        ...(input.stackId == null ? {} : { [APP_REVIEW_STACK_ID_ENV]: input.stackId }),
-        ...(recording === null
-          ? {}
-          : {
-              [APP_REVIEW_RECORDING_DIR_ENV]: recording.incomingDir,
-              [APP_REVIEW_RECORDER_SCRIPT_ENV]: recording.scriptPath,
-              [APP_REVIEW_RECORDER_BINDING_ENV]: DOM_RECORDER_BINDING,
-            }),
-      },
-      timeout: "45 minutes",
-      timeoutBehavior: "timedOutResult",
-      maxOutputBytes: 8_192,
-      outputMode: "truncate",
-      ...(logs === null ? {} : { onOutputChunk: logs.write }),
-    })
-    .pipe(
-      Effect.map((output) => ({
-        status: output.code === 0 && !output.timedOut ? ("passed" as const) : ("failed" as const),
-        outputMarkdown: [
-          output.timedOut
-            ? "Test command exceeded the 45 minute limit."
-            : `Exit code: ${output.code ?? "none"}\n${output.stdout}\n${output.stderr}`,
-          ...(output.stdoutTruncated ? ["Inline stdout was truncated."] : []),
-          ...(output.stderrTruncated ? ["Inline stderr was truncated."] : []),
-        ].join("\n\n"),
-      })),
-      Effect.catch((error) =>
-        Effect.succeed({ status: "failed" as const, outputMarkdown: error.message }),
-      ),
-    );
+  const artifactsDir = input.artifactsDir;
+  const result = yield* (
+    artifactsDir === undefined
+      ? Effect.void
+      : Effect.flatMap(FileSystem.FileSystem, (fs) =>
+          fs.makeDirectory(artifactsDir, { recursive: true, mode: 0o700 }),
+        )
+  ).pipe(
+    Effect.andThen(
+      runner.run({
+        command: platform === "win32" ? "cmd.exe" : "/bin/sh",
+        args:
+          platform === "win32"
+            ? ["/d", "/s", "/c", input.retryCommand]
+            : ["-c", input.retryCommand],
+        cwd: input.cwd,
+        env: {
+          ...input.env,
+          [APP_REVIEW_ARTIFACT_DIR_ENV]: input.artifactsDir ?? "",
+          [APP_REVIEW_PREVIEW_URL_ENV]: input.previewUrl ?? "",
+          [APP_REVIEW_TEST_PLATFORMS_ENV]: (input.testPlatforms ?? ["web"]).join(","),
+          APP_REVIEW_EXECUTION_ID: input.executionId,
+          APP_REVIEW_TEST_TIMEOUT_MS: String(timeoutMinutes * 60_000),
+          ...(input.stackId == null ? {} : { [APP_REVIEW_STACK_ID_ENV]: input.stackId }),
+          ...(recording === null
+            ? {}
+            : {
+                [APP_REVIEW_RECORDING_DIR_ENV]: recording.incomingDir,
+                [APP_REVIEW_RECORDER_SCRIPT_ENV]: recording.scriptPath,
+                [APP_REVIEW_RECORDER_BINDING_ENV]: DOM_RECORDER_BINDING,
+              }),
+        },
+        timeout: `${timeoutMinutes} minutes`,
+        timeoutBehavior: "timedOutResult",
+        maxOutputBytes: 8_192,
+        outputMode: "truncate",
+        ...(logs === null ? {} : { onOutputChunk: logs.write }),
+      }),
+    ),
+    Effect.map((output) => ({
+      status: output.code === 0 && !output.timedOut ? ("passed" as const) : ("failed" as const),
+      outputMarkdown: [
+        output.timedOut
+          ? `Test command exceeded the ${timeoutMinutes} minute limit.`
+          : `Exit code: ${output.code ?? "none"}\n${output.stdout}\n${output.stderr}`,
+        ...(output.stdoutTruncated ? ["Inline stdout was truncated."] : []),
+        ...(output.stderrTruncated ? ["Inline stderr was truncated."] : []),
+      ].join("\n\n"),
+    })),
+    Effect.catch((error) =>
+      Effect.succeed({ status: "failed" as const, outputMarkdown: error.message }),
+    ),
+  );
   const recordings =
     recording === null || input.recordingsDir === undefined
       ? []
@@ -343,7 +363,13 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
     command: input.command,
     executedCommand: input.retryCommand,
     ...result,
-    outputMarkdown: `${result.outputMarkdown}\n\n${logs?.describe() ?? "No test output logs were retained."}`,
+    outputMarkdown: [
+      result.outputMarkdown,
+      logs?.describe() ?? "No test output logs were retained.",
+      ...(input.artifactsDir === undefined
+        ? []
+        : [`Build artifact directory: \`${input.artifactsDir}\``]),
+    ].join("\n\n"),
     ...(recordings.length === 0 ? {} : { recordings }),
     completedAt: DateTime.formatIso(yield* DateTime.now),
   } satisfies AppReviewTestResult;

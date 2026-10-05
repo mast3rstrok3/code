@@ -48,6 +48,7 @@ import {
   appReviewRetryCommandsFailure,
   appReviewTestCommands,
   appReviewTestRecordingsDir,
+  appReviewBuildArtifactsDir,
   completedAppReviewTests,
   restoreAppReviewTestWrites,
   runAppReviewTest,
@@ -2423,7 +2424,8 @@ const make = Effect.gen(function* () {
       );
       if (remaining.length === 0) return;
       const config = yield* projectFileLoader.loadStrict(target.cwd);
-      const concurrency = run.serialE2e ? 1 : (Option.getOrUndefined(config)?.e2eConcurrency ?? 1);
+      const projectFile = Option.getOrUndefined(config);
+      const concurrency = run.serialE2e ? 1 : (projectFile?.e2eConcurrency ?? 1);
       const previewUrl = run.previewTargets[0] ?? null;
       // A lookup failure only costs the suite its stack ID, never the test run.
       const stackLookup = yield* appStackManager
@@ -2451,6 +2453,11 @@ const make = Effect.gen(function* () {
                   ? undefined
                   : appReviewTestRecordingsDir(path, serverConfig.stateDir, run.id),
               env: e2eEnvironment,
+              artifactsDir:
+                serverConfig === undefined
+                  ? undefined
+                  : appReviewBuildArtifactsDir(path, serverConfig.stateDir, run.id),
+              timeoutMinutes: projectFile?.e2eTimeoutMinutes,
             }).pipe(
               Effect.flatMap((result) =>
                 restoreE2eWrites(target.cwd, before).pipe(

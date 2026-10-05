@@ -36,6 +36,9 @@ export const APP_REVIEW_TEST_PLATFORMS_ENV = "APP_REVIEW_TEST_PLATFORMS";
  */
 export const APP_REVIEW_STACK_ID_ENV = "APP_REVIEW_STACK_ID";
 
+/** Run-owned persistent directory for suites to publish builds and qualification receipts. */
+export const APP_REVIEW_ARTIFACT_DIR_ENV = "APP_REVIEW_ARTIFACT_DIR";
+
 /**
  * Recording contract for `e2eCommands`. The suite launches its own browsers, so
  * the server cannot attach a recorder to them. A suite that wants its tests
