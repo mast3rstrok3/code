@@ -552,8 +552,8 @@ describe("buildTurnStartParams", () => {
       NodeAssert.equal(params.collaborationMode?.mode, "plan");
       const instructions = params.collaborationMode?.settings.developer_instructions ?? "";
       NodeAssert.match(instructions, /native Plan collaboration transport/);
-      NodeAssert.match(instructions, /CONTEXT\.md/);
-      NodeAssert.match(instructions, /CONTEXT-MAP\.md/);
+      NodeAssert.match(instructions, /GLOSSARY\.md/);
+      NodeAssert.match(instructions, /GLOSSARY-MAP\.md/);
       NodeAssert.match(instructions, /qualifying ADRs/);
       NodeAssert.match(instructions, /planning-grill-complete/);
       NodeAssert.match(instructions, /do not produce a `<proposed_plan>` block/);
@@ -1129,8 +1129,8 @@ describe("buildCodexDeveloperInstructions", () => {
     NodeAssert.match(instructions, /only as a compatibility fallback/);
     NodeAssert.match(instructions, /request_user_input/);
     NodeAssert.match(instructions, /Grill with Docs workflow prompt/);
-    NodeAssert.match(instructions, /CONTEXT\.md/);
-    NodeAssert.match(instructions, /CONTEXT-MAP\.md/);
+    NodeAssert.match(instructions, /GLOSSARY\.md/);
+    NodeAssert.match(instructions, /GLOSSARY-MAP\.md/);
     NodeAssert.match(instructions, /qualifying ADRs/);
     NodeAssert.match(instructions, /do not produce a `<proposed_plan>` block/);
     NodeAssert.doesNotMatch(instructions, /When you present the official plan/);

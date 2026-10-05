@@ -29,17 +29,23 @@ const GRILLING_BLUEPRINT = [
   "",
   "Interview the user relentlessly until you reach a shared understanding. Map this as a **design tree**: every decision branches into the decisions that hang off it.",
   "",
-  "Work the tree in **rounds**. The **frontier** is every decision whose prerequisites are already settled — the questions you can ask _now_ without guessing at answers you haven't heard yet. Ask the whole frontier in one round: number each question and give your recommended answer. Then wait for the user's answers before the next round.",
+  "Work the tree in **rounds**. The **frontier** is every decision whose prerequisites are already settled: the questions you can ask _now_ without guessing at answers you haven't heard yet. Ask the whole frontier in one round: number each question and give your recommended answer. Then wait for the user's answers before the next round.",
   "",
-  "Each question should be formatted like so:",
+  "Format a round like so:",
   "",
   "```",
   "❓ **Q1** - **<question title>**: <question body, might be multiple paragraphs, including multiple choices>",
   "",
   "➡️ <your recommended answer>",
+  "",
+  "---",
+  "",
+  "❓ **Q2** - **<question title>**: <question body, might be multiple paragraphs, including multiple choices>",
+  "",
+  "➡️ <your recommended answer>",
   "```",
   "",
-  "Each round the user answers reshapes the tree — settled decisions push the frontier outward and unblock questions that depended on them. Recompute the frontier and ask the next round. A question whose answer depends on another question still open in this round belongs to a _later_ round, not this one.",
+  "Each round the user answers reshapes the tree: settled decisions push the frontier outward and unblock questions that depended on them. Recompute the frontier and ask the next round. A question whose answer depends on another question still open in this round belongs to a _later_ round, not this one.",
   "",
   "Finding _facts_ is your job, never the user's. When a frontier question needs a fact from the environment, inspect the filesystem and available tools in this thread. Resolve that fact before asking questions that depend on it. The _decisions_ are the user's. Put each decision to them and wait.",
   "",
@@ -98,7 +104,7 @@ describe("WorkflowPromptRegistry", () => {
     );
     NodeAssert.equal(
       catalog.skills.filter((skill) => skill.id.startsWith("matt-pocock.")).length,
-      19,
+      20,
     );
     NodeAssert.deepEqual(
       catalog.skills.map((skill) => skill.title),
@@ -112,13 +118,13 @@ describe("WorkflowPromptRegistry", () => {
       NodeAssert.deepEqual(skill.buildModes, ["build"]);
       NodeAssert.equal(isRegisteredWorkflowPromptId(skill.id), true);
     }
-    NodeAssert.equal(catalog.docs.filter((doc) => doc.id === "context-format").length, 1);
+    NodeAssert.equal(catalog.docs.filter((doc) => doc.id === "glossary-format").length, 1);
     NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /Kubernetes-backed/);
     NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /mount.*`\/app`/);
     NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /separate pod volumes/);
     NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /ticket workers/);
     NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /worktree-owned AppStack/);
-    NodeAssert.deepEqual(resolveWorkflowDoc("context-format")?.skillIds, [
+    NodeAssert.deepEqual(resolveWorkflowDoc("glossary-format")?.skillIds, [
       "matt-pocock.grill-with-docs",
       "matt-pocock.domain-modeling",
       "matt-pocock.to-spec",
@@ -140,7 +146,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(directGrillWithDocs, /Map this as a \*\*design tree\*\*/);
     NodeAssert.match(directGrillWithDocs, /Most repos have a single context/);
     NodeAssert.match(directGrillWithDocs, /available-workflow-docs/);
-    NodeAssert.match(directGrillWithDocs, /workflow_doc_get\(\{ "docId": "context-format" \}\)/);
+    NodeAssert.match(directGrillWithDocs, /workflow_doc_get\(\{ "docId": "glossary-format" \}\)/);
     NodeAssert.deepEqual(
       catalog.skills.find((skill) => skill.id === "matt-pocock.domain-modeling")?.workflowIds,
       ["fast-engineering", "planning", "wayfinder"],
@@ -151,7 +157,7 @@ describe("WorkflowPromptRegistry", () => {
       WORKFLOW_PROMPT_IDS.planningDomainModelingCodex,
     );
     NodeAssert.match(renderedDomainModeling, /Most repos have a single context/);
-    NodeAssert.match(renderedDomainModeling, /├── CONTEXT-MAP\.md/);
+    NodeAssert.match(renderedDomainModeling, /├── GLOSSARY-MAP\.md/);
     NodeAssert.match(
       renderedDomainModeling,
       /Your glossary defines 'cancellation' as X, but you seem to mean Y/,
@@ -177,7 +183,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(prototypeUi?.content ?? "", /Build the floating switcher/);
     NodeAssert.ok((prototypeLogic?.content.length ?? 0) > 5_500);
     NodeAssert.ok((prototypeUi?.content.length ?? 0) > 6_800);
-    NodeAssert.ok((resolveWorkflowDoc("context-format")?.content.length ?? 0) > 2_200);
+    NodeAssert.ok((resolveWorkflowDoc("glossary-format")?.content.length ?? 0) > 2_200);
     NodeAssert.ok((resolveWorkflowDoc("adr-format")?.content.length ?? 0) > 2_700);
     NodeAssert.deepEqual(resolveWorkflowDoc("domain-docs")?.skillIds, [
       "matt-pocock.to-spec",
@@ -317,24 +323,24 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /Keep grilling/);
     NodeAssert.match(rendered, /Do not duplicate or summarize structured questions/);
     NodeAssert.match(rendered, /if and only if.*unavailable.*native.*request_user_input/);
-    NodeAssert.match(rendered, /CONTEXT\.md Format/);
-    NodeAssert.match(rendered, /CONTEXT-MAP\.md/);
+    NodeAssert.match(rendered, /GLOSSARY\.md Format/);
+    NodeAssert.match(rendered, /GLOSSARY-MAP\.md/);
     NodeAssert.match(rendered, /ADR Format/);
     NodeAssert.match(rendered, /Hard to reverse/);
     NodeAssert.match(rendered, /workflow_doc_get/);
     NodeAssert.doesNotMatch(rendered, /_Avoid_: Purchase, transaction/);
 
-    const contextDoc = planningGrill.associatedDocs?.find((doc) => doc.id === "context-format");
-    NodeAssert.ok(contextDoc);
-    NodeAssert.equal(contextDoc.path, "CONTEXT-FORMAT.md");
-    NodeAssert.match(contextDoc.content, /# CONTEXT\.md Format/);
-    NodeAssert.match(contextDoc.content, /Be opinionated\./);
-    NodeAssert.match(contextDoc.content, /## Structure/);
-    NodeAssert.match(contextDoc.content, /## Language/);
-    NodeAssert.match(contextDoc.content, /_Avoid_: Purchase, transaction/);
-    NodeAssert.match(contextDoc.content, /Only include terms specific to this project's context/);
-    NodeAssert.match(contextDoc.content, /## Single vs multi-context repos/);
-    NodeAssert.match(contextDoc.content, /# Context Map/);
+    const glossaryDoc = planningGrill.associatedDocs?.find((doc) => doc.id === "glossary-format");
+    NodeAssert.ok(glossaryDoc);
+    NodeAssert.equal(glossaryDoc.path, "GLOSSARY-FORMAT.md");
+    NodeAssert.match(glossaryDoc.content, /# GLOSSARY\.md Format/);
+    NodeAssert.match(glossaryDoc.content, /Be opinionated\./);
+    NodeAssert.match(glossaryDoc.content, /## Structure/);
+    NodeAssert.match(glossaryDoc.content, /## Language/);
+    NodeAssert.match(glossaryDoc.content, /_Avoid_: Purchase, transaction/);
+    NodeAssert.match(glossaryDoc.content, /Only include terms specific to this project's context/);
+    NodeAssert.match(glossaryDoc.content, /## Single vs multi-context repos/);
+    NodeAssert.match(glossaryDoc.content, /# Glossary Map/);
 
     const adrDoc = planningGrill.associatedDocs?.find((doc) => doc.id === "adr-format");
     NodeAssert.ok(adrDoc);
@@ -379,7 +385,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.doesNotMatch(rendered, /request_user_input/);
     NodeAssert.match(rendered, /"type": "planning-grill-complete"/);
     NodeAssert.doesNotMatch(rendered, /After the user explicitly confirms shared understanding/);
-    NodeAssert.ok(automaticGrill.associatedDocs?.some((doc) => doc.id === "context-format"));
+    NodeAssert.ok(automaticGrill.associatedDocs?.some((doc) => doc.id === "glossary-format"));
     NodeAssert.ok(automaticGrill.associatedDocs?.some((doc) => doc.id === "adr-format"));
   });
 
@@ -873,10 +879,12 @@ describe("WorkflowPromptRegistry", () => {
       (contract) => contract.id === WORKFLOW_PROMPT_IDS.planningSpecCodex,
     );
     NodeAssert.ok(planningSpec);
-    const specContextDoc = planningSpec.associatedDocs?.find((doc) => doc.id === "context-format");
-    NodeAssert.ok(specContextDoc);
-    NodeAssert.equal(specContextDoc.path, "CONTEXT-FORMAT.md");
-    NodeAssert.match(specContextDoc.content, /# CONTEXT\.md Format/);
+    const specGlossaryDoc = planningSpec.associatedDocs?.find(
+      (doc) => doc.id === "glossary-format",
+    );
+    NodeAssert.ok(specGlossaryDoc);
+    NodeAssert.equal(specGlossaryDoc.path, "GLOSSARY-FORMAT.md");
+    NodeAssert.match(specGlossaryDoc.content, /# GLOSSARY\.md Format/);
 
     const specAdrDoc = planningSpec.associatedDocs?.find((doc) => doc.id === "adr-format");
     NodeAssert.ok(specAdrDoc);
@@ -988,7 +996,7 @@ describe("repository skill files", () => {
 
   it("loads repository templates through the document API and keeps project files distinct", () => {
     for (const [id, file] of [
-      ["context-format", "CONTEXT-FORMAT.md"],
+      ["glossary-format", "GLOSSARY-FORMAT.md"],
       ["adr-format", "ADR-FORMAT.md"],
     ]) {
       const content = NodeFS.readFileSync(
@@ -1003,8 +1011,8 @@ describe("repository skill files", () => {
       ]) {
         const text = resolveWorkflowPromptText(promptId);
         NodeAssert.ok(text.includes(`workflow_doc_get({ "docId": "${id}" })`));
-        NodeAssert.match(text, /target project's own `CONTEXT.md`/);
-        NodeAssert.doesNotMatch(text, /\]\(\.\/CONTEXT-FORMAT.md\)|\]\(\.\/ADR-FORMAT.md\)/);
+        NodeAssert.match(text, /target project's own `GLOSSARY.md`/);
+        NodeAssert.doesNotMatch(text, /\]\(\.\/GLOSSARY-FORMAT.md\)|\]\(\.\/ADR-FORMAT.md\)/);
       }
     }
   });

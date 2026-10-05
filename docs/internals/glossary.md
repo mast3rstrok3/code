@@ -84,7 +84,7 @@ The focused built-in instructions for one workflow step, identified by a stable 
 
 #### Workflow doc
 
-A supporting reference a skill can load on demand with `workflow_doc_get` — for example the CONTEXT.md and ADR formats. Docs are deduplicated by global ID in [WorkflowPromptRegistry.ts][26] and only their metadata is injected into prompts.
+A supporting reference a skill can load on demand with `workflow_doc_get` — for example the GLOSSARY.md and ADR formats. Docs are deduplicated by global ID in [WorkflowPromptRegistry.ts][26] and only their metadata is injected into prompts.
 
 #### Product grill
 

@@ -508,9 +508,9 @@ describe("workflow-artifacts toolkit handlers", () => {
 
   it.effect("loads built-in workflow docs and rejects unknown IDs", () =>
     Effect.gen(function* () {
-      const doc = yield* handlers.workflow_doc_get({ docId: "context-format" });
-      assert.strictEqual(doc.path, "CONTEXT-FORMAT.md");
-      assert.match(doc.content, /# CONTEXT\.md Format/);
+      const doc = yield* handlers.workflow_doc_get({ docId: "glossary-format" });
+      assert.strictEqual(doc.path, "GLOSSARY-FORMAT.md");
+      assert.match(doc.content, /# GLOSSARY\.md Format/);
 
       const error = yield* handlers.workflow_doc_get({ docId: "missing" }).pipe(Effect.flip);
       assert.strictEqual(error._tag, "WorkflowArtifactAccessError");

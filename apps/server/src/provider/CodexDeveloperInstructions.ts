@@ -203,7 +203,7 @@ This provider thread predates T3's \`workflow_request_user_input\` registration.
 
 Do not apply ordinary CLI Plan Mode requirements. In particular, do not switch to a three-phase planning workflow, do not treat the user's request as plan-only, and do not produce a \`<proposed_plan>\` block.
 
-Use native \`request_user_input\` only in chunks of at most three questions, as the workflow prompt's compatibility fallback directs. Respect product-only scope or question limits when the user requested them. Grill with Docs retains its narrow authorization to update \`CONTEXT.md\`, \`CONTEXT-MAP.md\`, and qualifying ADRs as decisions crystallize; it must not make implementation changes. Preserve every other workflow instruction and required completion directive.
+Use native \`request_user_input\` only in chunks of at most three questions, as the workflow prompt's compatibility fallback directs. Respect product-only scope or question limits when the user requested them. Grill with Docs retains its narrow authorization to update \`GLOSSARY.md\`, \`GLOSSARY-MAP.md\`, and qualifying ADRs as decisions crystallize; it must not make implementation changes. Preserve every other workflow instruction and required completion directive.
 </collaboration_mode>`;
 
 type CodexDeveloperInstructionMode = ProviderInteractionMode | "interactive-grill";

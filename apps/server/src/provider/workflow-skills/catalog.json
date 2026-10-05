@@ -105,10 +105,10 @@
         "file": "documents/ADR-FORMAT.md"
       },
       {
-        "id": "matt-pocock.domain-modeling.context-format",
-        "title": "CONTEXT.md Format",
-        "path": "domain-modeling/CONTEXT-FORMAT.md",
-        "file": "documents/CONTEXT-FORMAT.md"
+        "id": "matt-pocock.domain-modeling.glossary-format",
+        "title": "GLOSSARY.md Format",
+        "path": "domain-modeling/GLOSSARY-FORMAT.md",
+        "file": "documents/GLOSSARY-FORMAT.md"
       }
     ]
   },
@@ -129,10 +129,10 @@
         "file": "documents/ADR-FORMAT.md"
       },
       {
-        "id": "matt-pocock.domain-modeling.context-format",
-        "title": "CONTEXT.md Format",
-        "path": "domain-modeling/CONTEXT-FORMAT.md",
-        "file": "documents/CONTEXT-FORMAT.md"
+        "id": "matt-pocock.domain-modeling.glossary-format",
+        "title": "GLOSSARY.md Format",
+        "path": "domain-modeling/GLOSSARY-FORMAT.md",
+        "file": "documents/GLOSSARY-FORMAT.md"
       }
     ]
   },
@@ -148,8 +148,19 @@
     "associatedDocs": []
   },
   {
-    "id": "matt-pocock.improve-codebase-architecture",
+    "id": "matt-pocock.implement-spec",
     "order": 107,
+    "workflow": "shared",
+    "role": "implementation-worker",
+    "stage": "build",
+    "title": "Implement Spec",
+    "description": "Implement the result of /to-spec and /to-tickets in code",
+    "file": "skills/implement-spec.md",
+    "associatedDocs": []
+  },
+  {
+    "id": "matt-pocock.improve-codebase-architecture",
+    "order": 108,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
@@ -167,7 +178,7 @@
   },
   {
     "id": "matt-pocock.prototype",
-    "order": 108,
+    "order": 109,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
@@ -191,7 +202,7 @@
   },
   {
     "id": "matt-pocock.pr",
-    "order": 109,
+    "order": 110,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
@@ -202,7 +213,7 @@
   },
   {
     "id": "matt-pocock.research",
-    "order": 110,
+    "order": 111,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
@@ -212,19 +223,19 @@
     "associatedDocs": []
   },
   {
-    "id": "matt-pocock.resolving-merge-conflicts",
-    "order": 111,
+    "id": "matt-pocock.retro",
+    "order": 112,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
-    "title": "Resolving Merge Conflicts",
-    "description": "Resolve merge and rebase conflicts",
-    "file": "skills/resolving-merge-conflicts.md",
+    "title": "Retro",
+    "description": "Conduct a retrospective on a coding session",
+    "file": "skills/retro.md",
     "associatedDocs": []
   },
   {
     "id": "matt-pocock.setup-matt-pocock-skills",
-    "order": 112,
+    "order": 113,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
@@ -266,7 +277,7 @@
   },
   {
     "id": "matt-pocock.tdd",
-    "order": 113,
+    "order": 114,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
@@ -290,7 +301,7 @@
   },
   {
     "id": "matt-pocock.to-spec",
-    "order": 114,
+    "order": 115,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
@@ -301,7 +312,7 @@
   },
   {
     "id": "matt-pocock.to-tickets",
-    "order": 115,
+    "order": 116,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
@@ -312,7 +323,7 @@
   },
   {
     "id": "matt-pocock.triage",
-    "order": 116,
+    "order": 117,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
@@ -336,7 +347,7 @@
   },
   {
     "id": "matt-pocock.wayfinder",
-    "order": 117,
+    "order": 118,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
@@ -347,7 +358,7 @@
   },
   {
     "id": "matt-pocock.wizard",
-    "order": 118,
+    "order": 119,
     "workflow": "shared",
     "role": "implementation-worker",
     "stage": "build",
@@ -400,10 +411,10 @@
         "file": "documents/app-dev-stack.md"
       },
       {
-        "id": "context-format",
-        "title": "CONTEXT.md Format",
-        "path": "CONTEXT-FORMAT.md",
-        "file": "documents/CONTEXT-FORMAT.md"
+        "id": "glossary-format",
+        "title": "GLOSSARY.md Format",
+        "path": "GLOSSARY-FORMAT.md",
+        "file": "documents/GLOSSARY-FORMAT.md"
       },
       {
         "id": "adr-format",
@@ -431,10 +442,10 @@
         "file": "documents/app-dev-stack.md"
       },
       {
-        "id": "context-format",
-        "title": "CONTEXT.md Format",
-        "path": "CONTEXT-FORMAT.md",
-        "file": "documents/CONTEXT-FORMAT.md"
+        "id": "glossary-format",
+        "title": "GLOSSARY.md Format",
+        "path": "GLOSSARY-FORMAT.md",
+        "file": "documents/GLOSSARY-FORMAT.md"
       },
       {
         "id": "adr-format",
@@ -462,10 +473,10 @@
         "file": "documents/app-dev-stack.md"
       },
       {
-        "id": "context-format",
-        "title": "CONTEXT.md Format",
-        "path": "CONTEXT-FORMAT.md",
-        "file": "documents/CONTEXT-FORMAT.md"
+        "id": "glossary-format",
+        "title": "GLOSSARY.md Format",
+        "path": "GLOSSARY-FORMAT.md",
+        "file": "documents/GLOSSARY-FORMAT.md"
       },
       {
         "id": "adr-format",
@@ -487,10 +498,10 @@
     "file": "skills/domain-modeling.md",
     "associatedDocs": [
       {
-        "id": "context-format",
-        "title": "CONTEXT.md Format",
-        "path": "CONTEXT-FORMAT.md",
-        "file": "documents/CONTEXT-FORMAT.md"
+        "id": "glossary-format",
+        "title": "GLOSSARY.md Format",
+        "path": "GLOSSARY-FORMAT.md",
+        "file": "documents/GLOSSARY-FORMAT.md"
       },
       {
         "id": "adr-format",
@@ -571,10 +582,10 @@
         "file": "documents/app-dev-stack.md"
       },
       {
-        "id": "context-format",
-        "title": "CONTEXT.md Format",
-        "path": "CONTEXT-FORMAT.md",
-        "file": "documents/CONTEXT-FORMAT.md"
+        "id": "glossary-format",
+        "title": "GLOSSARY.md Format",
+        "path": "GLOSSARY-FORMAT.md",
+        "file": "documents/GLOSSARY-FORMAT.md"
       },
       {
         "id": "adr-format",

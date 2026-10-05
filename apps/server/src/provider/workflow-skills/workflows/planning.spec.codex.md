@@ -2,7 +2,7 @@
 
 ## Domain model maintenance
 
-Maintain the project's domain model as part of Spec authoring. When the Spec resolves terminology, capture it in the CONTEXT.md glossary (format in CONTEXT-FORMAT.md): tight definitions, rejected synonyms under _Avoid_, project-specific domain concepts only, no implementation details. Record an ADR in docs/adr/ (format in ADR-FORMAT.md) only when a decision is hard to reverse, surprising without context, and the result of a real trade-off. Create these files lazily — only when you have something to write.
+Maintain the project's domain model as part of Spec authoring. When the Spec resolves terminology, capture it in the GLOSSARY.md glossary (format in GLOSSARY-FORMAT.md): tight definitions, rejected synonyms under _Avoid_, project-specific domain concepts only, no implementation details. Record an ADR in docs/adr/ (format in ADR-FORMAT.md) only when a decision is hard to reverse, surprising without context, and the result of a real trade-off. Create these files lazily — only when you have something to write.
 
 ## T3 workflow adapter
 

@@ -3,7 +3,7 @@
 The Settings catalog separates workflow automation into three layers:
 
 - **Workflows** contains the Engineering workflow variants. **Wayfinder** is visible while it is under development but cannot start yet.
-- **Skills** are focused engineering instructions. The catalog includes 19 skills from Matt Pocock's engineering collection plus T3-native orchestration skills.
+- **Skills** are focused engineering instructions. The catalog includes 20 skills from Matt Pocock's engineering collection plus T3-native orchestration skills.
 - **Docs** are supporting references used by those skills, such as ADR, context, testing, and browser-QA formats.
 
 The Skills catalog shows the instructions the application uses, including T3 additions. In Settings → Skills, save your default additions below a skill to apply them whenever that skill runs. Open a workflow step's instructions to add defaults for that specific step. Clear additions to restore the defaults. These instructions live in the application; no repository-local skill installation is required. Skills are sorted alphabetically. Each skill shows a **Build** pill when it can be invoked directly and workflow pills for every guided workflow that uses it. Document pills link to the supporting references associated with that skill.
@@ -218,7 +218,7 @@ Inspect a skill from Settings → Workflows or Settings → Skills to read the i
 
 Skills and supporting templates are app-owned repository files. Edit them and rebuild and deploy the environment to update subsequent turns. Upstream comparisons are manual.
 
-Grill with Docs contains the complete Grilling and Domain Modeling instructions. It loads the glossary and ADR templates through the workflow document API before writing those artifacts. The templates ship with T3; the project's own `CONTEXT.md` and ADRs stay in that project's worktree. Other direct Build invocations bundle their supporting files for the selected turn. Guided workflows load supporting documents on demand.
+Grill with Docs contains the complete Grilling and Domain Modeling instructions. It loads the glossary and ADR templates through the workflow document API before writing those artifacts. The templates ship with T3; the project's own `GLOSSARY.md` and ADRs stay in that project's worktree. Other direct Build invocations bundle their supporting files for the selected turn. Guided workflows load supporting documents on demand.
 
 Interactive grill threads use T3's own `workflow_request_user_input` tool, whichever agent runs them: Codex sees it as a dynamic tool, and Claude, Grok, and OpenCode reach it through T3's MCP server. Threads created before that tool existed temporarily fall back to the agent's own question tool and its three-question limit, which carries no recommendation. The visible Product or Planning workflow and its grill behavior do not become ordinary CLI Plan Mode. Full Feature's automatic Engineering Grill remains non-interactive and uses neither interactive transport.
 

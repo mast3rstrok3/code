@@ -537,7 +537,7 @@ function buildProductContextStagePrompt(
   return [
     "Build durable product and domain context from this locked Product Grill intent.",
     "",
-    "Do not run an Engineering Grill, make engineering decisions, or ask the user questions. Maintain CONTEXT.md, CONTEXT-MAP.md when warranted, and product/domain ADRs, then hand off to Spec authoring.",
+    "Do not run an Engineering Grill, make engineering decisions, or ask the user questions. Maintain GLOSSARY.md, GLOSSARY-MAP.md when warranted, and product/domain ADRs, then hand off to Spec authoring.",
     "",
     `Intent title: ${command.intentTitle}`,
     "",
