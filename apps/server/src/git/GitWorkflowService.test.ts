@@ -344,6 +344,31 @@ it.layer(MergeTestLayer)("GitWorkflowService mergeRef", (it) => {
     }),
   );
 
+  it.effect("returns the complete changed-file list when it exceeds 256 KiB", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTmpDir();
+      yield* initRepo(cwd);
+      const baseRef = yield* runGit(cwd, ["rev-parse", "HEAD"]);
+      const files = Array.from(
+        { length: 1_200 },
+        (_, index) => `${String(index).padStart(4, "0")}-${"x".repeat(220)}.ts`,
+      );
+      assert.isAbove(Buffer.byteLength(`${files.join("\0")}\0`), 256 * 1_024);
+      yield* Effect.forEach(files, (file) => writeFile(cwd, file, "feature\n"), {
+        concurrency: 32,
+        discard: true,
+      });
+      yield* runGit(cwd, ["add", "."]);
+      yield* runGit(cwd, ["commit", "-qm", "large feature"]);
+
+      const workflow = yield* GitWorkflowService.GitWorkflowService;
+      assert.deepStrictEqual(
+        yield* workflow.listChangedFiles({ cwd, baseRef, headRef: "HEAD" }),
+        files,
+      );
+    }),
+  );
+
   it.effect("merges a branch and treats a repeated merge as already integrated", () =>
     Effect.gen(function* () {
       const cwd = yield* makeTmpDir();

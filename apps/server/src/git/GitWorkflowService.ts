@@ -525,7 +525,8 @@ export const make = Effect.gen(function* () {
             operation: "GitWorkflowService.listChangedFiles",
             cwd: input.cwd,
             args: ["diff", "--name-only", "-z", input.baseRef, input.headRef],
-            maxOutputBytes: 256 * 1_024,
+            // Match workspace listings so large integrations retain every validation path.
+            maxOutputBytes: 16 * 1_024 * 1_024,
           }),
         ),
         Effect.map((result) => result.stdout.split("\0").filter((path) => path.length > 0)),
