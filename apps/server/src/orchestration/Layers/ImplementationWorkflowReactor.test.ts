@@ -3119,7 +3119,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("blocks App Review instead of reviewing a stack that is not running", () =>
+  it.effect("waits for stack startup without spending review or retry attempts", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -3157,9 +3157,9 @@ describe("ImplementationWorkflowReactor", () => {
 
           const snapshot = yield* system.query.getSnapshot();
           const blocked = snapshot.implementationRuns[0];
-          expect(blocked?.status).toBe("needs-human-attention");
-          expect(blocked?.retryableFailure?.stage).toBe("app-dev-stack");
-          expect(blocked?.retryableFailure?.detail).toContain("not 'running'");
+          expect(blocked?.status).toBe("qa-reviewing");
+          expect(blocked?.retryableFailure).toBeNull();
+          expect(blocked?.automationHalt).toBeNull();
           // No reviewer is sent at a URL that cannot serve it.
           expect(
             snapshot.threads.filter(
@@ -3175,6 +3175,26 @@ describe("ImplementationWorkflowReactor", () => {
           );
           expect(waiting?.tone).toBe("info");
           expect(waiting?.summary).toBe("Waiting for App Stack");
+          for (const minute of [2, 4, 6]) {
+            yield* TestClock.setTime(Date.parse(`2026-01-01T00:0${minute}:00.000Z`));
+            yield* system.reactor.recoverIncompleteStages();
+            yield* system.reactor.drain;
+            const pending = (yield* system.query.getSnapshot()).implementationRuns[0];
+            expect(pending?.status).toBe("qa-reviewing");
+            expect(pending?.retryableFailure).toBeNull();
+            expect(pending?.automationHalt).toBeNull();
+            expect(pending?.qaAttemptCount).toBe(0);
+          }
+          yield* TestClock.setTime(Date.parse("2026-01-01T00:25:00.000Z"));
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
+          const expired = (yield* system.query.getSnapshot()).implementationRuns[0];
+          expect(expired?.status).toBe("needs-human-attention");
+          expect(expired?.retryableFailure).toMatchObject({
+            stage: "app-dev-stack",
+            attemptCount: 1,
+          });
+          expect(expired?.qaAttemptCount).toBe(0);
         }),
       { autoCreateStackStatus: "starting" },
     ),
@@ -3216,9 +3236,9 @@ describe("ImplementationWorkflowReactor", () => {
 
           const snapshot = yield* system.query.getSnapshot();
           const blocked = snapshot.implementationRuns[0];
-          expect(blocked?.status).toBe("needs-human-attention");
-          expect(blocked?.retryableFailure?.stage).toBe("app-dev-stack");
-          expect(blocked?.retryableFailure?.detail).toContain("no available server");
+          expect(blocked?.status).toBe("qa-reviewing");
+          expect(blocked?.retryableFailure).toBeNull();
+          expect(blocked?.automationHalt).toBeNull();
           expect(blocked?.lastQaFailure).toBeNull();
           expect(blocked?.qaAttemptCount).toBe(0);
           expect(

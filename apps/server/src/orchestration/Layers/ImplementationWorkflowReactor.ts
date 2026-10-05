@@ -2913,6 +2913,12 @@ const make = Effect.gen(function* () {
     >["category"];
     readonly haltStage?: NonNullable<OrchestrationImplementationRun["automationHalt"]>["stage"];
   }) {
+    const waitingForStack =
+      input.retryableStage === "app-dev-stack" &&
+      input.humanBlocked !== true &&
+      input.automaticRecoveryWaiting === true &&
+      Date.parse(input.updatedAt) - Date.parse(input.run.appDevStack.requestedAt) <
+        RUN_STALL_GRACE_MS;
     const previousAttempts =
       input.retryableStage !== undefined &&
       input.run.retryableFailure?.stage === input.retryableStage &&
@@ -2922,14 +2928,16 @@ const make = Effect.gen(function* () {
     const nextAttemptCount = previousAttempts + 1;
     const humanBlocked = input.humanBlocked ?? structuralGitFailure(input.reasonMarkdown);
     const automationStopped =
-      input.retryableStage === undefined ||
-      humanBlocked ||
-      nextAttemptCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES;
+      !waitingForStack &&
+      (input.retryableStage === undefined ||
+        humanBlocked ||
+        nextAttemptCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES);
     const blockedRun: OrchestrationImplementationRun = {
       ...input.run,
-      status: "needs-human-attention",
-      retryableFailure:
-        input.retryableStage === undefined
+      status: waitingForStack ? "qa-reviewing" : "needs-human-attention",
+      retryableFailure: waitingForStack
+        ? null
+        : input.retryableStage === undefined
           ? input.run.retryableFailure
           : {
               ...(input.ticketId === undefined ? {} : { ticketId: input.ticketId }),
@@ -2968,19 +2976,17 @@ const make = Effect.gen(function* () {
     });
     yield* appendActivity({
       threadId: input.run.orchestratorThreadId,
-      tone: input.automaticRecoveryWaiting === true ? "info" : "error",
-      kind:
-        input.automaticRecoveryWaiting === true
-          ? "implementation-app-dev-stack-waiting"
-          : input.automaticRecovery === true
-            ? "implementation-qa-remediation-requested"
-            : "implementation-workflow.needs-human-attention",
-      summary:
-        input.automaticRecoveryWaiting === true
-          ? "Waiting for App Stack"
-          : input.automaticRecovery === true
-            ? "Automated QA remediation requested"
-            : "Implementation workflow needs human attention",
+      tone: waitingForStack ? "info" : "error",
+      kind: waitingForStack
+        ? "implementation-app-dev-stack-waiting"
+        : input.automaticRecovery === true
+          ? "implementation-qa-remediation-requested"
+          : "implementation-workflow.needs-human-attention",
+      summary: waitingForStack
+        ? "Waiting for App Stack"
+        : input.automaticRecovery === true
+          ? "Automated QA remediation requested"
+          : "Implementation workflow needs human attention",
       payload: { runId: input.run.id, reasonMarkdown: input.reasonMarkdown },
       createdAt: input.updatedAt,
     });
@@ -6564,7 +6570,10 @@ const make = Effect.gen(function* () {
         appDevStack: {
           ...cycleRun.appDevStack,
           status: "ensuring",
-          requestedAt: cycleRun.appDevStack.requestedAt || input.createdAt,
+          requestedAt:
+            cycleRun.appDevStack.status === "ensuring"
+              ? cycleRun.appDevStack.requestedAt || input.createdAt
+              : input.createdAt,
           updatedAt: input.createdAt,
         },
         updatedAt: input.createdAt,
