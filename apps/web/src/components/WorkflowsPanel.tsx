@@ -79,6 +79,7 @@ import {
   resolveWorkflowThreadStatus,
   resolveWorkflowTicketStatus,
   resolveWorkflowCurrentPath,
+  resolveWorkflowHeaderStatus,
   workflowCurrentPathScrollTarget,
   workflowStatusIsActive,
   workflowStepCanRetryImplementationFailure,
@@ -2527,6 +2528,7 @@ function appReviewRunPresentation(run: AppReviewWorkflowRun | null): {
 
 function WorkflowGroupCard(props: {
   readonly group: WorkflowGroup<EnvironmentThreadShell>;
+  readonly currentPath: WorkflowCurrentPath | null;
   readonly groups: readonly WorkflowGroup<EnvironmentThreadShell>[];
   readonly expandedById: Readonly<Record<string, boolean>>;
   readonly setExpandedById: Dispatch<SetStateAction<Record<string, boolean>>>;
@@ -2807,9 +2809,11 @@ function WorkflowGroupCard(props: {
         ? "paused"
         : linkedAppReviewRun !== null
           ? threadStatusAsStepStatus(runPresentation.status)
-          : steps.length > 0
-            ? groupStepStatus
-            : threadStatusAsStepStatus(groupStatus(group));
+          : resolveWorkflowHeaderStatus({
+              currentPath: linkedImplementationRun === null ? null : props.currentPath,
+              fallback:
+                steps.length > 0 ? groupStepStatus : threadStatusAsStepStatus(groupStatus(group)),
+            });
   const recoveredExistingThread =
     linkedImplementationRun !== null &&
     (linkedImplementationRun.finalCodeReviewLaunchCount > 1 ||
@@ -3838,6 +3842,7 @@ export function WorkflowsPanel(props: {
             <WorkflowGroupCard
               key={group.id}
               group={group}
+              currentPath={currentPathByGroupId.get(group.id) ?? null}
               groups={groups}
               expandedById={expandedById}
               setExpandedById={setExpandedById}

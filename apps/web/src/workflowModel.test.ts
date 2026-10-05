@@ -25,6 +25,7 @@ import {
   resolveWorkflowThreadTimeRange,
   resolveWorkflowThreadStatus,
   resolveWorkflowCurrentPath,
+  resolveWorkflowHeaderStatus,
   workflowCurrentPathScrollTarget,
   selectWorkflowRootForThread,
   workflowNavigationIsAvailable,
@@ -169,6 +170,32 @@ describe("resolveWorkflowCurrentPath", () => {
       ticketCodeReviewBudget: 3,
       finalCodeReviewBudget: 3,
     });
+
+  it("keeps a resumed workflow running despite failed earlier review steps", () => {
+    const run = implementationRun([
+      ticketState("ticket-1", "succeeded"),
+      ticketState("ticket-2", "running"),
+    ]);
+    const earlierSteps = resolveWorkflowStepRollup(["failed", "done", "running"]);
+    expect(earlierSteps).toBe("failed");
+    expect(resolveWorkflowHeaderStatus({ currentPath: resolve(run), fallback: earlierSteps })).toBe(
+      "running",
+    );
+  });
+
+  it("keeps a current failed ticket visible despite a running sibling", () => {
+    const run = implementationRun([
+      ticketState("ticket-1", "running"),
+      ticketState("ticket-2", "failed"),
+    ]);
+    expect(resolveWorkflowHeaderStatus({ currentPath: resolve(run), fallback: "running" })).toBe(
+      "blocked",
+    );
+  });
+
+  it("preserves step failures when no implementation run owns the card", () => {
+    expect(resolveWorkflowHeaderStatus({ currentPath: null, fallback: "failed" })).toBe("failed");
+  });
 
   it("prefers a blocked ticket over a running sibling and keeps wave order", () => {
     const run = implementationRun(

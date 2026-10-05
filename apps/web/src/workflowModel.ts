@@ -637,6 +637,15 @@ export interface WorkflowCurrentPath {
   readonly subtitle: string;
 }
 
+/** Earlier attempts remain in the steps; the card follows the current run. */
+export function resolveWorkflowHeaderStatus(input: {
+  readonly currentPath: WorkflowCurrentPath | null;
+  readonly fallback: WorkflowStepStatus;
+}): WorkflowStepStatus {
+  if (input.currentPath === null) return input.fallback;
+  return input.currentPath.status === "upcoming" ? "pending" : input.currentPath.status;
+}
+
 /** The deepest durable row the Interaction Modes chip can reveal. */
 export function workflowCurrentPathScrollTarget(path: WorkflowCurrentPath): string | null {
   if (path.threadId !== null) return path.threadId;
