@@ -6,7 +6,6 @@ import type {
   WorkflowPromptContract,
   WorkflowSkillContract,
 } from "@t3tools/contracts";
-import { isPlanningWorkflowInteractionMode } from "@t3tools/contracts";
 import { appendWorkflowSkillInstructions } from "@t3tools/shared/serverSettings";
 import { WORKFLOW_PRESET_DEFINITIONS } from "@t3tools/shared/workflowPresets";
 
@@ -65,7 +64,7 @@ function readSkillFile(file: string): string {
 export const WORKFLOW_REQUEST_USER_INPUT_CODE_MODE_FORWARDING =
   "When Code Mode calls workflow_request_user_input, keep its returned answers visible to the model by passing the complete result to the outer text(result) helper, for example: const result = await tools.workflow_request_user_input(...); text(result). Dynamic tool results use contentItems, not result.content; never discard or selectively read the returned value.";
 
-export const WORKFLOW_PROMPT_REGISTRY = Schema.decodeUnknownSync(WorkflowPromptContracts)(
+const WORKFLOW_PROMPT_REGISTRY = Schema.decodeUnknownSync(WorkflowPromptContracts)(
   skillFiles.map(({ file, workflowInstructionsFile, associatedDocs, ...contract }) => ({
     ...contract,
     promptText: [
@@ -369,7 +368,7 @@ export function resolveWorkflowDoc(docId: string): WorkflowDocContract | undefin
   return doc === undefined ? undefined : structuredClone(doc);
 }
 
-export function resolveWorkflowPromptContract(id: string): WorkflowPromptContract {
+function resolveWorkflowPromptContract(id: string): WorkflowPromptContract {
   const contract = WORKFLOW_PROMPT_REGISTRY.find((entry) => entry.id === id);
   if (contract === undefined) {
     throw new Error(`Unknown workflow prompt contract '${id}'`);
@@ -391,9 +390,7 @@ export function isBrowserAppReviewWorkflowPromptId(
   );
 }
 
-export function isE2eAppReviewWorkflowPromptId(
-  workflowPromptId: string | null | undefined,
-): boolean {
+function isE2eAppReviewWorkflowPromptId(workflowPromptId: string | null | undefined): boolean {
   return workflowPromptId === WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex;
 }
 
@@ -490,7 +487,7 @@ ${doc.content}
  * message of a workflow sub-step turn. The body is byte-identical to the text injected via the
  * system channel (`resolveWorkflowSystemInstructions`), so a stale prompt is visible in the thread.
  */
-export function buildWorkflowSkillCommandSection(
+function buildWorkflowSkillCommandSection(
   workflowPromptId: string | null | undefined,
 ): string | null {
   if (workflowPromptId == null || !isRegisteredWorkflowPromptId(workflowPromptId)) {
@@ -543,10 +540,4 @@ export function resolveWorkflowSystemInstructions(input: {
     return undefined;
   }
   return resolveWorkflowPromptText(workflowPromptId);
-}
-
-export function isWorkflowInteractionMode(
-  mode: ProviderInteractionMode | null | undefined,
-): boolean {
-  return isPlanningWorkflowInteractionMode(mode) || mode === "implementation-workflow";
 }

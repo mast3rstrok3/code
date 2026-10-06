@@ -45,7 +45,7 @@ export function nativeRepositoryUrl(remote: string): string | null {
   return match ? `https://github.com/${match[1]}/${match[2]}.git` : null;
 }
 
-export function nativeVerificationPrompt(handoff: NativeVerificationHandoff): string {
+function nativeVerificationPrompt(handoff: NativeVerificationHandoff): string {
   return [
     `Verify ${handoff.title} on ${handoff.claim?.platform}.`,
     handoff.instructionsMarkdown,

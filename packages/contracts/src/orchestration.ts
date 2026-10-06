@@ -983,10 +983,6 @@ export const IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES = 5;
 export const IMPLEMENTATION_STAGE_MAX_LAUNCHES = 2;
 /** Maximum gate launches across automatic repairs. An explicit rerun resets the budget. */
 export const IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS = 5;
-/** @deprecated Use IMPLEMENTATION_RUN_MAX_QA_REPAIRS. */
-export const IMPLEMENTATION_RUN_MAX_QA_CYCLES = IMPLEMENTATION_RUN_MAX_QA_REPAIRS;
-/** @deprecated Use IMPLEMENTATION_RUN_MAX_QA_REPAIRS. */
-export const IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS = IMPLEMENTATION_RUN_MAX_QA_REPAIRS;
 
 export const OrchestrationImplementationRunId = TrimmedNonEmptyString;
 export type OrchestrationImplementationRunId = typeof OrchestrationImplementationRunId.Type;

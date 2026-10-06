@@ -63,9 +63,9 @@ export const WORKFLOW_NUDGE_INTERVAL_MS = 10 * 60 * 1000;
  */
 export const WORKFLOW_NUDGE_MAX_ATTEMPTS = 48;
 export const WORKFLOW_RECOVERY_WINDOW_MS = 8 * 60 * 60 * 1000;
-export const WORKFLOW_RECOVERY_UNKNOWN_MAX_ATTEMPTS = 2;
-export const WORKFLOW_RECOVERY_INITIAL_JITTER_MAX_MS = 15 * 1000;
-export const WORKFLOW_RECOVERY_LATER_JITTER_MAX_MS = 60 * 1000;
+const WORKFLOW_RECOVERY_UNKNOWN_MAX_ATTEMPTS = 2;
+const WORKFLOW_RECOVERY_INITIAL_JITTER_MAX_MS = 15 * 1000;
+const WORKFLOW_RECOVERY_LATER_JITTER_MAX_MS = 60 * 1000;
 
 const STAGE_RETRY_OWNED_WORKFLOW_ROLES: ReadonlySet<OrchestrationThreadWorkflowRole> = new Set([
   "implementation-worker",
@@ -248,7 +248,7 @@ export function isBlockedAfterFailedTurn(thread: WorkflowNudgeThread): boolean {
 }
 
 /** True once the nudge path has given up on this thread. */
-export function hasExhaustedWorkflowNudges(thread: WorkflowNudgeThread): boolean {
+function hasExhaustedWorkflowNudges(thread: WorkflowNudgeThread): boolean {
   return thread.session?.lastError === WORKFLOW_NUDGE_EXHAUSTED_MESSAGE;
 }
 

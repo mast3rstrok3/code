@@ -52,7 +52,7 @@ export function parseArchivedThreadsEnvironmentKey(key: string): ReadonlyArray<E
   );
 }
 
-export function parseArchivedThreadsWorkspaceUserViewKey(key: string): WorkspaceUserView {
+function parseArchivedThreadsWorkspaceUserViewKey(key: string): WorkspaceUserView {
   if (!key.includes(ARCHIVED_THREADS_VIEW_KEY_SEPARATOR)) {
     return DEFAULT_WORKSPACE_USER_VIEW;
   }

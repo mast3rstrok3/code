@@ -72,7 +72,7 @@ export const WorkflowTicketsListTool = readonlyTool(
   }).annotate(Tool.Title, "List workflow tickets"),
 );
 
-export const WorkflowTicketGetTool = readonlyTool(
+const WorkflowTicketGetTool = readonlyTool(
   Tool.make("workflow_ticket_get", {
     description:
       "Get one canonical planning ticket by ID after workflow and project authorization.",
@@ -93,7 +93,7 @@ export const WorkflowAppReviewsListTool = readonlyTool(
   }).annotate(Tool.Title, "List workflow App Reviews"),
 );
 
-export const WorkflowAppReviewGetTool = readonlyTool(
+const WorkflowAppReviewGetTool = readonlyTool(
   Tool.make("workflow_app_review_get", {
     description: "Get one App Review after workflow and project authorization.",
     parameters: Schema.Struct({ reviewId: AppReviewId }),
@@ -103,7 +103,7 @@ export const WorkflowAppReviewGetTool = readonlyTool(
   }).annotate(Tool.Title, "Get workflow App Review"),
 );
 
-export const WorkflowDocGetTool = readonlyTool(
+const WorkflowDocGetTool = readonlyTool(
   Tool.make("workflow_doc_get", {
     description: "Load one built-in supporting document for a workflow skill by document ID.",
     parameters: Schema.Struct({ docId: Schema.String }),

@@ -290,7 +290,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   return state;
 });
 
-export function shellStateChanges(
+function shellStateChanges(
   environmentId: EnvironmentId,
   userView: WorkspaceUserView = DEFAULT_WORKSPACE_USER_VIEW,
 ) {

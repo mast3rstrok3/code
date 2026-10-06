@@ -30,7 +30,7 @@ export class ProviderIngestionBacklog extends Context.Service<
   }
 >()("t3/orchestration/ProviderIngestionBacklog") {}
 
-export const make = Effect.sync(() => {
+const make = Effect.sync(() => {
   const pending = new Map<string, number>();
   return ProviderIngestionBacklog.of({
     track: (threadId) =>

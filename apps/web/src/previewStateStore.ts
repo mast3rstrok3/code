@@ -460,13 +460,6 @@ export function rememberPreviewUrl(ref: ScopedThreadRef, url: string): void {
   }));
 }
 
-export function removePreviewThread(ref: ScopedThreadRef): void {
-  const threadKey = scopedThreadKey(ref);
-  appAtomRegistry.set(previewStateAtom(threadKey), EMPTY_THREAD_PREVIEW_STATE);
-  syncActivePreviewThread(threadKey, EMPTY_THREAD_PREVIEW_STATE);
-  changedPreviewThreadKeys.delete(threadKey);
-}
-
 export type PreviewRuntimeCapability =
   | { readonly supported: true; readonly mode: "desktop" | "server"; readonly message?: string }
   | { readonly supported: false; readonly mode: "none"; readonly message: string };

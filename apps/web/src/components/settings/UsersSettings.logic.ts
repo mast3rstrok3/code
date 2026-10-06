@@ -227,7 +227,7 @@ export function removeWorkspaceUserGithubOwnerToken(
  * touch `.github/workflows` (GitHub rejects those pushes without `workflows`, which is write-only).
  * GitHub cannot pre-fill repository access, so the user still picks the repositories.
  */
-export const GITHUB_FINE_GRAINED_TOKEN_PERMISSIONS = {
+const GITHUB_FINE_GRAINED_TOKEN_PERMISSIONS = {
   contents: "write",
   pull_requests: "write",
   workflows: "write",

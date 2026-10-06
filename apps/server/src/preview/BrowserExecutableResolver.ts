@@ -12,7 +12,7 @@ import * as Schema from "effect/Schema";
 
 import type * as ServerConfig from "../config.ts";
 
-export const SYSTEM_BROWSER_CANDIDATES = [
+const SYSTEM_BROWSER_CANDIDATES = [
   "chromium",
   "chromium-browser",
   "google-chrome",
@@ -158,7 +158,7 @@ const executableStatusCapabilities = (
   ...overrides,
 });
 
-export const disabledPreviewBrowserStatus = (
+const disabledPreviewBrowserStatus = (
   mode: ServerConfig.RuntimeMode,
   message: string,
 ): ServerPreviewBrowserStatus => ({
@@ -168,7 +168,7 @@ export const disabledPreviewBrowserStatus = (
   capabilities: executableStatusCapabilities(false),
 });
 
-export const unavailablePreviewBrowserStatus = (
+const unavailablePreviewBrowserStatus = (
   mode: ServerConfig.RuntimeMode,
   message: string,
 ): ServerPreviewBrowserStatus => ({
@@ -178,7 +178,7 @@ export const unavailablePreviewBrowserStatus = (
   capabilities: executableStatusCapabilities(false),
 });
 
-export const readyPreviewBrowserStatus = (
+const readyPreviewBrowserStatus = (
   mode: ServerConfig.RuntimeMode,
   source?: BrowserExecutableResolution["source"],
   recordingAvailable?: boolean,

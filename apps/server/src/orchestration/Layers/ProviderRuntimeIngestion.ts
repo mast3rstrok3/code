@@ -149,14 +149,14 @@ export const MAX_PRODUCT_INTENT_LOCK_REJECTION_BOUNCES = 3;
  * before the cycle is failed. Two covers the shape mistakes that repeat across providers without
  * letting a reviewer that cannot produce a verdict at all stall the stage.
  */
-export const MAX_PLANNING_REVIEWER_VERDICT_RETRIES = 2;
+const MAX_PLANNING_REVIEWER_VERDICT_RETRIES = 2;
 /**
  * How many times a planning root thread is handed its rejected Spec or Ticket artifact back for
  * re-emission. Past this the thread surfaces a needs-attention activity instead of retrying, so a
  * model that cannot produce the shape at all does not loop forever. Without any retry the stage
  * stalls silently: the rejection was only a server-side WARN while the thread sat "ready".
  */
-export const MAX_PLANNING_ARTIFACT_RETRIES = 2;
+const MAX_PLANNING_ARTIFACT_RETRIES = 2;
 
 /**
  * Server-synthesized user messages carry the `message-` prefix (see `serverMessageId` and the

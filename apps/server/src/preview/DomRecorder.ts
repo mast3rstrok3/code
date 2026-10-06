@@ -19,7 +19,7 @@ import * as NodePath from "node:path";
 export const DOM_RECORDER_BINDING = "__t3DomRecorderEmit";
 
 /** How long the page buffers events between binding calls. */
-export const DOM_RECORDER_FLUSH_INTERVAL_MS = 1_000;
+const DOM_RECORDER_FLUSH_INTERVAL_MS = 1_000;
 
 export interface DomRecorderPage {
   readonly exposeBinding: (
@@ -126,7 +126,7 @@ export const buildBootstrapScript = (recordScript: string): string => `
  * recorder. It captures the DOM, so those elements replay as empty boxes with no
  * error anywhere, which is worse than a heavier but correct video.
  */
-export const DOM_RECORDER_MAX_PIXEL_COVERAGE = 0.4;
+const DOM_RECORDER_MAX_PIXEL_COVERAGE = 0.4;
 
 /**
  * Measures how much of the viewport pixel-only elements occupy. This samples the

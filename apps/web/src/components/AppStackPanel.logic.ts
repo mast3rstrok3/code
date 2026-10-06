@@ -245,7 +245,7 @@ export function normalizePreviewHref(rawUrl: string | null | undefined): string 
   }
 }
 
-export function collectPreviewCandidates(stack: AppStack): readonly PreviewCandidate[] {
+function collectPreviewCandidates(stack: AppStack): readonly PreviewCandidate[] {
   const candidates: PreviewCandidate[] = [];
   const seen = new Set<string>();
   const previewUrls = stack.previewUrls ?? {};

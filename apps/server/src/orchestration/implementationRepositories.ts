@@ -14,9 +14,7 @@ import type { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import type { T3ProjectFileLoader } from "../project/T3ProjectFileLoader.ts";
 
 /** A repository a ticket names cannot be prepared for the run. */
-export class ImplementationRepositoryError extends Data.TaggedError(
-  "ImplementationRepositoryError",
-)<{
+class ImplementationRepositoryError extends Data.TaggedError("ImplementationRepositoryError")<{
   readonly message: string;
 }> {}
 

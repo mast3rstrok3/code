@@ -4,7 +4,7 @@ import {
   type ProviderInteractionMode,
 } from "@t3tools/contracts";
 
-export const PLANNING_WORKFLOW_PROVIDERS: ReadonlySet<ProviderDriverKind> = new Set([
+const PLANNING_WORKFLOW_PROVIDERS: ReadonlySet<ProviderDriverKind> = new Set([
   ProviderDriverKind.make("codex"),
   ProviderDriverKind.make("claudeAgent"),
   ProviderDriverKind.make("opencode"),

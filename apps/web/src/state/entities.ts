@@ -12,10 +12,8 @@ import type {
   OrchestrationMessage,
   OrchestrationImplementationRun,
   OrchestrationAppReviewWorkflowRun,
-  OrchestrationPlanningSpecId,
   OrchestrationPlanningWorkflow,
   OrchestrationProposedPlan,
-  OrchestrationSession,
   OrchestrationThreadActivity,
   AppReviewRecord,
   ScopedProjectRef,
@@ -79,9 +77,6 @@ const EMPTY_IMPLEMENTATION_RUNS_ATOM = Atom.make(EMPTY_IMPLEMENTATION_RUNS).pipe
 );
 const EMPTY_APP_REVIEW_WORKFLOW_RUNS_ATOM = Atom.make(EMPTY_APP_REVIEW_WORKFLOW_RUNS).pipe(
   Atom.withLabel("web-app-review-workflow-runs:empty"),
-);
-const EMPTY_SESSION_ATOM = Atom.make<OrchestrationSession | null>(null).pipe(
-  Atom.withLabel("web-thread-session:empty"),
 );
 
 const activeEnvironmentIdAtom = Atom.make<EnvironmentId | null>(null).pipe(
@@ -260,17 +255,6 @@ export function useAppReviewWorkflowRuns(
   );
 }
 
-export function useImplementationRunsForSpec(
-  environmentId: EnvironmentId | null,
-  specId: OrchestrationPlanningSpecId | null,
-): ReadonlyArray<OrchestrationImplementationRun> {
-  return useAtomValue(
-    environmentId === null || specId === null
-      ? EMPTY_IMPLEMENTATION_RUNS_ATOM
-      : environmentThreadShells.implementationRunsBySpecAtom({ environmentId, specId }),
-  );
-}
-
 export function usePlanningWorkflowThreadShells(
   environmentId: EnvironmentId | null,
   projectId?: ProjectId | null,
@@ -290,42 +274,6 @@ export function usePlanningWorkflowThreadShells(
           ),
     [environmentId, projectId, shells],
   );
-}
-
-export function useThreadSession(ref: ScopedThreadRef | null): OrchestrationSession | null {
-  return useAtomValue(
-    ref === null ? EMPTY_SESSION_ATOM : environmentThreadDetails.sessionAtom(ref),
-  );
-}
-
-export function useCreatePlanningSpecCommand() {
-  return useAtomCommand(threadEnvironment.createPlanningSpec, {
-    label: "planning Spec create",
-  });
-}
-
-export function useLoadPlanningSpecBundleCommand() {
-  return useAtomCommand(threadEnvironment.loadPlanningSpecBundle, {
-    label: "planning Spec bundle load",
-  });
-}
-
-export function useRequestPlanningTicketReviewCommand() {
-  return useAtomCommand(threadEnvironment.requestPlanningTicketReview, {
-    label: "planning ticket review request",
-  });
-}
-
-export function useLaunchImplementationRunCommand() {
-  return useAtomCommand(threadEnvironment.launchImplementationRun, {
-    label: "implementation run launch",
-  });
-}
-
-export function useRetryImplementationChangeRequestCommand() {
-  return useAtomCommand(threadEnvironment.retryImplementationChangeRequest, {
-    label: "implementation change request retry",
-  });
 }
 
 export function useRetryImplementationRunCommand() {

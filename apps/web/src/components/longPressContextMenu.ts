@@ -1,5 +1,5 @@
 export const LONG_PRESS_CONTEXT_MENU_DELAY_MS = 500;
-export const LONG_PRESS_CONTEXT_MENU_MOVE_TOLERANCE_PX = 10;
+const LONG_PRESS_CONTEXT_MENU_MOVE_TOLERANCE_PX = 10;
 
 export interface LongPressPointerInput {
   readonly pointerId: number;

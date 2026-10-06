@@ -55,19 +55,6 @@ export const workflowStaleLeasesTotal = Metric.counter("t3_workflow_stale_leases
   description: "Workflow stage leases found expired by reconciliation.",
 });
 
-export const workflowRecoveriesTotal = Metric.counter("t3_workflow_recoveries_total", {
-  description: "Workflow recovery episodes by cause and outcome.",
-});
-
-export const workflowRecoveryDuration = Metric.timer("t3_workflow_recovery_duration", {
-  description: "Duration of workflow recovery episodes.",
-});
-
-export const workflowProviderFallbacksTotal = Metric.counter(
-  "t3_workflow_provider_fallbacks_total",
-  { description: "Workflow recovery attempts using a fallback provider model." },
-);
-
 export const workflowParkedRateLimits = Metric.gauge("t3_workflow_parked_rate_limits", {
   description: "Workflow stages parked for a provider usage limit.",
 });
@@ -77,19 +64,9 @@ export const workflowMissingChildExecutionsTotal = Metric.counter(
   { description: "Workflow stage claims whose durable child execution is missing." },
 );
 
-export const workflowDurableJobHealthTotal = Metric.counter(
-  "t3_workflow_durable_job_health_total",
-  { description: "Durable validation job health transitions." },
-);
-
 export const workflowWatchdogFindingsTotal = Metric.counter("t3_workflow_watchdog_findings_total", {
   description: "Deduplicated workflow watchdog findings.",
 });
-
-export const workflowProductBudgetsDuringRecoveryTotal = Metric.counter(
-  "t3_workflow_product_budgets_during_recovery_total",
-  { description: "Product budget increments while infrastructure recovery is active." },
-);
 
 export const providerSessionsTotal = Metric.counter("t3_provider_sessions_total", {
   description: "Total provider session lifecycle operations.",

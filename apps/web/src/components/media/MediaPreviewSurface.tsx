@@ -11,7 +11,7 @@ export function mediaElementErrorMessage(kind: MediaPreviewSurfaceKind): string 
 }
 
 /** rrweb recordings replay through `DomReplaySurface`; everything else is a video. */
-export const DOM_REPLAY_MIME_TYPE = "application/x-rrweb+jsonl";
+const DOM_REPLAY_MIME_TYPE = "application/x-rrweb+jsonl";
 
 export function isDomReplayRecording(mimeType: string | null): boolean {
   return mimeType === DOM_REPLAY_MIME_TYPE;

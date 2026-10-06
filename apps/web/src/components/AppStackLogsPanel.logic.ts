@@ -106,7 +106,7 @@ const SERVICE_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   seaweedfs: "SeaweedFS",
 };
 
-export function displayNameFromStackPath(worktreePath: string): string {
+function displayNameFromStackPath(worktreePath: string): string {
   const normalized = normalizeStackWorktreePath(worktreePath);
   const lastSlashIndex = normalized.lastIndexOf("/");
   return normalized.slice(lastSlashIndex + 1) || "App Stack";
@@ -120,7 +120,7 @@ export function displayStackName(stack: AppStack): string {
   );
 }
 
-export function displayDiscoveredStackName(stack: AppStackDiscoveredStackPodLogs): string {
+function displayDiscoveredStackName(stack: AppStackDiscoveredStackPodLogs): string {
   return (
     nonEmpty(stack.displayName) ??
     nonEmpty(stack.repoName) ??
@@ -287,7 +287,7 @@ export function filterStackPodLogEntries(
   });
 }
 
-export function filterStackPodLogEntriesForStack(
+function filterStackPodLogEntriesForStack(
   stack: AppStackDiscoveredStackPodLogs,
   options: StackPodLogFilterOptions,
 ): AppStackPodLogEntry[] {
@@ -326,7 +326,7 @@ export function buildStackPodLogViews(
     });
 }
 
-export function stackPodLogsResultToDiscoveredStack(input: {
+function stackPodLogsResultToDiscoveredStack(input: {
   readonly stack: AppStack;
   readonly result: AppStackGetStackPodLogsResult;
   readonly limit: AppStackLogReadLimit;

@@ -103,7 +103,7 @@ export const verifyGithubOwnerToken = Effect.fn("verifyGithubOwnerToken")(functi
  * every token, so any of them yields the right commit identity; `covers` says
  * whether it is expected to grant access to that owner's repositories.
  */
-export function selectWorkspaceUserGithubToken(
+function selectWorkspaceUserGithubToken(
   user: WorkspaceUser,
   repositoryOwner: string | null | undefined,
 ): { readonly token: string; readonly owner?: string; readonly covers: boolean } | undefined {

@@ -83,7 +83,7 @@ export const closePreviewForEvent = (
   );
 };
 
-export const makePreviewLifecycleReactor = Effect.gen(function* () {
+const makePreviewLifecycleReactor = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const previewCoordinator = yield* PreviewCoordinator.PreviewCoordinator;
 

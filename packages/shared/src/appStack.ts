@@ -27,7 +27,7 @@ export function appStackServiceBlocksReadiness(service: {
   );
 }
 
-export const DEFAULT_APP_STACK_PREVIEW_DOMAIN = "nightingale-ai.com";
+const DEFAULT_APP_STACK_PREVIEW_DOMAIN = "nightingale-ai.com";
 
 export type AppStackVariant = "dev" | "prod";
 export const APP_STACK_VARIANTS: ReadonlyArray<AppStackVariant> = ["dev", "prod"];

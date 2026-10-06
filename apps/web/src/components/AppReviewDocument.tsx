@@ -49,7 +49,7 @@ function statusIcon(status: AppReviewRecord["status"]) {
   }
 }
 
-export function recordingEvidenceLabel(recording: AppReviewRecordingEvidence): string {
+function recordingEvidenceLabel(recording: AppReviewRecordingEvidence): string {
   const pieces: string[] = [recording.status];
   if (recording.sizeBytes !== null) {
     pieces.push(`${(recording.sizeBytes / (1024 * 1024)).toFixed(1)} MB`);

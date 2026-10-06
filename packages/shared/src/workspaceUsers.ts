@@ -1,6 +1,5 @@
 import {
   DEFAULT_WORKSPACE_USER_VIEW,
-  type EnvironmentId,
   type WorkspaceUser,
   WorkspaceUserId,
   type WorkspaceUserView,
@@ -8,14 +7,6 @@ import {
 
 export function workspaceUserViewCacheKey(userView: WorkspaceUserView): string {
   return userView.kind === "all" ? "all" : `user:${userView.userId}`;
-}
-
-export function environmentShellCacheKey(
-  environmentId: EnvironmentId,
-  userView: WorkspaceUserView,
-): string {
-  const userViewKey = workspaceUserViewCacheKey(userView);
-  return userViewKey === "all" ? environmentId : `${environmentId}::${userViewKey}`;
 }
 
 export function resolveWorkspaceUserView(
