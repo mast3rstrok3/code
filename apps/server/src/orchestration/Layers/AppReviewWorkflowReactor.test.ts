@@ -4765,6 +4765,18 @@ for (const scenario of [
   "ticket-dirty-stack",
   "combined",
   "empty",
+  "prepare",
+  "prepare-failed",
+  "prepare-timeout",
+  "prepare-recovered",
+  "prepare-recovered-failure",
+  "prepare-interrupted",
+  "prepare-paused",
+  "prepare-cancelled",
+  "prepare-stale",
+  "prepare-config-changed",
+  "no-repair",
+  "review-only-no-repair",
 ] as const) {
   effectIt.effect(`executes the programmatic review handoffs: ${scenario}`, () =>
     Effect.gen(function* () {
@@ -4776,7 +4788,13 @@ for (const scenario of [
       const diffStarted = yield* Deferred.make<void>();
       const releaseDiff = yield* Deferred.make<void>();
       const ticket = scenario.startsWith("ticket");
-      const embedded = ticket || scenario === "combined";
+      const preparation = scenario.startsWith("prepare");
+      const noRepair = scenario === "no-repair" || scenario === "review-only-no-repair";
+      const embedded = ticket || scenario === "combined" || preparation;
+      const preparationStarted = yield* Deferred.make<void>();
+      const releasePreparation = yield* Deferred.make<void>();
+      const preparationInterrupted = yield* Deferred.make<void>();
+      let headSha = "abc123";
       const splitRetry = scenario === "ticket-split-retry";
       const retryCommands = ["suite-b --grep phone", "suite-b --grep tablet"];
       const ticketCommands =
@@ -4810,6 +4828,51 @@ for (const scenario of [
                   ...carryCycle(1, AppReviewId.make("empty")),
                   status: "e2e-testing" as const,
                   e2eExecution: { id: "empty", commands: [], results: [] },
+                },
+              ],
+            }
+          : {}),
+        ...(scenario === "review-only-no-repair" ? { reviewOnly: true } : {}),
+        ...(scenario === "prepare-recovered-failure" ||
+        scenario === "prepare-recovered" ||
+        scenario === "prepare-interrupted" ||
+        scenario === "prepare-config-changed"
+          ? {
+              activePhase: "e2e" as const,
+              cyclesUsed: 1,
+              cycles: [
+                {
+                  ...carryCycle(1, AppReviewId.make("prepared-review")),
+                  status: "e2e-testing" as const,
+                  e2eExecution: {
+                    id: "prepared-execution",
+                    commands: ["suite-a", "suite-b"].map((command) => ({
+                      command,
+                      retryCommand: command,
+                    })),
+                    results: [],
+                    preparation: {
+                      command:
+                        scenario === "prepare-config-changed"
+                          ? "previous-prepare"
+                          : "prepare-fleet",
+                      result:
+                        scenario === "prepare-recovered-failure" ||
+                        scenario === "prepare-recovered" ||
+                        scenario === "prepare-config-changed"
+                          ? {
+                              command: "prepare-fleet",
+                              executedCommand: "prepare-fleet",
+                              status:
+                                scenario === "prepare-recovered-failure"
+                                  ? ("failed" as const)
+                                  : ("passed" as const),
+                              outputMarkdown: "preparation receipt",
+                              completedAt: now,
+                            }
+                          : null,
+                    },
+                  },
                 },
               ],
             }
@@ -4894,6 +4957,18 @@ for (const scenario of [
               completedAt: now,
             },
           ],
+          messages: [
+            {
+              id: `explanation-${turnId}`,
+              role: "assistant",
+              turnId,
+              text: "The runner owner must prepare the matching fleet, then rerun E2E.",
+              createdAt: now,
+              updatedAt: now,
+              attachments: [],
+              streaming: false,
+            },
+          ],
           activities: [
             {
               id: `result-${turnId}`,
@@ -4911,7 +4986,7 @@ for (const scenario of [
         Layer.provide(
           Layer.mergeAll(
             NodeServices.layer,
-            ...(scenario === "combined"
+            ...(scenario === "combined" || preparation
               ? [
                   serverConfigLayerTest("/assigned/worktree", {
                     prefix: "t3-review-artifacts-",
@@ -4927,13 +5002,42 @@ for (const scenario of [
                   activeTests -= 1;
                   const command = input.args.at(-1)!;
                   const cycle = storedRun.cycles.at(-1)!;
-                  expect(
-                    cycle.e2eExecution?.commands.some(
-                      (selection) => selection.retryCommand === command,
-                    ),
-                  ).toBe(true);
                   executions.push(command);
                   executionEnvironments.push(input.env);
+                  if (command === "prepare-fleet") {
+                    expect(input.timeout).toBe("90 minutes");
+                    expect(input.env?.APP_REVIEW_TEST_TIMEOUT_MS).toBe("5400000");
+                    expect(cycle.e2eExecution?.preparation?.result).toBeNull();
+                    expect(input.env?.APP_REVIEW_TEST_PLATFORMS).toBe("web");
+                    expect(input.env?.APP_REVIEW_ARTIFACT_DIR).toContain(
+                      "workflow-build-artifacts",
+                    );
+                    if (["prepare", "prepare-paused", "prepare-cancelled"].includes(scenario)) {
+                      yield* Deferred.succeed(preparationStarted, undefined);
+                      yield* Deferred.await(releasePreparation).pipe(
+                        Effect.onInterrupt(() =>
+                          Deferred.succeed(preparationInterrupted, undefined),
+                        ),
+                      );
+                    }
+                    if (scenario === "prepare-stale") headSha = "changed-head";
+                  } else if (command === "check-fleet") {
+                    expect(cycle.e2eExecution?.preparation?.result?.status).toBe("passed");
+                    expect(input.env?.APP_REVIEW_ARTIFACT_DIR).toContain(
+                      "workflow-build-artifacts",
+                    );
+                    expect(input.timeout).toBe(10_000);
+                  } else {
+                    expect(
+                      cycle.e2eExecution?.commands.some(
+                        (selection) => selection.retryCommand === command,
+                      ),
+                    ).toBe(true);
+                    if (preparation) {
+                      expect(cycle.e2eExecution?.preparation?.result?.status).toBe("passed");
+                      expect(input.timeout).toBe("120 minutes");
+                    }
+                  }
                   if (scenario === "combined") {
                     expect(input.timeout).toBe("120 minutes");
                     expect(input.env?.APP_REVIEW_TEST_TIMEOUT_MS).toBe("7200000");
@@ -4946,10 +5050,13 @@ for (const scenario of [
                   }
                   return {
                     code: ChildProcessSpawner.ExitCode(
-                      !embedded && command.startsWith("suite-b") && cycle.cycleNumber < 3 ? 1 : 0,
+                      (command === "prepare-fleet" && scenario === "prepare-failed") ||
+                        (!embedded && command.startsWith("suite-b") && cycle.cycleNumber < 3)
+                        ? 1
+                        : 0,
                     ),
-                    timedOut: false,
-                    stdout: "booking result",
+                    timedOut: command === "prepare-fleet" && scenario === "prepare-timeout",
+                    stdout: command === "prepare-fleet" ? "preparation receipt" : "booking result",
                     stderr: "",
                     stdoutTruncated: false,
                     stderrTruncated: false,
@@ -5018,7 +5125,7 @@ for (const scenario of [
                 Effect.sync(() => Option.fromUndefinedOr(threads.find((entry) => entry.id === id))),
             }),
             Layer.mock(GitWorkflowService)({
-              resolveCommit: () => Effect.succeed({ commitSha: "abc123" }),
+              resolveCommit: () => Effect.sync(() => ({ commitSha: headSha })),
               localStatus: () =>
                 Effect.succeed({
                   isRepo: true,
@@ -5099,7 +5206,16 @@ for (const scenario of [
                   Option.some({
                     e2eCommands: ["suite-a", "suite-b"],
                     e2eConcurrency: 4,
-                    ...(scenario === "combined" ? { e2eTimeoutMinutes: 120 } : {}),
+                    ...(scenario === "combined" || preparation ? { e2eTimeoutMinutes: 120 } : {}),
+                    ...(preparation
+                      ? {
+                          e2ePrepare: { command: "prepare-fleet", timeoutMinutes: 90 },
+                          e2ePreflight: {
+                            command: "check-fleet",
+                            blockedReason: "The fleet owner must prepare live targets.",
+                          },
+                        }
+                      : {}),
                   }),
                 ),
             }),
@@ -5205,8 +5321,107 @@ for (const scenario of [
             stackStarting = false;
             yield* reactor.reconcile();
           }
+          if (["prepare", "prepare-paused", "prepare-cancelled"].includes(scenario)) {
+            yield* Deferred.await(preparationStarted);
+            if (scenario === "prepare-paused") {
+              const index = threads.findIndex((entry) => entry.id === storedRun.controllerThreadId);
+              threads[index] = { ...threads[index]!, workflowPausedAt: now };
+              yield* reactor.reconcile();
+              yield* Deferred.await(preparationInterrupted);
+              expect(storedRun.cycles[0]?.e2eExecution?.preparation?.result).toBeNull();
+              expect(executions).toEqual(["prepare-fleet"]);
+              threads[index] = { ...threads[index]!, workflowPausedAt: null };
+              yield* Deferred.succeed(releasePreparation, undefined);
+              yield* reactor.reconcile();
+            } else if (scenario === "prepare-cancelled") {
+              storedRun = { ...storedRun, status: "failed", outcome: "failed", activePhase: null };
+              yield* reactor.reconcile();
+              yield* Deferred.await(preparationInterrupted);
+              expect(executions).toEqual(["prepare-fleet"]);
+              expect(storedRun.cycles[0]?.e2eExecution?.preparation?.result).toBeNull();
+              expect(storedRun.cycles[0]?.e2eExecution?.results).toEqual([]);
+              return;
+            } else {
+              yield* reactor.reconcile();
+              expect(executions).toEqual(["prepare-fleet"]);
+              yield* Deferred.succeed(releasePreparation, undefined);
+            }
+          }
           yield* Deferred.await(settled);
           yield* reactor.drain;
+          if (preparation) {
+            if (scenario === "prepare-stale" || scenario === "prepare-config-changed") {
+              expect(storedRun.status).toBe("failed");
+              expect(storedRun.failure?.reason).toBe(
+                scenario === "prepare-stale" ? "workspace-stale" : "review-blocked",
+              );
+              expect(executions).toEqual(scenario === "prepare-stale" ? ["prepare-fleet"] : []);
+              expect(storedRun.cycles[0]?.e2eExecution?.results).toEqual([]);
+              return;
+            }
+            if (
+              scenario === "prepare-failed" ||
+              scenario === "prepare-timeout" ||
+              scenario === "prepare-recovered-failure"
+            ) {
+              expect(executions).toEqual(
+                scenario === "prepare-recovered-failure" ? [] : ["prepare-fleet"],
+              );
+              expect(storedRun.status).toBe("failed");
+              expect(storedRun.failure).toMatchObject({
+                reason: "review-blocked",
+                phase: "e2e",
+                retryable: false,
+              });
+              expect(storedRun.cyclesUsed).toBe(1);
+              expect(storedRun.cycles[0]?.e2eExecution?.results).toEqual([]);
+              expect(storedRun.cycles[0]?.e2eExecution?.preparation?.result?.status).toBe("failed");
+              expect(storedRun.failure?.detailMarkdown).toContain(
+                scenario === "prepare-timeout" ? "90 minute limit" : "preparation receipt",
+              );
+              return;
+            }
+            expect(executions.slice(0, -2)).toEqual(
+              scenario === "prepare-recovered"
+                ? ["check-fleet"]
+                : scenario === "prepare-paused"
+                  ? ["prepare-fleet", "prepare-fleet", "check-fleet"]
+                  : ["prepare-fleet", "check-fleet"],
+            );
+            expect(executions.slice(-2).toSorted()).toEqual(["suite-a", "suite-b"]);
+            expect(storedRun.status).toBe("passed");
+            expect(storedRun.cyclesUsed).toBe(1);
+            expect(storedRun.cycles[0]?.e2eExecution?.preparation?.result?.status).toBe("passed");
+            return;
+          }
+          if (noRepair) {
+            completePhase({
+              type: "app-review-repair-tickets",
+              runId: storedRun.id,
+              cycleNumber: 1,
+              tickets: [],
+            });
+            yield* reactor.reconcile();
+            expect(storedRun.cyclesUsed).toBe(1);
+            expect(storedRun.cycles.at(-1)?.repairTickets).toEqual([]);
+            expect(executions.toSorted()).toEqual(["suite-a", "suite-b"]);
+            expect(storedRun.status).toBe(scenario === "no-repair" ? "failed" : "exhausted");
+            if (scenario === "no-repair") {
+              expect(storedRun.failure).toMatchObject({
+                reason: "review-blocked",
+                phase: "e2e",
+                retryable: false,
+              });
+              expect(storedRun.failure?.detailMarkdown).toContain(
+                "The runner owner must prepare the matching fleet",
+              );
+              expect(storedRun.failure?.detailMarkdown).toContain("booking result");
+              yield* reactor.reconcile();
+              expect(storedRun.status).toBe("failed");
+              expect(storedRun.cyclesUsed).toBe(1);
+            }
+            return;
+          }
           if (scenario === "ticket-dirty-stack") {
             expect(storedRun.failure).toMatchObject({ reason: "embedded-worktree-dirty" });
             expect(storedRun.previewTargets).toEqual(initial.previewTargets);

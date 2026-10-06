@@ -631,8 +631,21 @@ function markDependentsReady(
 
 function automationStageForFailure(
   stage: NonNullable<OrchestrationImplementationRun["retryableFailure"]>["stage"] | undefined,
+  run: Pick<OrchestrationImplementationRun, "fixOrigin" | "activeValidationKind">,
 ): NonNullable<OrchestrationImplementationRun["automationHalt"]>["stage"] {
   switch (stage) {
+    case "fixer":
+      switch (run.fixOrigin) {
+        case "app-dev-stack":
+        case "app-review":
+          return "app-review";
+        case "code-review":
+          return "final-code-review";
+        case "merge-gate":
+          return run.activeValidationKind === "final" ? "final-code-review" : "integration";
+        default:
+          return "implementation";
+      }
     case "app-review":
     case "app-dev-stack":
       return "app-review";
@@ -777,17 +790,34 @@ export function isRecoverableInterruptedWorktreeHalt(
 
 function automationHaltMatchesRunRerun(input: {
   readonly halt: NonNullable<OrchestrationImplementationRun["automationHalt"]>;
+  readonly run: OrchestrationImplementationRun;
   readonly stage: OrchestrationImplementationRerunRunStage;
   readonly validationKind?: "integration" | "final" | null;
 }): boolean {
+  const failedRunFixer =
+    input.halt.ticketId === undefined &&
+    input.run.retryableFailure?.stage === "fixer" &&
+    input.run.retryableFailure.ticketId === undefined;
+  const halt = failedRunFixer
+    ? { ...input.halt, stage: automationStageForFailure("fixer", input.run) }
+    : input.halt;
+  // A full App Review supplies the acceptance evidence a final repair may lack.
+  if (
+    input.stage === "app-review" &&
+    failedRunFixer &&
+    input.run.fixOrigin === "merge-gate" &&
+    input.validationKind === "final" &&
+    halt.category === "retry-exhausted"
+  )
+    return true;
   if (
     input.stage === "merge-gate" &&
     input.validationKind === "final" &&
-    input.halt.ticketId === undefined &&
-    input.halt.stage === "final-code-review"
+    halt.ticketId === undefined &&
+    halt.stage === "final-code-review"
   )
     return true;
-  return implementationRerunTargetMatchesHalt(input.halt, {
+  return implementationRerunTargetMatchesHalt(halt, {
     kind: "run",
     stage: input.stage,
   });
@@ -851,8 +881,10 @@ export function implementationAppReviewNeedsCodeReviewRecovery(
     | "integrationHeadSha"
     | "appReviewExhaustedAt"
   >,
+  latestNestedRun?: Pick<AppReviewWorkflowRun, "status">,
 ): boolean {
   if (run.status !== "qa-reviewing" || run.appReviewStrategy !== "nested-workflow") return false;
+  if (latestNestedRun?.status === "running") return false;
   if (run.latestAppReviewWorkflowOutcome === "skipped") return true;
   return (
     (run.appReviewedHeadSha !== null && run.appReviewedHeadSha === run.integrationHeadSha) ||
@@ -1126,6 +1158,7 @@ function clearRunStageForRerun(input: {
       input.run.automationHalt !== null &&
       automationHaltMatchesRunRerun({
         halt: input.run.automationHalt,
+        run: input.run,
         stage: input.stage,
         validationKind: isLegacyFinalRegressionFailure(input.run)
           ? "final"
@@ -1166,13 +1199,42 @@ function clearRunStageForRerun(input: {
       };
     case "app-review":
       return {
-        ...withRepositoryHeads(base, "appReviewedHeadSha", null),
+        ...withRepositoryHeads(
+          withRepositoryHeads(
+            withRepositoryHeads(base, "appReviewedHeadSha", null),
+            "codeReviewedHeadSha",
+            null,
+          ),
+          "validatedHeadSha",
+          null,
+        ),
         status: "qa-reviewing" as const,
         activeAppReviewThreadId: null,
         activeAppReviewHeadSha: null,
         appReviewedHeadSha: null,
         appReviewExhaustedAt: null,
         latestAppReviewWorkflowOutcome: null,
+        qaAttemptCount: 0,
+        qaCycleCount: 0,
+        appReviewUnblockAttemptCount: 0,
+        qaExhaustedAt: null,
+        qaExhaustionReason: null,
+        activeFixerThreadId: null,
+        fixOrigin: null,
+        activeValidationKind: null,
+        activeValidationHeadSha: null,
+        activeValidatorThreadId: null,
+        mergeGateAttemptCount: 0,
+        validatedHeadSha: null,
+        finalValidation: null,
+        codeReviewedHeadSha: null,
+        activeCodeReviewHeadSha: null,
+        activeCodeReviewThreadId: null,
+        finalCodeReviewGeneration: input.run.finalCodeReviewGeneration + 1,
+        finalCodeReviewLaunchCount: 0,
+        finalCodeReviewPassCount: 0,
+        codeReviewExhaustedAt: null,
+        codeReviewExhaustionReason: null,
       };
     case "code-review":
       return {
@@ -2952,7 +3014,7 @@ const make = Effect.gen(function* () {
         automationStopped && input.recordAutomationHalt !== false
           ? {
               ...(input.ticketId === undefined ? {} : { ticketId: input.ticketId }),
-              stage: input.haltStage ?? automationStageForFailure(input.retryableStage),
+              stage: input.haltStage ?? automationStageForFailure(input.retryableStage, input.run),
               // An explicit category from the call site wins. `humanBlocked` says
               // who can clear the halt, not what kind of halt it is, and a caller
               // that has already named the kind should not have it overwritten.
@@ -6921,16 +6983,24 @@ const make = Effect.gen(function* () {
           yield* continueWithoutBrowserReview(readyRun);
           return;
         }
+        const controllerThreadId = yield* serverThreadId("app-review-orchestrator");
+        const appReviewWorkflowRunId = AppReviewWorkflowRunId.make(
+          `app-review-workflow-${controllerThreadId}`,
+        );
+        // Recovery can see the nested launch before this reactor consumes its
+        // event. Reserve ownership first so it cannot reap the new review.
         const claimed = yield* updateRun({
           sourceThreadId: input.sourceThreadId,
-          run: readyRun,
+          run: {
+            ...readyRun,
+            appReviewWorkflowRunIds: [...readyRun.appReviewWorkflowRunIds, appReviewWorkflowRunId],
+          },
           createdAt: input.createdAt,
         });
         if (!claimed) {
           yield* logSkippedLaunch({ runId: cycleRun.id, stage: "app-review" });
           return;
         }
-        const controllerThreadId = yield* serverThreadId("app-review-orchestrator");
         yield* orchestrationEngine.dispatch({
           type: "thread.app-review-workflow.launch",
           commandId: yield* serverCommandId("implementation-app-review-workflow-launch"),
@@ -11452,6 +11522,7 @@ const make = Effect.gen(function* () {
             })
           : !automationHaltMatchesRunRerun({
               halt: run.automationHalt,
+              run,
               stage: target.stage,
               validationKind: isLegacyFinalRegressionFailure(run)
                 ? "final"
@@ -12109,7 +12180,18 @@ const make = Effect.gen(function* () {
       return;
     }
     if (event.type === "thread.app-review-workflow-launched") {
-      yield* updateRun({ sourceThreadId, run: linkedRun, createdAt: event.occurredAt });
+      yield* updateRun({
+        sourceThreadId,
+        run: {
+          ...linkedRun,
+          appReviewedHeadSha: null,
+          appReviewExhaustedAt: null,
+          ...(run.qaExhaustionReason === "app-review"
+            ? { qaExhaustedAt: null, qaExhaustionReason: null }
+            : {}),
+        },
+        createdAt: event.occurredAt,
+      });
       return;
     }
     if (
@@ -14037,7 +14119,14 @@ const make = Effect.gen(function* () {
         ((activeReviewer.session?.status === "error" ||
           activeReviewer.session?.status === "stopped") &&
           !awaitingNudge(activeReviewer));
-      if (implementationAppReviewNeedsCodeReviewRecovery(run)) {
+      if (
+        implementationAppReviewNeedsCodeReviewRecovery(
+          run,
+          readModel.appReviewWorkflowRuns?.find(
+            (candidate) => candidate.id === run.appReviewWorkflowRunIds.at(-1),
+          ),
+        )
+      ) {
         const continuedRun: OrchestrationImplementationRun = {
           ...run,
           status: "code-reviewing",

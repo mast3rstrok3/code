@@ -229,6 +229,12 @@ export const AppReviewWorkflowCycle = Schema.Struct({
       id: TrimmedNonEmptyString,
       commands: Schema.Array(AppReviewRetryCommand),
       results: Schema.Array(AppReviewTestResult),
+      preparation: Schema.optionalKey(
+        Schema.Struct({
+          command: TrimmedNonEmptyString,
+          result: Schema.NullOr(AppReviewTestResult),
+        }),
+      ),
     }),
   ),
   e2eLaunchCount: Schema.optionalKey(NonNegativeInt),

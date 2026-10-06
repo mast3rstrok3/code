@@ -72,9 +72,24 @@ After all tickets reach a terminal result, the merge gate combines usable branch
 
 **App Review:** the same review loop reaches you three ways. Fast Feature and Implementation launch it automatically, you can choose **App Review** in the composer's workflow list, or you can launch it from the web or desktop App Review panel. The required review brief remains the acceptance boundary for every cycle.
 
-Each App Review starts with automated E2E commands. Ticket reviews use the exact suite selection saved during ticket planning. Standalone and Final App Reviews start with every `e2eCommands` entry in `t3.json`. The workflow captures exit codes and bounded output without an agent waiting for the tests. Failed tests go to gap analysis and repair threads, followed by a retry of the failed selections. Up to five test cycles run. Manual Browser App Review remains available on request.
+Each App Review starts with automated E2E commands. Ticket reviews use the exact suite selection saved during ticket planning. Standalone and Final App Reviews start with every `e2eCommands` entry in `t3.json`. The workflow captures exit codes and bounded output without an agent waiting for the tests. Failed tests go to gap analysis and repair threads, followed by a retry of the failed selections. Up to five test cycles run. If gap analysis finds no repair it can make, the review stops with the prerequisite and recovery instructions instead of reporting that its cycle budget ran out. Resolve the prerequisite and rerun acceptance. Manual Browser App Review remains available on request.
 
 Test commands run from the assigned worktree with `APP_REVIEW_PREVIEW_URL` set to its App Stack. Test commands and readiness checks also receive `APP_REVIEW_TEST_PLATFORMS`, a comma-separated list such as `web,android`. Configure your runner to test every selected platform and report omitted platforms as unrun. Reviews without a saved selection default to `web`. Put reusable setup in the repository's test scripts. Commands run sequentially by default. Set `e2eConcurrency: 2` only when the application suites isolate their mutable databases, accounts, setup and reports. `APP_REVIEW_EXECUTION_ID` identifies each execution. When the reviewed worktree has an App Stack serving that target, test commands also receive its ID as `APP_REVIEW_STACK_ID`. When the server holds Stacks controller access, test commands and locally launched agents receive `APP_DEV_STACK_API_URL` and `APP_DEV_STACK_API_TOKEN`, so a suite can request its own test fleet without a second copy of the token. Existing agent processes need to restart to pick up these variables. Commands default to a 45-minute limit. Set `e2eTimeoutMinutes` in `t3.json` to an integer from 1 to 180 for suites that need a different budget. Each command receives that budget as `APP_REVIEW_TEST_TIMEOUT_MS`; use it to save partial results and finish cleanup before the deadline. A command exceeding its limit fails with a timeout. Stopping the workflow cancels its test processes; recovery retains completed results and restarts unfinished commands. Older tickets need a structured suite selection before starting a new App Review.
+
+For suites that need builds or a prepared test fleet, configure `e2ePrepare` in `t3.json`:
+
+```json
+{
+  "e2ePrepare": {
+    "command": "node scripts/prepare-e2e-fleet.mjs",
+    "timeoutMinutes": 90
+  }
+}
+```
+
+Preparation runs once per E2E execution before readiness checks and acceptance commands. Its budget is separate from the test budget and defaults to 45 minutes, with a range of 1 to 180. Use an idempotent script that prepares targets owned by this review and stores builds and receipts in `APP_REVIEW_ARTIFACT_DIR`. Recovery retains completed preparation and retries interrupted preparation. A failed preparation blocks acceptance until you resolve the cause and rerun E2E. Preparation must leave the reviewed source unchanged. Verify the source revision and enough remaining target lifetime for tests and cleanup in your readiness script.
+
+Preparation, readiness checks, and test commands receive the same assigned preview URL, platforms, artifact directory, stack ID when available, and server-provided Stacks controller access. Keep long builds and provisioning in preparation; readiness checks have a 10-second limit.
 
 For tests that require a database or other service, configure `e2ePreflight` in `t3.json`:
 
@@ -87,7 +102,7 @@ For tests that require a database or other service, configure `e2ePreflight` in 
 }
 ```
 
-Supply a read-only readiness script that loads the same managed configuration as your tests and checks the services they actually use. T3 runs it in the reviewed worktree with `APP_REVIEW_PREVIEW_URL` set to the assigned target, before launching E2E tests or repair validation. Exit 0 allows the phase to start. Exit 1 or a 10-second timeout pauses it and retries only readiness once per minute, including after a server restart. A passing check resumes the same phase without spending another repair cycle. Other exit codes stop automatic checks. Keep credentials out of the command and blocker explanation; T3 discards command output. Changing the command or reviewed revision requires an explicit phase rerun. Stopping the workflow stops automatic checks. Projects without `e2ePreflight` retain agent-managed prerequisite checks.
+Supply a read-only readiness script that loads the same managed configuration as your tests and checks the services they actually use. T3 runs it in the reviewed worktree with `APP_REVIEW_PREVIEW_URL` set to the assigned target, before launching E2E tests or repair validation. Exit 0 allows the phase to start. Exit 1 or a 10-second timeout pauses it and retries only readiness once per minute, including after a server restart. A passing check resumes the same phase without spending another repair cycle. Other exit codes stop automatic checks. Keep credentials out of the command and blocker explanation; T3 discards command output. Changing the command or reviewed revision requires an explicit phase rerun. Stopping the workflow stops automatic checks. Projects without `e2ePreflight` start their configured commands without a readiness wait.
 
 Suites that need to reuse build artifacts receive `APP_REVIEW_ARTIFACT_DIR`, a persistent directory owned by the review run. Publish APKs, build recipes, checksums and qualification receipts there, then copy files into the test workspace and verify their checksums before reuse. This directory survives disposal of the review's stack and worktree. Files left only in temporary build directories do not.
 

@@ -127,6 +127,26 @@ export const T3ProjectFile = Schema.Struct({
         "Time limit for each App Review E2E command, default 45 minutes. APP_REVIEW_TEST_TIMEOUT_MS gives the runner the same budget so it can retain results and clean up before the deadline.",
     }),
   ),
+  e2ePrepare: Schema.optionalKey(
+    Schema.Struct({
+      command: trimmedNonEmpty(
+        {
+          description:
+            "Idempotent preparation command run before readiness checks and timed E2E suites. Prepare only targets owned by this review, using APP_REVIEW_ARTIFACT_DIR to retain builds and receipts. Interrupted preparation may run again after recovery.",
+        },
+        T3_PROJECT_FILE_VALIDATION_COMMAND_MAX_LENGTH,
+      ),
+      timeoutMinutes: Schema.optionalKey(
+        Schema.Number.check(
+          Schema.isInt(),
+          Schema.isBetween({ minimum: 1, maximum: 180 }),
+        ).annotate({
+          description:
+            "Preparation time limit, default 45 minutes, separate from e2eTimeoutMinutes.",
+        }),
+      ),
+    }),
+  ),
   e2ePreflight: Schema.optionalKey(
     Schema.Struct({
       command: trimmedNonEmpty(

@@ -9,6 +9,9 @@ describe("validatePlanningTicketFileChanges", () => {
         { path: "src/new.ts", action: "create" },
         { path: "src/current.ts", action: "update" },
         { path: "src/old.ts", action: "delete" },
+        { path: "apps/mobile/app/(app)/workspace/[...segments].tsx", action: "create" },
+        { path: "app/users/[id]/page.tsx", action: "update" },
+        { path: "app/docs/[[...slug]]/page.tsx", action: "delete" },
       ]),
     ).toBeNull();
   });
@@ -23,6 +26,8 @@ describe("validatePlanningTicketFileChanges", () => {
     [[{ path: "src/../file.ts", action: "update" as const }], "traversal"],
     [[{ path: "src/", action: "update" as const }], "exact file"],
     [[{ path: "src/*.ts", action: "update" as const }], "glob"],
+    [[{ path: "src/file?.ts", action: "update" as const }], "glob"],
+    [[{ path: "src/{one,two}.ts", action: "update" as const }], "glob"],
     [
       [
         { path: "src/file.ts", action: "update" as const },

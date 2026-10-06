@@ -554,6 +554,26 @@ it("continues a terminal nested App Review to Code Review instead of launching i
   ).toBe(false);
 });
 
+it("keeps a running replacement App Review ahead of historical completion markers", () => {
+  const base = {
+    status: "qa-reviewing",
+    appReviewStrategy: "nested-workflow",
+    latestAppReviewWorkflowOutcome: null,
+    appReviewedHeadSha: null,
+    integrationHeadSha: "current-head",
+    appReviewExhaustedAt: "2026-01-01T00:00:00.000Z",
+  } as const;
+
+  expect(implementationAppReviewNeedsCodeReviewRecovery(base, { status: "running" })).toBe(false);
+  expect(implementationAppReviewNeedsCodeReviewRecovery(base, { status: "exhausted" })).toBe(true);
+  expect(
+    implementationAppReviewNeedsCodeReviewRecovery(
+      { ...base, appReviewedHeadSha: "current-head", appReviewExhaustedAt: null },
+      { status: "running" },
+    ),
+  ).toBe(false);
+});
+
 it("serializes App Review and Code Review writers", () => {
   const run = {
     id: "implementation-run-1",
@@ -2660,6 +2680,308 @@ describe("ImplementationWorkflowReactor", () => {
       }),
     ),
   );
+
+  it.effect("keeps combined App Review owned before its launch event is consumed", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const dispatch = system.engine.dispatch;
+        const launchGate = vi.spyOn(system.engine, "dispatch").mockImplementation((command) =>
+          command.type === "thread.app-review-workflow.launch"
+            ? dispatch(command).pipe(
+                Effect.tap(() => Deferred.succeed(entered, undefined)),
+                Effect.tap(() => Deferred.await(release)),
+              )
+            : dispatch(command),
+        );
+        const launching = yield* Effect.forkChild(launchFastFeatureNestedReview(system));
+        yield* Deferred.await(entered);
+        yield* system.reactor
+          .recoverIncompleteStages()
+          .pipe(
+            Effect.ensuring(Deferred.succeed(release, undefined)),
+            Effect.ensuring(Effect.sync(() => launchGate.mockRestore())),
+          );
+        const { run, nestedRun } = yield* Fiber.join(launching);
+        const snapshot = yield* system.query.getSnapshot();
+        expect(snapshot.appReviewWorkflowRuns).toHaveLength(1);
+        expect(snapshot.appReviewWorkflowRuns?.[0]?.status).toBe("running");
+        expect(
+          snapshot.implementationRuns.find((candidate) => candidate.id === run.id)
+            ?.appReviewWorkflowRunIds,
+        ).toEqual([nestedRun.id]);
+      }),
+    ),
+  );
+
+  it.effect("keeps a replacement combined App Review active after an exhausted review", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, nestedRun } = yield* launchFastFeatureNestedReview(system);
+        const exhaustedAt = "2026-01-01T00:04:00.000Z";
+        yield* system.engine.dispatch({
+          type: "thread.app-review-workflow.update",
+          commandId: commandId("exhaust-old-combined-review"),
+          threadId: nestedRun.controllerThreadId,
+          run: {
+            ...nestedRun,
+            status: "exhausted",
+            outcome: "exhausted",
+            activePhase: null,
+            activeThreadId: null,
+            phaseExecution: null,
+            completedAt: exhaustedAt,
+            updatedAt: exhaustedAt,
+          },
+          createdAt: exhaustedAt,
+        });
+        yield* system.reactor.drain;
+        const halted = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (candidate) => candidate.id === run.id,
+        )!;
+        expect(halted.appReviewExhaustedAt).toBe(exhaustedAt);
+        const createdAt = "2026-01-01T00:05:00.000Z";
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("claim-replacement-combined-review"),
+          threadId: sourceThreadId,
+          run: {
+            ...halted,
+            status: "qa-reviewing",
+            automationHalt: null,
+            retryableFailure: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        });
+        const controllerThreadId = ThreadId.make("replacement-combined-review");
+        yield* system.engine.dispatch({
+          type: "thread.app-review-workflow.launch",
+          commandId: commandId("launch-replacement-combined-review"),
+          targetThreadId: nestedRun.targetThreadId,
+          controllerThreadId,
+          caller: nestedRun.caller,
+          briefMarkdown: nestedRun.briefMarkdown,
+          previewTargets: nestedRun.previewTargets,
+          workspaceRevision: nestedRun.workspaceRevision,
+          cycleBudget: nestedRun.cycleBudget,
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+          createdAt,
+        });
+        yield* system.reactor.drain;
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+        const snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns.find((candidate) => candidate.id === run.id)!;
+        expect(current.status).toBe("qa-reviewing");
+        expect(current.appReviewExhaustedAt).toBeNull();
+        expect(current.qaExhaustedAt).toBeNull();
+        expect(current.qaExhaustionReason).toBeNull();
+        expect(current.activeCodeReviewThreadId).toBeNull();
+        expect(
+          snapshot.appReviewWorkflowRuns?.find(
+            (candidate) => candidate.controllerThreadId === controllerThreadId,
+          )?.status,
+        ).toBe("running");
+        expect(
+          snapshot.appReviewWorkflowRuns?.find((candidate) => candidate.id === nestedRun.id)
+            ?.status,
+        ).toBe("exhausted");
+      }),
+    ),
+  );
+
+  it.effect("records an exhausted final regression fixer under final code review", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        const fixerThreadId = run.ticketStates[0]?.workerThreadId;
+        if (!fixerThreadId) throw new Error("Worker thread missing.");
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("final-fixer-retry-state"),
+          threadId: sourceThreadId,
+          run: {
+            ...run,
+            status: "fixing",
+            fixOrigin: "merge-gate",
+            activeValidationKind: "final",
+            activeFixerThreadId: fixerThreadId,
+            retryableFailure: {
+              stage: "fixer",
+              detail: "First repair failed.",
+              failedAt: now,
+              attemptCount: 1,
+              maxAttempts: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+              humanBlocked: false,
+            },
+          },
+          createdAt: now,
+        });
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("failed-final-fixer-result"),
+          threadId: fixerThreadId,
+          activity: {
+            id: eventId("failed-final-fixer-result"),
+            kind: "implementation-fix-result",
+            tone: "error",
+            summary: "Final repair failed",
+            payload: {
+              type: "implementation-fix-result",
+              runId: run.id,
+              status: "failed",
+              validations: [],
+              notesMarkdown: "Native acceptance evidence is missing.",
+            },
+            turnId: null,
+            createdAt: "2026-01-01T00:04:00.000Z",
+          },
+          createdAt: "2026-01-01T00:04:00.000Z",
+        });
+        yield* system.reactor.drain;
+        const halted = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (candidate) => candidate.id === run.id,
+        )!;
+        expect(halted.status).toBe("needs-human-attention");
+        expect(halted.automationHalt).toMatchObject({
+          stage: "final-code-review",
+          category: "retry-exhausted",
+        });
+      }),
+    ),
+  );
+
+  for (const [haltStage, haltCategory] of [
+    ["implementation", "retry-exhausted"],
+    ["final-code-review", "retry-exhausted"],
+    ["implementation", "structural-invariant"],
+  ] as const) {
+    it.effect(
+      `restarts App Review after a final repair halted under ${haltStage} ${haltCategory}`,
+      () =>
+        withSystem((system) =>
+          Effect.gen(function* () {
+            const { run, nestedRun } = yield* launchFastFeatureNestedReview(system);
+            const failedAt = "2026-01-01T00:04:00.000Z";
+            const validation = {
+              command: "native parity audit",
+              status: "failed" as const,
+              outputMarkdown: "Native acceptance evidence is missing.",
+              completedAt: failedAt,
+            };
+            yield* system.engine.dispatch({
+              type: "thread.app-review-workflow.update",
+              commandId: commandId("exhaust-review-before-final-repair"),
+              threadId: nestedRun.controllerThreadId,
+              run: {
+                ...nestedRun,
+                status: "exhausted",
+                outcome: "exhausted",
+                activePhase: null,
+                activeThreadId: null,
+                phaseExecution: null,
+                completedAt: failedAt,
+                updatedAt: failedAt,
+              },
+              createdAt: failedAt,
+            });
+            yield* system.reactor.drain;
+            const latest = (yield* system.query.getSnapshot()).implementationRuns.find(
+              (candidate) => candidate.id === run.id,
+            )!;
+            yield* system.engine.dispatch({
+              type: "thread.implementation-run.update",
+              commandId: commandId("halt-final-repair-with-missing-evidence"),
+              threadId: sourceThreadId,
+              run: {
+                ...latest,
+                status: "needs-human-attention",
+                fixOrigin: "merge-gate",
+                activeValidationKind: "final",
+                activeValidatorThreadId: null,
+                activeCodeReviewThreadId: null,
+                codeReviewedHeadSha: "previous-head",
+                validatedHeadSha: "previous-head",
+                finalCodeReviewPassCount: 5,
+                codeReviewExhaustedAt: failedAt,
+                codeReviewExhaustionReason: "Review cycles exhausted.",
+                finalValidation: validation,
+                finalValidationResults: [validation],
+                finalRegression: {
+                  checks: [{ command: validation.command, result: validation }],
+                  cycles: [
+                    { headSha: "previous-head", validations: [validation], completedAt: failedAt },
+                  ],
+                  reviewBaseSha: "previous-head",
+                },
+                retryableFailure: {
+                  stage: "fixer",
+                  detail: validation.outputMarkdown,
+                  failedAt,
+                  attemptCount: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+                  maxAttempts: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+                  humanBlocked: false,
+                },
+                automationHalt: {
+                  stage: haltStage,
+                  category: haltCategory,
+                  detail: validation.outputMarkdown,
+                  haltedAt: failedAt,
+                },
+                updatedAt: failedAt,
+              },
+              createdAt: failedAt,
+            });
+            yield* system.engine.dispatch({
+              type: "thread.implementation-run.rerun",
+              commandId: commandId("rerun-app-review-after-final-repair"),
+              threadId: sourceThreadId,
+              runId: run.id,
+              target: { kind: "run", stage: "app-review" },
+              createdAt: "2026-01-01T00:05:00.000Z",
+            });
+            yield* system.reactor.drain;
+            yield* system.reactor.recoverIncompleteStages();
+            yield* system.reactor.drain;
+            const snapshot = yield* system.query.getSnapshot();
+            const restarted = snapshot.implementationRuns.find(
+              (candidate) => candidate.id === run.id,
+            )!;
+            if (haltCategory === "structural-invariant") {
+              expect(restarted.status).toBe("needs-human-attention");
+              expect(restarted.automationHalt?.category).toBe("structural-invariant");
+              expect(
+                snapshot.appReviewWorkflowRuns?.filter(
+                  (candidate) => candidate.status === "running",
+                ),
+              ).toHaveLength(0);
+              return;
+            }
+            expect(restarted.status).toBe("qa-reviewing");
+            expect(restarted.automationHalt).toBeNull();
+            expect(restarted.retryableFailure).toBeNull();
+            expect(restarted.activeValidationKind).toBeNull();
+            expect(restarted.activeFixerThreadId).toBeNull();
+            expect(restarted.codeReviewedHeadSha).toBeNull();
+            expect(restarted.validatedHeadSha).toBeNull();
+            expect(restarted.finalCodeReviewPassCount).toBe(0);
+            expect(restarted.codeReviewExhaustedAt).toBeNull();
+            expect(restarted.finalValidationResults).toEqual([validation]);
+            expect(restarted.ticketStates).toEqual(latest.ticketStates);
+            expect(
+              snapshot.appReviewWorkflowRuns?.find((candidate) => candidate.id === nestedRun.id)
+                ?.status,
+            ).toBe("exhausted");
+            expect(
+              snapshot.appReviewWorkflowRuns?.filter((candidate) => candidate.status === "running"),
+            ).toHaveLength(1);
+            expect(restarted.appReviewWorkflowRunIds.at(-1)).not.toBe(nestedRun.id);
+          }),
+        ),
+    );
+  }
 
   it.effect("reconnects a halted Fast Feature run to its manually rerun App Review thread", () =>
     withSystem((system) =>

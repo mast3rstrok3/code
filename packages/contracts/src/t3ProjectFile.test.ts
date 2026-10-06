@@ -6,6 +6,26 @@ import { T3ProjectFile } from "./t3ProjectFile.ts";
 const decode = Schema.decodeUnknownSync(T3ProjectFile);
 
 describe("T3ProjectFile", () => {
+  it("accepts an optional preparation command with a separate bounded budget", () => {
+    expect(decode({}).e2ePrepare).toBeUndefined();
+    expect(
+      decode({ e2ePrepare: { command: " node scripts/prepare-e2e.mjs " } }).e2ePrepare,
+    ).toEqual({
+      command: "node scripts/prepare-e2e.mjs",
+    });
+    for (const timeoutMinutes of [1, 45, 180]) {
+      expect(
+        decode({ e2ePrepare: { command: "prepare", timeoutMinutes } }).e2ePrepare?.timeoutMinutes,
+      ).toBe(timeoutMinutes);
+    }
+    for (const invalid of [
+      { command: " " },
+      { command: "x".repeat(513) },
+      ...[0, 181, 1.5, "45"].map((timeoutMinutes) => ({ command: "prepare", timeoutMinutes })),
+    ]) {
+      expect(() => decode({ e2ePrepare: invalid })).toThrow();
+    }
+  });
   it("accepts bounded E2E timeouts and preserves the default when omitted", () => {
     expect(decode({}).e2eTimeoutMinutes).toBeUndefined();
     for (const minutes of [1, 45, 120, 180]) {

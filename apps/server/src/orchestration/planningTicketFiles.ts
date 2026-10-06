@@ -1,7 +1,8 @@
 import type { OrchestrationPlanningFileChange } from "@t3tools/contracts";
 
 const VALID_ACTIONS = new Set(["create", "update", "delete"]);
-const GLOB_PATTERN = /[*?[\]{}]/;
+// Brackets are literal characters in framework route filenames.
+const GLOB_PATTERN = /[*?{}]/;
 const WINDOWS_DRIVE_PATTERN = /^[a-zA-Z]:/;
 
 export function validatePlanningTicketFileChanges(

@@ -2104,6 +2104,26 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const testContextForRun = Effect.fn("AppReviewWorkflowReactor.testContextForRun")(function* (
+    run: AppReviewWorkflowRun,
+    cwd: string,
+  ) {
+    const previewUrl = run.previewTargets[0] ?? null;
+    const lookup = yield* appStackManager
+      .getByWorktree({ worktreePath: cwd })
+      .pipe(Effect.orElseSucceed(() => null));
+    return {
+      previewUrl,
+      stackId: appReviewStackIdForTarget({ lookup, previewUrl }),
+      testPlatforms: run.testPlatforms,
+      env: e2eEnvironment,
+      artifactsDir:
+        serverConfig === undefined
+          ? undefined
+          : appReviewBuildArtifactsDir(path, serverConfig.stateDir, run.id),
+    };
+  });
+
   const checkPrerequisites = Effect.fn("AppReviewWorkflowReactor.checkPrerequisites")(function* (
     run: AppReviewWorkflowRun,
     cwd: string,
@@ -2114,8 +2134,7 @@ const make = Effect.gen(function* () {
     const result = yield* runAppReviewPreflight({
       command: config.command,
       cwd,
-      previewUrl: run.previewTargets[0] ?? null,
-      testPlatforms: run.testPlatforms,
+      ...(yield* testContextForRun(run, cwd)),
     });
     const workspaceRevision =
       result === "waiting" ? yield* computeWorkspaceRevision(cwd) : run.workspaceRevision;
@@ -2411,9 +2430,13 @@ const make = Effect.gen(function* () {
       if (!execution || testProcesses.has(run.id)) return;
       const target = yield* resolveTarget(run.targetThreadId);
       if (target === null) return;
-      if (!preflightPassed && !(yield* checkPrerequisites(run, target.cwd, "e2e"))) return;
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const current = readModel.appReviewWorkflowRuns?.find((entry) => entry.id === run.id);
       if (
+        current?.status !== "running" ||
+        current.activePhase !== "e2e" ||
+        current.updatedAt !== run.updatedAt ||
+        current.cycles.at(-1)?.e2eExecution?.id !== execution.id ||
         isWorkflowThreadPaused(readModel.threads, run.controllerThreadId) ||
         appReviewWaitsForAdmission(run, readModel)
       )
@@ -2426,12 +2449,101 @@ const make = Effect.gen(function* () {
       const config = yield* projectFileLoader.loadStrict(target.cwd);
       const projectFile = Option.getOrUndefined(config);
       const concurrency = run.serialE2e ? 1 : (projectFile?.e2eConcurrency ?? 1);
-      const previewUrl = run.previewTargets[0] ?? null;
-      // A lookup failure only costs the suite its stack ID, never the test run.
-      const stackLookup = yield* appStackManager
-        .getByWorktree({ worktreePath: target.cwd })
-        .pipe(Effect.orElseSucceed(() => null));
-      const stackId = appReviewStackIdForTarget({ lookup: stackLookup, previewUrl });
+      const context = yield* testContextForRun(run, target.cwd);
+      const preparation = projectFile?.e2ePrepare;
+      if (
+        execution.preparation !== undefined &&
+        preparation?.command !== execution.preparation.command
+      ) {
+        yield* failRun({
+          run,
+          reason: "review-blocked",
+          retryable: false,
+          detailMarkdown:
+            "The E2E preparation command changed. Rerun E2E to accept the new configuration.",
+          occurredAt: yield* nowIso,
+        });
+        return;
+      }
+      const previousPreparation = execution.preparation?.result;
+      if (previousPreparation?.status === "failed") {
+        yield* failRun({
+          run,
+          reason: "review-blocked",
+          retryable: false,
+          detailMarkdown: `E2E preparation failed before acceptance tests ran.\n\n${previousPreparation.outputMarkdown}\n\nResolve the preparation prerequisite, then rerun E2E in the Workflows panel.`,
+          occurredAt: yield* nowIso,
+        });
+        return;
+      }
+      if (preparation !== undefined && previousPreparation?.status !== "passed") {
+        const claimedCycle = {
+          ...cycle,
+          e2eExecution: {
+            ...execution,
+            preparation: { command: preparation.command, result: null },
+          },
+        };
+        const before = yield* readWorkspace(target.cwd);
+        const latest = yield* projectionSnapshotQuery.getCommandReadModel();
+        const latestRun = latest.appReviewWorkflowRuns?.find((entry) => entry.id === run.id);
+        if (
+          latestRun?.status !== "running" ||
+          latestRun.activePhase !== "e2e" ||
+          latestRun.updatedAt !== run.updatedAt ||
+          latestRun.cycles.at(-1)?.e2eExecution?.id !== execution.id ||
+          isWorkflowThreadPaused(latest.threads, run.controllerThreadId) ||
+          appReviewWaitsForAdmission(run, latest)
+        )
+          return;
+        yield* updateRun({
+          ...run,
+          cycles: run.cycles.map((entry) =>
+            entry.cycleNumber === cycle.cycleNumber ? claimedCycle : entry,
+          ),
+        });
+        const fiber = yield* Effect.forkIn(
+          runAppReviewTest({
+            command: preparation.command,
+            retryCommand: preparation.command,
+            cwd: target.cwd,
+            ...context,
+            executionId: execution.id,
+            recordingsDir:
+              serverConfig === undefined
+                ? undefined
+                : appReviewTestRecordingsDir(path, serverConfig.stateDir, run.id),
+            timeoutMinutes: preparation.timeoutMinutes,
+          }).pipe(
+            Effect.flatMap((result) =>
+              restoreE2eWrites(target.cwd, before).pipe(
+                Effect.tapError((error) =>
+                  Effect.logWarning("Preparation worktree writes not restored", error),
+                ),
+                Effect.orElseSucceed(() => null),
+                Effect.map((note) =>
+                  note === null
+                    ? result
+                    : { ...result, outputMarkdown: `${note}\n\n${result.outputMarkdown}` },
+                ),
+              ),
+            ),
+            Effect.flatMap((result) =>
+              worker.enqueue({
+                kind: "test-result",
+                preparation: true,
+                runId: run.id,
+                executionId: execution.id,
+                result,
+              }),
+            ),
+          ),
+          scope,
+        );
+        testProcesses.set(run.id, { id: execution.id, fiber });
+        return;
+      }
+      if (!preflightPassed && !(yield* checkPrerequisites(run, target.cwd, "e2e"))) return;
       // Without a baseline nothing is restored, and the stale check judges the writes.
       const before = yield* readWorkspace(target.cwd).pipe(
         Effect.tapError((error) => Effect.logWarning("E2E workspace baseline unavailable", error)),
@@ -2444,19 +2556,12 @@ const make = Effect.gen(function* () {
             runAppReviewTest({
               ...selection,
               cwd: target.cwd,
-              previewUrl,
-              stackId,
-              testPlatforms: run.testPlatforms,
+              ...context,
               executionId: execution.id,
               recordingsDir:
                 serverConfig === undefined
                   ? undefined
                   : appReviewTestRecordingsDir(path, serverConfig.stateDir, run.id),
-              env: e2eEnvironment,
-              artifactsDir:
-                serverConfig === undefined
-                  ? undefined
-                  : appReviewBuildArtifactsDir(path, serverConfig.stateDir, run.id),
               timeoutMinutes: projectFile?.e2eTimeoutMinutes,
             }).pipe(
               Effect.flatMap((result) =>
@@ -3580,10 +3685,8 @@ ${result.outputMarkdown}`,
   /**
    * End a cycle that has no repair to run.
    *
-   * Review-only runs stop after writing their tickets. A valid empty ticket
-   * result also stops here because gap analysis found no in-scope repair. The
-   * cycle completed its contract, while the non-passing review remains visible
-   * as an exhausted run instead of an automation failure.
+   * Review-only runs stop after writing their tickets. An empty repair plan
+   * leaves acceptance blocked and preserves the planner's recovery instructions.
    */
   const finishWithoutFixing = Effect.fn("AppReviewWorkflowReactor.finishWithoutFixing")(
     function* (input: {
@@ -3613,6 +3716,34 @@ ${result.outputMarkdown}`,
         ),
         updatedAt: input.occurredAt,
       };
+      if (input.repairTickets.length === 0 && input.run.reviewOnly !== true) {
+        const planner = yield* resolveThread(cycle.plannerThreadId ?? cycle.reviewerThreadId);
+        const explanation = planner?.messages
+          .filter(
+            (message) => message.role === "assistant" && message.turnId === input.plannerTurnId,
+          )
+          .map((message) => message.text.trim())
+          .filter(Boolean)
+          .join("\n\n");
+        yield* failRun({
+          run: {
+            ...reviewedRun,
+            activePhase: cycle.e2eExecution || cycle.appReviewScope === "e2e" ? "e2e" : "review",
+          },
+          reason: "review-blocked",
+          retryable: false,
+          detailMarkdown: [
+            "Acceptance remains unverified. Gap analysis found no repair that can run in this worktree.",
+            explanation,
+            cycle.actionableFindingsMarkdown,
+            "Resolve the recorded prerequisites, then rerun the acceptance phase in the Workflows panel. Completed repairs remain available.",
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
+          occurredAt: input.occurredAt,
+        });
+        return;
+      }
       yield* updateRun(reviewedRun);
       yield* finishExhausted(reviewedRun, input.occurredAt);
     },
@@ -4739,8 +4870,7 @@ ${result.outputMarkdown}`,
       const result = yield* runAppReviewPreflight({
         command: config.command,
         cwd: target.cwd,
-        previewUrl: check.previewUrl,
-        testPlatforms: run.testPlatforms,
+        ...(yield* testContextForRun(run, target.cwd)),
       });
       const workspaceRevision =
         result === "ready" ? yield* computeWorkspaceRevision(target.cwd) : null;
@@ -4868,6 +4998,7 @@ ${result.outputMarkdown}`,
     | { readonly kind: "reconcile" }
     | {
         readonly kind: "test-result";
+        readonly preparation?: boolean;
         readonly runId: string;
         readonly executionId: string;
         readonly result: AppReviewTestResult;
@@ -4886,14 +5017,18 @@ ${result.outputMarkdown}`,
       cycle?.e2eExecution?.id !== item.executionId ||
       isWorkflowThreadPaused(readModel.threads, run.controllerThreadId) ||
       appReviewWaitsForAdmission(run, readModel) ||
-      !cycle.e2eExecution.commands.some(
-        (selection) =>
-          selection.command === item.result.command &&
-          selection.retryCommand === item.result.executedCommand,
-      ) ||
-      completedAppReviewTests(cycle.e2eExecution).some(
-        (result) => result.command === item.result.command,
-      )
+      (item.preparation
+        ? cycle.e2eExecution.preparation?.command !== item.result.command ||
+          item.result.executedCommand !== item.result.command ||
+          cycle.e2eExecution.preparation.result !== null
+        : !cycle.e2eExecution.commands.some(
+            (selection) =>
+              selection.command === item.result.command &&
+              selection.retryCommand === item.result.executedCommand,
+          ) ||
+          completedAppReviewTests(cycle.e2eExecution).some(
+            (result) => result.command === item.result.command,
+          ))
     )
       return;
     const updated = {
@@ -4904,7 +5039,9 @@ ${result.outputMarkdown}`,
               ...entry,
               e2eExecution: {
                 ...cycle.e2eExecution!,
-                results: [...cycle.e2eExecution!.results, item.result],
+                ...(item.preparation
+                  ? { preparation: { command: item.result.command, result: item.result } }
+                  : { results: [...cycle.e2eExecution!.results, item.result] }),
               },
             }
           : entry,
@@ -4912,6 +5049,17 @@ ${result.outputMarkdown}`,
       updatedAt: item.result.completedAt,
     };
     yield* updateRun(updated);
+    if (item.preparation) {
+      testProcesses.delete(run.id);
+      if (item.result.status === "passed") {
+        const target = yield* resolveTarget(updated.targetThreadId);
+        if (
+          target === null ||
+          !(yield* assertStableRevision(updated, target.cwd, item.result.completedAt))
+        )
+          return;
+      }
+    }
     if (!(yield* isDraining)) yield* reconcileE2e(updated, item.result.completedAt);
   });
 
