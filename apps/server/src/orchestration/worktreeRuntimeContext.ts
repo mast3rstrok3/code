@@ -1,4 +1,9 @@
-import type { AppStackByWorktreeResult, WorkflowPreset } from "@t3tools/contracts";
+import type {
+  AppStackByWorktreeResult,
+  OrchestrationProjectShell,
+  OrchestrationThreadShell,
+  WorkflowPreset,
+} from "@t3tools/contracts";
 import {
   appStackVariantForComposePath,
   appStackServiceBlocksReadiness,
@@ -14,9 +19,84 @@ const WORKFLOWS_WITH_EARLY_APP_STACK = new Set<WorkflowPreset>([
   "fast-plan",
 ]);
 
+/** What Git reports for the workspace at turn start. */
+export interface WorkspaceCheckout {
+  readonly isRepo: boolean;
+  /** The checked-out branch, or null on a detached HEAD. */
+  readonly branch: string | null;
+}
+
+/** Threads that worked within this window still count as using their checkout. */
+const SHARED_WORKSPACE_ACTIVITY_WINDOW_MS = 24 * 60 * 60 * 1_000;
+
+const normalizeWorkspacePath = (workspacePath: string) => workspacePath.trim().replace(/\/+$/, "");
+
+function lastActivityMs(thread: OrchestrationThreadShell): number {
+  const stamps = [
+    thread.latestUserMessageAt,
+    thread.latestTurn?.requestedAt,
+    thread.latestTurn?.startedAt,
+    thread.latestTurn?.completedAt,
+  ];
+  return Math.max(
+    0,
+    ...stamps.map((stamp) => (stamp == null ? 0 : Date.parse(stamp))).filter(Number.isFinite),
+  );
+}
+
+/**
+ * Titles of other active threads whose workspace is `workspacePath`: a thread
+ * without a worktree works in its project's root. Active means not archived or
+ * settled, and running a turn or active within the last day. Two threads of
+ * workflows never count against each other, because the workflow reactors
+ * already decide which of them may write.
+ */
+export function activeThreadsSharingWorkspace(input: {
+  readonly thread: Pick<OrchestrationThreadShell, "id" | "workflowContext">;
+  readonly workspacePath: string;
+  readonly threads: ReadonlyArray<OrchestrationThreadShell>;
+  readonly projects: ReadonlyArray<Pick<OrchestrationProjectShell, "id" | "workspaceRoot">>;
+  readonly nowMs: number;
+}): ReadonlyArray<string> {
+  const target = normalizeWorkspacePath(input.workspacePath);
+  const roots = new Map(input.projects.map((project) => [project.id, project.workspaceRoot]));
+  const isWorkflowThread = (thread: Pick<OrchestrationThreadShell, "workflowContext">) =>
+    thread.workflowContext != null;
+  return input.threads
+    .filter((other) => {
+      if (other.id === input.thread.id) return false;
+      if (other.archivedAt !== null) return false;
+      if (other.settledAt !== null || other.settledOverride === "settled") return false;
+      if (isWorkflowThread(input.thread) && isWorkflowThread(other)) return false;
+      const otherWorkspace = other.worktreePath ?? roots.get(other.projectId);
+      if (otherWorkspace === undefined || normalizeWorkspacePath(otherWorkspace) !== target) {
+        return false;
+      }
+      return (
+        other.latestTurn?.state === "running" ||
+        input.nowMs - lastActivityMs(other) <= SHARED_WORKSPACE_ACTIVITY_WINDOW_MS
+      );
+    })
+    .map((other) => other.title);
+}
+
+function gitBranchLine(recorded: string | null, checkout: WorkspaceCheckout | null): string {
+  if (checkout === null) return `- Git branch: ${recorded ?? "unknown"}`;
+  if (!checkout.isRepo) return "- Git branch: none (not a Git repository)";
+  const current = checkout.branch ?? "detached HEAD";
+  return recorded !== null && recorded !== current
+    ? `- Git branch: ${current} (this thread was started on '${recorded}')`
+    : `- Git branch: ${current}`;
+}
+
 export function buildWorktreeRuntimeContext(input: {
   readonly worktreePath: string;
+  /** The branch recorded on the thread. */
   readonly branch: string | null;
+  /** The live checkout, or null when Git could not be asked. */
+  readonly checkout?: WorkspaceCheckout | null;
+  /** Titles of other active threads working in the same checkout. */
+  readonly sharedWithThreadTitles?: ReadonlyArray<string>;
   readonly workflowPreset: WorkflowPreset | null;
   readonly stackLookup: AppStackByWorktreeResult | null;
   readonly setupFailureDetail?: string | null;
@@ -79,12 +159,25 @@ export function buildWorktreeRuntimeContext(input: {
     ];
   })();
 
+  const sharedWith = input.sharedWithThreadTitles ?? [];
+  const sharedLines =
+    sharedWith.length === 0
+      ? []
+      : [
+          `- Shared checkout: ${sharedWith.length} other active thread(s) also work here: ${sharedWith
+            .slice(0, 3)
+            .map((title) => JSON.stringify(title))
+            .join(", ")}${sharedWith.length > 3 ? ", ..." : ""}`,
+          "Another thread is working in this checkout. Do not create, switch, or reset branches here, and do not stash or rebase. If this task needs its own branch, create a separate git worktree for it and work there.",
+        ];
+
   return [
     "<worktree-runtime-context>",
     "This block is generated from current orchestration state at turn start and is authoritative.",
     "It replaces earlier runtime context in this conversation. An earlier unavailable status does not apply when this block reports a running stack.",
     `- Worktree path: ${input.worktreePath}`,
-    `- Git branch: ${input.branch ?? "rename pending"}`,
+    gitBranchLine(input.branch, input.checkout ?? null),
+    ...sharedLines,
     ...stackLines,
     ...(stack?.services?.some(isAppStackDeviceService)
       ? [

@@ -1,6 +1,121 @@
+import {
+  DEFAULT_WORKSPACE_USER_ID,
+  type OrchestrationThreadShell,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+  TurnId,
+  WorkflowId,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildWorktreeRuntimeContext } from "./worktreeRuntimeContext.ts";
+import {
+  activeThreadsSharingWorkspace,
+  buildWorktreeRuntimeContext,
+} from "./worktreeRuntimeContext.ts";
+
+const now = "2026-10-06T12:00:00.000Z";
+const projectId = ProjectId.make("project-rudi");
+const projects = [{ id: projectId, workspaceRoot: "/repos/rudi" }];
+
+const threadShell = (
+  id: string,
+  overrides: Partial<OrchestrationThreadShell> = {},
+): OrchestrationThreadShell => ({
+  id: ThreadId.make(id),
+  projectId,
+  ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+  parentThreadId: null,
+  workflowRole: null,
+  title: id,
+  modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  branch: null,
+  worktreePath: null,
+  pullRequests: [],
+  latestTurn: null,
+  createdAt: now,
+  updatedAt: now,
+  archivedAt: null,
+  settledOverride: null,
+  settledAt: null,
+  session: null,
+  latestUserMessageAt: now,
+  hasPendingApprovals: false,
+  hasPendingUserInput: false,
+  hasActionableProposedPlan: false,
+  ...overrides,
+});
+
+const sharing = (
+  thread: OrchestrationThreadShell,
+  others: ReadonlyArray<OrchestrationThreadShell>,
+  workspacePath = "/repos/rudi",
+) =>
+  activeThreadsSharingWorkspace({
+    thread,
+    workspacePath,
+    threads: [thread, ...others],
+    projects,
+    nowMs: Date.parse(now),
+  });
+
+describe("activeThreadsSharingWorkspace", () => {
+  it("finds another active local thread in the project root", () => {
+    expect(sharing(threadShell("me"), [threadShell("approvals")])).toEqual(["approvals"]);
+  });
+
+  it("matches worktree paths and ignores threads in other worktrees", () => {
+    const me = threadShell("me", { worktreePath: "/worktrees/rudi/a" });
+    expect(
+      sharing(
+        me,
+        [
+          threadShell("same", { worktreePath: "/worktrees/rudi/a/" }),
+          threadShell("other", { worktreePath: "/worktrees/rudi/b" }),
+          threadShell("root"),
+        ],
+        "/worktrees/rudi/a",
+      ),
+    ).toEqual(["same"]);
+  });
+
+  it("ignores archived, settled, and idle threads but keeps a running one", () => {
+    const dayAgo = "2026-10-05T11:00:00.000Z";
+    const idleTurn = {
+      turnId: TurnId.make("turn-1"),
+      state: "completed" as const,
+      requestedAt: dayAgo,
+      startedAt: dayAgo,
+      completedAt: dayAgo,
+      assistantMessageId: null,
+    };
+    expect(
+      sharing(threadShell("me"), [
+        threadShell("archived", { archivedAt: now }),
+        threadShell("settled", { settledAt: now }),
+        threadShell("idle", { latestUserMessageAt: dayAgo, latestTurn: idleTurn }),
+        threadShell("running", {
+          latestUserMessageAt: dayAgo,
+          latestTurn: { ...idleTurn, state: "running", completedAt: null },
+        }),
+      ]),
+    ).toEqual(["running"]);
+  });
+
+  it("lets threads of workflows share a worktree with each other", () => {
+    const workflowContext = {
+      workflowId: WorkflowId.make("workflow-1"),
+      rootThreadId: ThreadId.make("root"),
+      ticketScope: [],
+    };
+    const worker = threadShell("worker", { worktreePath: "/w", workflowContext });
+    const reviewer = threadShell("reviewer", { worktreePath: "/w", workflowContext });
+    const user = threadShell("user", { worktreePath: "/w" });
+    expect(sharing(worker, [reviewer, user], "/w")).toEqual(["user"]);
+  });
+});
 
 describe("buildWorktreeRuntimeContext", () => {
   it("marks workflow stacks as pending until workspace dependencies are ready", () => {
@@ -125,5 +240,53 @@ describe("buildWorktreeRuntimeContext", () => {
     expect(context).toContain("App Stack status: starting");
     expect(context).toContain("Until this worktree's App Stack is healthy");
     expect(context).not.toContain("only authoritative runtime and browser target");
+  });
+
+  it("reports the checked-out branch and the branch the thread started on", () => {
+    const base = {
+      worktreePath: "/repos/rudi",
+      workflowPreset: null,
+      stackLookup: { stack: null, frontendUrl: null, frontendServiceName: null },
+    };
+    expect(
+      buildWorktreeRuntimeContext({
+        ...base,
+        branch: "dev",
+        checkout: { isRepo: true, branch: "plain-language-approvals" },
+      }),
+    ).toContain("- Git branch: plain-language-approvals (this thread was started on 'dev')");
+    expect(
+      buildWorktreeRuntimeContext({
+        ...base,
+        branch: null,
+        checkout: { isRepo: false, branch: null },
+      }),
+    ).toContain("- Git branch: none (not a Git repository)");
+    expect(
+      buildWorktreeRuntimeContext({
+        ...base,
+        branch: null,
+        checkout: { isRepo: true, branch: null },
+      }),
+    ).toContain("- Git branch: detached HEAD");
+    expect(buildWorktreeRuntimeContext({ ...base, branch: null, checkout: null })).toContain(
+      "- Git branch: unknown",
+    );
+  });
+
+  it("warns against branch changes in a checkout another thread is using", () => {
+    const context = buildWorktreeRuntimeContext({
+      worktreePath: "/repos/rudi",
+      branch: "dev",
+      workflowPreset: null,
+      stackLookup: { stack: null, frontendUrl: null, frontendServiceName: null },
+      sharedWithThreadTitles: ["Plain-language approvals"],
+    });
+
+    expect(context).toContain(
+      '- Shared checkout: 1 other active thread(s) also work here: "Plain-language approvals"',
+    );
+    expect(context).toContain("Do not create, switch, or reset branches here");
+    expect(context).toContain("create a separate git worktree");
   });
 });
