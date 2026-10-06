@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - bundle worktree tests build real git checkouts on disk.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
