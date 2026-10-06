@@ -3100,11 +3100,22 @@ const make = Effect.gen(function* () {
           detail: `Dependency ticket '${input.ticketId}' does not have a successful committed branch.`,
         });
       }
+      // Once a completed run deleted the branch, the commit it recorded stands
+      // in for it, so a rerun or a later gate still finds the ticket's work.
+      const deletedBranchCommitSha = state.deletedBranchCommitSha ?? null;
       const [resolved, reported] = yield* Effect.all([
-        gitWorkflow.resolveCommit({
-          cwd,
-          ref: state.branch,
-        }),
+        gitWorkflow
+          .resolveCommit({
+            cwd,
+            ref: state.branch,
+          })
+          .pipe(
+            Effect.catch((error) =>
+              deletedBranchCommitSha === null
+                ? Effect.fail(error)
+                : gitWorkflow.resolveCommit({ cwd, ref: deletedBranchCommitSha }),
+            ),
+          ),
         gitWorkflow.resolveCommit({
           cwd,
           ref: state.workerResult.commitSha,
@@ -3507,7 +3518,7 @@ const make = Effect.gen(function* () {
         cwd: repository?.worktreePath ?? input.run.orchestratorWorktreePath,
         branch: plannedWorker.branch,
         path: plannedWorker.worktreePath,
-        startRef: worktreeStartRef,
+        startRef: existing.deletedBranchCommitSha ?? worktreeStartRef,
         baseRefName: repository?.baseBranch ?? input.run.baseBranch,
       });
     }
@@ -4864,13 +4875,14 @@ const make = Effect.gen(function* () {
     if (Option.isSome(existing)) return;
     // The claim records the branch before `createWorker` creates it, so a server
     // that died in that window leaves a ticket whose branch is named but absent.
-    // Restoring has to be able to create it, not only attach to it.
+    // Restoring has to be able to create it, not only attach to it. A branch
+    // that completion cleanup deleted comes back at the commit it recorded.
     const repository = ticketRunRepository(input.run, input.ticketId);
     yield* ensureTicketWorktree({
       cwd: repository?.worktreePath ?? input.run.orchestratorWorktreePath,
       branch: state.branch,
       path: state.worktreePath,
-      startRef: input.run.orchestratorBranch,
+      startRef: state.deletedBranchCommitSha ?? input.run.orchestratorBranch,
       baseRefName: repository?.baseBranch ?? input.run.baseBranch,
     });
   });
@@ -7558,6 +7570,7 @@ const make = Effect.gen(function* () {
     });
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     yield* teardownWorkflowStacks({ readModel, run: completedRun, createdAt: input.createdAt });
+    yield* deleteIntegratedTicketBranches({ run: completedRun, createdAt: input.createdAt });
   });
 
   const startChangeRequestBabysitter = Effect.fn(
@@ -12413,6 +12426,142 @@ const make = Effect.gen(function* () {
     },
   );
 
+  /** Ticket branches this process already deleted or decided to keep. */
+  const settledTicketBranches = new Set<string>();
+
+  /**
+   * Deletes the local branch of each ticket a completed run integrated. A branch
+   * goes only once its worktree is gone, while it still points at the accepted
+   * commit, and when the run's branch contains it; `git branch -d` checks the
+   * merge again. Every other branch is kept and logged once per process. The
+   * deleted commit is recorded so a rerun can recreate the branch.
+   */
+  const deleteIntegratedTicketBranches = Effect.fn(
+    "ImplementationWorkflowReactor.deleteIntegratedTicketBranches",
+  )(function* (input: {
+    readonly run: OrchestrationImplementationRun;
+    readonly createdAt: string;
+  }) {
+    const { run } = input;
+    if (run.status !== "completed") return;
+    const results = yield* Effect.forEach(
+      run.ticketStates,
+      (state) =>
+        Effect.gen(function* () {
+          const acceptedCommitSha =
+            state.workerResult?.status === "succeeded" ? state.workerResult.commitSha : null;
+          if (
+            state.status !== "succeeded" ||
+            state.branch === null ||
+            acceptedCommitSha === null ||
+            state.branch === run.orchestratorBranch ||
+            isTicketSkipped(run.skips, state.ticketId) ||
+            state.deletedBranchCommitSha === acceptedCommitSha ||
+            (state.worktreePath !== null &&
+              normalizeWorkflowWorktreePath(state.worktreePath) ===
+                normalizeWorkflowWorktreePath(run.orchestratorWorktreePath))
+          ) {
+            return null;
+          }
+          const key = `${run.id}:${state.ticketId}:${acceptedCommitSha}`;
+          if (settledTicketBranches.has(key)) return null;
+          const branch = state.branch;
+          const keep = (reason: string, failed = false) => {
+            settledTicketBranches.add(key);
+            const details = { runId: run.id, ticketId: state.ticketId, branch, reason };
+            return (
+              failed
+                ? Effect.logWarning("ticket branch kept after run completion", details)
+                : Effect.logInfo("ticket branch kept after run completion", details)
+            ).pipe(Effect.as(null));
+          };
+          if (state.resourceCleanupRetention !== null) {
+            return yield* keep(
+              `its worktree was retained (${state.resourceCleanupRetention.reason})`,
+            );
+          }
+          // Worktree cleanup removes a clean checkout first; until then a later
+          // pass retries.
+          if (state.worktreePath !== null) {
+            const worktreeHead = yield* gitWorkflow
+              .resolveCommit({ cwd: state.worktreePath, ref: "HEAD" })
+              .pipe(Effect.option);
+            if (Option.isSome(worktreeHead)) return null;
+          }
+          const cwd = ticketRepositoryWorktreePath(run, state.ticketId);
+          const branchHead = yield* gitWorkflow
+            .resolveCommit({ cwd, ref: `refs/heads/${branch}` })
+            .pipe(Effect.option);
+          if (Option.isNone(branchHead)) {
+            settledTicketBranches.add(key);
+            return null;
+          }
+          const checks = yield* Effect.all([
+            gitWorkflow.resolveCommit({ cwd, ref: acceptedCommitSha }),
+            gitWorkflow.isAncestor({
+              cwd,
+              ancestorRef: branchHead.value.commitSha,
+              descendantRef: `refs/heads/${run.orchestratorBranch}`,
+            }),
+          ]).pipe(Effect.result);
+          if (checks._tag === "Failure") {
+            return yield* keep(errorDetail(checks.failure), true);
+          }
+          const [accepted, merged] = checks.success;
+          if (branchHead.value.commitSha !== accepted.commitSha) {
+            return yield* keep(
+              `it is at '${branchHead.value.commitSha}', not accepted commit '${accepted.commitSha}'`,
+            );
+          }
+          if (!merged) return yield* keep(`it is not merged into '${run.orchestratorBranch}'`);
+          const deleted = yield* gitWorkflow
+            .deleteMergedBranch({ cwd, branch })
+            .pipe(Effect.result);
+          if (deleted._tag === "Failure") return yield* keep(errorDetail(deleted.failure), true);
+          settledTicketBranches.add(key);
+          yield* appendActivity({
+            threadId: run.orchestratorThreadId,
+            tone: "info",
+            kind: "implementation-ticket-branch-deleted",
+            summary: `Ticket ${state.ticketId} branch deleted`,
+            payload: {
+              runId: run.id,
+              ticketId: state.ticketId,
+              branch,
+              commitSha: accepted.commitSha,
+            },
+            createdAt: input.createdAt,
+          });
+          return { ticketId: state.ticketId, acceptedCommitSha, commitSha: accepted.commitSha };
+        }),
+      { concurrency: 4 },
+    );
+    const deletedByTicket = new Map(
+      results.filter((result) => result !== null).map((result) => [result.ticketId, result]),
+    );
+    if (deletedByTicket.size === 0) return;
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const currentRun = findRunById(readModel, run.id) ?? run;
+    const sourceThreadId = findRunSourceThreadId({ readModel, run: currentRun });
+    if (sourceThreadId === null) return;
+    yield* updateRun({
+      sourceThreadId,
+      run: {
+        ...currentRun,
+        ticketStates: currentRun.ticketStates.map((state) => {
+          const deleted = deletedByTicket.get(state.ticketId);
+          return deleted !== undefined &&
+            state.workerResult?.status === "succeeded" &&
+            state.workerResult.commitSha === deleted.acceptedCommitSha
+            ? { ...state, deletedBranchCommitSha: deleted.commitSha }
+            : state;
+        }),
+        updatedAt: currentRun.updatedAt > input.createdAt ? currentRun.updatedAt : input.createdAt,
+      },
+      createdAt: input.createdAt,
+    });
+  });
+
   const handleChangeRequestBabysitResult = Effect.fn(
     "ImplementationWorkflowReactor.handleChangeRequestBabysitResult",
   )(function* (
@@ -12479,6 +12628,7 @@ const make = Effect.gen(function* () {
       createdAt: updatedAt,
     });
     yield* teardownWorkflowStacks({ readModel, run: completedRun, createdAt: updatedAt });
+    yield* deleteIntegratedTicketBranches({ run: completedRun, createdAt: updatedAt });
   });
 
   const processActivity = Effect.fn("ImplementationWorkflowReactor.processActivity")(function* (
@@ -13346,6 +13496,7 @@ const make = Effect.gen(function* () {
       }
       if (run.status === "completed" || run.status === "canceled") {
         yield* teardownWorkflowStacks({ readModel, run, createdAt });
+        yield* deleteIntegratedTicketBranches({ run, createdAt });
         continue;
       }
       const failedTicketWarnings = new Map(

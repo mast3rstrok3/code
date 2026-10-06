@@ -800,6 +800,11 @@ interface ImplementationCalls {
    * creating ticket branches altogether still looked plausible here.
    */
   readonly createdBranches: Ref.Ref<ReadonlySet<string>>;
+  /** Branches `git branch -d` deleted; resolving one by name fails until it is recreated. */
+  readonly deletedBranches: Ref.Ref<ReadonlySet<string>>;
+  readonly deleteMergedBranchInputs: Ref.Ref<
+    ReadonlyArray<{ readonly cwd: string; readonly branch: string }>
+  >;
   readonly removeWorktreeFailuresRemaining: Ref.Ref<number>;
   readonly mergeRefInputs: Ref.Ref<ReadonlyArray<GitMergeRefInput>>;
   readonly localStatusCount: Ref.Ref<number>;
@@ -1039,11 +1044,28 @@ function makeTestLayer(
               Effect.tap(() =>
                 input.newRefName === undefined
                   ? Effect.void
-                  : Ref.update(calls.createdBranches, (branches) =>
-                      new Set(branches).add(input.newRefName as string),
-                    ),
+                  : Effect.all([
+                      Ref.update(calls.createdBranches, (branches) =>
+                        new Set(branches).add(input.newRefName as string),
+                      ),
+                      Ref.update(calls.deletedBranches, (branches) => {
+                        const remaining = new Set(branches);
+                        remaining.delete(input.newRefName as string);
+                        return remaining;
+                      }),
+                    ]),
               ),
             ),
+          deleteMergedBranch: (input) =>
+            Effect.all([
+              Ref.update(calls.deleteMergedBranchInputs, (inputs) => [...inputs, input]),
+              Ref.update(calls.createdBranches, (branches) => {
+                const remaining = new Set(branches);
+                remaining.delete(input.branch);
+                return remaining;
+              }),
+              Ref.update(calls.deletedBranches, (branches) => new Set(branches).add(input.branch)),
+            ]).pipe(Effect.asVoid),
           removeWorktree: (input) =>
             Ref.update(calls.removeWorktreeInputs, (inputs) => [...inputs, input]).pipe(
               Effect.andThen(
@@ -1087,6 +1109,14 @@ function makeTestLayer(
                   });
                 }
                 return { commitSha: `${branch}@commit` };
+              }
+              if ((yield* Ref.get(calls.deletedBranches)).has(input.ref)) {
+                return yield* new GitCommandError({
+                  operation: "GitWorkflowService.resolveCommit",
+                  command: "git rev-parse",
+                  cwd: input.cwd,
+                  detail: `unknown revision '${input.ref}'`,
+                });
               }
               if (
                 input.ref === "HEAD" &&
@@ -1594,6 +1624,10 @@ function withSystem<A, E>(
     const createdBranches = yield* Ref.make<ReadonlySet<string>>(
       new Set(options?.existingBranches ?? []),
     );
+    const deletedBranches = yield* Ref.make<ReadonlySet<string>>(new Set());
+    const deleteMergedBranchInputs = yield* Ref.make<
+      ReadonlyArray<{ readonly cwd: string; readonly branch: string }>
+    >([]);
     const removeWorktreeFailuresRemaining = yield* Ref.make(
       options?.failRemoveWorktreeAttempts ?? 0,
     );
@@ -1624,6 +1658,8 @@ function withSystem<A, E>(
       removeWorktreeInputs,
       activeWorktreePaths,
       createdBranches,
+      deletedBranches,
+      deleteMergedBranchInputs,
       removeWorktreeFailuresRemaining,
       mergeRefInputs,
       localStatusCount,
@@ -6161,6 +6197,133 @@ describe("ImplementationWorkflowReactor", () => {
             expect(yield* fileSystem.exists(`${worktreePath}/apps/index.ts`)).toBe(true);
           }),
         { failRemoveWorktreeAttempts: 1 },
+      ),
+    );
+  });
+
+  // Ticket branches outlive their worktrees so dependents and integration can
+  // read them. Once the run completes they have nothing left to serve.
+  describe("integrated ticket branches", () => {
+    const ticketBranch = "implementation/checkout-ticket-1";
+
+    const completeRun = (
+      system: ImplementationSystem,
+      options?: {
+        readonly dirtyAfterResult?: boolean;
+        readonly tickets?: ReadonlyArray<ReturnType<typeof planningTicket>>;
+      },
+    ) =>
+      Effect.gen(function* () {
+        const { run, tickets } = yield* launchRun(
+          system,
+          options?.tickets === undefined ? undefined : { tickets: options.tickets },
+        );
+        for (const ticket of tickets) {
+          yield* appendWorkerResult(system, { run, ticketId: ticket.id, status: "succeeded" });
+        }
+        if (options?.dirtyAfterResult) yield* Ref.set(system.dirtyWorkerWorktrees, true);
+        yield* system.reactor.recoverIncompleteStages();
+        expect(yield* Ref.get(system.deleteMergedBranchInputs)).toEqual([]);
+        const current = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        )!;
+        expect(current.ticketStates[0]?.branch).toBe(ticketBranch);
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("complete-run"),
+          threadId: sourceThreadId,
+          run: { ...current, status: "completed", updatedAt: "2026-01-01T00:04:00.000Z" },
+          createdAt: "2026-01-01T00:04:00.000Z",
+        });
+        yield* system.reactor.drain;
+        yield* system.reactor.recoverIncompleteStages();
+        const ticketStates =
+          (yield* system.query.getSnapshot()).implementationRuns.find(
+            (entry) => entry.id === run.id,
+          )?.ticketStates ?? [];
+        return { run, ticketState: ticketStates[0], ticketStates };
+      });
+
+    it.effect("deletes a merged ticket branch once its run completes", () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run, ticketState } = yield* completeRun(system);
+
+          expect(yield* Ref.get(system.deleteMergedBranchInputs)).toEqual([
+            { cwd: run.orchestratorWorktreePath, branch: ticketBranch },
+          ]);
+          expect(ticketState?.deletedBranchCommitSha).toBe(`${ticketBranch}@commit`);
+          const activities =
+            (yield* system.query.getSnapshot()).threads.find(
+              (thread) => thread.id === run.orchestratorThreadId,
+            )?.activities ?? [];
+          expect(
+            activities.filter(
+              (activity) => activity.kind === "implementation-ticket-branch-deleted",
+            ),
+          ).toHaveLength(1);
+
+          yield* system.reactor.recoverIncompleteStages();
+          expect(yield* Ref.get(system.deleteMergedBranchInputs)).toHaveLength(1);
+        }),
+      ),
+    );
+
+    it.effect("keeps a ticket branch the run branch does not contain", () =>
+      withSystem(
+        (system) =>
+          Effect.gen(function* () {
+            const { ticketState } = yield* completeRun(system);
+
+            expect(yield* Ref.get(system.deleteMergedBranchInputs)).toEqual([]);
+            expect(ticketState?.deletedBranchCommitSha).toBeUndefined();
+          }),
+        { nonAncestorCommitSha: `${ticketBranch}@commit` },
+      ),
+    );
+
+    it.effect("keeps a ticket branch whose worktree was retained with changes", () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { ticketState } = yield* completeRun(system, { dirtyAfterResult: true });
+
+          expect(ticketState?.resourceCleanupRetention?.reason).toBe("dirty-worktree");
+          expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([]);
+          expect(yield* Ref.get(system.deleteMergedBranchInputs)).toEqual([]);
+        }),
+      ),
+    );
+
+    // The rerun reads its deleted dependency through the recorded commit.
+    it.effect("recreates a deleted ticket branch at its recorded commit on rerun", () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run, ticketStates } = yield* completeRun(system, {
+            tickets: [planningTicket("TICKET-1"), planningTicket("TICKET-2", ["TICKET-1"])],
+          });
+          const dependent = ticketStates[1]!;
+          expect(yield* Ref.get(system.deleteMergedBranchInputs)).toHaveLength(2);
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.rerun",
+            commandId: commandId("rerun-after-branch-deletion"),
+            threadId: sourceThreadId,
+            runId: run.id,
+            target: { kind: "ticket", ticketId: dependent.ticketId, stage: "implementation" },
+            createdAt: "2026-01-01T00:05:00.000Z",
+          });
+          yield* system.reactor.drain;
+
+          expect((yield* Ref.get(system.createWorktreeInputs)).at(-1)).toMatchObject({
+            refName: `${dependent.branch}@commit`,
+            newRefName: dependent.branch,
+            path: dependent.worktreePath,
+          });
+          const rerun = (yield* system.query.getSnapshot()).implementationRuns.find(
+            (entry) => entry.id === run.id,
+          );
+          expect(rerun?.automationHalt).toBeNull();
+          expect(rerun?.ticketStates[1]?.status).toBe("running");
+        }),
       ),
     );
   });

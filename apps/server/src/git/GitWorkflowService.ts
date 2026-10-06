@@ -151,6 +151,15 @@ export class GitWorkflowService extends Context.Service<
     readonly pruneWorktrees: (input: {
       readonly cwd: string;
     }) => Effect.Effect<void, GitCommandError>;
+    /**
+     * Deletes a local branch with `git branch -d`. Git refuses when the branch
+     * is not merged into the HEAD of `cwd` (or its upstream) or is checked out
+     * in any worktree.
+     */
+    readonly deleteMergedBranch: (input: {
+      readonly cwd: string;
+      readonly branch: string;
+    }) => Effect.Effect<void, GitCommandError>;
     readonly createRef: (
       input: VcsCreateRefInput,
     ) => Effect.Effect<VcsCreateRefResult, GitCommandError>;
@@ -645,6 +654,18 @@ export const make = Effect.gen(function* () {
     pruneWorktrees: (input) =>
       ensureGitCommand("GitWorkflowService.pruneWorktrees", input.cwd).pipe(
         Effect.andThen(git.pruneWorktrees(input)),
+      ),
+    deleteMergedBranch: (input) =>
+      ensureGitCommand("GitWorkflowService.deleteMergedBranch", input.cwd).pipe(
+        Effect.andThen(
+          git.execute({
+            operation: "GitWorkflowService.deleteMergedBranch",
+            cwd: input.cwd,
+            args: ["branch", "-d", "--", input.branch],
+            maxOutputBytes: 4_096,
+          }),
+        ),
+        Effect.asVoid,
       ),
     createRef: (input) =>
       ensureGitCommand("GitWorkflowService.createRef", input.cwd).pipe(
