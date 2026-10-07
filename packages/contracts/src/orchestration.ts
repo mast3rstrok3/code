@@ -1489,6 +1489,11 @@ export const OrchestrationImplementationTicketState = Schema.Struct({
   ).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   appReviewWorkflowRunId: Schema.optionalKey(Schema.NullOr(AppReviewWorkflowRunId)),
   /**
+   * The commit the ticket branch pointed at when cleanup deleted it after the
+   * run completed. A later rerun recreates the branch from it.
+   */
+  deletedBranchCommitSha: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  /**
    * Worktrees Code created in other repositories so the ticket's App Stack
    * could bundle their apps. Ticket cleanup removes them.
    */

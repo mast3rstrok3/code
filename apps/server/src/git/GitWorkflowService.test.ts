@@ -433,4 +433,38 @@ it.layer(MergeTestLayer)("GitWorkflowService mergeRef", (it) => {
       assert.notEqual(mergeHead.exitCode, 0);
     }),
   );
+
+  it.effect("deletes a merged branch and refuses an unmerged or checked-out one", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const cwd = yield* makeTmpDir();
+      yield* initRepo(cwd);
+      for (const branch of ["merged", "unmerged", "checked-out"]) {
+        yield* runGit(cwd, ["checkout", "-b", branch, "main"]);
+        yield* writeFile(cwd, `${branch}.txt`, `${branch}\n`);
+        yield* runGit(cwd, ["add", "."]);
+        yield* runGit(cwd, ["commit", "-m", branch]);
+      }
+      yield* runGit(cwd, ["checkout", "main"]);
+      yield* runGit(cwd, ["merge", "--no-edit", "merged", "checked-out"]);
+      const worktreePath = path.join(yield* makeTmpDir(), "checkout");
+      yield* runGit(cwd, ["worktree", "add", worktreePath, "checked-out"]);
+
+      const workflow = yield* GitWorkflowService.GitWorkflowService;
+      yield* workflow.deleteMergedBranch({ cwd, branch: "merged" });
+      const unmerged = yield* workflow
+        .deleteMergedBranch({ cwd, branch: "unmerged" })
+        .pipe(Effect.flip);
+      const checkedOut = yield* workflow
+        .deleteMergedBranch({ cwd, branch: "checked-out" })
+        .pipe(Effect.flip);
+
+      expect(unmerged).toBeInstanceOf(GitCommandError);
+      expect(checkedOut).toBeInstanceOf(GitCommandError);
+      assert.deepStrictEqual(
+        (yield* runGit(cwd, ["branch", "--format=%(refname:short)"])).split("\n").sort(),
+        ["checked-out", "main", "unmerged"],
+      );
+    }),
+  );
 });
