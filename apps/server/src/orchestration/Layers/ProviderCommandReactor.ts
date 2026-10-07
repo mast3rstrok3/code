@@ -27,6 +27,7 @@ import { projectComposerContextForProvider } from "@t3tools/shared/composerConte
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -82,7 +83,10 @@ import {
   appendWorkflowStepInstructions,
   resolveWorkflowPromptId,
 } from "../../provider/WorkflowPromptRegistry.ts";
-import { buildWorktreeRuntimeContext } from "../worktreeRuntimeContext.ts";
+import {
+  activeThreadsSharingWorkspace,
+  buildWorktreeRuntimeContext,
+} from "../worktreeRuntimeContext.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { isWorkflowThreadPaused } from "../workflowPause.ts";
@@ -388,9 +392,47 @@ const make = Effect.gen(function* () {
           "workflow-app-dev-stack.failed",
         ],
       });
+      // The live branch and the other threads in this checkout only add
+      // detail, so any failed lookup leaves them out rather than failing the turn.
+      const optionalDetail = <A, E, R>(label: string, effect: Effect.Effect<A, E, R>) =>
+        effect.pipe(
+          Effect.catchCause((cause) =>
+            Effect.logDebug(`runtime context ${label} unavailable`, Cause.pretty(cause)).pipe(
+              Effect.as(null),
+            ),
+          ),
+        );
+      const [checkout, shell, nowMs] = yield* Effect.all(
+        [
+          optionalDetail(
+            "git status",
+            gitWorkflow.localStatus({ cwd: worktreePath }).pipe(
+              Effect.timeout("2 seconds"),
+              Effect.map((status) => ({ isRepo: status.isRepo, branch: status.refName })),
+            ),
+          ),
+          optionalDetail(
+            "thread list",
+            projectionSnapshotQuery.getShellSnapshot({ unsettledOnly: true }),
+          ),
+          Clock.currentTimeMillis,
+        ],
+        { concurrency: "unbounded" },
+      );
       const context = buildWorktreeRuntimeContext({
         worktreePath,
         branch: input.thread.branch,
+        checkout,
+        sharedWithThreadTitles:
+          shell === null
+            ? []
+            : activeThreadsSharingWorkspace({
+                thread: input.thread,
+                workspacePath: worktreePath,
+                threads: shell.threads,
+                projects: shell.projects,
+                nowMs,
+              }),
         workflowPreset: input.thread.workflowPreset ?? null,
         stackLookup: Option.getOrNull(stackLookup),
         setupFailureDetail: (() => {

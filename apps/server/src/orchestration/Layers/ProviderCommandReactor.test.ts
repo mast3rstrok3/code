@@ -7,6 +7,7 @@ import {
   EnvironmentId,
   type AppStackByWorktreeResult,
   AppStackError,
+  GitCommandError,
   ModelSelection,
   ProviderRuntimeEvent,
   ProviderSession,
@@ -31,6 +32,7 @@ import {
   type OrchestrationThreadWorkflowRole,
   type WorkflowPreset,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
@@ -355,6 +357,18 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     const pruneWorktrees = vi.fn((_: { readonly cwd: string }) => Effect.void);
+    // Fails unless a test sets it, so the context falls back to the recorded branch.
+    const localStatus = vi.fn<GitWorkflowService.GitWorkflowService["Service"]["localStatus"]>(
+      (statusInput) =>
+        Effect.fail(
+          new GitCommandError({
+            operation: "test.localStatus",
+            command: "git status",
+            cwd: statusInput.cwd,
+            detail: "no live status in this test",
+          }),
+        ),
+    );
     const closeIdleTerminals = vi.fn((_: { readonly threadId: string }) => Effect.void);
     const createWorktree = vi.fn(
       (input: { readonly refName: string; readonly path: string | null }) =>
@@ -533,6 +547,7 @@ describe("ProviderCommandReactor", () => {
           renameBranch,
           pruneWorktrees,
           createWorktree,
+          localStatus,
         } satisfies Partial<GitWorkflowService.GitWorkflowService["Service"]>),
       ),
       Layer.provideMerge(
@@ -732,6 +747,7 @@ describe("ProviderCommandReactor", () => {
       renameBranch,
       pruneWorktrees,
       createWorktree,
+      localStatus,
       closeIdleTerminals,
       refreshStatus,
       generateBranchName,
@@ -3085,6 +3101,65 @@ describe("ProviderCommandReactor", () => {
     expect(first.input).toContain("no stack is registered");
     expect(first.input).toContain("Follow repository instructions for local testing");
     expect(first.input).not.toContain("limit work to source inspection");
+  });
+
+  it("warns a thread that shares its checkout with another active thread", async () => {
+    const harness = await createHarness();
+    // The reactor reads the real clock, so the neighbor's turn has to be recent by it.
+    const recently = await harness.runEffect(DateTime.now.pipe(Effect.map(DateTime.formatIso)));
+    harness.localStatus.mockImplementation(() =>
+      Effect.succeed({
+        isRepo: true,
+        hasPrimaryRemote: true,
+        isDefaultRef: false,
+        refName: "plain-language-approvals",
+        hasWorkingTreeChanges: false,
+        workingTree: { files: [], insertions: 0, deletions: 0 },
+      }),
+    );
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-thread-create-neighbor"),
+        threadId: ThreadId.make("thread-neighbor"),
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        title: "Plain-language approvals",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: recently,
+      }),
+    );
+    for (const threadId of ["thread-neighbor", "thread-1"]) {
+      await harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(`cmd-turn-start-shared-${threadId}`),
+          threadId: ThreadId.make(threadId),
+          message: {
+            messageId: asMessageId(`user-message-shared-${threadId}`),
+            role: "user",
+            text: "Keep going.",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: recently,
+        }),
+      );
+      await harness.drain();
+    }
+
+    const request = harness.sendTurn.mock.calls.at(-1)?.[0] as { readonly input?: string };
+    expect(request.input).toContain("Worktree path: /tmp/provider-project");
+    expect(request.input).toContain("Git branch: plain-language-approvals");
+    expect(request.input).toContain(
+      '1 other active thread(s) also work here: "Plain-language approvals"',
+    );
+    expect(request.input).toContain("Do not create, switch, or reset branches here");
   });
 
   it("injects authoritative worktree and App Stack state into provider turns", async () => {
