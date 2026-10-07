@@ -1,3 +1,4 @@
+import * as McpToolAccess from "../../McpToolAccess.ts";
 import { type ThreadId, WorkflowArtifactAccessError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
@@ -7,8 +8,8 @@ import { WorkflowArtifactsToolkit } from "./tools.ts";
 import { resolveWorkflowDoc } from "../../../provider/WorkflowPromptRegistry.ts";
 
 const resolve = Effect.fn("WorkflowArtifactsToolkit.resolve")(function* () {
-  const scope = yield* McpInvocationContext.requireMcpCapability("workflow-artifacts");
-  return yield* getWorkflowArtifactsForThread({ threadId: scope.threadId });
+  const scope = yield* McpInvocationContext.requireThreadMcpCapability("workflow-artifacts");
+  return yield* getWorkflowArtifactsForThread({ threadId: scope.thread.threadId });
 });
 
 const notFound = (threadId: ThreadId, message: string) =>
@@ -49,13 +50,27 @@ export const handlers = {
     }),
   workflow_doc_get: (input) =>
     Effect.gen(function* () {
-      const scope = yield* McpInvocationContext.requireMcpCapability("workflow-artifacts");
+      const scope = yield* McpInvocationContext.requireThreadMcpCapability("workflow-artifacts");
       const doc = resolveWorkflowDoc(input.docId);
       if (doc === undefined) {
-        return yield* notFound(scope.threadId, `Workflow document '${input.docId}' was not found.`);
+        return yield* notFound(
+          scope.thread.threadId,
+          `Workflow document '${input.docId}' was not found.`,
+        );
       }
       return doc;
     }),
 } satisfies Parameters<typeof WorkflowArtifactsToolkit.toLayer>[0];
+
+export const layer = McpToolAccess.toLayer(WorkflowArtifactsToolkit, {
+  workflow_context_get: McpToolAccess.readsAsCaller(handlers.workflow_context_get),
+  workflow_spec_get: McpToolAccess.readsAsCaller(handlers.workflow_spec_get),
+  workflow_wayfinder_map_get: McpToolAccess.readsAsCaller(handlers.workflow_wayfinder_map_get),
+  workflow_tickets_list: McpToolAccess.readsAsCaller(handlers.workflow_tickets_list),
+  workflow_ticket_get: McpToolAccess.readsAsCaller(handlers.workflow_ticket_get),
+  workflow_app_reviews_list: McpToolAccess.readsAsCaller(handlers.workflow_app_reviews_list),
+  workflow_app_review_get: McpToolAccess.readsAsCaller(handlers.workflow_app_review_get),
+  workflow_doc_get: McpToolAccess.readsAsCaller(handlers.workflow_doc_get),
+});
 
 export const WorkflowArtifactsToolkitHandlersLive = WorkflowArtifactsToolkit.toLayer(handlers);

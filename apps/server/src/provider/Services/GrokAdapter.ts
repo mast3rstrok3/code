@@ -7,7 +7,7 @@
  *
  * @module GrokAdapter
  */
-import type { ProviderAdapterError } from "../Errors.ts";
+import type { ProviderAdapterError } from "../legacyErrors.ts";
 import type { ProviderAdapterShape } from "./ProviderAdapter.ts";
 
 /**

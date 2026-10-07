@@ -11,8 +11,8 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as Statement from "effect/unstable/sql/Statement";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as Statement from "effect/sql/Statement";
 
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 import { ProjectionProjectRepositoryLive } from "./ProjectionProjects.ts";
@@ -360,7 +360,6 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
 
       assert.strictEqual(
         row.defaultModelSelection,
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         JSON.stringify({
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5.4",
@@ -429,7 +428,6 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
 
       assert.strictEqual(
         row.modelSelection,
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         JSON.stringify({
           instanceId: ProviderInstanceId.make("claudeAgent"),
           model: "claude-opus-4-6",
@@ -776,9 +774,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         ORDER BY number ASC
       `;
       assert.strictEqual(rawRows[0]?.number, 7);
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       assert.deepStrictEqual(JSON.parse(rawRows[0]?.snapshotJson ?? "null"), synced.snapshot);
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       assert.deepStrictEqual(JSON.parse(rawRows[0]?.stackJson ?? "null"), synced.stack);
       assert.strictEqual(rawRows[1]?.snapshotJson, null);
       assert.strictEqual(rawRows[1]?.stackJson, null);

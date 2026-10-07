@@ -1,94 +1,51 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-
 import {
   OrchestrationReactor,
   type OrchestrationReactorShape,
 } from "../Services/OrchestrationReactor.ts";
-import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ImplementationWorkflowReactor } from "../Services/ImplementationWorkflowReactor.ts";
 import { AppReviewWorkflowReactor } from "../Services/AppReviewWorkflowReactor.ts";
-import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
-import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ProductWorkflowReactor } from "../Services/ProductWorkflowReactor.ts";
 import { PreviewLifecycleReactor } from "../Services/PreviewLifecycleReactor.ts";
-import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
-import * as ThreadSettlementReactor from "../ThreadSettlementReactor.ts";
-import * as AppStackLifecycleReactor from "../AppStackLifecycleReactor.ts";
-import * as PullRequestSyncReactor from "../PullRequestSyncReactor.ts";
-import * as ThreadPullRequestReactor from "../ThreadPullRequestReactor.ts";
-import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
-import * as StorageCleanup from "../../storageCleanup.ts";
+import { WorkflowRuntimeBridge } from "../WorkflowRuntimeBridge.ts";
+import { AppStackLifecycleReactor } from "../AppStackLifecycleReactor.ts";
 
 export const makeOrchestrationReactor = Effect.gen(function* () {
-  const providerRuntimeIngestion = yield* ProviderRuntimeIngestionService;
-  const providerCommandReactor = yield* ProviderCommandReactor;
-  const checkpointReactor = yield* CheckpointReactor;
-  const productWorkflowReactor = yield* ProductWorkflowReactor;
-  const implementationWorkflowReactor = yield* ImplementationWorkflowReactor;
-  const appReviewWorkflowReactor = yield* AppReviewWorkflowReactor;
-  const previewLifecycleReactor = yield* PreviewLifecycleReactor;
-  const threadDeletionReactor = yield* ThreadDeletionReactor;
-  const threadSettlementReactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
-  const appStackLifecycleReactor = yield* AppStackLifecycleReactor.AppStackLifecycleReactor;
-  const pullRequestSyncReactor = yield* PullRequestSyncReactor.PullRequestSyncReactor;
-  const threadPullRequestReactor = yield* ThreadPullRequestReactor.ThreadPullRequestReactor;
-  const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
-  const storageCleanup = yield* StorageCleanup.StorageCleanup;
-
-  const drainPendingProviderCommands = Effect.gen(function* () {
-    yield* providerCommandReactor.replayPendingWorkflowTurnStarts;
-    yield* providerCommandReactor.drain;
-  });
-
+  const bridge = yield* WorkflowRuntimeBridge;
+  const product = yield* ProductWorkflowReactor;
+  const implementation = yield* ImplementationWorkflowReactor;
+  const appReview = yield* AppReviewWorkflowReactor;
+  const preview = yield* PreviewLifecycleReactor;
+  const appStacks = yield* AppStackLifecycleReactor;
   const reconcilePendingProviderCommands = Effect.gen(function* () {
-    // Stale-turn recovery has settled before this phase. Nested App Review
-    // settles first so parent ticket recovery sees its durable result.
-    yield* appReviewWorkflowReactor.reconcile();
-    yield* appReviewWorkflowReactor.flush ?? appReviewWorkflowReactor.drain;
-    yield* implementationWorkflowReactor.reconcileStartup();
-    yield* implementationWorkflowReactor.flush ?? implementationWorkflowReactor.drain;
-    yield* productWorkflowReactor.reconcileStartup();
-    yield* productWorkflowReactor.flush ?? productWorkflowReactor.drain;
-    yield* providerCommandReactor.replayPendingWorkflowTurnStarts;
-    yield* providerCommandReactor.drain;
-    yield* threadDeletionReactor.cleanupEmptyWorkflowShells;
+    yield* appReview.reconcile();
+    yield* appReview.flush ?? appReview.drain;
+    yield* implementation.reconcileStartup();
+    yield* implementation.flush ?? implementation.drain;
+    yield* product.reconcileStartup();
+    yield* product.flush ?? product.drain;
+    yield* bridge.drain;
   });
-
-  const start: OrchestrationReactorShape["start"] = Effect.fn("start")(function* () {
-    yield* providerRuntimeIngestion.start();
-    yield* providerCommandReactor.start();
-    yield* checkpointReactor.start();
-    yield* productWorkflowReactor.start();
-    yield* implementationWorkflowReactor.start();
-    yield* appReviewWorkflowReactor.start();
-    yield* previewLifecycleReactor.start();
-    yield* threadDeletionReactor.start();
-    yield* appStackLifecycleReactor.start();
-    yield* threadPullRequestReactor.start();
-    yield* threadSettlementReactor.start();
-    yield* pullRequestSyncReactor.start();
-    yield* agentAwarenessRelay.start();
-    yield* storageCleanup.start();
-  });
-
-  const drainForShutdown = Effect.gen(function* () {
-    yield* providerRuntimeIngestion.drain;
-    yield* appReviewWorkflowReactor.flush ?? appReviewWorkflowReactor.drain;
-    yield* implementationWorkflowReactor.flush ?? implementationWorkflowReactor.drain;
-    yield* productWorkflowReactor.flush ?? productWorkflowReactor.drain;
-    yield* providerCommandReactor.drain;
-    yield* checkpointReactor.drain;
-    yield* providerRuntimeIngestion.drain;
-    yield* checkpointReactor.drain;
-    yield* appStackLifecycleReactor.drain;
-  });
-
   return {
-    start,
-    drainPendingProviderCommands,
+    start: () =>
+      Effect.gen(function* () {
+        yield* bridge.start;
+        yield* product.start();
+        yield* implementation.start();
+        yield* appReview.start();
+        yield* preview.start();
+        yield* appStacks.start();
+      }),
+    drainPendingProviderCommands: bridge.drain,
     reconcilePendingProviderCommands,
-    drainForShutdown,
+    drainForShutdown: Effect.gen(function* () {
+      yield* appReview.flush ?? appReview.drain;
+      yield* implementation.flush ?? implementation.drain;
+      yield* product.flush ?? product.drain;
+      yield* bridge.drain;
+      yield* appStacks.drain;
+    }),
   } satisfies OrchestrationReactorShape;
 });
 

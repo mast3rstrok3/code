@@ -188,3 +188,34 @@ const make = Effect.gen(function* PreviewCoordinatorMake() {
 });
 
 export const layer = Layer.effect(PreviewCoordinator, make);
+
+/** Workflow cleanup uses the same tabs as the current Browser panel. */
+export const layerNative = Layer.effect(
+  PreviewCoordinator,
+  Effect.gen(function* () {
+    const manager = yield* PreviewManager.PreviewManager;
+    const retired = () =>
+      Effect.fail(
+        new PreviewBrowserUnavailableError({
+          message: "This preview operation was replaced by the Browser panel's stream protocol.",
+        }),
+      );
+    return PreviewCoordinator.of({
+      open: (input) => manager.open({ ...input, runtime: "server" }),
+      navigate: manager.navigate,
+      resize: manager.resize,
+      refresh: manager.refresh,
+      close: manager.close,
+      list: manager.list,
+      reportStatus: manager.reportStatus,
+      subscribeFrames: retired,
+      input: retired,
+      goBack: retired,
+      goForward: retired,
+      zoom: retired,
+      captureScreenshot: retired,
+      pickElementAt: retired,
+      clearBrowserData: retired,
+    });
+  }),
+);

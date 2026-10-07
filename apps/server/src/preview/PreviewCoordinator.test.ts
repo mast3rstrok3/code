@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
 import {
   PreviewBrowserUnavailableError,
@@ -76,6 +77,7 @@ const makeHarness = () => {
   const browserLayer = Layer.succeed(ServerBrowserManager.ServerBrowserManager, browser);
   const layer = PreviewCoordinator.layer.pipe(
     Layer.provide(Layer.merge(PreviewManager.layer, browserLayer)),
+    Layer.provide(NodeCrypto.layer),
   );
   return { ensureTabCalls, navigateCalls, layer };
 };

@@ -33,7 +33,7 @@ import type * as PubSub from "effect/PubSub";
 import type * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";
 
-import type { ProviderServiceError } from "../Errors.ts";
+import type { ProviderServiceError } from "../legacyErrors.ts";
 import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
 

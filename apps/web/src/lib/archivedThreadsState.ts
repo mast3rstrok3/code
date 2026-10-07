@@ -1,3 +1,5 @@
+import { AsyncResult, Atom } from "effect/reactivity";
+import { DEFAULT_WORKSPACE_USER_ID } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import {
   type ArchivedSnapshotEntry,
@@ -13,11 +15,25 @@ import { useClientSettings, usePrimarySettings } from "../hooks/useSettings";
 import { resolveWorkspaceUserView } from "@t3tools/shared/model";
 import { activeWorkspaceUserViewAtom } from "../state/shell";
 
-function archivedSnapshotAtom(environmentId: EnvironmentId, userView: WorkspaceUserView) {
-  return orchestrationEnvironment.archivedShellSnapshot({
-    environmentId,
-    input: { userView },
-  });
+const archivedSnapshotForEnvironment = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get) => {
+    const view = get(activeWorkspaceUserViewAtom);
+    return AsyncResult.map(
+      get(orchestrationEnvironment.archivedShellSnapshot({ environmentId, input: {} })),
+      (snapshot) =>
+        view.kind === "all"
+          ? snapshot
+          : {
+              ...snapshot,
+              threads: snapshot.threads.filter(
+                (thread) => (thread.ownerUserId ?? DEFAULT_WORKSPACE_USER_ID) === view.userId,
+              ),
+            },
+    );
+  }),
+);
+function archivedSnapshotAtom(environmentId: EnvironmentId, _userView?: WorkspaceUserView) {
+  return archivedSnapshotForEnvironment(environmentId);
 }
 
 const archivedSnapshotsAtom = createArchivedThreadSnapshotsAtomFamily({
@@ -44,7 +60,7 @@ export function useArchivedThreadSnapshots(environmentIds: ReadonlyArray<Environ
     [activeWorkspaceUserView, workspaceUsers],
   );
   const environmentKey = useMemo(
-    () => makeArchivedThreadsEnvironmentKey(environmentIds, userView),
+    () => makeArchivedThreadsEnvironmentKey(environmentIds),
     [environmentIds, userView],
   );
   const result = useAtomValue(archivedSnapshotsAtom(environmentKey));

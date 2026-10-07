@@ -186,12 +186,12 @@ export function mediaKindFromPath(path: string): "image" | "video" | null {
 }
 
 function hasPreviewExtension(path: string, extensions: ReadonlyArray<string>): boolean {
-  const pathWithoutQuery = previewPathWithoutQuery(path);
-  return extensions.some((extension) => pathWithoutQuery.endsWith(extension));
+  const literalPath = path.toLowerCase();
+  return extensions.some((extension) => literalPath.endsWith(extension));
 }
 
 export function workspacePreviewMimeType(path: string): WorkspacePreviewMimeType | null {
-  const pathWithoutQuery = previewPathWithoutQuery(path);
+  const pathWithoutQuery = path.toLowerCase();
   for (const extension of Object.keys(WORKSPACE_PREVIEW_MIME_TYPES) as ReadonlyArray<
     keyof typeof WORKSPACE_PREVIEW_MIME_TYPES
   >) {

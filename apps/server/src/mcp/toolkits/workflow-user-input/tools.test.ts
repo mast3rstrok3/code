@@ -1,6 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import { WORKFLOW_USER_INPUT_MAX_QUESTIONS } from "@t3tools/contracts";
-import { Tool } from "effect/unstable/ai";
+import { Tool } from "effect/ai";
 
 import { WorkflowRequestUserInputTool } from "./tools.ts";
 

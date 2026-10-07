@@ -9,7 +9,7 @@ import {
   isTicketStageSkipped,
 } from "@t3tools/contracts";
 import { NativeVerificationPanel } from "./NativeVerificationPanel";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import type { EnvironmentWorkflowThreadShell } from "@t3tools/client-runtime/state/models";
 import type {
   AppReviewWorkflowCycle,
   AppReviewWorkflowPhase,
@@ -447,14 +447,14 @@ function TimelineTimeRange(props: {
   );
 }
 
-function groupTitle(group: WorkflowGroup<EnvironmentThreadShell>): string {
+function groupTitle(group: WorkflowGroup<EnvironmentWorkflowThreadShell>): string {
   if (group.preset) return WORKFLOW_PRESET_DEFINITION_BY_ID[group.preset].label;
   if (group.kind === "batch") return "Agent batch";
   if (group.kind === "legacy") return "Legacy workflow";
   return "Workflow run";
 }
 
-function groupStatus(group: WorkflowGroup<EnvironmentThreadShell>): WorkflowThreadStatus {
+function groupStatus(group: WorkflowGroup<EnvironmentWorkflowThreadShell>): WorkflowThreadStatus {
   const statuses = group.rows.map((row) => resolveWorkflowThreadStatus(row.thread));
   return (
     statuses.find((status) => status === "approval") ??
@@ -469,10 +469,10 @@ function groupStatus(group: WorkflowGroup<EnvironmentThreadShell>): WorkflowThre
 }
 
 function ThreadRow(props: {
-  readonly row: WorkflowGroup<EnvironmentThreadShell>["rows"][number];
+  readonly row: WorkflowGroup<EnvironmentWorkflowThreadShell>["rows"][number];
   readonly timestampFormat: TimestampFormat;
   readonly activeThreadKey: string | null;
-  readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
+  readonly onOpenThread: (thread: EnvironmentWorkflowThreadShell) => void;
 }) {
   const { row } = props;
   const status = resolveWorkflowThreadStatus(row.thread);
@@ -535,7 +535,7 @@ function ThreadRow(props: {
   );
 }
 
-function workflowStepTitle(step: WorkflowTimelineStep<EnvironmentThreadShell>): string {
+function workflowStepTitle(step: WorkflowTimelineStep<EnvironmentWorkflowThreadShell>): string {
   if (step.label !== null) return step.label;
   const first = step.entries[0];
   if (!first) return "Work";
@@ -543,7 +543,7 @@ function workflowStepTitle(step: WorkflowTimelineStep<EnvironmentThreadShell>): 
   return workflowRoleShortLabel(first.row.thread.workflowRole) ?? "Work";
 }
 
-function workflowStepPhase(step: WorkflowTimelineStep<EnvironmentThreadShell>): string {
+function workflowStepPhase(step: WorkflowTimelineStep<EnvironmentWorkflowThreadShell>): string {
   const label = workflowStepTitle(step);
   const separator = label.indexOf(" phase · ");
   if (separator !== -1) return label.slice(0, separator);
@@ -557,16 +557,16 @@ function workflowStepPhase(step: WorkflowTimelineStep<EnvironmentThreadShell>): 
     : "Implementation";
 }
 
-function workflowStepLabel(step: WorkflowTimelineStep<EnvironmentThreadShell>): string {
+function workflowStepLabel(step: WorkflowTimelineStep<EnvironmentWorkflowThreadShell>): string {
   const label = workflowStepTitle(step);
   const separator = label.indexOf(" phase · ");
   return separator === -1 ? label : label.slice(separator + " phase · ".length);
 }
 
 function groupWorkflowStepsByPhase(
-  steps: readonly WorkflowTimelineStep<EnvironmentThreadShell>[],
-): readonly (readonly [string, readonly WorkflowTimelineStep<EnvironmentThreadShell>[]])[] {
-  const byPhase = new Map<string, WorkflowTimelineStep<EnvironmentThreadShell>[]>();
+  steps: readonly WorkflowTimelineStep<EnvironmentWorkflowThreadShell>[],
+): readonly (readonly [string, readonly WorkflowTimelineStep<EnvironmentWorkflowThreadShell>[]])[] {
+  const byPhase = new Map<string, WorkflowTimelineStep<EnvironmentWorkflowThreadShell>[]>();
   for (const step of steps) {
     const phase = workflowStepPhase(step);
     const phaseSteps = byPhase.get(phase);
@@ -577,8 +577,8 @@ function groupWorkflowStepsByPhase(
 }
 
 function planningStepTimeRange(
-  step: WorkflowTimelineStep<EnvironmentThreadShell>,
-  groups: readonly WorkflowGroup<EnvironmentThreadShell>[],
+  step: WorkflowTimelineStep<EnvironmentWorkflowThreadShell>,
+  groups: readonly WorkflowGroup<EnvironmentWorkflowThreadShell>[],
   spec: OrchestrationPlanningSpec | null,
   tickets: readonly OrchestrationPlanningTicket[],
 ) {
@@ -608,7 +608,7 @@ function planningStepTimeRange(
 export type RestartablePlanningStage = "grill" | "spec" | "tickets";
 
 export function restartablePlanningStage(
-  step: WorkflowTimelineStep<EnvironmentThreadShell>,
+  step: WorkflowTimelineStep<EnvironmentWorkflowThreadShell>,
   currentStage: OrchestrationPlanningWorkflowStage,
 ): RestartablePlanningStage | null {
   const label = workflowStepLabel(step).toLowerCase();
@@ -712,7 +712,7 @@ function resolveStepRestart(input: {
  * stage at a time from the ticket's own row.
  */
 function rerunRunStageForStep(
-  step: WorkflowTimelineStep<EnvironmentThreadShell>,
+  step: WorkflowTimelineStep<EnvironmentWorkflowThreadShell>,
   run?: OrchestrationImplementationRun | null,
 ): RerunRunStage | null {
   const label = workflowStepLabel(step).toLowerCase();
@@ -728,7 +728,7 @@ function rerunRunStageForStep(
 
 /** The skip controlled by a workflow row, including publication stages that cannot restart. */
 function skipRunStageForStep(
-  step: WorkflowTimelineStep<EnvironmentThreadShell>,
+  step: WorkflowTimelineStep<EnvironmentWorkflowThreadShell>,
 ): SkipRunStage | null {
   const label = workflowStepLabel(step).toLowerCase();
   if (label.includes("create pull request")) return "change-request";
@@ -738,12 +738,12 @@ function skipRunStageForStep(
 
 /** Threads of a step that are still live, excluding the workflow root. */
 function collectRunningStepThreadIds(
-  allThreads: readonly EnvironmentThreadShell[],
-  step: WorkflowTimelineStep<EnvironmentThreadShell>,
+  allThreads: readonly EnvironmentWorkflowThreadShell[],
+  step: WorkflowTimelineStep<EnvironmentWorkflowThreadShell>,
   rootThreadId: string,
 ): readonly ThreadId[] {
   const ids = new Set<ThreadId>();
-  const consider = (thread: EnvironmentThreadShell) => {
+  const consider = (thread: EnvironmentWorkflowThreadShell) => {
     if (thread.id === rootThreadId) return;
     // A paused scope is stopped even while a stale session row says otherwise.
     if (findWorkflowPauseScope(allThreads, thread.id) !== null) return;
@@ -759,11 +759,11 @@ function collectRunningStepThreadIds(
 
 /** Every thread a step owns, whatever it is doing right now. */
 function collectStepThreads(
-  step: WorkflowTimelineStep<EnvironmentThreadShell>,
+  step: WorkflowTimelineStep<EnvironmentWorkflowThreadShell>,
   rootThreadId: string,
-): readonly EnvironmentThreadShell[] {
-  const byId = new Map<ThreadId, EnvironmentThreadShell>();
-  const consider = (thread: EnvironmentThreadShell) => {
+): readonly EnvironmentWorkflowThreadShell[] {
+  const byId = new Map<ThreadId, EnvironmentWorkflowThreadShell>();
+  const consider = (thread: EnvironmentWorkflowThreadShell) => {
     if (thread.id === rootThreadId) return;
     byId.set(thread.id, thread);
   };
@@ -775,7 +775,7 @@ function collectStepThreads(
 }
 
 function planningStepProgress(
-  step: WorkflowTimelineStep<EnvironmentThreadShell>,
+  step: WorkflowTimelineStep<EnvironmentWorkflowThreadShell>,
   currentStage: OrchestrationPlanningWorkflowStage,
 ): "Completed" | "Current" | "Upcoming" | null {
   const label = workflowStepLabel(step).toLowerCase();
@@ -880,7 +880,7 @@ function appReviewPhaseRerunDisabledReason(input: {
   readonly callerBusyReason: string | null;
   readonly cyclesUsed: number;
   readonly cycleBudget: number;
-  readonly activeThread: EnvironmentThreadShell | undefined;
+  readonly activeThread: EnvironmentWorkflowThreadShell | undefined;
 }): string | null {
   if (!input.isCurrentCycle) return "Only the newest cycle can start again.";
   if (input.callerBusyReason !== null) return input.callerBusyReason;
@@ -920,14 +920,14 @@ export function TicketAppReviewCycles(props: {
   readonly onRerunPhase: ((phase: AppReviewWorkflowPhase) => void) | undefined;
   readonly onStopThreads: ((threadIds: readonly ThreadId[]) => void) | undefined;
   readonly onResumeThreads: ((threadIds: readonly ThreadId[]) => void) | undefined;
-  readonly threads: readonly EnvironmentThreadShell[];
-  readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
+  readonly threads: readonly EnvironmentWorkflowThreadShell[];
+  readonly onOpenThread: (thread: EnvironmentWorkflowThreadShell) => void;
   readonly activeThreadKey: string | null;
   readonly timestampFormat: TimestampFormat;
   readonly disclosures: WorkflowDisclosureControls;
 }) {
   const threadById = new Map(props.threads.map((thread) => [thread.id, thread] as const));
-  const threadRow = (threadId: EnvironmentThreadShell["id"] | null) => {
+  const threadRow = (threadId: EnvironmentWorkflowThreadShell["id"] | null) => {
     if (threadId === null) return null;
     const thread = threadById.get(threadId);
     if (!thread) return null;
@@ -1287,8 +1287,8 @@ function AppReviewRunsTimeline(props: {
   readonly onRerunAppReviewPhase:
     | ((input: { readonly appReviewRunId: string; readonly phase: AppReviewWorkflowPhase }) => void)
     | undefined;
-  readonly threads: readonly EnvironmentThreadShell[];
-  readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
+  readonly threads: readonly EnvironmentWorkflowThreadShell[];
+  readonly onOpenThread: (thread: EnvironmentWorkflowThreadShell) => void;
   readonly activeThreadKey: string | null;
   readonly timestampFormat: TimestampFormat;
   readonly disclosures: WorkflowDisclosureControls;
@@ -1339,7 +1339,7 @@ function AppReviewRunsTimeline(props: {
  */
 function workflowStepSubSteps(
   preset: WorkflowPreset | null,
-  step: WorkflowTimelineStep<EnvironmentThreadShell>,
+  step: WorkflowTimelineStep<EnvironmentWorkflowThreadShell>,
 ): ReadonlyArray<WorkflowPresetSubStep> {
   if (preset === null || step.label === null) return [];
   const definition = WORKFLOW_PRESET_DEFINITION_BY_ID[preset];
@@ -1376,10 +1376,10 @@ const VISIBLE_STAGE_THREADS = 8;
 
 /** The tail of a step's entries, keeping each entry's original cycle number. */
 function visibleStepEntries(
-  step: WorkflowTimelineStep<EnvironmentThreadShell>,
+  step: WorkflowTimelineStep<EnvironmentWorkflowThreadShell>,
   showAll: boolean,
 ): ReadonlyArray<{
-  readonly entry: WorkflowTimelineStep<EnvironmentThreadShell>["entries"][number];
+  readonly entry: WorkflowTimelineStep<EnvironmentWorkflowThreadShell>["entries"][number];
   readonly entryIndex: number;
 }> {
   const indexed = step.entries.map((entry, entryIndex) => ({ entry, entryIndex }));
@@ -1389,10 +1389,10 @@ function visibleStepEntries(
 }
 
 function ThreadRowList(props: {
-  readonly threads: readonly EnvironmentThreadShell[];
+  readonly threads: readonly EnvironmentWorkflowThreadShell[];
   readonly timestampFormat: TimestampFormat;
   readonly activeThreadKey: string | null;
-  readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
+  readonly onOpenThread: (thread: EnvironmentWorkflowThreadShell) => void;
 }) {
   const [showAll, setShowAll] = useState(false);
   const hiddenCount = props.threads.length - VISIBLE_STAGE_THREADS;
@@ -1423,10 +1423,10 @@ function ThreadRowList(props: {
 }
 
 function EarlierThreads(props: {
-  readonly threads: readonly EnvironmentThreadShell[];
+  readonly threads: readonly EnvironmentWorkflowThreadShell[];
   readonly timestampFormat: TimestampFormat;
   readonly activeThreadKey: string | null;
-  readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
+  readonly onOpenThread: (thread: EnvironmentWorkflowThreadShell) => void;
 }) {
   if (props.threads.length === 0) return null;
   return (
@@ -1547,7 +1547,7 @@ function WorkflowExecutionStatusList(props: {
  */
 function ticketStageRerunDisabledReason(input: {
   readonly stageLabel: string;
-  readonly threads: readonly EnvironmentThreadShell[];
+  readonly threads: readonly EnvironmentWorkflowThreadShell[];
   readonly appReviewRun: AppReviewWorkflowRun | null | undefined;
 }): string | null {
   if (input.stageLabel === "App Review") {
@@ -1566,7 +1566,7 @@ function ticketStageRerunDisabledReason(input: {
 /** Whether the App Review's current phase still has a live provider session. */
 export function appReviewRunActiveThreadIsBusy(
   run: AppReviewWorkflowRun | null | undefined,
-  threads: readonly EnvironmentThreadShell[],
+  threads: readonly EnvironmentWorkflowThreadShell[],
 ): boolean {
   if (run?.status !== "running" || run.activeThreadId === null) return false;
   const activeThread = threads.find((thread) => thread.id === run.activeThreadId);
@@ -1610,8 +1610,8 @@ const TICKET_STAGE_RERUN = {
  * from a wider menu.
  */
 export function workflowPauseOf(
-  allThreads: readonly EnvironmentThreadShell[],
-  rowThreads: readonly EnvironmentThreadShell[],
+  allThreads: readonly EnvironmentWorkflowThreadShell[],
+  rowThreads: readonly EnvironmentWorkflowThreadShell[],
 ): { readonly scopeThreadIds: readonly ThreadId[]; readonly paused: boolean } {
   const scopeThreadIds = new Set<ThreadId>();
   let pausedCount = 0;
@@ -1636,8 +1636,8 @@ export function workflowPauseOf(
  * busy, with Clear and Start refusing to touch it.
  */
 export function runningThreadIdsOf(
-  allThreads: readonly EnvironmentThreadShell[],
-  threads: readonly EnvironmentThreadShell[],
+  allThreads: readonly EnvironmentWorkflowThreadShell[],
+  threads: readonly EnvironmentWorkflowThreadShell[],
 ): readonly ThreadId[] {
   return threads
     .filter(
@@ -1691,7 +1691,7 @@ function ticketReviewOutcome(state: OrchestrationImplementationTicketState | und
 export function workflowTicketStatuses(input: {
   readonly runs: readonly OrchestrationImplementationRun[];
   readonly tickets: readonly OrchestrationPlanningTicket[];
-  readonly threads: readonly EnvironmentThreadShell[];
+  readonly threads: readonly EnvironmentWorkflowThreadShell[];
   readonly appReviewWorkflowRuns: readonly AppReviewWorkflowRun[];
 }): readonly WorkflowStepStatus[] {
   const counted = new Set<string>();
@@ -1852,9 +1852,9 @@ function TicketPhases(props: {
   readonly onRerunAppReviewPhase:
     | ((input: { readonly appReviewRunId: string; readonly phase: AppReviewWorkflowPhase }) => void)
     | undefined;
-  readonly threads: readonly EnvironmentThreadShell[];
+  readonly threads: readonly EnvironmentWorkflowThreadShell[];
   readonly appReviewWorkflowRuns: readonly AppReviewWorkflowRun[];
-  readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
+  readonly onOpenThread: (thread: EnvironmentWorkflowThreadShell) => void;
   readonly onOpenAppReview: () => void;
   readonly activeThreadKey: string | null;
   readonly timestampFormat: TimestampFormat;
@@ -1866,7 +1866,7 @@ function TicketPhases(props: {
   const runThreads = props.threads.filter((thread) =>
     runWorkflowIds.has(thread.workflowContext?.workflowId ?? ""),
   );
-  const threadsByTicketId = new Map<string, EnvironmentThreadShell[]>();
+  const threadsByTicketId = new Map<string, EnvironmentWorkflowThreadShell[]>();
   for (const thread of runThreads) {
     for (const ticketId of thread.workflowContext?.ticketScope ?? []) {
       const scoped = threadsByTicketId.get(ticketId);
@@ -1979,7 +1979,7 @@ function TicketPhases(props: {
               );
               const linkedThreads = [...linkedThreadIds]
                 .map((threadId) => runThreads.find((thread) => thread.id === threadId))
-                .filter((thread): thread is EnvironmentThreadShell => thread !== undefined)
+                .filter((thread): thread is EnvironmentWorkflowThreadShell => thread !== undefined)
                 .toSorted(
                   (left, right) =>
                     Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
@@ -2527,9 +2527,9 @@ function appReviewRunPresentation(run: AppReviewWorkflowRun | null): {
 }
 
 function WorkflowGroupCard(props: {
-  readonly group: WorkflowGroup<EnvironmentThreadShell>;
+  readonly group: WorkflowGroup<EnvironmentWorkflowThreadShell>;
   readonly currentPath: WorkflowCurrentPath | null;
-  readonly groups: readonly WorkflowGroup<EnvironmentThreadShell>[];
+  readonly groups: readonly WorkflowGroup<EnvironmentWorkflowThreadShell>[];
   readonly expandedById: Readonly<Record<string, boolean>>;
   readonly setExpandedById: Dispatch<SetStateAction<Record<string, boolean>>>;
   readonly focusedWorkflowId: string | null;
@@ -2538,8 +2538,8 @@ function WorkflowGroupCard(props: {
   readonly timestampFormat: TimestampFormat;
   readonly appReviewWorkflowRuns: readonly AppReviewWorkflowRun[];
   readonly implementationRuns: readonly OrchestrationImplementationRun[];
-  readonly workflowRoot: EnvironmentThreadShell;
-  readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
+  readonly workflowRoot: EnvironmentWorkflowThreadShell;
+  readonly onOpenThread: (thread: EnvironmentWorkflowThreadShell) => void;
   readonly onOpenAppReview: () => void;
   readonly onCopyWorkflowLink: (workflowId: string) => void;
   readonly onRetryImplementationRun?: ((runId: string) => void) | undefined;
@@ -2787,13 +2787,14 @@ function WorkflowGroupCard(props: {
       ] as const;
     }),
   );
-  const stepStatusOf = (step: WorkflowTimelineStep<EnvironmentThreadShell>): WorkflowStepStatus =>
-    stepStatusById.get(step.id) ?? "pending";
+  const stepStatusOf = (
+    step: WorkflowTimelineStep<EnvironmentWorkflowThreadShell>,
+  ): WorkflowStepStatus => stepStatusById.get(step.id) ?? "pending";
   const groupStepStatus = resolveWorkflowStepRollup(steps.map(stepStatusOf));
   /** The step a collapsed row points at: whatever is holding the run up. */
   const liveStepOf = (
-    candidates: readonly WorkflowTimelineStep<EnvironmentThreadShell>[],
-  ): WorkflowTimelineStep<EnvironmentThreadShell> | null =>
+    candidates: readonly WorkflowTimelineStep<EnvironmentWorkflowThreadShell>[],
+  ): WorkflowTimelineStep<EnvironmentWorkflowThreadShell> | null =>
     candidates.find((step) => stepStatusOf(step) === "blocked") ??
     candidates.find((step) => stepStatusOf(step) === "awaiting") ??
     candidates.find((step) => stepStatusOf(step) === "running") ??
@@ -3520,7 +3521,7 @@ export function WorkflowsPanel(props: {
   readonly defaultMaxParallelAppReviews?: number | undefined;
   readonly onSetMaxParallelAppReviews?: ((value: number) => void) | undefined;
   readonly onSetMaxParallelTickets?: ((value: number) => void) | undefined;
-  readonly workflow: WorkflowRoot<EnvironmentThreadShell> | null;
+  readonly workflow: WorkflowRoot<EnvironmentWorkflowThreadShell> | null;
   readonly activeThreadKey: string | null;
   readonly focusedWorkflowId: string | null;
   readonly timestampFormat: TimestampFormat;
@@ -3530,7 +3531,7 @@ export function WorkflowsPanel(props: {
   readonly spec: OrchestrationPlanningSpec | null;
   readonly skillTitlesById: ReadonlyMap<string, string>;
   readonly onOpenSkill: (skillId: string) => void;
-  readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
+  readonly onOpenThread: (thread: EnvironmentWorkflowThreadShell) => void;
   readonly onOpenAppReview: () => void;
   readonly onCopyWorkflowLink: (workflowId: string) => void;
   readonly onRetryImplementationRun?: ((runId: string) => void) | undefined;
@@ -3596,7 +3597,7 @@ export function WorkflowsPanel(props: {
     handledFocusedWorkflowId.current = props.focusedWorkflowId;
     const groupById = new Map(groups.map((group) => [group.id, group] as const));
     const expandedAncestors: Record<string, boolean> = {};
-    let currentGroup: WorkflowGroup<EnvironmentThreadShell> | undefined = focusedGroup;
+    let currentGroup: WorkflowGroup<EnvironmentWorkflowThreadShell> | undefined = focusedGroup;
     while (currentGroup) {
       expandedAncestors[currentGroup.id] = true;
       currentGroup =

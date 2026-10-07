@@ -54,7 +54,7 @@ export function applyServerConfigProjection(
         config: {
           ...projection.config,
           keybindings: event.payload.keybindings,
-          tickets: event.payload.tickets,
+          issues: event.payload.issues,
         },
         latestEvent: event,
         source: "live",

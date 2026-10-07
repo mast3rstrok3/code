@@ -1,19 +1,16 @@
 import type {
   EnvironmentId,
-  OrchestrationImplementationRun,
-  OrchestrationAppReviewWorkflowRun,
-  OrchestrationPlanningSpecId,
-  OrchestrationShellSnapshot,
-  OrchestrationThreadShell,
+  OrchestrationV2ShellSnapshot,
+  OrchestrationV2ThreadShell,
   ProjectId,
   ScopedProjectRef,
   ScopedThreadRef,
   ThreadId,
 } from "@t3tools/contracts";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 
 import type { EnvironmentThreadShell } from "./models.ts";
-import { scopeThreadShell } from "./models.ts";
+import { presentThreadShell } from "./models.ts";
 import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
 import {
   arrayElementsEqual,
@@ -24,12 +21,9 @@ import {
   threadRefsEqual,
 } from "./entities.ts";
 
-const EMPTY_THREADS: ReadonlyArray<OrchestrationThreadShell> = Object.freeze([]);
-const EMPTY_IMPLEMENTATION_RUNS: ReadonlyArray<OrchestrationImplementationRun> = Object.freeze([]);
-const EMPTY_APP_REVIEW_WORKFLOW_RUNS: ReadonlyArray<OrchestrationAppReviewWorkflowRun> =
-  Object.freeze([]);
+const EMPTY_THREADS: ReadonlyArray<OrchestrationV2ThreadShell> = Object.freeze([]);
 const EMPTY_SCOPED_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
-const EMPTY_THREAD_INDEX: ReadonlyMap<ThreadId, OrchestrationThreadShell> = new Map();
+const EMPTY_THREAD_INDEX: ReadonlyMap<ThreadId, OrchestrationV2ThreadShell> = new Map();
 const EMPTY_THREAD_REFS_BY_PROJECT: ReadonlyMap<
   ProjectId,
   ReadonlyArray<ScopedThreadRef>
@@ -39,15 +33,15 @@ export function createEnvironmentThreadShellAtoms(input: {
   readonly catalogValueAtom: Atom.Atom<EnvironmentCatalogState>;
   readonly snapshotAtom: (
     environmentId: EnvironmentId,
-  ) => Atom.Atom<OrchestrationShellSnapshot | null>;
+  ) => Atom.Atom<OrchestrationV2ShellSnapshot | null>;
 }) {
   // Point reads and aggregate lists share values without keeping an atom alive
   // for every listed thread. Replaced source objects can be collected.
   const scopedThreads = new WeakMap<
-    OrchestrationThreadShell,
+    OrchestrationV2ThreadShell,
     Map<EnvironmentId, EnvironmentThreadShell>
   >();
-  const scopedThread = (environmentId: EnvironmentId, thread: OrchestrationThreadShell) => {
+  const scopedThread = (environmentId: EnvironmentId, thread: OrchestrationV2ThreadShell) => {
     let byEnvironment = scopedThreads.get(thread);
     if (byEnvironment === undefined) {
       byEnvironment = new Map();
@@ -55,7 +49,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     }
     let value = byEnvironment.get(environmentId);
     if (value === undefined) {
-      value = scopeThreadShell(environmentId, thread);
+      value = presentThreadShell(environmentId, thread);
       byEnvironment.set(environmentId, value);
     }
     return value;
@@ -63,48 +57,13 @@ export function createEnvironmentThreadShellAtoms(input: {
 
   const environmentThreadsAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make(
-      (get): ReadonlyArray<OrchestrationThreadShell> =>
+      (get): ReadonlyArray<OrchestrationV2ThreadShell> =>
         get(input.snapshotAtom(environmentId))?.threads ?? EMPTY_THREADS,
     ).pipe(Atom.withLabel(`environment-threads:${environmentId}`)),
   );
 
-  const environmentImplementationRunsAtom = Atom.family((environmentId: EnvironmentId) =>
-    Atom.make(
-      (get): ReadonlyArray<OrchestrationImplementationRun> =>
-        get(input.snapshotAtom(environmentId))?.implementationRuns ?? EMPTY_IMPLEMENTATION_RUNS,
-    ).pipe(Atom.withLabel(`environment-implementation-runs:${environmentId}`)),
-  );
-
-  const environmentAppReviewWorkflowRunsAtom = Atom.family((environmentId: EnvironmentId) =>
-    Atom.make(
-      (get): ReadonlyArray<OrchestrationAppReviewWorkflowRun> =>
-        get(input.snapshotAtom(environmentId))?.appReviewWorkflowRuns ??
-        EMPTY_APP_REVIEW_WORKFLOW_RUNS,
-    ).pipe(Atom.withLabel(`environment-app-review-workflow-runs:${environmentId}`)),
-  );
-
-  const implementationRunsBySpecAtomFamily = Atom.family((key: string) => {
-    const separator = key.indexOf("\u0000");
-    if (separator < 0) {
-      throw new Error(`Invalid implementation runs by Spec atom key: ${JSON.stringify(key)}.`);
-    }
-    const environmentId = key.slice(0, separator) as EnvironmentId;
-    const specId = key.slice(separator + 1) as OrchestrationPlanningSpecId;
-    let previous: ReadonlyArray<OrchestrationImplementationRun> = [];
-    return Atom.make((get) => {
-      const next = get(environmentImplementationRunsAtom(environmentId)).filter(
-        (run) => run.specId === specId,
-      );
-      if (arrayElementsEqual(previous, next)) {
-        return previous;
-      }
-      previous = next;
-      return previous;
-    }).pipe(Atom.withLabel(`environment-implementation-runs-by-spec:${key}`));
-  });
-
   const environmentThreadIndexAtom = Atom.family((environmentId: EnvironmentId) =>
-    Atom.make((get): ReadonlyMap<ThreadId, OrchestrationThreadShell> => {
+    Atom.make((get): ReadonlyMap<ThreadId, OrchestrationV2ThreadShell> => {
       const threads = get(environmentThreadsAtom(environmentId));
       if (threads.length === 0) {
         return EMPTY_THREAD_INDEX;
@@ -240,19 +199,29 @@ export function createEnvironmentThreadShellAtoms(input: {
     return previousThreadShells;
   }).pipe(Atom.withLabel("environment-thread-shell-list"));
 
+  let previousNavigationShells: ReadonlyArray<EnvironmentThreadShell> = [];
+  const navigationThreadShellsAtom = Atom.make((get) => {
+    const next: EnvironmentThreadShell[] = [];
+    for (const environmentId of get(input.catalogValueAtom).entries.keys()) {
+      for (const thread of get(environmentThreadsAtom(environmentId))) {
+        if (thread.archivedAt !== null || thread.lineage.relationshipToParent === "subagent")
+          continue;
+        next.push(scopedThread(environmentId, thread));
+      }
+    }
+    if (arrayElementsEqual(previousNavigationShells, next)) return previousNavigationShells;
+    previousNavigationShells = next;
+    return next;
+  }).pipe(Atom.withLabel("environment-navigation-thread-shells"));
+
   return {
     environmentThreadsAtom,
-    environmentImplementationRunsAtom,
-    environmentAppReviewWorkflowRunsAtom,
-    implementationRunsBySpecAtom: (input: {
-      readonly environmentId: EnvironmentId;
-      readonly specId: OrchestrationPlanningSpecId;
-    }) => implementationRunsBySpecAtomFamily(`${input.environmentId}\u0000${input.specId}`),
     environmentThreadIndexAtom,
     environmentThreadRefsAtom,
     environmentThreadRefsByProjectAtom,
     threadRefsAtom,
     threadShellsAtom,
+    navigationThreadShellsAtom,
     threadShellsForProjectRefsAtom: (refs: ReadonlyArray<ScopedProjectRef>) =>
       threadShellsForProjectRefsAtomFamily(projectRefCollectionKey(refs)),
     threadShellAtom: (ref: ScopedThreadRef) => threadShellAtomFamily(threadKey(ref)),

@@ -49,9 +49,9 @@ import * as Path from "effect/Path";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -2889,11 +2889,15 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  for (const [haltStage, haltCategory] of [
-    ["implementation", "retry-exhausted"],
-    ["final-code-review", "retry-exhausted"],
-    ["implementation", "structural-invariant"],
-  ] as const) {
+  describe.each(
+    [
+      ...([
+        ["implementation", "retry-exhausted"],
+        ["final-code-review", "retry-exhausted"],
+        ["implementation", "structural-invariant"],
+      ] as const),
+    ].map((scenarioCase) => [scenarioCase] as const),
+  )("scenario %s", ([haltStage, haltCategory]) => {
     it.effect(
       `restarts App Review after a final repair halted under ${haltStage} ${haltCategory}`,
       () =>
@@ -3017,7 +3021,7 @@ describe("ImplementationWorkflowReactor", () => {
           }),
         ),
     );
-  }
+  });
 
   it.effect("reconnects a halted Fast Feature run to its manually rerun App Review thread", () =>
     withSystem((system) =>
@@ -4386,7 +4390,9 @@ describe("ImplementationWorkflowReactor", () => {
       ),
   );
 
-  for (const workflowPreset of ["quick-plan", "fast-plan"] as const) {
+  describe.each(
+    [...(["quick-plan", "fast-plan"] as const)].map((scenarioCase) => [scenarioCase] as const),
+  )("scenario %s", (workflowPreset) => {
     it.effect(
       `${workflowPreset} keeps reported Build failures blocking, or enters its next stage`,
       () =>
@@ -4448,10 +4454,18 @@ describe("ImplementationWorkflowReactor", () => {
           }),
         ),
     );
-  }
+  });
 
-  for (const workflowPreset of ["quick-plan", "fast-plan", "fast-feature"] as const) {
-    for (const sessionStatus of ["starting", "running", "ready"] as const) {
+  describe.each(
+    [...(["quick-plan", "fast-plan", "fast-feature"] as const)].map(
+      (scenarioCase) => [scenarioCase] as const,
+    ),
+  )("scenario %s", (workflowPreset) => {
+    describe.each(
+      [...(["starting", "running", "ready"] as const)].map(
+        (scenarioCase) => [scenarioCase] as const,
+      ),
+    )("scenario %s", (sessionStatus) => {
       it.effect(
         `checks the Build owner before declaring ${workflowPreset} stalled with a ${sessionStatus} session`,
         () =>
@@ -4502,8 +4516,8 @@ describe("ImplementationWorkflowReactor", () => {
             }),
           ),
       );
-    }
-  }
+    });
+  });
 
   it.effect("re-seeds a Fast feature Build thread that was stranded without a turn", () =>
     withSystem(
@@ -5201,7 +5215,11 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  for (const phase of ["implementation", "code-review"] as const) {
+  describe.each(
+    [...(["implementation", "code-review"] as const)].map(
+      (scenarioCase) => [scenarioCase] as const,
+    ),
+  )("scenario %s", (phase) => {
     it.effect(`releases parallel ticket slots while ${phase} is paused`, () =>
       withSystem((system) =>
         Effect.gen(function* () {
@@ -5272,9 +5290,13 @@ describe("ImplementationWorkflowReactor", () => {
         }),
       ),
     );
-  }
+  });
 
-  for (const waitingStage of ["ready", "blocked", "failed", "queued-review"] as const) {
+  describe.each(
+    [...(["ready", "blocked", "failed", "queued-review"] as const)].map(
+      (scenarioCase) => [scenarioCase] as const,
+    ),
+  )("scenario %s", (waitingStage) => {
     it.effect(`recovery stops a retained idle ticket stack: ${waitingStage}`, () =>
       withSystem((system) =>
         Effect.gen(function* () {
@@ -5331,9 +5353,13 @@ describe("ImplementationWorkflowReactor", () => {
         }),
       ),
     );
-  }
+  });
 
-  for (const stackGuard of ["protected", "foreign-owner", "ownerless", "active-worker"] as const) {
+  describe.each(
+    [...(["protected", "foreign-owner", "ownerless", "active-worker"] as const)].map(
+      (scenarioCase) => [scenarioCase] as const,
+    ),
+  )("scenario %s", (stackGuard) => {
     it.effect(`recovery preserves a retained ticket stack with ${stackGuard}`, () =>
       withSystem((system) =>
         Effect.gen(function* () {
@@ -5390,7 +5416,7 @@ describe("ImplementationWorkflowReactor", () => {
         }),
       ),
     );
-  }
+  });
 
   it.effect("recovery rechecks admission after an idle stack lookup", () =>
     withSystem((system) =>
@@ -5499,7 +5525,11 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  for (const owner of ["workflow", "protected", "other-workflow"] as const) {
+  describe.each(
+    [...(["workflow", "protected", "other-workflow"] as const)].map(
+      (scenarioCase) => [scenarioCase] as const,
+    ),
+  )("scenario %s", (owner) => {
     it.effect(`releases an agent-started stack after implementation failure: ${owner}`, () =>
       withSystem((system) =>
         Effect.gen(function* () {
@@ -5523,7 +5553,7 @@ describe("ImplementationWorkflowReactor", () => {
         }),
       ),
     );
-  }
+  });
 
   it.effect("queues App Reviews before stack allocation and applies live review budgets", () =>
     withSystem((system) =>
@@ -7729,12 +7759,16 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  for (const [corrected, lastLaunch] of [
-    [true, false],
-    [false, false],
-    [true, true],
-    [false, true],
-  ] as const) {
+  describe.each(
+    [
+      ...([
+        [true, false],
+        [false, false],
+        [true, true],
+        [false, true],
+      ] as const),
+    ].map((scenarioCase) => [scenarioCase] as const),
+  )("scenario %s", ([corrected, lastLaunch]) => {
     it.effect(
       `requests a corrected worker report${lastLaunch ? " on the last launch" : ""} and ${corrected ? "accepts the correction" : "halts with the parse error after the retry"}`,
       () =>
@@ -7869,7 +7903,7 @@ describe("ImplementationWorkflowReactor", () => {
           }),
         ),
     );
-  }
+  });
 
   it.effect(
     "recovers a blocked worker report during an unrelated halt without restarting agents",
@@ -7985,100 +8019,103 @@ describe("ImplementationWorkflowReactor", () => {
       ),
   );
 
-  for (const discarded of [false, true]) {
-    it.effect(
-      `continues a ${discarded ? "discarded" : "recorded"} successful worker after another ticket halted the run`,
-      () =>
-        withSystem((system) =>
-          Effect.gen(function* () {
-            const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
-            const halt = {
-              stage: "app-review" as const,
-              category: "review-blocked" as const,
-              detail: "Another ticket needs review recovery.",
-              haltedAt: now,
-            };
-            yield* system.engine.dispatch({
-              type: "thread.implementation-run.update",
-              commandId: commandId("other-ticket-halt"),
-              threadId: sourceThreadId,
-              run: { ...run, status: "needs-human-attention", automationHalt: halt },
-              createdAt: now,
-            });
-            yield* system.reactor.drain;
-            yield* appendWorkerResult(system, {
-              run,
-              status: "succeeded",
-              completeTicketReview: false,
-            });
-            let snapshot = yield* system.query.getSnapshot();
-            const recorded = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
-            const state = recorded.ticketStates[0]!;
-            expect(state.workerResult?.status).toBe("succeeded");
-            const workerMessages = snapshot.threads.find(
-              (thread) => thread.id === state.workerThreadId,
-            )!.messages.length;
-            yield* system.reactor.recoverIncompleteStages();
-            yield* system.reactor.drain;
-            expect(
-              (yield* system.query.getSnapshot()).implementationRuns.find(
-                (entry) => entry.id === run.id,
-              )?.automationHalt,
-            ).toEqual(halt);
-            const updatedAt = "2026-01-01T00:05:00.000Z";
-            yield* system.engine.dispatch({
-              type: "thread.implementation-run.update",
-              commandId: commandId("resume-recorded-worker"),
-              threadId: sourceThreadId,
-              run: {
-                ...recorded,
-                status: discarded ? "needs-human-attention" : "running",
-                automationHalt: discarded
-                  ? {
-                      stage: "implementation",
-                      category: "retry-exhausted",
-                      ticketId: state.ticketId,
-                      detail: "Implementation launch budget exhausted.",
-                      haltedAt: updatedAt,
-                    }
-                  : null,
-                ticketStates: recorded.ticketStates.map((entry) => ({
-                  ...entry,
-                  ...(discarded
+  describe.each([false, true].map((scenarioCase) => [scenarioCase] as const))(
+    "scenario %s",
+    (discarded) => {
+      it.effect(
+        `continues a ${discarded ? "discarded" : "recorded"} successful worker after another ticket halted the run`,
+        () =>
+          withSystem((system) =>
+            Effect.gen(function* () {
+              const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+              const halt = {
+                stage: "app-review" as const,
+                category: "review-blocked" as const,
+                detail: "Another ticket needs review recovery.",
+                haltedAt: now,
+              };
+              yield* system.engine.dispatch({
+                type: "thread.implementation-run.update",
+                commandId: commandId("other-ticket-halt"),
+                threadId: sourceThreadId,
+                run: { ...run, status: "needs-human-attention", automationHalt: halt },
+                createdAt: now,
+              });
+              yield* system.reactor.drain;
+              yield* appendWorkerResult(system, {
+                run,
+                status: "succeeded",
+                completeTicketReview: false,
+              });
+              let snapshot = yield* system.query.getSnapshot();
+              const recorded = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
+              const state = recorded.ticketStates[0]!;
+              expect(state.workerResult?.status).toBe("succeeded");
+              const workerMessages = snapshot.threads.find(
+                (thread) => thread.id === state.workerThreadId,
+              )!.messages.length;
+              yield* system.reactor.recoverIncompleteStages();
+              yield* system.reactor.drain;
+              expect(
+                (yield* system.query.getSnapshot()).implementationRuns.find(
+                  (entry) => entry.id === run.id,
+                )?.automationHalt,
+              ).toEqual(halt);
+              const updatedAt = "2026-01-01T00:05:00.000Z";
+              yield* system.engine.dispatch({
+                type: "thread.implementation-run.update",
+                commandId: commandId("resume-recorded-worker"),
+                threadId: sourceThreadId,
+                run: {
+                  ...recorded,
+                  status: discarded ? "needs-human-attention" : "running",
+                  automationHalt: discarded
                     ? {
-                        status: "ready" as const,
-                        workerResult: null,
-                        warningMarkdown:
-                          "Recovery continued the existing Implementation thread after its provider session stopped.",
+                        stage: "implementation",
+                        category: "retry-exhausted",
+                        ticketId: state.ticketId,
+                        detail: "Implementation launch budget exhausted.",
+                        haltedAt: updatedAt,
                       }
-                    : {}),
+                    : null,
+                  ticketStates: recorded.ticketStates.map((entry) => ({
+                    ...entry,
+                    ...(discarded
+                      ? {
+                          status: "ready" as const,
+                          workerResult: null,
+                          warningMarkdown:
+                            "Recovery continued the existing Implementation thread after its provider session stopped.",
+                        }
+                      : {}),
+                    updatedAt,
+                  })),
                   updatedAt,
-                })),
-                updatedAt,
-              },
-              createdAt: updatedAt,
-            });
-            yield* system.reactor.drain;
-            yield* system.reactor.recoverIncompleteStages();
-            yield* system.reactor.drain;
-            yield* system.reactor.recoverIncompleteStages();
-            yield* system.reactor.drain;
-            snapshot = yield* system.query.getSnapshot();
-            const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
-            expect(recovered.automationHalt).toBeNull();
-            expect(recovered.ticketStates[0]?.status).toBe("code-reviewing");
-            expect(recovered.ticketStates[0]?.workerResult?.commitSha).toBe(
-              state.workerResult?.commitSha,
-            );
-            expect(recovered.ticketStates[0]?.attemptCount).toBe(state.attemptCount);
-            expect(recovered.workerResults).toHaveLength(1);
-            expect(
-              snapshot.threads.find((thread) => thread.id === state.workerThreadId)!.messages,
-            ).toHaveLength(workerMessages);
-          }),
-        ),
-    );
-  }
+                },
+                createdAt: updatedAt,
+              });
+              yield* system.reactor.drain;
+              yield* system.reactor.recoverIncompleteStages();
+              yield* system.reactor.drain;
+              yield* system.reactor.recoverIncompleteStages();
+              yield* system.reactor.drain;
+              snapshot = yield* system.query.getSnapshot();
+              const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
+              expect(recovered.automationHalt).toBeNull();
+              expect(recovered.ticketStates[0]?.status).toBe("code-reviewing");
+              expect(recovered.ticketStates[0]?.workerResult?.commitSha).toBe(
+                state.workerResult?.commitSha,
+              );
+              expect(recovered.ticketStates[0]?.attemptCount).toBe(state.attemptCount);
+              expect(recovered.workerResults).toHaveLength(1);
+              expect(
+                snapshot.threads.find((thread) => thread.id === state.workerThreadId)!.messages,
+              ).toHaveLength(workerMessages);
+            }),
+          ),
+      );
+    },
+  );
 
   it.effect("waits on an idle worker until the background task it started has ended", () =>
     withSystem((system) =>
@@ -9004,7 +9041,11 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  for (const purpose of ["reproduction", "verification", undefined] as const) {
+  describe.each(
+    [...(["reproduction", "verification", undefined] as const)].map(
+      (scenarioCase) => [scenarioCase] as const,
+    ),
+  )("scenario %s", (purpose) => {
     it.effect(`handles ${purpose ?? "legacy"} red evidence in ticket Code Review`, () =>
       withSystem(
         (system) =>
@@ -9109,7 +9150,7 @@ describe("ImplementationWorkflowReactor", () => {
         },
       ),
     );
-  }
+  });
 
   it.effect(
     "retries a ticket validation halt in Code Review without repeating implementation",
@@ -10999,258 +11040,264 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  for (const headChanged of [false, true]) {
-    it.effect(
-      `recovers a legacy final regression failure ${headChanged ? "only on its tested commit" : "into repair without repeating tests"}`,
-      () =>
-        withSystem((system) =>
-          Effect.gen(function* () {
-            const { run } = yield* launchRun(system);
-            const validations: OrchestrationImplementationValidationResult[] = [
-              {
-                command: "vp check",
-                status: "failed",
-                completedAt: now,
-                outputMarkdown: "Bad report path",
-              },
-              {
-                command: "env -u REPORT vp check",
-                supersedesCommand: "vp check",
-                status: "passed",
-                completedAt: "2026-01-01T00:00:01.000Z",
-                outputMarkdown: "Same checks passed after correcting setup",
-              },
-              {
-                command: "vp run typecheck",
-                status: "failed",
-                completedAt: now,
-                outputMarkdown: "One case failed",
-              },
-            ];
-            yield* system.engine.dispatch({
-              type: "thread.implementation-run.update",
-              commandId: commandId("legacy-regression-stop"),
-              threadId: sourceThreadId,
-              run: {
-                ...run,
-                status: "needs-human-attention",
-                integrationHeadSha: "def456",
-                codeReviewedHeadSha: "def456",
-                activeValidationKind: null,
-                activeValidatorThreadId: null,
-                activeCodeReviewThreadId: null,
-                finalValidation: validations[2]!,
-                finalValidationResults: validations,
-                automationHalt: {
-                  stage: "final-code-review",
-                  category: "validation-failed",
-                  detail: "Legacy gate stopped",
-                  haltedAt: now,
-                },
-                updatedAt: now,
-              },
-              createdAt: now,
-            });
-            if (headChanged) yield* Ref.set(system.orchestratorHead, "changed@commit");
-            yield* system.engine.dispatch({
-              type: "thread.implementation-run.rerun",
-              commandId: commandId("resume-legacy-regression"),
-              threadId: sourceThreadId,
-              runId: run.id,
-              target: { kind: "run", stage: "code-review" },
-              createdAt: "2026-01-01T00:00:05.000Z",
-            });
-            yield* system.reactor.drain;
-            const snapshot = yield* system.query.getSnapshot();
-            const resumed = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
-            expect(resumed.activeValidatorThreadId).toBeNull();
-            expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
-            if (headChanged) {
-              expect(resumed.status).toBe("needs-human-attention");
-              expect(resumed.automationHalt?.detail).toContain("expected HEAD");
-              expect(resumed.activeFixerThreadId).toBeNull();
-              return;
-            }
-            expect(resumed.status, resumed.automationHalt?.detail).toBe("fixing");
-            expect(resumed.activeValidationKind).toBe("final");
-            expect(resumed.finalRegression?.cycles).toHaveLength(1);
-            expect(resumed.finalRegression?.checks[0]?.result?.status).toBe("passed");
-            expect(resumed.finalRegression?.checks[0]?.result?.command).toBe(
-              "env -u REPORT vp check",
-            );
-            expect(resumed.finalRegression?.checks[1]?.result?.status).toBe("failed");
-            const fixer = snapshot.threads.find(
-              (thread) => thread.id === resumed.activeFixerThreadId,
-            );
-            expect(fixer?.title).toBe("Final regression repair 1 of 5");
-            expect(fixer?.messages.at(-1)?.text).toContain("One case failed");
-            expect(fixer?.messages.at(-1)?.text).not.toContain("Bad report path");
-          }),
-        ),
-    );
-  }
-
-  for (const succeeds of [true, false]) {
-    it.effect(
-      `final regression cycles ${succeeds ? "retry failures and publish" : "stop after five failed rounds"}`,
-      () =>
-        withSystem(
-          (system) =>
+  describe.each([false, true].map((scenarioCase) => [scenarioCase] as const))(
+    "scenario %s",
+    (headChanged) => {
+      it.effect(
+        `recovers a legacy final regression failure ${headChanged ? "only on its tested commit" : "into repair without repeating tests"}`,
+        () =>
+          withSystem((system) =>
             Effect.gen(function* () {
-              const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
-              yield* appendWorkerResult(system, { run, status: "succeeded" });
-              yield* passMergeGate(system, run);
-              const current = () =>
-                Effect.map(system.query.getSnapshot(), (snapshot) =>
-                  snapshot.implementationRuns.find((entry) => entry.id === run.id)!,
-                );
-              let active = yield* current();
-              yield* appendCodeReviewResult(system, {
-                run,
-                threadId: active.activeCodeReviewThreadId!,
-                status: "clean",
-                tag: "regression-initial",
-                validations: [],
-              });
-              const emit = (
-                threadId: ThreadId,
-                type: string,
-                payload: Record<string, unknown>,
-                second: number,
-              ) =>
-                Effect.gen(function* () {
-                  const createdAt = `2026-01-01T00:01:${String(second).padStart(2, "0")}.000Z`;
-                  yield* system.engine.dispatch({
-                    type: "thread.activity.append",
-                    commandId: commandId(`regression-${second}`),
-                    threadId,
-                    activity: {
-                      id: eventId(`regression-${second}`),
-                      tone: "info",
-                      kind: type,
-                      summary: type,
-                      payload: { type, runId: run.id, ...payload },
-                      turnId: null,
-                      createdAt,
-                    },
-                    createdAt,
-                  });
-                  yield* system.reactor.drain;
-                });
-              for (let cycle = 1; cycle <= (succeeds ? 2 : 5); cycle++) {
-                active = yield* current();
-                expect(active.status).toBe("validating");
-                expect(active.activeValidationKind).toBe("final");
-                const snapshot = yield* system.query.getSnapshot();
-                const prompt =
-                  snapshot.threads
-                    .find((thread) => thread.id === active.activeValidatorThreadId)
-                    ?.messages.at(-1)?.text ?? "";
-                expect(prompt).toContain(`Final regression cycle ${cycle} of 5`);
-                if (cycle > 1) {
-                  expect(prompt).toContain("vp test failed-case");
-                  expect(prompt).not.toContain("- vp check\n");
-                }
-                const passed = succeeds && cycle === 2;
-                yield* emit(
-                  active.activeValidatorThreadId!,
-                  "implementation-merge-gate-result",
-                  {
-                    status: passed ? "passed" : "failed",
-                    validations: [
-                      ...(cycle === 1
-                        ? [
-                            {
-                              command: "vp check",
-                              status: "passed",
-                              outputMarkdown: "unchanged checks pass",
-                              completedAt: now,
-                            },
-                          ]
-                        : []),
-                      {
-                        command: cycle === 1 ? "vp run typecheck" : "vp test failed-case",
-                        status: passed ? "passed" : "failed",
-                        retryCommand: "vp test failed-case",
-                        outputMarkdown: "Exact failed case selection",
-                        completedAt: now,
-                      },
-                    ],
-                    summaryMarkdown: passed ? "Retest passed" : "One check failed",
-                  },
-                  cycle * 4,
-                );
-                active = yield* current();
-                expect(active.finalRegression?.cycles).toHaveLength(cycle);
-                if (passed) {
-                  expect(active.validatedHeadSha).toBe("repair-1@commit");
-                  expect(
-                    active.finalRegression?.checks.every(
-                      (check) => check.result?.status === "passed",
-                    ),
-                  ).toBe(true);
-                  expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(1);
-                  break;
-                }
-                expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
-                if (cycle === 5) {
-                  expect(active.status).toBe("needs-human-attention");
-                  expect(active.automationHalt?.detail).toContain("after 5 cycles");
-                  expect(active.activeFixerThreadId).toBeNull();
-                  expect(active.finalValidation?.status).toBe("failed");
-                  break;
-                }
-                expect(active.status).toBe("fixing");
-                yield* Ref.set(system.orchestratorHead, `repair-${cycle}@commit`);
-                yield* emit(
-                  active.activeFixerThreadId!,
-                  "implementation-fix-result",
-                  {
-                    status: "succeeded",
-                    commitSha: `repair-${cycle}@commit`,
-                    validations: requiredValidations(),
-                    notesMarkdown: "Fixed the failing case",
-                  },
-                  cycle * 4 + 1,
-                );
-                active = yield* current();
-                expect(
-                  active.status,
-                  active.automationHalt?.detail ?? active.retryableFailure?.detail,
-                ).toBe("code-reviewing");
-                expect(active.codeReviewedHeadSha).toBeNull();
-                yield* emit(
-                  active.activeCodeReviewThreadId!,
-                  "implementation-code-review-result",
-                  {
-                    status: "clean",
-                    validations: [],
-                    reportMarkdown: "Repair reviewed",
-                    invalidatedValidationCommands: [],
-                    reviewedRetryCommands: [
-                      { command: "vp run typecheck", retryCommand: "vp test failed-case" },
-                    ],
-                    validationImpactMarkdown:
-                      "Only the failing case changed. Passing checks and fixtures remain valid.",
-                  },
-                  cycle * 4 + 2,
-                );
-              }
-            }),
-          {
-            serverSettings: {
-              workflowStepReviewParts: [
+              const { run } = yield* launchRun(system);
+              const validations: OrchestrationImplementationValidationResult[] = [
                 {
-                  workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
-                  e2e: false,
-                  browser: false,
+                  command: "vp check",
+                  status: "failed",
+                  completedAt: now,
+                  outputMarkdown: "Bad report path",
                 },
-              ],
+                {
+                  command: "env -u REPORT vp check",
+                  supersedesCommand: "vp check",
+                  status: "passed",
+                  completedAt: "2026-01-01T00:00:01.000Z",
+                  outputMarkdown: "Same checks passed after correcting setup",
+                },
+                {
+                  command: "vp run typecheck",
+                  status: "failed",
+                  completedAt: now,
+                  outputMarkdown: "One case failed",
+                },
+              ];
+              yield* system.engine.dispatch({
+                type: "thread.implementation-run.update",
+                commandId: commandId("legacy-regression-stop"),
+                threadId: sourceThreadId,
+                run: {
+                  ...run,
+                  status: "needs-human-attention",
+                  integrationHeadSha: "def456",
+                  codeReviewedHeadSha: "def456",
+                  activeValidationKind: null,
+                  activeValidatorThreadId: null,
+                  activeCodeReviewThreadId: null,
+                  finalValidation: validations[2]!,
+                  finalValidationResults: validations,
+                  automationHalt: {
+                    stage: "final-code-review",
+                    category: "validation-failed",
+                    detail: "Legacy gate stopped",
+                    haltedAt: now,
+                  },
+                  updatedAt: now,
+                },
+                createdAt: now,
+              });
+              if (headChanged) yield* Ref.set(system.orchestratorHead, "changed@commit");
+              yield* system.engine.dispatch({
+                type: "thread.implementation-run.rerun",
+                commandId: commandId("resume-legacy-regression"),
+                threadId: sourceThreadId,
+                runId: run.id,
+                target: { kind: "run", stage: "code-review" },
+                createdAt: "2026-01-01T00:00:05.000Z",
+              });
+              yield* system.reactor.drain;
+              const snapshot = yield* system.query.getSnapshot();
+              const resumed = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
+              expect(resumed.activeValidatorThreadId).toBeNull();
+              expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
+              if (headChanged) {
+                expect(resumed.status).toBe("needs-human-attention");
+                expect(resumed.automationHalt?.detail).toContain("expected HEAD");
+                expect(resumed.activeFixerThreadId).toBeNull();
+                return;
+              }
+              expect(resumed.status, resumed.automationHalt?.detail).toBe("fixing");
+              expect(resumed.activeValidationKind).toBe("final");
+              expect(resumed.finalRegression?.cycles).toHaveLength(1);
+              expect(resumed.finalRegression?.checks[0]?.result?.status).toBe("passed");
+              expect(resumed.finalRegression?.checks[0]?.result?.command).toBe(
+                "env -u REPORT vp check",
+              );
+              expect(resumed.finalRegression?.checks[1]?.result?.status).toBe("failed");
+              const fixer = snapshot.threads.find(
+                (thread) => thread.id === resumed.activeFixerThreadId,
+              );
+              expect(fixer?.title).toBe("Final regression repair 1 of 5");
+              expect(fixer?.messages.at(-1)?.text).toContain("One case failed");
+              expect(fixer?.messages.at(-1)?.text).not.toContain("Bad report path");
+            }),
+          ),
+      );
+    },
+  );
+
+  describe.each([true, false].map((scenarioCase) => [scenarioCase] as const))(
+    "scenario %s",
+    (succeeds) => {
+      it.effect(
+        `final regression cycles ${succeeds ? "retry failures and publish" : "stop after five failed rounds"}`,
+        () =>
+          withSystem(
+            (system) =>
+              Effect.gen(function* () {
+                const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+                yield* appendWorkerResult(system, { run, status: "succeeded" });
+                yield* passMergeGate(system, run);
+                const current = () =>
+                  Effect.map(system.query.getSnapshot(), (snapshot) =>
+                    snapshot.implementationRuns.find((entry) => entry.id === run.id)!,
+                  );
+                let active = yield* current();
+                yield* appendCodeReviewResult(system, {
+                  run,
+                  threadId: active.activeCodeReviewThreadId!,
+                  status: "clean",
+                  tag: "regression-initial",
+                  validations: [],
+                });
+                const emit = (
+                  threadId: ThreadId,
+                  type: string,
+                  payload: Record<string, unknown>,
+                  second: number,
+                ) =>
+                  Effect.gen(function* () {
+                    const createdAt = `2026-01-01T00:01:${String(second).padStart(2, "0")}.000Z`;
+                    yield* system.engine.dispatch({
+                      type: "thread.activity.append",
+                      commandId: commandId(`regression-${second}`),
+                      threadId,
+                      activity: {
+                        id: eventId(`regression-${second}`),
+                        tone: "info",
+                        kind: type,
+                        summary: type,
+                        payload: { type, runId: run.id, ...payload },
+                        turnId: null,
+                        createdAt,
+                      },
+                      createdAt,
+                    });
+                    yield* system.reactor.drain;
+                  });
+                for (let cycle = 1; cycle <= (succeeds ? 2 : 5); cycle++) {
+                  active = yield* current();
+                  expect(active.status).toBe("validating");
+                  expect(active.activeValidationKind).toBe("final");
+                  const snapshot = yield* system.query.getSnapshot();
+                  const prompt =
+                    snapshot.threads
+                      .find((thread) => thread.id === active.activeValidatorThreadId)
+                      ?.messages.at(-1)?.text ?? "";
+                  expect(prompt).toContain(`Final regression cycle ${cycle} of 5`);
+                  if (cycle > 1) {
+                    expect(prompt).toContain("vp test failed-case");
+                    expect(prompt).not.toContain("- vp check\n");
+                  }
+                  const passed = succeeds && cycle === 2;
+                  yield* emit(
+                    active.activeValidatorThreadId!,
+                    "implementation-merge-gate-result",
+                    {
+                      status: passed ? "passed" : "failed",
+                      validations: [
+                        ...(cycle === 1
+                          ? [
+                              {
+                                command: "vp check",
+                                status: "passed",
+                                outputMarkdown: "unchanged checks pass",
+                                completedAt: now,
+                              },
+                            ]
+                          : []),
+                        {
+                          command: cycle === 1 ? "vp run typecheck" : "vp test failed-case",
+                          status: passed ? "passed" : "failed",
+                          retryCommand: "vp test failed-case",
+                          outputMarkdown: "Exact failed case selection",
+                          completedAt: now,
+                        },
+                      ],
+                      summaryMarkdown: passed ? "Retest passed" : "One check failed",
+                    },
+                    cycle * 4,
+                  );
+                  active = yield* current();
+                  expect(active.finalRegression?.cycles).toHaveLength(cycle);
+                  if (passed) {
+                    expect(active.validatedHeadSha).toBe("repair-1@commit");
+                    expect(
+                      active.finalRegression?.checks.every(
+                        (check) => check.result?.status === "passed",
+                      ),
+                    ).toBe(true);
+                    expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(1);
+                    break;
+                  }
+                  expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
+                  if (cycle === 5) {
+                    expect(active.status).toBe("needs-human-attention");
+                    expect(active.automationHalt?.detail).toContain("after 5 cycles");
+                    expect(active.activeFixerThreadId).toBeNull();
+                    expect(active.finalValidation?.status).toBe("failed");
+                    break;
+                  }
+                  expect(active.status).toBe("fixing");
+                  yield* Ref.set(system.orchestratorHead, `repair-${cycle}@commit`);
+                  yield* emit(
+                    active.activeFixerThreadId!,
+                    "implementation-fix-result",
+                    {
+                      status: "succeeded",
+                      commitSha: `repair-${cycle}@commit`,
+                      validations: requiredValidations(),
+                      notesMarkdown: "Fixed the failing case",
+                    },
+                    cycle * 4 + 1,
+                  );
+                  active = yield* current();
+                  expect(
+                    active.status,
+                    active.automationHalt?.detail ?? active.retryableFailure?.detail,
+                  ).toBe("code-reviewing");
+                  expect(active.codeReviewedHeadSha).toBeNull();
+                  yield* emit(
+                    active.activeCodeReviewThreadId!,
+                    "implementation-code-review-result",
+                    {
+                      status: "clean",
+                      validations: [],
+                      reportMarkdown: "Repair reviewed",
+                      invalidatedValidationCommands: [],
+                      reviewedRetryCommands: [
+                        { command: "vp run typecheck", retryCommand: "vp test failed-case" },
+                      ],
+                      validationImpactMarkdown:
+                        "Only the failing case changed. Passing checks and fixtures remain valid.",
+                    },
+                    cycle * 4 + 2,
+                  );
+                }
+              }),
+            {
+              serverSettings: {
+                workflowStepReviewParts: [
+                  {
+                    workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+                    e2e: false,
+                    browser: false,
+                  },
+                ],
+              },
             },
-          },
-        ),
-    );
-  }
+          ),
+      );
+    },
+  );
 
   it.effect("runs one final gate after a clean review without repeating the review", () =>
     withSystem(
@@ -13149,7 +13196,11 @@ describe("ImplementationWorkflowReactor", () => {
       ),
   );
 
-  for (const stackOwnership of ["workflow", "protected", "other-workflow"] as const) {
+  describe.each(
+    [...(["workflow", "protected", "other-workflow"] as const)].map(
+      (scenarioCase) => [scenarioCase] as const,
+    ),
+  )("scenario %s", (stackOwnership) => {
     it.effect(
       `releases only its unprotected ticket stack before Code Review: ${stackOwnership}`,
       () =>
@@ -13197,7 +13248,7 @@ describe("ImplementationWorkflowReactor", () => {
           }),
         ),
     );
-  }
+  });
 
   it.effect(
     "stage recovery applies a terminal ticket App Review whose update was interrupted",
@@ -14110,14 +14161,18 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  for (const [outcome, backgroundTaskOpen] of [
-    ["clean", false],
-    ["findings", false],
-    ["malformed", false],
-    ["clean", true],
-    ["findings", true],
-    ["malformed", true],
-  ] as const) {
+  describe.each(
+    [
+      ...([
+        ["clean", false],
+        ["findings", false],
+        ["malformed", false],
+        ["clean", true],
+        ["findings", true],
+        ["malformed", true],
+      ] as const),
+    ].map((scenarioCase) => [scenarioCase] as const),
+  )("scenario %s", ([outcome, backgroundTaskOpen]) => {
     it.effect(
       `recovers a ${outcome} ticket Code Review result (background task open=${backgroundTaskOpen})`,
       () =>
@@ -14296,7 +14351,7 @@ describe("ImplementationWorkflowReactor", () => {
           }),
         ),
     );
-  }
+  });
 
   it.effect("halts a ticket Code Review that has no launch budget left", () =>
     withSystem((system) =>
@@ -14719,48 +14774,57 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  for (const scenario of [
-    {
-      name: "clears its stale halt",
-      haltStage: "implementation",
-      paused: false,
-      ticketStatus: "ready",
-    },
-    { name: "holds its concurrency slot", haltStage: null, paused: false, ticketStatus: "ready" },
-    {
-      name: "preserves an unrelated halt",
-      haltStage: "code-review",
-      paused: false,
-      ticketStatus: "ready",
-    },
-    {
-      name: "respects a workflow pause",
-      haltStage: "implementation",
-      paused: true,
-      ticketStatus: "ready",
-    },
-    {
-      name: "repairs its stale halted execution",
-      haltStage: null,
-      paused: false,
-      ticketStatus: "running",
-    },
-    {
-      name: "counts its active claim without a recovery warning",
-      haltStage: null,
-      paused: false,
-      ticketStatus: "ready",
-      omitRecoveryWarning: true,
-    },
-    {
-      name: "settles its resumed claim after a planned restart",
-      haltStage: null,
-      paused: false,
-      ticketStatus: "ready",
-      omitRecoveryWarning: true,
-      reconciling: true,
-    },
-  ] as const) {
+  describe.each(
+    [
+      ...([
+        {
+          name: "clears its stale halt",
+          haltStage: "implementation",
+          paused: false,
+          ticketStatus: "ready",
+        },
+        {
+          name: "holds its concurrency slot",
+          haltStage: null,
+          paused: false,
+          ticketStatus: "ready",
+        },
+        {
+          name: "preserves an unrelated halt",
+          haltStage: "code-review",
+          paused: false,
+          ticketStatus: "ready",
+        },
+        {
+          name: "respects a workflow pause",
+          haltStage: "implementation",
+          paused: true,
+          ticketStatus: "ready",
+        },
+        {
+          name: "repairs its stale halted execution",
+          haltStage: null,
+          paused: false,
+          ticketStatus: "running",
+        },
+        {
+          name: "counts its active claim without a recovery warning",
+          haltStage: null,
+          paused: false,
+          ticketStatus: "ready",
+          omitRecoveryWarning: true,
+        },
+        {
+          name: "settles its resumed claim after a planned restart",
+          haltStage: null,
+          paused: false,
+          ticketStatus: "ready",
+          omitRecoveryWarning: true,
+          reconciling: true,
+        },
+      ] as const),
+    ].map((scenarioCase) => [scenarioCase] as const),
+  )("scenario %s", (scenario) => {
     it.effect(`recovery of an active worker ${scenario.name} without another launch`, () =>
       withSystem((system) =>
         Effect.gen(function* () {
@@ -14899,131 +14963,136 @@ describe("ImplementationWorkflowReactor", () => {
         }),
       ),
     );
-  }
+  });
 
   // A restart's crash recovery can clear the halt and leave only the `ready`
   // ticket that recovery gave up on.
-  for (const halted of [true, false]) {
-    it.effect(
-      `recovers a worker report that arrived after recovery gave up on it${halted ? " and halted" : ", with the halt already cleared"}`,
-      () =>
-        withSystem((system) =>
-          Effect.gen(function* () {
-            const { run } = yield* launchRun(system);
-            const state = run.ticketStates[0]!;
-            const threadId = state.workerThreadId!;
-            const reportedAt = DateTime.formatIso(yield* DateTime.now);
-            const turnId = TurnId.make("late-report-turn");
-            const messageId = MessageId.make("late-report-message");
-            const session = (status: "running" | "ready") => ({
-              threadId,
-              status,
-              providerName: "codex",
-              runtimeMode: "full-access" as const,
-              activeTurnId: status === "running" ? turnId : null,
-              lastError: null,
-              updatedAt: reportedAt,
-            });
-            yield* system.engine.dispatch({
-              type: "thread.session.set",
-              commandId: commandId("late-report-running"),
-              threadId,
-              session: session("running"),
-              createdAt: reportedAt,
-            });
-            yield* system.engine.dispatch({
-              type: "thread.message.assistant.delta",
-              commandId: commandId("late-report-text"),
-              threadId,
-              turnId,
-              messageId,
-              delta: `\`\`\`json\n${yield* encodeJson({
-                type: "implementation-worker-result",
-                ticketId: state.ticketId,
-                workerThreadId: threadId,
-                branch: state.branch,
-                worktreePath: state.worktreePath,
-                status: "succeeded",
-                commitSha: `${state.branch}@commit`,
-                validations: requiredValidations(),
-                notesMarkdown: "succeeded",
-                reportedAt,
-              })}\n\`\`\``,
-              createdAt: reportedAt,
-            });
-            yield* system.engine.dispatch({
-              type: "thread.message.assistant.complete",
-              commandId: commandId("late-report-complete"),
-              threadId,
-              turnId,
-              messageId,
-              createdAt: reportedAt,
-            });
-            yield* system.engine.dispatch({
-              type: "thread.session.set",
-              commandId: commandId("late-report-ready"),
-              threadId,
-              session: session("ready"),
-              createdAt: reportedAt,
-            });
-            yield* system.reactor.drain;
+  describe.each([true, false].map((scenarioCase) => [scenarioCase] as const))(
+    "scenario %s",
+    (halted) => {
+      it.effect(
+        `recovers a worker report that arrived after recovery gave up on it${halted ? " and halted" : ", with the halt already cleared"}`,
+        () =>
+          withSystem((system) =>
+            Effect.gen(function* () {
+              const { run } = yield* launchRun(system);
+              const state = run.ticketStates[0]!;
+              const threadId = state.workerThreadId!;
+              const reportedAt = DateTime.formatIso(yield* DateTime.now);
+              const turnId = TurnId.make("late-report-turn");
+              const messageId = MessageId.make("late-report-message");
+              const session = (status: "running" | "ready") => ({
+                threadId,
+                status,
+                providerName: "codex",
+                runtimeMode: "full-access" as const,
+                activeTurnId: status === "running" ? turnId : null,
+                lastError: null,
+                updatedAt: reportedAt,
+              });
+              yield* system.engine.dispatch({
+                type: "thread.session.set",
+                commandId: commandId("late-report-running"),
+                threadId,
+                session: session("running"),
+                createdAt: reportedAt,
+              });
+              yield* system.engine.dispatch({
+                type: "thread.message.assistant.delta",
+                commandId: commandId("late-report-text"),
+                threadId,
+                turnId,
+                messageId,
+                delta: `\`\`\`json\n${yield* encodeJson({
+                  type: "implementation-worker-result",
+                  ticketId: state.ticketId,
+                  workerThreadId: threadId,
+                  branch: state.branch,
+                  worktreePath: state.worktreePath,
+                  status: "succeeded",
+                  commitSha: `${state.branch}@commit`,
+                  validations: requiredValidations(),
+                  notesMarkdown: "succeeded",
+                  reportedAt,
+                })}\n\`\`\``,
+                createdAt: reportedAt,
+              });
+              yield* system.engine.dispatch({
+                type: "thread.message.assistant.complete",
+                commandId: commandId("late-report-complete"),
+                threadId,
+                turnId,
+                messageId,
+                createdAt: reportedAt,
+              });
+              yield* system.engine.dispatch({
+                type: "thread.session.set",
+                commandId: commandId("late-report-ready"),
+                threadId,
+                session: session("ready"),
+                createdAt: reportedAt,
+              });
+              yield* system.reactor.drain;
 
-            // The halt is written after the report, as it is when the report was
-            // still queued in ingestion while recovery gave up on the worker.
-            yield* TestClock.adjust(Duration.minutes(1));
-            const haltedAt = DateTime.formatIso(yield* DateTime.now);
-            const current = (yield* system.query.getSnapshot()).implementationRuns.find(
-              (entry) => entry.id === run.id,
-            )!;
-            yield* system.engine.dispatch({
-              type: "thread.implementation-run.update",
-              commandId: commandId("late-report-exhaustion-halt"),
-              threadId: sourceThreadId,
-              run: {
-                ...current,
-                // The report was never recorded: it was still queued when the
-                // halt was written.
-                workerResults: [],
-                status: halted ? "needs-human-attention" : "running",
-                automationHalt: halted
-                  ? {
-                      stage: "implementation",
-                      category: "retry-exhausted",
-                      ticketId: state.ticketId,
-                      detail: "Implementation launch budget exhausted.",
-                      haltedAt,
-                    }
-                  : null,
-                ticketStates: current.ticketStates.map((entry) => ({
-                  ...entry,
-                  status: "ready" as const,
-                  attemptCount: 2,
-                  workerResult: null,
-                  warningMarkdown:
-                    "Recovery continued the existing Implementation thread after its provider session stopped.",
+              // The halt is written after the report, as it is when the report was
+              // still queued in ingestion while recovery gave up on the worker.
+              yield* TestClock.adjust(Duration.minutes(1));
+              const haltedAt = DateTime.formatIso(yield* DateTime.now);
+              const current = (yield* system.query.getSnapshot()).implementationRuns.find(
+                (entry) => entry.id === run.id,
+              )!;
+              yield* system.engine.dispatch({
+                type: "thread.implementation-run.update",
+                commandId: commandId("late-report-exhaustion-halt"),
+                threadId: sourceThreadId,
+                run: {
+                  ...current,
+                  // The report was never recorded: it was still queued when the
+                  // halt was written.
+                  workerResults: [],
+                  status: halted ? "needs-human-attention" : "running",
+                  automationHalt: halted
+                    ? {
+                        stage: "implementation",
+                        category: "retry-exhausted",
+                        ticketId: state.ticketId,
+                        detail: "Implementation launch budget exhausted.",
+                        haltedAt,
+                      }
+                    : null,
+                  ticketStates: current.ticketStates.map((entry) => ({
+                    ...entry,
+                    status: "ready" as const,
+                    attemptCount: 2,
+                    workerResult: null,
+                    warningMarkdown:
+                      "Recovery continued the existing Implementation thread after its provider session stopped.",
+                    updatedAt: haltedAt,
+                  })),
                   updatedAt: haltedAt,
-                })),
-                updatedAt: haltedAt,
-              },
-              createdAt: haltedAt,
-            });
-            yield* system.reactor.drain;
-            yield* system.reactor.recoverIncompleteStages();
-            yield* system.reactor.drain;
+                },
+                createdAt: haltedAt,
+              });
+              yield* system.reactor.drain;
+              yield* system.reactor.recoverIncompleteStages();
+              yield* system.reactor.drain;
 
-            const snapshot = yield* system.query.getSnapshot();
-            const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
-            expect(recovered.automationHalt).toBeNull();
-            expect(recovered.ticketStates[0]?.workerResult?.commitSha).toBe(
-              `${state.branch}@commit`,
-            );
-            expect(
-              snapshot.threads.filter((thread) => thread.workflowRole === "implementation-worker"),
-            ).toHaveLength(1);
-          }),
-        ),
-    );
-  }
+              const snapshot = yield* system.query.getSnapshot();
+              const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
+              expect(recovered.automationHalt).toBeNull();
+              expect(recovered.ticketStates[0]?.workerResult?.commitSha).toBe(
+                `${state.branch}@commit`,
+              );
+              expect(
+                snapshot.threads.filter(
+                  (thread) => thread.workflowRole === "implementation-worker",
+                ),
+              ).toHaveLength(1);
+            }),
+          ),
+      );
+    },
+  );
 
   /**
    * An integration gate repairs what it finds, so the commit it makes to pass is
@@ -15067,7 +15136,9 @@ describe("ImplementationWorkflowReactor", () => {
    * The ceiling asks a human to read a gate that keeps failing. Once they have and
    * they start it again, a spent count that nothing lowers makes the halt permanent.
    */
-  for (const gateKind of ["integration", "final"] as const) {
+  describe.each(
+    [...(["integration", "final"] as const)].map((scenarioCase) => [scenarioCase] as const),
+  )("scenario %s", (gateKind) => {
     it.effect(`restarts ${gateKind} validation with its own gate and renewed budget`, () =>
       withSystem((system) =>
         Effect.gen(function* () {
@@ -15149,19 +15220,23 @@ describe("ImplementationWorkflowReactor", () => {
         }),
       ),
     );
-  }
+  });
 
-  for (const scenario of [
-    "active",
-    "late",
-    "restart",
-    "legacy-result",
-    "old-legacy-result",
-    "changed-head",
-    "stale-turn",
-    "canceled",
-    "paused",
-  ] as const) {
+  describe.each(
+    [
+      ...([
+        "active",
+        "late",
+        "restart",
+        "legacy-result",
+        "old-legacy-result",
+        "changed-head",
+        "stale-turn",
+        "canceled",
+        "paused",
+      ] as const),
+    ].map((scenarioCase) => [scenarioCase] as const),
+  )("scenario %s", (scenario) => {
     it.effect(`final validator launch recovery handles ${scenario}`, () =>
       withSystem(
         (system) =>
@@ -15345,7 +15420,7 @@ describe("ImplementationWorkflowReactor", () => {
         },
       ),
     );
-  }
+  });
 
   it.effect("concurrent recovery claims one fixer and replaces it only after it stops", () =>
     withSystem((system) =>

@@ -7,7 +7,6 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
-  type ServerSettingsPatch,
 } from "@t3tools/contracts";
 import {
   type CustomModelDefinition,
@@ -28,9 +27,7 @@ import {
 import { ModelEsque } from "./components/chat/providerIconUtils";
 import {
   type ProviderInstanceEntry,
-  applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
-  sortProviderInstanceEntries,
   NO_PROVIDER_MODEL_SELECTION,
 } from "./providerInstances";
 import { sortModelsForProviderInstance } from "./modelOrdering";
@@ -352,70 +349,13 @@ export function getCustomModelOptionsByInstance(
 }
 
 /**
- * Build the provider instances and model lists consumed by the shared model
- * picker. Composer and workflow callers use this projection so a provider or
- * model discovered by the server appears in both places at the same time.
+ * Whether stored model options pick the opencode "plan" agent. Shared settings
+ * pickers keep and show such a value even while this device's legacy plan
+ * mode is off: another device may have chosen it, and this device's filter
+ * only applies to picks made here.
  */
-export function getProviderModelPickerChoices(
-  settings: UnifiedSettings,
-  providers: ReadonlyArray<ServerProvider>,
-): {
-  readonly instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
-  readonly modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<AppModelOption>>;
-} {
-  const instanceEntries = sortProviderInstanceEntries(
-    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings),
-  );
-  const modelOptionsByInstance = new Map<ProviderInstanceId, ReadonlyArray<AppModelOption>>();
-  for (const entry of instanceEntries) {
-    modelOptionsByInstance.set(entry.instanceId, getAppModelOptionsForInstance(settings, entry));
-  }
-  return { instanceEntries, modelOptionsByInstance };
-}
-
-/**
- * Drop the opencode "plan" agent option from a stored model selection.
- * Used when legacy plan mode is turned off so server-side text-generation
- * tasks (title, branch, PR) cannot keep dispatching the plan agent.
- */
-export function withoutPlanAgentSelection(
-  selection: ModelSelection | null | undefined,
-): ModelSelection | null | undefined {
-  if (!selection?.options) {
-    return selection;
-  }
-  const options = selection.options.filter(
-    (option) => !(option.id === "agent" && option.value === "plan"),
-  );
-  if (options.length === selection.options.length) {
-    return selection;
-  }
-  return createModelSelection(selection.instanceId, selection.model, options);
-}
-
-// The dropdown hides the opencode "plan" agent while legacy plan mode is off,
-// but the persisted text-generation selections are only healed when the toggle
-// flips. Users who already have plan mode off and a stored "plan" selection
-// never trip the toggle handler, so resolve the heal once per settings load.
-export function resolvePlanAgentHealPatch(input: {
-  readonly planModeEnabled: boolean;
-  readonly textGenerationModelSelection: ModelSelection | null | undefined;
-  readonly sourceControlWriterModelSelection: ModelSelection | null | undefined;
-}): ServerSettingsPatch | null {
-  if (input.planModeEnabled) {
-    return null;
-  }
-  const healedText = withoutPlanAgentSelection(input.textGenerationModelSelection);
-  const healedSourceControl = withoutPlanAgentSelection(input.sourceControlWriterModelSelection);
-  const patch: ServerSettingsPatch = {
-    ...(healedText && healedText !== input.textGenerationModelSelection
-      ? { textGenerationModelSelection: healedText }
-      : {}),
-    ...(healedSourceControl && healedSourceControl !== input.sourceControlWriterModelSelection
-      ? { sourceControlWriterModelSelection: healedSourceControl }
-      : {}),
-  };
-  return Object.keys(patch).length > 0 ? patch : null;
+export function selectsPlanAgent(options: ModelSelection["options"]): boolean {
+  return options?.some((option) => option.id === "agent" && option.value === "plan") ?? false;
 }
 
 export function resolveAppModelSelectionState(
@@ -457,7 +397,7 @@ export function resolveAppModelSelectionState(
       model,
       models: entry.models,
       modelOptions: selectedEntry ? selection.options : undefined,
-      planModeEnabled: settings.planModeEnabled,
+      planModeEnabled: settings.planModeEnabled || selectsPlanAgent(selection.options),
     });
 
     return createModelSelection(entry.instanceId, model, modelOptionsForDispatch);
@@ -466,43 +406,37 @@ export function resolveAppModelSelectionState(
   return NO_PROVIDER_MODEL_SELECTION;
 }
 
-/**
- * The agent model a fresh launch would use: the first enabled, available
- * provider instance in picker order and that instance's default model.
- *
- * This seeds previews that stand in for "the model the workflow runs on"
- * before any run exists, so it deliberately ignores
- * `textGenerationModelSelection` — that choice is for titles and summaries,
- * not agents.
- */
+export function getProviderModelPickerChoices(
+  settings: UnifiedSettings,
+  providers: ReadonlyArray<ServerProvider>,
+) {
+  const instanceEntries = deriveProviderInstanceEntries(providers);
+  const modelOptionsByInstance = new Map<ProviderInstanceId, ReadonlyArray<AppModelOption>>();
+  for (const entry of instanceEntries)
+    modelOptionsByInstance.set(entry.instanceId, getAppModelOptionsForInstance(settings, entry));
+  return { instanceEntries, modelOptionsByInstance };
+}
+
 export function resolveDefaultAgentModelSelectionState(
   settings: UnifiedSettings,
   providers: ReadonlyArray<ServerProvider>,
 ): ModelSelection {
-  const entry = sortProviderInstanceEntries(
-    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings),
-  ).find((candidate) => candidate.enabled && candidate.isAvailable);
-  if (entry) {
-    const model =
-      entry.models.find((candidate) => candidate.isDefault && !candidate.isCustom)?.slug ??
-      entry.models.find((candidate) => !candidate.isCustom)?.slug ??
-      getDefaultServerModel(providers, entry.driverKind);
-    const { modelOptionsForDispatch } = getComposerProviderState({
-      provider: entry.driverKind,
-      model,
-      models: entry.models,
-      modelOptions: undefined,
-    });
-    return createModelSelection(entry.instanceId, model, modelOptionsForDispatch);
-  }
-
-  const provider = resolveSelectableProvider(providers, null);
-  const model = getDefaultServerModel(providers, provider);
+  const entry = deriveProviderInstanceEntries(providers).find(
+    (candidate) => candidate.enabled && candidate.isAvailable,
+  );
+  if (!entry)
+    return createModelSelection(
+      defaultInstanceIdForDriver(ProviderDriverKind.make("codex")),
+      getDefaultServerModel(providers, ProviderDriverKind.make("codex")),
+    );
+  const model =
+    resolveAppModelSelectionForInstance(entry.instanceId, settings, providers, null) ??
+    getDefaultServerModel(providers, entry.driverKind);
   const { modelOptionsForDispatch } = getComposerProviderState({
-    provider,
+    provider: entry.driverKind,
     model,
-    models: getProviderModels(providers, provider),
+    models: entry.models,
     modelOptions: undefined,
   });
-  return createModelSelection(defaultInstanceIdForDriver(provider), model, modelOptionsForDispatch);
+  return createModelSelection(entry.instanceId, model, modelOptionsForDispatch);
 }

@@ -1,38 +1,32 @@
 // @effect-diagnostics nodeBuiltinImport:off - tests inject swaps at the native open boundary.
-import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
 import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
 import {
-  APP_REVIEW_RECORDING_EVIDENCE_ID,
-  AppReviewId,
-  AppReviewWorkflowRunId,
   AssetAccessError,
-  EMPTY_APP_REVIEW_EVIDENCE,
   AssetPreviewTypeValidationError,
   ThreadId,
-  type AppReviewEvidence,
+  TurnItemId,
 } from "@t3tools/contracts";
 import { PROJECT_FAVICON_FALLBACK_MARKER } from "@t3tools/shared/projectFavicon";
 import { describe, expect, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
-import { HttpClient, HttpClientResponse, HttpServerResponse } from "effect/unstable/http";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { HttpClient, HttpClientResponse, HttpServerResponse } from "effect/http";
 import { vi } from "vite-plus/test";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
-import {
-  ProjectionThreadAppReviewRepository,
-  type ProjectionThreadAppReview,
-} from "../persistence/Services/ProjectionThreadAppReviews.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
@@ -41,7 +35,7 @@ import { ASSET_ROUTE_PREFIX, issueAssetUrl, resolveAsset } from "./AssetAccess.t
 import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
 import { openMediaFile } from "./MediaFile.ts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
-import * as GitHubCli from "../sourceControl/GitHubCli.ts";
+import * as GitHubCredentials from "../sourceControl/GitHubCredentials.ts";
 import { githubMediaResponse } from "./GitHubMediaFetch.ts";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -49,61 +43,90 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return { ...actual, open: vi.fn(actual.open), realpath: vi.fn(actual.realpath) };
 });
 
-const configLayer = ServerConfig.ServerConfig.layerTest(process.cwd(), {
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof NodeOS>();
+  return { ...actual, homedir: vi.fn(actual.homedir) };
+});
+
+const layerConfig = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-asset-access-test-",
 });
-const appReviewRows = new Map<string, ProjectionThreadAppReview>();
-const appReviewRepositoryLayer = Layer.succeed(
-  ProjectionThreadAppReviewRepository,
-  ProjectionThreadAppReviewRepository.of({
-    upsert: (row) =>
-      Effect.sync(() => {
-        appReviewRows.set(row.reviewId, row);
-      }),
-    getById: ({ reviewId }) => Effect.sync(() => Option.fromNullishOr(appReviewRows.get(reviewId))),
-    listByThreadId: () => Effect.succeed([]),
-    listAll: () => Effect.succeed([]),
-    deleteByThreadId: () => Effect.void,
-  }),
-);
-const testLayer = Layer.mergeAll(
+// A PNG header is enough for the dimension read: signature, then IHDR width and height.
+const screenshotPng = new Uint8Array(24);
+screenshotPng.set([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52,
+]);
+new DataView(screenshotPng.buffer).setUint32(16, 390);
+new DataView(screenshotPng.buffer).setUint32(20, 844);
+const screenshotItem = {
+  id: TurnItemId.make("tool-screenshot"),
+  type: "dynamic_tool" as const,
+  threadId: ThreadId.make("thread-1"),
+  runId: null,
+  nodeId: null,
+  providerThreadId: null,
+  providerTurnId: null,
+  nativeItemRef: null,
+  parentItemId: null,
+  ordinal: 1,
+  status: "completed" as const,
+  title: null,
+  toolName: "mcp__t3-code__device_screenshot",
+  input: { deviceId: "phone" },
+  output: {
+    content: [
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: Buffer.from(screenshotPng).toString("base64"),
+        },
+      },
+    ],
+  },
+  startedAt: DateTime.makeUnsafe("2026-10-05T00:00:00.000Z"),
+  completedAt: DateTime.makeUnsafe("2026-10-05T00:00:01.000Z"),
+  updatedAt: DateTime.makeUnsafe("2026-10-05T00:00:01.000Z"),
+};
+
+const oversizedScreenshotItem = {
+  ...screenshotItem,
+  id: TurnItemId.make("tool-screenshot-oversized"),
+  output: {
+    content: [
+      {
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: "A".repeat(14 * 1024 * 1024) },
+      },
+    ],
+  },
+};
+
+const layerTest = Layer.mergeAll(
   NodeHttpPlatform.layer,
-  configLayer,
+  Layer.mock(Orchestrator.OrchestratorV2)({
+    getTurnItem: ({ itemId }) =>
+      Effect.succeed(
+        itemId === screenshotItem.id
+          ? screenshotItem
+          : itemId === oversizedScreenshotItem.id
+            ? oversizedScreenshotItem
+            : null,
+      ),
+  }),
+  layerConfig,
   WorkspacePaths.layer,
   ProjectFaviconResolver.layer.pipe(
     Layer.provide(WorkspacePaths.layer),
     Layer.provide(T3ProjectFileLoader.layer),
   ),
-  NativeAppIconResolver.layer.pipe(Layer.provide(configLayer)),
-  ServerSecretStore.layer.pipe(Layer.provide(configLayer)),
-  appReviewRepositoryLayer,
+  NativeAppIconResolver.layer.pipe(Layer.provide(layerConfig)),
+  ServerSecretStore.layer.pipe(Layer.provide(layerConfig)),
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
-const seedAppReview = (reviewId: AppReviewId, evidence: AppReviewEvidence) => {
-  appReviewRows.set(reviewId, {
-    reviewId,
-    sourceThreadId: ThreadId.make("thread-source"),
-    reviewThreadId: ThreadId.make("thread-review"),
-    appReviewScope: null,
-    sourceProposedPlan: null,
-    sourceTurnId: null,
-    status: "running",
-    document: {
-      verdict: "pending",
-      summary: "",
-      checks: [],
-      findings: [],
-      questions: [],
-      nextSteps: [],
-    },
-    evidence,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-  });
-};
-
 describe("AssetAccess", () => {
-  it.effect("loads private media immediately after login and reuses the found credential", () => {
+  it.effect("loads private media immediately after login with the GitHub credential", () => {
     let lookups = 0;
     const authorizations: Array<string | undefined> = [];
     return Effect.gen(function* () {
@@ -115,19 +138,21 @@ describe("AssetAccess", () => {
       expect((yield* githubMediaResponse(asset, {})).status).toBe(404);
       expect((yield* githubMediaResponse(asset, {})).status).toBe(200);
       expect((yield* githubMediaResponse(asset, {})).status).toBe(200);
-      expect(lookups).toBe(2);
+      // Caching the token is GitHubCredentials' job; this asks it every time.
+      expect(lookups).toBe(3);
       expect(authorizations).toEqual([undefined, "Bearer signed-in", "Bearer signed-in"]);
     }).pipe(
       Effect.provide(
-        Layer.mock(GitHubCli.GitHubCli)({
-          execute: () =>
-            Effect.sync(() => ({
-              exitCode: ChildProcessSpawner.ExitCode(0),
-              stdout: ++lookups === 1 ? "" : "signed-in",
-              stderr: "",
-              stdoutTruncated: false,
-              stderrTruncated: false,
-            })),
+        Layer.mock(GitHubCredentials.GitHubCredentials)({
+          get: (host) =>
+            ++lookups === 1
+              ? Effect.fail(new GitHubCredentials.GitHubNotSignedInError({ host }))
+              : Effect.succeed({
+                  host,
+                  token: Redacted.make("signed-in"),
+                  source: "gh" as const,
+                  fingerprint: "fingerprint",
+                }),
         }),
       ),
       Effect.provideService(
@@ -149,6 +174,35 @@ describe("AssetAccess", () => {
     );
   });
 
+  it.effect("serves an image a tool returned inline from the stored item", () =>
+    Effect.gen(function* () {
+      const resource = {
+        _tag: "tool-output-image" as const,
+        threadId: screenshotItem.threadId,
+        itemId: screenshotItem.id,
+        index: 0,
+      };
+      const result = yield* issueAssetUrl({ resource });
+      expect(result.imageDimensions).toEqual({ width: 390, height: 844 });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const separator = suffix.indexOf("/");
+      expect(yield* resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1))).toEqual({
+        kind: "bytes",
+        mimeType: "image/png",
+        bytes: Buffer.from(screenshotPng),
+      });
+      const missing = yield* issueAssetUrl({ resource: { ...resource, index: 1 } }).pipe(
+        Effect.flip,
+      );
+      expect(missing._tag).toBe("AssetWorkspaceAssetNotFoundError");
+      // Larger than a provider turn accepts, so it is never decoded.
+      const oversized = yield* issueAssetUrl({
+        resource: { ...resource, itemId: oversizedScreenshotItem.id },
+      }).pipe(Effect.flip);
+      expect(oversized._tag).toBe("AssetWorkspaceAssetNotFoundError");
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("issues exact URLs for media and browser documents outside the workspace", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -159,7 +213,7 @@ describe("AssetAccess", () => {
         ["screenshot.png", "image/png"],
         ["recording.mp4", "video/mp4"],
         ["recording.webm", "video/webm"],
-        ["report.html", "text/html; charset=utf-8"],
+        ["report.html", "text/html"],
         ["report.pdf", "application/pdf"],
       ] as const) {
         const filePath = path.join(outside, name);
@@ -182,7 +236,7 @@ describe("AssetAccess", () => {
         expect(yield* resolveAsset(token, `../${name}`)).toBeNull();
         expect(yield* resolveAsset(`${token}tampered`, name)).toBeNull();
       }
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("reports pixel dimensions from an image header and nothing for other files", () =>
@@ -206,7 +260,7 @@ describe("AssetAccess", () => {
       expect((yield* issue("shot.png")).imageDimensions).toEqual({ width: 1600, height: 900 });
       expect((yield* issue("clip.mp4")).imageDimensions).toBeUndefined();
       expect((yield* issue("broken.png")).imageDimensions).toBeUndefined();
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("resolves relative media paths from the thread workspace, including outside it", () =>
@@ -232,7 +286,56 @@ describe("AssetAccess", () => {
           path: yield* fs.realPath(filePath),
         });
       }
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("resolves home-relative media paths independently of the workspace", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-media-home-" });
+      const home = path.join(directory, "var", "home", "alice");
+      const filePath = path.join(home, "Downloads", "repro.mp4");
+      yield* fs.makeDirectory(path.dirname(filePath), { recursive: true });
+      yield* fs.writeFileString(filePath, "recording bytes");
+      const canonicalFile = yield* fs.realPath(filePath);
+      const homeSpy = vi.mocked(NodeOS.homedir).mockReturnValue(home);
+      try {
+        for (const workspaceRoot of [
+          path.join(home, "project"),
+          path.join(directory, "srv", "project"),
+          undefined,
+        ]) {
+          if (workspaceRoot) yield* fs.makeDirectory(workspaceRoot, { recursive: true });
+          for (const requestedPath of ["~/Downloads/repro.mp4", "~\\Downloads/repro.mp4"]) {
+            const result = yield* issueAssetUrl({
+              resource: {
+                _tag: "media-file",
+                threadId: ThreadId.make("thread-1"),
+                path: requestedPath,
+              },
+              ...(workspaceRoot ? { workspaceRoot } : {}),
+            });
+            const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+            const separator = suffix.indexOf("/");
+            const asset = yield* resolveAsset(
+              suffix.slice(0, separator),
+              suffix.slice(separator + 1),
+            );
+            expect(asset).toMatchObject({
+              kind: "file",
+              path: canonicalFile,
+              mimeType: "video/mp4",
+            });
+            if (asset?.kind !== "file") throw new Error("Expected a resolved home media file");
+            const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset));
+            expect(yield* Effect.promise(() => response.text())).toBe("recording bytes");
+          }
+        }
+      } finally {
+        homeSpy.mockRestore();
+      }
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect.skipIf(!symlinksSupported)(
@@ -270,7 +373,7 @@ describe("AssetAccess", () => {
           },
         }).pipe(Effect.flip);
         expect(directoryError._tag).toBe("AssetWorkspaceAssetNotFoundError");
-      }).pipe(Effect.provide(testLayer)),
+      }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect.skipIf(!symlinksSupported)(
@@ -302,7 +405,7 @@ describe("AssetAccess", () => {
         yield* fs.remove(filePath);
         yield* fs.symlink(replacementPath, filePath);
         expect(yield* resolveAsset(token, name)).toBeNull();
-      }).pipe(Effect.provide(testLayer)),
+      }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect.skipIf(!symlinksSupported)(
@@ -341,7 +444,7 @@ describe("AssetAccess", () => {
           yield* fs.remove(filePath);
           yield* fs.rename(savedPath, filePath);
         }
-      }).pipe(Effect.provide(testLayer)),
+      }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect.skipIf(!symlinksSupported)(
@@ -377,7 +480,7 @@ describe("AssetAccess", () => {
             Effect.provideService(FileSystem.FileSystem, swappingFileSystem),
           ),
         ).toBeNull();
-      }).pipe(Effect.provide(testLayer)),
+      }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect.skipIf(!symlinksSupported)(
@@ -411,7 +514,7 @@ describe("AssetAccess", () => {
         expect(yield* openMediaFile(canonicalPath)).toBeNull();
         expect(opened).toBeDefined();
         expect(opened?.fd).toBe(-1);
-      }).pipe(Effect.provide(testLayer)),
+      }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect.skipIf(!symlinksSupported)(
@@ -469,7 +572,7 @@ describe("AssetAccess", () => {
             Effect.provideService(FileSystem.FileSystem, swappingFileSystem),
           ),
         ).toBeNull();
-      }).pipe(Effect.provide(testLayer)),
+      }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("keeps in-place edits readable but requires a new URL after atomic replacement", () =>
@@ -519,7 +622,7 @@ describe("AssetAccess", () => {
           renewedSuffix.slice(renewedSeparator + 1),
         ),
       ).toBeNull();
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("issues workspace URLs that resolve the entry file and sibling assets", () =>
@@ -560,7 +663,7 @@ describe("AssetAccess", () => {
       expect(yield* resolveAsset(token, "../secret.txt")).toBeNull();
       expect(yield* resolveAsset(token, ".env")).toBeNull();
       expect(yield* resolveAsset(`${token}tampered`, "report.html")).toBeNull();
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("rejects workspace files outside the authorized root", () =>
@@ -594,7 +697,7 @@ describe("AssetAccess", () => {
         },
       });
       expect(error.cause).toBeInstanceOf(WorkspacePaths.WorkspacePathOutsideRootError);
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("issues draft workspace URLs without a thread", () =>
@@ -628,7 +731,7 @@ describe("AssetAccess", () => {
         path: canonicalCssPath,
       });
       expect(yield* resolveAsset(token, "../secret.txt")).toBeNull();
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("serves absolute draft media files exactly, wherever they live", () =>
@@ -659,7 +762,7 @@ describe("AssetAccess", () => {
         mimeType: "video/mp4",
       });
       expect(yield* resolveAsset(token, "other.mp4")).toBeNull();
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("falls back to the resource cwd for relative draft paths", () =>
@@ -684,7 +787,7 @@ describe("AssetAccess", () => {
         kind: "file",
         path: canonicalHtmlPath,
       });
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("preserves non-missing canonical path failures when issuing asset URLs", () =>
@@ -726,7 +829,7 @@ describe("AssetAccess", () => {
         },
       });
       expect(error.cause).toBe(cause);
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("issues exact workspace URLs for image previews", () =>
@@ -762,71 +865,50 @@ describe("AssetAccess", () => {
       });
       expect(yield* resolveAsset(token, "other.png")).toBeNull();
       expect(yield* resolveAsset(token, "../icon.png")).toBeNull();
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
-  it.effect("issues exact workspace URLs for video previews", () =>
+  it.effect("previews workspace files with literal fragment characters in their paths", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-asset-video-workspace-",
-      });
-      const assetsDirectory = path.join(root, "artifacts", "hero-captures");
-      const recordingPath = path.join(assetsDirectory, "recording.webm");
-      const siblingVideoPath = path.join(assetsDirectory, "other.webm");
-      const siblingImagePath = path.join(assetsDirectory, "other.png");
-      const browserRecordingDirectory = path.join(root, ".logs", "recordings", "run-1");
-      const browserRecordingPath = path.join(browserRecordingDirectory, "page@abcd1234.webm");
-      yield* fileSystem.makeDirectory(assetsDirectory, { recursive: true });
-      yield* fileSystem.makeDirectory(browserRecordingDirectory, { recursive: true });
-      yield* fileSystem.writeFile(recordingPath, new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]));
-      yield* fileSystem.writeFile(siblingVideoPath, new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]));
-      yield* fileSystem.writeFile(siblingImagePath, new Uint8Array([137, 80, 78, 71]));
-      yield* fileSystem.writeFile(browserRecordingPath, new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]));
-      const canonicalRecordingPath = yield* fileSystem.realPath(recordingPath);
-      const canonicalBrowserRecordingPath = yield* fileSystem.realPath(browserRecordingPath);
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-preview-literal-" });
+      const directory = path.join(root, "assets#archive");
+      yield* fileSystem.makeDirectory(directory);
 
-      const result = yield* issueAssetUrl({
+      for (const name of ["icon#v2.png", "report#draft.pdf"]) {
+        const filePath = path.join(directory, name);
+        yield* fileSystem.writeFileString(filePath, "preview fixture");
+        const canonicalFile = yield* fileSystem.realPath(filePath);
+        const result = yield* issueAssetUrl({
+          resource: {
+            _tag: "workspace-file",
+            threadId: ThreadId.make("thread-1"),
+            path: filePath,
+          },
+          workspaceRoot: root,
+        });
+        const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+        const token = suffix.slice(0, suffix.indexOf("/"));
+
+        expect(yield* resolveAsset(token, name)).toEqual({ kind: "file", path: canonicalFile });
+        if (name.endsWith(".png")) {
+          expect(yield* resolveAsset(token, "other.png")).toBeNull();
+        }
+      }
+
+      const disguisedPath = path.join(root, "image.png#notes.txt");
+      yield* fileSystem.writeFileString(disguisedPath, "not an image");
+      const error = yield* issueAssetUrl({
         resource: {
           _tag: "workspace-file",
           threadId: ThreadId.make("thread-1"),
-          path: recordingPath,
+          path: disguisedPath,
         },
         workspaceRoot: root,
-      });
-      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
-      const separatorIndex = suffix.indexOf("/");
-      const token = suffix.slice(0, separatorIndex);
-
-      expect(yield* resolveAsset(token, "recording.webm")).toEqual({
-        kind: "file",
-        path: canonicalRecordingPath,
-      });
-      expect(yield* resolveAsset(token, "other.webm")).toBeNull();
-      expect(yield* resolveAsset(token, "other.png")).toBeNull();
-      expect(yield* resolveAsset(token, "../recording.webm")).toBeNull();
-
-      const browserRecordingResult = yield* issueAssetUrl({
-        resource: {
-          _tag: "workspace-file",
-          threadId: ThreadId.make("thread-1"),
-          path: browserRecordingPath,
-        },
-        workspaceRoot: root,
-      });
-      expect(browserRecordingResult.relativeUrl.endsWith("/page%40abcd1234.webm")).toBe(true);
-      const browserRecordingSuffix = browserRecordingResult.relativeUrl.slice(
-        `${ASSET_ROUTE_PREFIX}/`.length,
-      );
-      const browserRecordingSeparatorIndex = browserRecordingSuffix.indexOf("/");
-      const browserRecordingToken = browserRecordingSuffix.slice(0, browserRecordingSeparatorIndex);
-
-      expect(yield* resolveAsset(browserRecordingToken, "page@abcd1234.webm")).toEqual({
-        kind: "file",
-        path: canonicalBrowserRecordingPath,
-      });
-    }).pipe(Effect.provide(testLayer)),
+      }).pipe(Effect.flip);
+      expect(error).toBeInstanceOf(AssetPreviewTypeValidationError);
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("issues exact attachment capabilities by attachment id", () =>
@@ -850,7 +932,7 @@ describe("AssetAccess", () => {
         kind: "file",
         path: attachmentPath,
       });
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("serves video attachments inline", () =>
@@ -882,7 +964,7 @@ describe("AssetAccess", () => {
         fileName: "demo.mp4",
         mimeType: "video/mp4",
       });
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
   it.effect("issues signed native application icon capabilities", () =>
     Effect.gen(function* () {
@@ -897,7 +979,7 @@ describe("AssetAccess", () => {
         new RegExp(`^${ASSET_ROUTE_PREFIX}/[^/]+/native-app-icon\\.png$`, "u"),
       );
       expect(result.expiresAt).toBeGreaterThan(0);
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("serves document attachments inline when a viewer requests it", () =>
@@ -930,7 +1012,7 @@ describe("AssetAccess", () => {
         fileName: "report.pdf",
         mimeType: "application/pdf",
       });
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("serves audio previews with their stored format and keeps saving explicit", () =>
@@ -964,7 +1046,7 @@ describe("AssetAccess", () => {
           ...(disposition === "attachment" ? { download: true } : {}),
         });
       }
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("keeps inline requests for other attachment types as downloads", () =>
@@ -992,7 +1074,7 @@ describe("AssetAccess", () => {
       expect(
         yield* resolveAsset(suffix.slice(0, separatorIndex), suffix.slice(separatorIndex + 1)),
       ).toMatchObject({ kind: "file", path: attachmentPath, download: true });
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
   it.effect("issues project favicon capabilities with a signed fallback", () =>
     Effect.gen(function* () {
@@ -1049,7 +1131,7 @@ describe("AssetAccess", () => {
           fallbackSuffix.slice(fallbackSeparatorIndex + 1),
         ),
       ).toBeNull();
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("issues project favicon capabilities for a saved override", () =>
@@ -1070,7 +1152,7 @@ describe("AssetAccess", () => {
 
       expect(result.sourcePath).toBe(path.join("brand", "custom.svg"));
       expect(result.relativeUrl).toMatch(/\/v[0-9a-f]{64}-custom\.svg$/);
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("issues an exact capability for a saved favicon outside the workspace", () =>
@@ -1108,7 +1190,7 @@ describe("AssetAccess", () => {
       );
       expect(tamperedSuffixResult).toEqual({ kind: "file", path: canonicalPath });
       expect(tamperedSuffixResult).not.toEqual({ kind: "file", path: canonicalSiblingPath });
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("ignores a client favicon path hint", () =>
@@ -1129,7 +1211,7 @@ describe("AssetAccess", () => {
 
       expect(result.sourcePath).toBe(path.join("brand", "saved.svg"));
       expect(result.relativeUrl).toMatch(/\/v[0-9a-f]{64}-saved\.svg$/);
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("keeps automatic favicon resolution separate from a saved override", () =>
@@ -1149,7 +1231,7 @@ describe("AssetAccess", () => {
 
       expect(result.sourcePath).toBe("favicon.svg");
       expect(result.relativeUrl).toMatch(/\/v[0-9a-f]{64}-favicon\.svg$/);
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("rejects a resolved project favicon with a non-image extension", () =>
@@ -1167,7 +1249,7 @@ describe("AssetAccess", () => {
       }).pipe(Effect.flip);
 
       expect(error).toBeInstanceOf(AssetPreviewTypeValidationError);
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("buckets project favicon expiry after content hashing", () =>
@@ -1192,7 +1274,7 @@ describe("AssetAccess", () => {
       }).pipe(Effect.provideService(Crypto.Crypto, crossingCrypto));
 
       expect(result.expiresAt).toBe(3 * bucketMs);
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("preserves structured project favicon resolution causes", () =>
@@ -1226,188 +1308,7 @@ describe("AssetAccess", () => {
       expect(error.message).toBe("Failed to resolve project favicon.");
       expect(error._tag).toBe("AssetProjectFaviconResolutionError");
       expect(error.cause).toBe(resolutionCause);
-    }).pipe(Effect.provide(testLayer)),
-  );
-
-  it.effect("round-trips a saved app-review recording through signed URLs", () =>
-    Effect.gen(function* () {
-      const config = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const artifactsDir = path.join(config.stateDir, "preview-artifacts");
-      const webmPath = path.join(artifactsDir, "browser-recording-test.webm");
-      yield* fileSystem.makeDirectory(artifactsDir, { recursive: true });
-      yield* fileSystem.writeFile(webmPath, new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]));
-      const canonicalWebmPath = yield* fileSystem.realPath(webmPath);
-
-      const reviewId = AppReviewId.make("app-review-recording");
-      seedAppReview(reviewId, {
-        recording: {
-          status: "saved",
-          path: webmPath,
-          mimeType: "video/webm",
-          sizeBytes: 4,
-          startedAt: "2026-01-01T00:00:00.000Z",
-          completedAt: "2026-01-01T00:01:00.000Z",
-          error: null,
-        },
-        screenshots: [],
-      });
-
-      const result = yield* issueAssetUrl({
-        resource: {
-          _tag: "app-review-evidence",
-          reviewId,
-          evidenceId: APP_REVIEW_RECORDING_EVIDENCE_ID,
-        },
-      });
-      expect(result.relativeUrl.endsWith("/browser-recording-test.webm")).toBe(true);
-      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
-      const separatorIndex = suffix.indexOf("/");
-      const token = suffix.slice(0, separatorIndex);
-
-      expect(yield* resolveAsset(token, "browser-recording-test.webm")).toEqual({
-        kind: "file",
-        path: canonicalWebmPath,
-      });
-      expect(yield* resolveAsset(`${token}tampered`, "browser-recording-test.webm")).toBeNull();
-    }).pipe(Effect.provide(testLayer)),
-  );
-
-  it.effect("round-trips app-review screenshots by evidence id", () =>
-    Effect.gen(function* () {
-      const config = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const reviewId = AppReviewId.make("app-review-screenshot");
-      const screenshotDir = path.join(config.stateDir, "preview-artifacts", "app-review", reviewId);
-      const screenshotPath = path.join(screenshotDir, "shot-1.png");
-      yield* fileSystem.makeDirectory(screenshotDir, { recursive: true });
-      yield* fileSystem.writeFile(screenshotPath, new Uint8Array([137, 80, 78, 71]));
-      const canonicalScreenshotPath = yield* fileSystem.realPath(screenshotPath);
-
-      seedAppReview(reviewId, {
-        recording: EMPTY_APP_REVIEW_EVIDENCE.recording,
-        screenshots: [
-          {
-            id: "shot-1",
-            path: screenshotPath,
-            mimeType: "image/png",
-            caption: "Initial load",
-            capturedAt: "2026-01-01T00:00:00.000Z",
-          },
-        ],
-      });
-
-      const result = yield* issueAssetUrl({
-        resource: { _tag: "app-review-evidence", reviewId, evidenceId: "shot-1" },
-      });
-      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
-      const token = suffix.slice(0, suffix.indexOf("/"));
-
-      expect(yield* resolveAsset(token, "shot-1.png")).toEqual({
-        kind: "file",
-        path: canonicalScreenshotPath,
-      });
-
-      const missing = yield* issueAssetUrl({
-        resource: { _tag: "app-review-evidence", reviewId, evidenceId: "shot-2" },
-      }).pipe(Effect.flip);
-      expect(missing._tag).toBe("AssetAppReviewEvidenceNotFoundError");
-    }).pipe(Effect.provide(testLayer)),
-  );
-
-  it.effect("rejects app-review evidence that is not saved or escapes the artifacts root", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-
-      // Recording not yet saved: no URL may be minted.
-      const recordingReviewId = AppReviewId.make("app-review-in-progress");
-      seedAppReview(recordingReviewId, {
-        recording: { ...EMPTY_APP_REVIEW_EVIDENCE.recording, status: "recording" },
-        screenshots: [],
-      });
-      const notSaved = yield* issueAssetUrl({
-        resource: {
-          _tag: "app-review-evidence",
-          reviewId: recordingReviewId,
-          evidenceId: APP_REVIEW_RECORDING_EVIDENCE_ID,
-        },
-      }).pipe(Effect.flip);
-      expect(notSaved._tag).toBe("AssetAppReviewEvidenceNotFoundError");
-
-      // Evidence path outside stateDir/preview-artifacts: rejected even though
-      // the file exists.
-      const outside = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-asset-evidence-outside-",
-      });
-      const outsidePath = path.join(outside, "escape.webm");
-      yield* fileSystem.writeFile(outsidePath, new Uint8Array([1]));
-      const traversalReviewId = AppReviewId.make("app-review-traversal");
-      seedAppReview(traversalReviewId, {
-        recording: {
-          status: "saved",
-          path: outsidePath,
-          mimeType: "video/webm",
-          sizeBytes: 1,
-          startedAt: null,
-          completedAt: null,
-          error: null,
-        },
-        screenshots: [],
-      });
-      const traversal = yield* issueAssetUrl({
-        resource: {
-          _tag: "app-review-evidence",
-          reviewId: traversalReviewId,
-          evidenceId: APP_REVIEW_RECORDING_EVIDENCE_ID,
-        },
-      }).pipe(Effect.flip);
-      expect(traversal._tag).toBe("AssetAppReviewEvidenceNotFoundError");
-
-      // Unknown review id.
-      const unknown = yield* issueAssetUrl({
-        resource: {
-          _tag: "app-review-evidence",
-          reviewId: AppReviewId.make("app-review-missing"),
-          evidenceId: APP_REVIEW_RECORDING_EVIDENCE_ID,
-        },
-      }).pipe(Effect.flip);
-      expect(unknown._tag).toBe("AssetAppReviewEvidenceNotFoundError");
-    }).pipe(Effect.provide(testLayer)),
-  );
-
-  it.effect("serves a run's test recordings and nothing outside the run directory", () =>
-    Effect.gen(function* () {
-      const config = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const runId = AppReviewWorkflowRunId.make("app-review-workflow-recorded");
-      const runDir = path.join(config.stateDir, "preview-artifacts", "app-review-e2e", runId);
-      yield* fileSystem.makeDirectory(runDir, { recursive: true });
-      const recordingPath = path.join(runDir, "exec-1.rrweb.jsonl");
-      yield* fileSystem.writeFileString(recordingPath, '{"type":4}\n');
-      yield* fileSystem.writeFileString(
-        path.join(config.stateDir, "preview-artifacts", "secret.rrweb.jsonl"),
-        "{}",
-      );
-
-      const result = yield* issueAssetUrl({
-        resource: { _tag: "app-review-test-recording", runId, recordingId: "exec-1" },
-      });
-      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
-      const token = suffix.slice(0, suffix.indexOf("/"));
-      expect(yield* resolveAsset(token, "exec-1.rrweb.jsonl")).toEqual({
-        kind: "file",
-        path: yield* fileSystem.realPath(recordingPath),
-      });
-
-      const escaped = yield* issueAssetUrl({
-        resource: { _tag: "app-review-test-recording", runId, recordingId: "../../secret" },
-      }).pipe(Effect.flip);
-      expect(escaped._tag).toBe("AssetAppReviewEvidenceNotFoundError");
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("serves GitHub-hosted pull request media through the repository's credential", () =>
@@ -1463,6 +1364,6 @@ describe("AssetAccess", () => {
         const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(AssetAccessError))(error);
         expect(encoded).not.toContain(url);
       }
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 });

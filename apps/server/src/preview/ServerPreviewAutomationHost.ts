@@ -1,5 +1,5 @@
 import {
-  PREVIEW_AUTOMATION_OPERATIONS,
+  PREVIEW_AUTOMATION_V1_OPERATIONS,
   PreviewBrowserUnavailableError,
   type BrowserNavigationTarget,
   type PreviewAutomationNavigateInput,
@@ -57,7 +57,7 @@ const latestTab = (
 ): string | null =>
   sessions.toSorted((a, b) => a.updatedAt.localeCompare(b.updatedAt)).at(-1)?.tabId ?? null;
 
-const OPERATIONS_WITHOUT_RECORDING = PREVIEW_AUTOMATION_OPERATIONS.filter(
+const OPERATIONS_WITHOUT_RECORDING = PREVIEW_AUTOMATION_V1_OPERATIONS.filter(
   (operation) => operation !== "recordingStart" && operation !== "recordingStop",
 );
 
@@ -283,7 +283,7 @@ export const layer = Layer.effectDiscard(
       clientId,
       environmentId,
       supportedOperations: recordingSupported
-        ? PREVIEW_AUTOMATION_OPERATIONS
+        ? PREVIEW_AUTOMATION_V1_OPERATIONS
         : OPERATIONS_WITHOUT_RECORDING,
     });
 

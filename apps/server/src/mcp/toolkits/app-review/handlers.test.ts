@@ -99,11 +99,12 @@ const makeHarness = (input: {
   const layer = Layer.mergeAll(
     Layer.succeed(McpInvocationContext.McpInvocationContext, {
       environmentId,
-      threadId,
-      providerSessionId: "provider-session-1",
-      providerInstanceId,
+
       capabilities: new Set(input.capabilities ?? (["preview", "app-review"] as const)),
       issuedAt: 1,
+      thread: { threadId, providerSessionId: "provider-session-1", providerInstanceId },
+      client: undefined,
+      requestNamespace: "workflow-test",
     }),
     Layer.mock(ProjectionSnapshotQuery)({
       getThreadDetailSnapshotById: () => Effect.die("unused"),

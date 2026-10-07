@@ -3,7 +3,14 @@ import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
-import { ProviderValidationError } from "./Errors.ts";
+class UserInputAttachmentError extends Schema.TaggedError<UserInputAttachmentError>()(
+  "UserInputAttachmentError",
+  {
+    operation: Schema.String,
+    issue: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
 
 const quoteReference = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 
@@ -26,17 +33,17 @@ export const appendUserInputAttachmentPaths = Effect.fn("appendUserInputAttachme
           !(yield* fs.exists(path).pipe(
             Effect.mapError(
               (cause) =>
-                new ProviderValidationError({
+                new UserInputAttachmentError({
                   operation: "respondToUserInput",
-                  ticket: `Could not access attachment '${attachment.name}'.`,
+                  issue: `Could not access attachment '${attachment.name}'.`,
                   cause,
                 }),
             ),
           ))
         ) {
-          return yield* new ProviderValidationError({
+          return yield* new UserInputAttachmentError({
             operation: "respondToUserInput",
-            ticket: `Attachment '${attachment.name}' is no longer available. Attach it again.`,
+            issue: `Attachment '${attachment.name}' is no longer available. Attach it again.`,
           });
         }
         references.push(

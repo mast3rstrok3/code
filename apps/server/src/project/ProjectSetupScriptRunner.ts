@@ -1,14 +1,15 @@
-import { ProjectId } from "@t3tools/contracts";
+import { ProjectId, type ProjectScript } from "@t3tools/contracts";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import {
   projectScriptRuntimeEnv,
   resolveProjectScripts,
+  settleProjectScript,
   setupProjectScript,
 } from "@t3tools/shared/projectScripts";
-import * as NodeCrypto from "node:crypto";
 
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -17,9 +18,9 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
+import * as ProjectService from "./ProjectService.ts";
 
 export interface ProjectSetupScriptRunnerResultNoScript {
   readonly status: "no-script";
@@ -62,6 +63,13 @@ export interface ProjectSetupScriptRunnerInput {
   readonly projectCwd?: string;
   readonly worktreePath: string;
   readonly preferredTerminalId?: string;
+  /** Which project script to run. Defaults to the worktree setup script. */
+  readonly trigger?: "setup" | "settle";
+  readonly project?: {
+    readonly id: ProjectId;
+    readonly workspaceRoot: string;
+    readonly scripts: ReadonlyArray<ProjectScript>;
+  };
   /**
    * Wrap the command so the shell reports its exit code back through the
    * terminal stream, and forward cleaned output lines while it runs. The
@@ -170,11 +178,11 @@ function stripTerminalControl(text: string): string {
   return (
     text
       .replace(
-        // eslint-disable-next-line no-control-regex
+        // eslint-disable-next-line no-control-regex -- ANSI escape sequences start with ESC.
         /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>]/g,
         "",
       )
-      // eslint-disable-next-line no-control-regex
+      // eslint-disable-next-line no-control-regex -- removing control characters is the point.
       .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
   );
 }
@@ -224,11 +232,12 @@ function wrapCommandForCompletion(
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
-  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const projects = yield* ProjectService.ProjectService;
   const terminalManager = yield* TerminalManager.TerminalManager;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const crypto = yield* Crypto.Crypto;
   const completionShell = resolveCompletionShell(
     yield* HostProcessPlatform,
     yield* HostProcessEnvironment,
@@ -252,6 +261,9 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const startedAtMs = yield* Clock.currentTimeMillis;
       const done = yield* Deferred.make<ProjectSetupScriptCompletion>();
+      // The shell redraws its prompt just after the sentinel. Closing before
+      // that would read the redraw as new activity and keep an idle shell.
+      const promptReturned = yield* Deferred.make<void>();
       let lineBuffer = "";
       let settled = false;
 
@@ -305,15 +317,26 @@ export const make = Effect.gen(function* () {
           if (lineBuffer.length > PARTIAL_LINE_MAX_LENGTH) {
             lineBuffer = lineBuffer.slice(-PARTIAL_LINE_MAX_LENGTH);
           }
-          return Effect.forEach(lines, handleLine, { discard: true });
+          return Effect.forEach(lines, handleLine, { discard: true }).pipe(
+            // A prompt has no newline, so it is what remains once the sentinel is in.
+            Effect.andThen(
+              Effect.suspend(() =>
+                settled && lineBuffer.length > 0
+                  ? Deferred.succeed(promptReturned, undefined).pipe(Effect.asVoid)
+                  : Effect.void,
+              ),
+            ),
+          );
         }
         if (event.type === "exited" || event.type === "closed") {
-          return settle(null);
+          return settle(null).pipe(Effect.andThen(Deferred.succeed(promptReturned, undefined)));
         }
         return Effect.void;
       });
 
       const completion = Deferred.await(done).pipe(
+        // A shell with an empty prompt never prints one; do not wait forever.
+        Effect.tap(() => Deferred.await(promptReturned).pipe(Effect.timeoutOption("1 second"))),
         Effect.ensuring(Effect.sync(() => unsubscribe())),
       );
       return { completion, unsubscribe };
@@ -328,23 +351,27 @@ export const make = Effect.gen(function* () {
       ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
       ...(input.projectCwd === undefined ? {} : { projectCwd: input.projectCwd }),
     };
-    const projectById = input.projectId
-      ? yield* projectionSnapshotQuery.getProjectShellById(ProjectId.make(input.projectId)).pipe(
-          Effect.map(Option.getOrUndefined),
-          Effect.mapError(
-            (cause) =>
-              new ProjectSetupScriptOperationError({
-                ...errorContext,
-                operation: "resolveProject",
-                cause,
-              }),
-          ),
-        )
-      : null;
+    const suppliedProject = input.project;
+    const projectById =
+      suppliedProject ??
+      (input.projectId
+        ? yield* projects.getById(ProjectId.make(input.projectId)).pipe(
+            Effect.map(Option.getOrUndefined),
+            Effect.mapError(
+              (cause) =>
+                new ProjectSetupScriptOperationError({
+                  ...errorContext,
+                  operation: "resolveProject",
+                  cause,
+                }),
+            ),
+          )
+        : null);
     const project =
+      suppliedProject ??
       projectById ??
       (input.projectCwd
-        ? yield* projectionSnapshotQuery.getActiveProjectByWorkspaceRoot(input.projectCwd).pipe(
+        ? yield* projects.getByWorkspaceRoot(input.projectCwd).pipe(
             Effect.map(Option.getOrUndefined),
             Effect.mapError(
               (cause) =>
@@ -371,54 +398,73 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
-    const configuredScript = setupProjectScript(resolveProjectScripts(settings, project));
+    const trigger = input.trigger ?? "setup";
+    const scripts = resolveProjectScripts(settings, project);
+    const configuredScript =
+      trigger === "settle" ? settleProjectScript(scripts) : setupProjectScript(scripts);
     const script =
       configuredScript ??
-      (yield* fileSystem.readFileString(path.join(input.worktreePath, "package.json")).pipe(
-        Effect.map((raw) => {
-          const manifest = decodeWorktreePackageManifest(raw);
-          if (
-            Option.isNone(manifest) ||
-            typeof manifest.value.scripts?.["bootstrap:worktree"] !== "string"
-          ) {
-            return null;
-          }
-          const command = conventionalBootstrapCommand(manifest.value.packageManager);
-          return command === null
-            ? null
-            : {
-                id: "bootstrap-worktree",
-                name: "Bootstrap Worktree",
-                command,
-              };
-        }),
-        Effect.catchTags({
-          PlatformError: (cause) =>
-            cause.reason._tag === "NotFound"
-              ? Effect.succeed(null)
-              : Effect.fail(
-                  new ProjectSetupScriptOperationError({
-                    ...errorContext,
-                    operation: "resolveSetupScript",
-                    cause,
-                  }),
-                ),
-        }),
-      ));
+      (trigger === "settle"
+        ? null
+        : yield* fileSystem.readFileString(path.join(input.worktreePath, "package.json")).pipe(
+            Effect.map((raw) => {
+              const manifest = decodeWorktreePackageManifest(raw);
+              if (
+                Option.isNone(manifest) ||
+                typeof manifest.value.scripts?.["bootstrap:worktree"] !== "string"
+              ) {
+                return null;
+              }
+              const command = conventionalBootstrapCommand(manifest.value.packageManager);
+              return command === null
+                ? null
+                : {
+                    id: "bootstrap-worktree",
+                    name: "Bootstrap Worktree",
+                    command,
+                  };
+            }),
+            Effect.catchTags({
+              PlatformError: (cause) =>
+                cause.reason._tag === "NotFound"
+                  ? Effect.succeed(null)
+                  : Effect.fail(
+                      new ProjectSetupScriptOperationError({
+                        ...errorContext,
+                        operation: "resolveSetupScript",
+                        cause,
+                      }),
+                    ),
+            }),
+          ));
     if (!script) {
       return {
         status: "no-script",
       } as const;
     }
 
-    const terminalId = input.preferredTerminalId ?? `setup-${script.id}`;
+    // A thread settles again after it is resumed, and an earlier settle shell
+    // may still be busy; typing into it would feed its foreground program.
+    const terminalId =
+      input.preferredTerminalId ??
+      (trigger === "settle"
+        ? `settle-${script.id}-${(yield* crypto.randomUUIDv4.pipe(Effect.orDie)).slice(0, 8)}`
+        : `setup-${script.id}`);
     const cwd = input.worktreePath;
-    const env = projectScriptRuntimeEnv({
-      project: { cwd: project.workspaceRoot },
-      worktreePath: input.worktreePath,
-    });
+    const env = {
+      ...projectScriptRuntimeEnv({
+        project: { cwd: project.workspaceRoot },
+        worktreePath: input.worktreePath,
+      }),
+      // Setup can run before a client attaches. Truecolor probes in tools such
+      // as Vite+ wait for terminal replies that nobody can send at that point.
+      // Keep TERM's 256-color support without advertising truecolor here.
+      COLORTERM: "",
+    };
     const observe = input.observeCompletion;
-    const completionToken = observe ? NodeCrypto.randomUUID().replaceAll("-", "") : null;
+    const completionToken = observe
+      ? (yield* crypto.randomUUIDv4.pipe(Effect.orDie)).replaceAll("-", "")
+      : null;
     const commandLine =
       observe && completionToken
         ? wrapCommandForCompletion(

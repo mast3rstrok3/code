@@ -5,27 +5,19 @@ import type {
   PreviewOpenInput,
   PreviewSessionSnapshot,
   ScopedThreadRef,
-  ServerConfig,
 } from "@t3tools/contracts";
 import { mediaFileReference } from "@t3tools/client-runtime/media-reference";
 import {
   type AtomCommandResult,
   mapAtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import {
-  isWorkspaceBrowserPreviewPath,
-  isWorkspaceMediaPreviewPath,
-} from "@t3tools/shared/filePreview";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 
 import { resolveAssetUrl } from "~/assets/assetUrls";
-import {
-  applyPreviewServerSnapshot,
-  isPreviewSupportedInRuntime,
-  rememberPreviewUrl,
-} from "~/previewStateStore";
+import { isPreviewAvailableFor, previewRuntimeFor } from "~/browser/previewRuntime";
+import { applyPreviewServerSnapshot, rememberPreviewUrl } from "~/previewStateStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 
 import {
@@ -35,7 +27,7 @@ import {
 } from "./browserDefaults";
 
 export const isBrowserPreviewFile = (path: string): boolean =>
-  isWorkspaceBrowserPreviewPath(path) || isWorkspaceMediaPreviewPath(path);
+  /\.(?:html?|pdf)$/i.test(path.split(/[?#]/, 1)[0] ?? "");
 
 export class BrowserPreviewUnavailableError extends Data.TaggedError(
   "BrowserPreviewUnavailableError",
@@ -67,6 +59,7 @@ export async function openUrlInPreview<E>(input: {
   if (defaults instanceof BrowserSettingsReadError) {
     return AsyncResult.failure(Cause.fail(defaults));
   }
+  const runtime = previewRuntimeFor(input.threadRef.environmentId);
   const result = await input.openPreview({
     environmentId: input.threadRef.environmentId,
     input: {
@@ -77,6 +70,7 @@ export async function openUrlInPreview<E>(input: {
       // applied explicitly or file/link opens would ignore them.
       viewport: browserDefaultOpenViewport(defaults),
       profileId: browserDefaultOpenProfileId(defaults),
+      ...(runtime === undefined ? {} : { runtime }),
     },
   });
   return mapAtomCommandResult(result, (snapshot) => {
@@ -100,14 +94,13 @@ export async function openFileInPreview<AssetError, PreviewError>(input: {
     readonly input: { readonly resource: AssetResource };
   }) => Promise<AtomCommandResult<AssetCreateUrlResult, AssetError>>;
   readonly openPreview: OpenPreviewMutation<PreviewError>;
-  readonly serverConfig?: ServerConfig | null;
 }): Promise<
   AtomCommandResult<
     void,
     AssetError | PreviewError | BrowserPreviewUnavailableError | BrowserSettingsReadError
   >
 > {
-  if (!isPreviewSupportedInRuntime(input.serverConfig)) {
+  if (!isPreviewAvailableFor(input.threadRef.environmentId)) {
     return AsyncResult.failure(
       Cause.fail(
         new BrowserPreviewUnavailableError({

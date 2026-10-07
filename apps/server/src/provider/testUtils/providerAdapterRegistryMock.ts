@@ -12,7 +12,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as PubSub from "effect/PubSub";
 
-import { ProviderUnsupportedError, type ProviderAdapterError } from "../Errors.ts";
+import { ProviderUnsupportedError, type ProviderAdapterError } from "../legacyErrors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import type { ProviderAdapterRegistryShape } from "../Services/ProviderAdapterRegistry.ts";
 

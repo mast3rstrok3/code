@@ -1,6 +1,7 @@
 import { EnvironmentId, type ThreadPullRequestLink } from "@t3tools/contracts";
 import type { DesktopPreviewFavicon, PreviewSessionSnapshot } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
+import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -98,6 +99,15 @@ function renderTabs(
   return renderToStaticMarkup(
     <RightPanelTabs
       mode="inline"
+      keybindings={DEFAULT_RESOLVED_KEYBINDINGS}
+      getShortcutContext={() => ({
+        terminalFocus: false,
+        terminalOpen: false,
+        previewFocus: false,
+        previewOpen: false,
+        isWeb: true,
+        isDesktop: false,
+      })}
       surfaces={second ? [previewSurface, secondSurface] : [previewSurface]}
       environmentId={null}
       activeSurfaceId={previewSurface.id}
@@ -118,30 +128,17 @@ function renderTabs(
       onAddBrowser={() => undefined}
       onAddBrowserInProfile={() => undefined}
       onAddTerminal={() => undefined}
-      onAddReview={() => undefined}
-      onAddLogs={() => undefined}
-      onAddAppStack={() => undefined}
       onAddPullRequest={() => undefined}
       onAddPullRequests={() => undefined}
       onAddDiff={() => undefined}
       onAddFiles={() => undefined}
-      onAddAgents={() => undefined}
-      onAddWorkflows={() => undefined}
       onAddDevice={() => undefined}
-      liveAgentCount={0}
-      liveWorkflowCount={0}
       browserAvailable
-      browserUnavailableReason={undefined}
       terminalAvailable={false}
-      reviewAvailable={false}
-      logsAvailable={false}
       diffAvailable={false}
       filesAvailable={false}
-      appStackAvailable={false}
       pullRequestAvailable={false}
       pullRequestsAvailable={false}
-      agentsAvailable={false}
-      workflowsAvailable={false}
       deviceAvailable={false}
     >
       <div>content</div>

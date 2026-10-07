@@ -20,10 +20,11 @@ This browser tooling context is scoped to the Implementation Workflow Browser Ap
 Use the \`t3-code\` MCP server for all browser work. Drive the browser with the \`preview_*\` tools (\`preview_open\`, \`preview_navigate\`, \`preview_snapshot\`, \`preview_click\`, \`preview_type\`, \`preview_press\`, \`preview_scroll\`, \`preview_wait_for\`, \`preview_resize\`) and coordinate the durable App Review record with \`app_review_get\`, \`app_review_recording_start\`, \`app_review_capture_screenshot\`, \`app_review_recording_stop\`, and \`app_review_update\`. Do not use external browsers, browser MCP servers, or standalone Playwright scripts.
 
 Evidence is required. A passed verdict needs a saved screen recording plus at least one captioned screenshot. A failed verdict normally uses the same evidence, but if recording finalization fails after product testing, preserve the failure when there is at least one failed check and every actionable finding references a captured screenshot. Tooling, preview, and evidence problems are failed reviews with concrete diagnostic detail, never a third verdict. See \`preview-browser-qa.md\` for the full workflow.`;
+import { T3_CODE_ORCHESTRATION_INSTRUCTIONS } from "./T3OrchestrationInstructions.ts";
 
 const T3_CODE_DEVICE_TOOL_INSTRUCTIONS = `## T3 Code devices
 
-The \`t3-code\` MCP server also exposes \`device_*\` tools for iOS Simulators and Android Emulators on this environment. For mobile verification, call \`device_list\`, then \`device_open\` so the user can watch the device in their Device panel; its result explains how to drive the device. Driving happens through the \`agent-device\` CLI, which is on PATH. Keep the host config and session flags returned by \`device_open\` on every command so concurrent devices stay independent: prefer \`agent-device snapshot -i\` refs over coordinates, and use \`device_screenshot\` when you need to see the screen. Prefer these tools and \`agent-device\` for opening and driving devices. Platform tools such as \`xcrun simctl\` and \`adb\` remain available for anything they do not cover, such as builds, logs, or port forwarding. If \`device_list\` reports a platform as unavailable, say so.`;
+The \`t3-code\` MCP server also exposes \`device_*\` tools for iOS Simulators and Android Emulators on this environment. For mobile verification, call \`device_list\`, then \`device_open\` so the user can watch the device in their Device panel; its result explains how to drive the device. Driving happens through the \`agent-device\` CLI, using the exact launcher path returned by \`device_open\`. Keep the host config and session flags returned by \`device_open\` on every command so concurrent devices stay independent: prefer \`agent-device snapshot -i\` refs over coordinates, and use \`device_screenshot\` when you need to see the screen. Prefer these tools and \`agent-device\` for opening and driving devices. Platform tools such as \`xcrun simctl\` and \`adb\` remain available for anything they do not cover, such as builds, logs, or port forwarding. If \`device_list\` reports a platform as unavailable, say so.`;
 
 export interface T3CodeToolAvailability {
   readonly browser: boolean;
@@ -246,6 +247,7 @@ export function buildCodexAdditionalContext(
   const tools = toolInstructions(toolsAvailable);
   // Separate keys keep each value under Codex's per-entry token cap.
   return {
+    t3_code_orchestration: { kind: "application", value: T3_CODE_ORCHESTRATION_INSTRUCTIONS },
     t3_code_runtime: {
       kind: "application",
       value: buildRuntimeInstructions({ harness: "Codex", ...runtime }),

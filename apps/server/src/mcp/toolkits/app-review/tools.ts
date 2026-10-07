@@ -1,3 +1,5 @@
+import { OrchestratorMcpFailure } from "@t3tools/contracts";
+import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import {
   AppReviewDocument,
   AppReviewError,
@@ -15,7 +17,7 @@ import {
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
@@ -76,6 +78,7 @@ export const AppReviewScreenshotResult = Schema.Struct({
 });
 
 const dependencies = [
+  ThreadManagementService.ThreadManagementService,
   McpInvocationContext.McpInvocationContext,
   OrchestrationEngineService,
   ProjectionSnapshotQuery,
@@ -90,12 +93,14 @@ const browserDependencies = [
 ];
 
 const AppReviewToolFailure = Schema.Union([
+  OrchestratorMcpFailure,
   AppReviewError,
   OrchestrationDispatchCommandError,
   OrchestrationGetSnapshotError,
 ]);
 
 const AppReviewBrowserToolFailure = Schema.Union([
+  OrchestratorMcpFailure,
   AppReviewError,
   OrchestrationDispatchCommandError,
   OrchestrationGetSnapshotError,

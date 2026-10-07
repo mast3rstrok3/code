@@ -1,3 +1,5 @@
+import { OrchestratorMcpFailure } from "@t3tools/contracts";
+import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import {
   AppReviewId,
   AppReviewRecord,
@@ -12,13 +14,18 @@ import {
   WorkflowDocContract,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 
-const dependencies = [McpInvocationContext.McpInvocationContext, ProjectionSnapshotQuery];
+const dependencies = [
+  ThreadManagementService.ThreadManagementService,
+  McpInvocationContext.McpInvocationContext,
+  ProjectionSnapshotQuery,
+];
 const failure = Schema.Union([
+  OrchestratorMcpFailure,
   WorkflowArtifactAccessError,
   OrchestrationGetSnapshotError,
   PreviewAutomationUnavailableError,

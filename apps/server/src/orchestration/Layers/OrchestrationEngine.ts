@@ -24,7 +24,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TxPriorityQueue from "effect/TxPriorityQueue";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import {
   metricAttributes,
@@ -302,6 +302,27 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             detail: "The server is draining workflow work for a planned restart.",
           });
         }
+        // Native project APIs can add a shared project after this workflow engine starts.
+        const createdProjectId =
+          envelope.command.type === "thread.create" ? envelope.command.projectId : null;
+        if (
+          createdProjectId !== null &&
+          !commandReadModel.projects.some((project) => project.id === createdProjectId)
+        ) {
+          const shell = yield* projectionSnapshotQuery.getProjectShellById(createdProjectId);
+          if (Option.isSome(shell)) {
+            const project = yield* projectionSnapshotQuery.getActiveProjectByWorkspaceRoot(
+              shell.value.workspaceRoot,
+            );
+            if (Option.isSome(project) && project.value.id === createdProjectId) {
+              commandReadModel = {
+                ...commandReadModel,
+                projects: [...commandReadModel.projects, project.value],
+              };
+            }
+          }
+        }
+
         // New and moved projects do not carry a resolved identity in the event-derived
         // command model. Legacy PR edits need it to identify the link they replace.
         if (
@@ -464,11 +485,14 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             }),
           )
           .pipe(
-            Effect.catchTag("SqlError", (sqlError) =>
-              Effect.fail(
-                toPersistenceSqlError("OrchestrationEngine.processEnvelope:transaction")(sqlError),
-              ),
-            ),
+            Effect.catchTags({
+              SqlError: (sqlError) =>
+                Effect.fail(
+                  toPersistenceSqlError("OrchestrationEngine.processEnvelope:transaction")(
+                    sqlError,
+                  ),
+                ),
+            }),
           );
 
         yield* Effect.all(committedCommand.cleanups, { concurrency: 1, discard: true });

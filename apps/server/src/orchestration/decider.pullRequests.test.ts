@@ -1,3 +1,4 @@
+import { describe } from "vite-plus/test";
 import { DEFAULT_WORKSPACE_USER_ID } from "@t3tools/contracts";
 import {
   CommandId,
@@ -17,7 +18,8 @@ import * as Schema from "effect/Schema";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 import { projectEvent } from "./projector.ts";
-import { isThreadDetailEvent } from "../ws.ts";
+const isThreadDetailEvent = (event: OrchestrationEvent) =>
+  event.type.startsWith("thread.") && !event.type.startsWith("thread.pull-request");
 
 const decodeCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 
@@ -286,7 +288,11 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
     }),
   );
 
-  for (const source of ["manual", "agent", "created", "stack"] as const) {
+  describe.each(
+    [...(["manual", "agent", "created", "stack"] as const)].map(
+      (scenarioCase) => [scenarioCase] as const,
+    ),
+  )("scenario %s", (source) => {
     it.effect(`legacy unlink removes the visible ${source} link and preserves other requests`, () =>
       Effect.gen(function* () {
         const other = makeLink({ number: 7, snapshot: { ...snapshot, state: "merged" } });
@@ -319,7 +325,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
         expect(thread.linkedPullRequest?.number).toBe(7);
       }),
     );
-  }
+  });
 
   it.effect("links a pull request with a normalized key and empty host state", () =>
     Effect.gen(function* () {
@@ -465,7 +471,9 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
     }),
   );
 
-  for (const source of ["manual", "agent", "created"] as const) {
+  describe.each(
+    [...(["manual", "agent", "created"] as const)].map((scenarioCase) => [scenarioCase] as const),
+  )("scenario %s", (source) => {
     it.effect(`unlinking a ${source} member prevents its sibling rediscovering it`, () =>
       Effect.gen(function* () {
         const member = makeLink({ source });
@@ -518,7 +526,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
         expect(rediscovered._tag).toBe("Failure");
       }),
     );
-  }
+  });
 
   it.effect("rejects unlinking a pull request that is not linked", () =>
     Effect.gen(function* () {

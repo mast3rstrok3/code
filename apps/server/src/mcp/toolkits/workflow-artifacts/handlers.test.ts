@@ -13,7 +13,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { McpSchema, McpServer } from "effect/unstable/ai";
+import { McpSchema, McpServer } from "effect/ai";
 
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { getWorkflowArtifactsForThread } from "../../../orchestration/workflowArtifacts.ts";
@@ -272,20 +272,30 @@ const queryLayer = Layer.mock(ProjectionSnapshotQuery)({
 
 const invocationLayer = Layer.succeed(McpInvocationContext.McpInvocationContext, {
   environmentId: EnvironmentId.make("environment-1"),
-  threadId: childThreadId,
-  providerSessionId: "provider-session-1",
-  providerInstanceId: ProviderInstanceId.make("codex"),
+
   capabilities: new Set(["workflow-artifacts"] as const),
   issuedAt: 1,
+  thread: {
+    threadId: childThreadId,
+    providerSessionId: "provider-session-1",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  },
+  client: undefined,
+  requestNamespace: "workflow-test",
 });
 
 const nestedReviewerInvocationLayer = Layer.succeed(McpInvocationContext.McpInvocationContext, {
   environmentId: EnvironmentId.make("environment-1"),
-  threadId: nestedReviewerThreadId,
-  providerSessionId: "provider-session-nested-reviewer",
-  providerInstanceId: ProviderInstanceId.make("codex"),
+
   capabilities: new Set(["workflow-artifacts"] as const),
   issuedAt: 1,
+  thread: {
+    threadId: nestedReviewerThreadId,
+    providerSessionId: "provider-session-nested-reviewer",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  },
+  client: undefined,
+  requestNamespace: "workflow-test",
 });
 
 const mcpClient = McpSchema.McpServerClient.of({
@@ -301,6 +311,7 @@ const mcpClient = McpSchema.McpServerClient.of({
   getClient: Effect.die("unused"),
 });
 const mcpLayer = (threadId = nestedReviewerThreadId) =>
+  // oxlint-disable-next-line t3code/no-raw-mcp-registration -- Tests exercise encoding with explicit invocation fixtures; production uses McpToolAccess.
   McpServer.toolkit(WorkflowArtifactsToolkit).pipe(
     Layer.provide(WorkflowArtifactsToolkitHandlersLive),
     Layer.provideMerge(McpServer.McpServer.layer),
@@ -308,11 +319,16 @@ const mcpLayer = (threadId = nestedReviewerThreadId) =>
     Layer.provideMerge(
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment-1"),
-        threadId,
-        providerSessionId: "provider-session-mcp",
-        providerInstanceId: ProviderInstanceId.make("codex"),
+
         capabilities: new Set(["workflow-artifacts"] as const),
         issuedAt: 1,
+        thread: {
+          threadId,
+          providerSessionId: "provider-session-mcp",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+        client: undefined,
+        requestNamespace: "workflow-test",
       }),
     ),
     Layer.provideMerge(Layer.succeed(McpSchema.McpServerClient, mcpClient)),

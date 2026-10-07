@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { AcpRegistryUrlAuthAction } from "./acpRegistry.ts";
 import {
   type EnvironmentMachineKind,
   ExecutionEnvironmentDescriptor,
@@ -23,6 +24,7 @@ import {
 } from "./keybindings.ts";
 import { EditorId, FileManagerRevealKind, RemoteOpenTarget } from "./editor.ts";
 import { ModelCapabilities } from "./model.ts";
+import { RuntimeMode } from "./providerPolicy.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits, UsageLimitSourceSnapshots } from "./providerUsageLimits.ts";
 import { ServerSettings } from "./settings.ts";
@@ -141,26 +143,26 @@ export const WorkflowCatalog = Schema.Struct({
 });
 export type WorkflowCatalog = typeof WorkflowCatalog.Type;
 
-const KeybindingsMalformedConfigTicket = Schema.Struct({
+const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
   message: TrimmedNonEmptyString,
 });
 
-const KeybindingsInvalidEntryTicket = Schema.Struct({
+const KeybindingsInvalidEntryIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.invalid-entry"),
   message: TrimmedNonEmptyString,
   index: Schema.Number,
 });
 
-export const ServerConfigTicket = Schema.Union([
-  KeybindingsMalformedConfigTicket,
-  KeybindingsInvalidEntryTicket,
+export const ServerConfigIssue = Schema.Union([
+  KeybindingsMalformedConfigIssue,
+  KeybindingsInvalidEntryIssue,
 ]);
-export type ServerConfigTicket = typeof ServerConfigTicket.Type;
+export type ServerConfigIssue = typeof ServerConfigIssue.Type;
 
 // Issue kinds grow over time; older clients must not fail the whole config
 // decode over a kind they cannot render.
-const ServerConfigTickets = ForwardCompatibleArray(ServerConfigTicket);
+const ServerConfigIssues = ForwardCompatibleArray(ServerConfigIssue);
 
 export const ServerProviderState = Schema.Literals(["ready", "warning", "error", "disabled"]);
 export type ServerProviderState = typeof ServerProviderState.Type;
@@ -177,6 +179,8 @@ export const ServerProviderAuth = Schema.Struct({
   type: Schema.optional(TrimmedNonEmptyString),
   label: Schema.optional(TrimmedNonEmptyString),
   email: Schema.optional(TrimmedNonEmptyString),
+  action: Schema.optional(AcpRegistryUrlAuthAction),
+  canLogout: Schema.optional(Schema.Boolean),
   subscriptionSharing: Schema.optional(Schema.Boolean),
   profileId: Schema.optional(TrimmedNonEmptyString),
 });
@@ -235,9 +239,25 @@ export const ServerProviderWorkspaceSnapshot = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   checkedAt: IsoDateTime,
   slashCommands: Schema.Array(ServerProviderSlashCommand),
+  /** Skills are available, but command discovery still needs a retry. */
+  slashCommandsPending: Schema.optional(Schema.Boolean),
   skills: Schema.Array(ServerProviderSkill),
 });
 export type ServerProviderWorkspaceSnapshot = typeof ServerProviderWorkspaceSnapshot.Type;
+
+/**
+ * How long a workspace's skill and command scan stays current. Nothing watches
+ * skill directories, so a composer opened after this rescans on use, and the
+ * server answers repeat requests inside the window from its cache.
+ */
+export const PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS = 5 * 60_000;
+
+export function isProviderWorkspaceSnapshotCurrent(
+  snapshot: Pick<ServerProviderWorkspaceSnapshot, "checkedAt">,
+  nowMs: number,
+): boolean {
+  return nowMs - Date.parse(snapshot.checkedAt) < PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS;
+}
 
 /**
  * Availability of a configured provider instance from the runtime's POV.
@@ -327,12 +347,16 @@ export const ServerProvider = Schema.Struct({
   driver: ProviderDriverKind,
   displayName: Schema.optional(TrimmedNonEmptyString),
   accentColor: Schema.optional(TrimmedNonEmptyString),
+  // Optional visual identity supplied by the owning provider driver. Clients
+  // must still validate remote URLs against that driver's trusted origin.
+  iconUrl: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(2_048))),
   badgeLabel: Schema.optional(TrimmedNonEmptyString),
   continuation: Schema.optional(ServerProviderContinuation),
   showInteractionModeToggle: Schema.optional(Schema.Boolean),
   // The driver streams context window usage, so a started thread will have a
   // meter once its activities load. Clients reserve the meter's space on it.
   reportsContextWindow: Schema.optional(Schema.Boolean),
+  supportedRuntimeModes: Schema.optional(ForwardCompatibleArray(RuntimeMode)),
   requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
   supportsConversationRollback: Schema.optional(Schema.Boolean),
   supportsTextGeneration: Schema.optional(Schema.Boolean),
@@ -340,8 +364,18 @@ export const ServerProvider = Schema.Struct({
     Schema.Struct({
       canAuthenticate: Schema.Boolean,
       canInstall: Schema.Boolean,
+      documentationUrl: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(2_048))),
     }),
   ),
+  nativeSessions: Schema.optional(
+    Schema.Struct({
+      canList: Schema.Boolean,
+      canLoad: Schema.Boolean,
+      canResume: Schema.Boolean,
+      canDelete: Schema.optional(Schema.Boolean),
+    }),
+  ),
+  configurableProviders: Schema.optional(Schema.Boolean),
   runtimePaths: Schema.optionalKey(
     Schema.Struct({
       homePath: TrimmedNonEmptyString,
@@ -393,6 +427,14 @@ export type ServerProviders = typeof ServerProviders.Type;
  */
 export const isProviderAvailable = (snapshot: ServerProvider): boolean =>
   snapshot.availability !== "unavailable";
+
+/**
+ * Treat an absent `supportsTextGeneration` as supported so legacy
+ * producers, which all support application text generation, keep working
+ * without resending the field.
+ */
+export const isProviderTextGenerationCapable = (snapshot: ServerProvider): boolean =>
+  snapshot.supportsTextGeneration !== false;
 
 export const ServerObservability = Schema.Struct({
   logsDirectoryPath: TrimmedNonEmptyString,
@@ -705,13 +747,22 @@ export function environmentThemeFileHasColors(file: EnvironmentThemeFile): boole
   );
 }
 
+export const ServerDirectEndpointKind = Schema.Literals(["lan", "tailnet"]);
+export type ServerDirectEndpointKind = typeof ServerDirectEndpointKind.Type;
+
+export const ServerDirectEndpoint = Schema.Struct({
+  kind: ServerDirectEndpointKind,
+  httpBaseUrl: TrimmedNonEmptyString,
+});
+export type ServerDirectEndpoint = typeof ServerDirectEndpoint.Type;
+
 export const ServerConfig = Schema.Struct({
   environment: ExecutionEnvironmentDescriptor,
   auth: ServerAuthDescriptor,
   cwd: TrimmedNonEmptyString,
   keybindingsConfigPath: TrimmedNonEmptyString,
   keybindings: ResolvedKeybindingsConfig,
-  tickets: ServerConfigTickets,
+  issues: ServerConfigIssues,
   providers: ServerProviders,
   // Editor ids grow over time; drop ones this build does not know rather than
   // failing the whole config decode.
@@ -722,6 +773,13 @@ export const ServerConfig = Schema.Struct({
    * sshd or no advertisable name.
    */
   remoteOpenTargets: Schema.optionalKey(ForwardCompatibleArray(RemoteOpenTarget)),
+  /**
+   * Direct addresses this server listens on right now (LAN and tailnet), so a
+   * client connected one way can learn the others. Hints only: the client
+   * checks each address answers as this environment before using it. Absent on
+   * servers that predate the feature; empty when bound to loopback only.
+   */
+  directEndpoints: Schema.optionalKey(ForwardCompatibleArray(ServerDirectEndpoint)),
   observability: ServerObservability,
   settings: ServerSettings,
   previewBrowser: Schema.optional(ServerPreviewBrowserStatus),
@@ -742,6 +800,17 @@ export const ServerConfig = Schema.Struct({
   threadSnapshotPagination: Schema.optionalKey(Schema.Boolean),
   /** Whether thread reads accept the reasoningMessages opt-in. */
   reasoningMessages: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Folder behind this environment's Scratch project, for threads that need
+   * no repository. Present only on servers that answer projects.ensureScratch
+   * and whose data dir is outside a Git checkout.
+   */
+  scratchWorkspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
+  /**
+   * Folder that holds projects started from just a name. Present only on
+   * servers that answer projects.createNew.
+   */
+  newProjectsRoot: Schema.optionalKey(TrimmedNonEmptyString),
   /**
    * Palettes published by this environment's machine. Never sent in a config
    * snapshot: the theme stream emits the current set before any change, so a
@@ -795,7 +864,7 @@ export type ServerRemoveKeybindingInput = typeof ServerRemoveKeybindingInput.Typ
 
 export const ServerUpsertKeybindingResult = Schema.Struct({
   keybindings: ResolvedKeybindingsConfig,
-  tickets: ServerConfigTickets,
+  issues: ServerConfigIssues,
 });
 export type ServerUpsertKeybindingResult = typeof ServerUpsertKeybindingResult.Type;
 
@@ -803,7 +872,7 @@ export const ServerRemoveKeybindingResult = ServerUpsertKeybindingResult;
 export type ServerRemoveKeybindingResult = typeof ServerRemoveKeybindingResult.Type;
 
 export const ServerConfigUpdatedPayload = Schema.Struct({
-  tickets: ServerConfigTickets,
+  issues: ServerConfigIssues,
   providers: ServerProviders,
   settings: Schema.optional(ServerSettings),
 });
@@ -811,7 +880,7 @@ export type ServerConfigUpdatedPayload = typeof ServerConfigUpdatedPayload.Type;
 
 export const ServerConfigKeybindingsUpdatedPayload = Schema.Struct({
   keybindings: ResolvedKeybindingsConfig,
-  tickets: ServerConfigTickets,
+  issues: ServerConfigIssues,
 });
 export type ServerConfigKeybindingsUpdatedPayload =
   typeof ServerConfigKeybindingsUpdatedPayload.Type;
@@ -927,6 +996,13 @@ export const ServerLifecycleWelcomePayload = Schema.Struct({
 });
 export type ServerLifecycleWelcomePayload = typeof ServerLifecycleWelcomePayload.Type;
 
+export const ServerLifecycleLegacyThreadMigrationPayload = Schema.Struct({
+  status: Schema.Union([Schema.Literal("running"), Schema.Literal("complete")]),
+  totalThreadCount: NonNegativeInt,
+});
+export type ServerLifecycleLegacyThreadMigrationPayload =
+  typeof ServerLifecycleLegacyThreadMigrationPayload.Type;
+
 export const ServerLifecycleStreamWelcomeEvent = Schema.Struct({
   version: Schema.Literal(1),
   sequence: NonNegativeInt,
@@ -958,11 +1034,20 @@ export const ServerLifecycleStreamDrainingEvent = Schema.Struct({
   payload: ServerLifecycleDrainingPayload,
 });
 export type ServerLifecycleStreamDrainingEvent = typeof ServerLifecycleStreamDrainingEvent.Type;
+export const ServerLifecycleStreamLegacyThreadMigrationEvent = Schema.Struct({
+  version: Schema.Literal(1),
+  sequence: NonNegativeInt,
+  type: Schema.Literal("legacyThreadMigration"),
+  payload: ServerLifecycleLegacyThreadMigrationPayload,
+});
+export type ServerLifecycleStreamLegacyThreadMigrationEvent =
+  typeof ServerLifecycleStreamLegacyThreadMigrationEvent.Type;
 
 export const ServerLifecycleStreamEvent = Schema.Union([
   ServerLifecycleStreamWelcomeEvent,
   ServerLifecycleStreamReadyEvent,
   ServerLifecycleStreamDrainingEvent,
+  ServerLifecycleStreamLegacyThreadMigrationEvent,
 ]);
 export type ServerLifecycleStreamEvent = typeof ServerLifecycleStreamEvent.Type;
 

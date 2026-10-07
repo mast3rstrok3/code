@@ -12,8 +12,8 @@ import {
   ProjectIconOverride,
   ThreadId,
 } from "@t3tools/contracts";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -126,7 +126,7 @@ const makeEventStore = Effect.gen(function* () {
     Result: OrchestrationEventPersistedRowSchema,
     execute: (request) =>
       sql`
-        INSERT INTO orchestration_events (
+        INSERT INTO workflow_events (
           event_id,
           aggregate_kind,
           stream_id,
@@ -147,7 +147,7 @@ const makeEventStore = Effect.gen(function* () {
           COALESCE(
             (
               SELECT stream_version + 1
-              FROM orchestration_events
+              FROM workflow_events
               WHERE aggregate_kind = ${request.aggregateKind}
                 AND stream_id = ${request.streamId}
               ORDER BY stream_version DESC
@@ -196,7 +196,7 @@ const makeEventStore = Effect.gen(function* () {
           correlation_id AS "correlationId",
           payload_json AS "payload",
           metadata_json AS "metadata"
-        FROM orchestration_events
+        FROM workflow_events
         WHERE sequence > ${request.sequenceExclusive}
         ORDER BY sequence ASC
         LIMIT ${request.limit}
@@ -220,7 +220,7 @@ const makeEventStore = Effect.gen(function* () {
           correlation_id AS "correlationId",
           payload_json AS "payload",
           metadata_json AS "metadata"
-        FROM orchestration_events
+        FROM workflow_events
         WHERE aggregate_kind = ${request.aggregateKind}
           AND stream_id = ${request.aggregateId}
           AND sequence > ${request.fromSequenceExclusive}
@@ -243,7 +243,7 @@ const makeEventStore = Effect.gen(function* () {
           )), 0) AS "hasCreateEvent"
         FROM (
           SELECT payload_json, event_type
-          FROM orchestration_events
+          FROM workflow_events
           WHERE aggregate_kind = ${request.aggregateKind}
             AND stream_id = ${request.aggregateId}
             AND sequence > ${request.fromSequenceExclusive}
@@ -333,7 +333,7 @@ const makeEventStore = Effect.gen(function* () {
     Result: Schema.Struct({ sequence: Schema.Number }),
     execute: (request) => sql`
           SELECT sequence
-          FROM orchestration_events
+          FROM workflow_events
           WHERE aggregate_kind = ${request.aggregateKind}
             AND stream_id = ${request.aggregateId}
             AND ${sql.and([

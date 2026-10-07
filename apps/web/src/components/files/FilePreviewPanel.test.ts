@@ -1,20 +1,63 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { ProjectReadFileError } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+import { describe, expect, it } from "vite-plus/test";
 
-// The panel module pulls in the diff worker, which needs a browser `self`.
-vi.mock("../DiffWorkerPoolProvider", () => ({ DiffWorkerPoolProvider: () => null }));
-
-import { resolveWorkspaceMediaAssetPath } from "./FilePreviewPanel";
 import {
   formatFileCommentRange,
   normalizeFileCommentRange,
   remapFileCommentAnnotations,
 } from "./fileCommentAnnotations";
 import {
+  filePreviewReadErrorMessage,
   isMarkdownPreviewFile,
+  resolveFilePreviewPath,
   setMarkdownTaskChecked,
   shouldShowFileExplorer,
 } from "./filePreviewMode";
-import { resolveWorkspaceFilePreviewKind } from "./workspaceFilePreviewKind";
+
+const decodeReadError = Schema.decodeSync(ProjectReadFileError);
+
+describe("file preview read errors", () => {
+  it.each([
+    ["path_not_file", "The path is a directory or special file, not a regular file."],
+    ["binary_file", "The file is binary and cannot be displayed as text."],
+    ["workspace_path_outside_root", "The requested path is outside the workspace."],
+    ["resolved_path_outside_root", "The path resolves to a location outside the workspace."],
+    [
+      "operation_failed",
+      "The file could not be accessed or read. It may be missing or inaccessible.",
+    ],
+  ] as const)("describes %s without revealing the platform cause", (failure, message) => {
+    const error = new ProjectReadFileError({
+      cwd: "/workspace",
+      relativePath: "workspace/outline.md",
+      failure,
+      operation: "realpath-target",
+      resolvedPath: "/workspace/workspace/outline.md",
+      cause: new Error("EACCES: sensitive platform detail"),
+    });
+    expect(filePreviewReadErrorMessage(error)).toBe(message);
+  });
+
+  it("distinguishes an inaccessible workspace from an inaccessible file", () => {
+    const error = new ProjectReadFileError({
+      cwd: "/workspace",
+      relativePath: "outline.md",
+      failure: "operation_failed",
+      operation: "realpath-workspace-root",
+      operationPath: "/workspace",
+    });
+    expect(filePreviewReadErrorMessage(error)).toBe("The workspace folder could not be accessed.");
+  });
+
+  it("preserves the public message from older servers", () => {
+    const error = decodeReadError({
+      _tag: "ProjectReadFileError",
+      message: "Legacy file read failure.",
+    });
+    expect(filePreviewReadErrorMessage(error)).toBe("Legacy file read failure.");
+  });
+});
 
 describe("file comment annotations", () => {
   it("normalizes and formats selected line ranges", () => {
@@ -75,27 +118,6 @@ describe("isMarkdownPreviewFile", () => {
   });
 });
 
-describe("resolveWorkspaceFilePreviewKind", () => {
-  it("classifies workspace media separately from text files", () => {
-    expect(resolveWorkspaceFilePreviewKind("artifacts/hero-captures/01-hero.png")).toBe("image");
-    expect(resolveWorkspaceFilePreviewKind("artifacts/hero-captures/hero-navigation.webm")).toBe(
-      "video",
-    );
-    expect(resolveWorkspaceFilePreviewKind("src/index.ts")).toBe("text");
-  });
-});
-
-describe("workspace media preview assets", () => {
-  it("resolves media asset paths against the workspace cwd before minting URLs", () => {
-    expect(resolveWorkspaceMediaAssetPath(".logs/recordings/page@abcd.webm", "/repo/app")).toBe(
-      "/repo/app/.logs/recordings/page@abcd.webm",
-    );
-    expect(resolveWorkspaceMediaAssetPath("/repo/app/recording.webm", "/repo/app")).toBe(
-      "/repo/app/recording.webm",
-    );
-  });
-});
-
 describe("shouldShowFileExplorer", () => {
   it("hides the workspace tree for host files and attachments", () => {
     expect(
@@ -144,5 +166,26 @@ describe("setMarkdownTaskChecked", () => {
   it("leaves the document unchanged for a stale or invalid marker offset", () => {
     expect(setMarkdownTaskChecked(markdown, 0, true)).toBe(markdown);
     expect(setMarkdownTaskChecked(markdown, 200, true)).toBe(markdown);
+  });
+});
+
+describe("resolveFilePreviewPath", () => {
+  it.each([
+    ["/repo/project", null],
+    ["/repo/project/", null],
+    [".", null],
+    [null, null],
+    ["/repo/project/src", "/repo/project/src"],
+    ["/repo/project/src/main.ts", "/repo/project/src/main.ts"],
+    ["src/main.ts", "src/main.ts"],
+    ["/repo/project-other", "/repo/project-other"],
+  ])("opens %s in the appropriate workspace surface", (path, expected) => {
+    const relativePath = resolveFilePreviewPath(path, "/repo/project");
+    expect(relativePath).toBe(expected);
+    if (expected === null) {
+      expect(
+        shouldShowFileExplorer({ relativePath, explorerOpen: false, attachmentOpen: false }),
+      ).toBe(true);
+    }
   });
 });

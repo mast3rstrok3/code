@@ -1,3 +1,4 @@
+import * as McpToolAccess from "../../McpToolAccess.ts";
 import {
   CommandId,
   EventId,
@@ -79,8 +80,8 @@ const toWorkflowUserInputAnswers = (
 export const handlers = {
   workflow_request_user_input: (input) =>
     Effect.gen(function* () {
-      const scope = yield* McpInvocationContext.requireMcpCapability("user-input");
-      const threadId = scope.threadId;
+      const scope = yield* McpInvocationContext.requireThreadMcpCapability("user-input");
+      const threadId = scope.thread.threadId;
       const engine = yield* OrchestrationEngineService;
       const broker = yield* WorkflowUserInputBroker.WorkflowUserInputBroker;
       const snapshotQuery = yield* ProjectionSnapshotQuery;
@@ -114,7 +115,8 @@ export const handlers = {
           `No question is waiting under resumeRequestId '${resumeRequestId}'. It was answered or retired already. Ask again with a fresh call that omits resumeRequestId.`,
         );
       }
-      const requestId = resumeRequestId ?? `workflow-user-input-${nextId(scope.providerSessionId)}`;
+      const requestId =
+        resumeRequestId ?? `workflow-user-input-${nextId(scope.thread.providerSessionId)}`;
       // The registered questions win over a resend, so a reworded resume can
       // never remap answers the user gave to the card they actually saw.
       const questions = Option.getOrElse(resumed, () =>
@@ -128,7 +130,7 @@ export const handlers = {
       }) =>
         Effect.gen(function* () {
           const createdAt = yield* nowIso;
-          const activityId = nextId(scope.providerSessionId);
+          const activityId = nextId(scope.thread.providerSessionId);
           yield* engine
             .dispatch({
               type: "thread.activity.append",
@@ -225,4 +227,6 @@ export const handlers = {
     }),
 } satisfies Parameters<typeof WorkflowUserInputToolkit.toLayer>[0];
 
-export const WorkflowUserInputToolkitHandlersLive = WorkflowUserInputToolkit.toLayer(handlers);
+export const layer = McpToolAccess.toLayer(WorkflowUserInputToolkit, {
+  workflow_request_user_input: McpToolAccess.actsAsCaller(handlers.workflow_request_user_input),
+});

@@ -71,11 +71,16 @@ const makeEnvironment = (
   });
   const invocationLayer = Layer.succeed(McpInvocationContext.McpInvocationContext, {
     environmentId: EnvironmentId.make("environment-1"),
-    threadId,
-    providerSessionId: "provider-session-1",
-    providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+
     capabilities: new Set(capabilities),
     issuedAt: 1,
+    thread: {
+      threadId,
+      providerSessionId: "provider-session-1",
+      providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+    },
+    client: undefined,
+    requestNamespace: "workflow-test",
   });
   return {
     commands,

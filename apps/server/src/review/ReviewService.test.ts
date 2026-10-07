@@ -5,31 +5,18 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 
-import {
-  DEFAULT_WORKSPACE_USER_ID,
-  ProjectId,
-  ProviderInstanceId,
-  ThreadId,
-} from "@t3tools/contracts";
-import { ServerConfig } from "../config.ts";
-import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
-import { ProjectionThreadRepository } from "../persistence/Services/ProjectionThreads.ts";
+import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as ReviewService from "./ReviewService.ts";
 
-function makeLayer(input: {
+function layer(input: {
   readonly workspaceRoot: string;
   readonly baseDir: string;
   readonly detectCalls?: Array<{ readonly cwd: string }>;
-  readonly registeredWorkspaceRoots?: ReadonlyArray<{
-    readonly workspaceRoot: string;
-    readonly deleted?: boolean;
-  }>;
-  readonly registeredWorktrees?: ReadonlyArray<{
-    readonly worktreePath: string;
-    readonly deleted?: boolean;
-  }>;
+  readonly worktreesDirectory?: string;
+  readonly previousWorktreesDirectories?: ReadonlyArray<string>;
 }) {
   return ReviewService.layer.pipe(
     Layer.provide(
@@ -45,63 +32,9 @@ function makeLayer(input: {
     ),
     Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
     Layer.provide(
-      Layer.mock(ProjectionProjectRepository)({
-        listAll: () =>
-          Effect.succeed(
-            (input.registeredWorkspaceRoots ?? []).map((project, index) => ({
-              projectId: ProjectId.make(`project-${index}`),
-              ownerUserId: DEFAULT_WORKSPACE_USER_ID,
-              title: `Project ${index}`,
-              workspaceRoot: project.workspaceRoot,
-              defaultModelSelection: null,
-              defaultThreadEnvMode: null,
-              previewRecordingMode: null,
-              autoPull: false,
-              scripts: [],
-              createdAt: "2026-08-13T00:00:00.000Z",
-              updatedAt: "2026-08-13T00:00:00.000Z",
-              deletedAt: project.deleted ? "2026-08-13T00:00:00.000Z" : null,
-            })),
-          ),
-      }),
-    ),
-    Layer.provide(
-      Layer.mock(ProjectionThreadRepository)({
-        listByProjectId: ({ projectId }) =>
-          Effect.succeed(
-            (input.registeredWorktrees ?? []).map((thread, index) => ({
-              threadId: ThreadId.make(`thread-${index}`),
-              projectId,
-              ownerUserId: DEFAULT_WORKSPACE_USER_ID,
-              parentThreadId: null,
-              workflowRole: null,
-              title: `Thread ${index}`,
-              modelSelection: {
-                instanceId: ProviderInstanceId.make("codex"),
-                model: "gpt-5.6",
-              },
-              runtimeMode: "full-access" as const,
-              interactionMode: "default" as const,
-              branch: null,
-              worktreePath: thread.worktreePath,
-              latestTurnId: null,
-              createdAt: "2026-08-13T00:00:00.000Z",
-              updatedAt: "2026-08-13T00:00:00.000Z",
-              archivedAt: null,
-              settledOverride: null,
-              settledAt: null,
-              unsettledAt: null,
-              snoozedUntil: null,
-              snoozedAt: null,
-              pinnedAt: null,
-              latestUserMessageAt: null,
-              pendingApprovalCount: 0,
-              pendingUserInputCount: 0,
-              hasActionableProposedPlan: 0,
-              planningWorkflowStage: null,
-              deletedAt: thread.deleted ? "2026-08-13T00:00:00.000Z" : null,
-            })),
-          ),
+      ServerSettings.ServerSettingsService.layerTest({
+        worktreesDirectory: input.worktreesDirectory ?? "",
+        previousWorktreesDirectories: [...(input.previousWorktreesDirectories ?? [])],
       }),
     ),
     Layer.provide(ServerConfig.layerTest(input.workspaceRoot, input.baseDir)),
@@ -121,13 +54,13 @@ describe("ReviewService", () => {
       const error = yield* Effect.gen(function* () {
         const review = yield* ReviewService.ReviewService;
         return yield* review.getDiffPreview({ cwd: outsideRoot }).pipe(Effect.flip);
-      }).pipe(Effect.provide(makeLayer({ workspaceRoot, baseDir, detectCalls })));
+      }).pipe(Effect.provide(layer({ workspaceRoot, baseDir, detectCalls })));
 
       assert.strictEqual(error._tag, "VcsRepositoryDetectionError");
       assert.strictEqual(error.operation, "ReviewService.getDiffPreview");
       assert.match(
         "detail" in error ? error.detail : "",
-        /must stay within a configured or registered workspace root/,
+        /must stay within the configured workspace root/,
       );
       assert.deepStrictEqual(detectCalls, []);
     }).pipe(Effect.provide(NodeServices.layer)),
@@ -154,15 +87,50 @@ describe("ReviewService", () => {
             newPath: "file.ts",
           })
           .pipe(Effect.flip);
-      }).pipe(Effect.provide(makeLayer({ workspaceRoot, baseDir, detectCalls })));
+      }).pipe(Effect.provide(layer({ workspaceRoot, baseDir, detectCalls })));
 
       assert.strictEqual(error._tag, "VcsRepositoryDetectionError");
       assert.strictEqual(error.operation, "ReviewService.getDiffFileContents");
       assert.match(
         "detail" in error ? error.detail : "",
-        /must stay within a configured or registered workspace root/,
+        /must stay within the configured workspace root/,
       );
       assert.deepStrictEqual(detectCalls, []);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("allows previous custom worktree locations but never a filesystem root", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-workspace-" });
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
+      const previous = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-old-worktrees-" });
+      const outsideRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-outside-" });
+
+      const result = yield* Effect.gen(function* () {
+        const review = yield* ReviewService.ReviewService;
+        return yield* review.getDiffPreview({ cwd: previous });
+      }).pipe(
+        Effect.provide(
+          layer({
+            workspaceRoot,
+            baseDir,
+            worktreesDirectory: "/",
+            previousWorktreesDirectories: [previous],
+          }),
+        ),
+      );
+      assert.strictEqual(result.cwd, previous);
+
+      const rootLink = `${baseDir}/root-link`;
+      yield* fs.symlink("/", rootLink);
+      for (const worktreesDirectory of ["/", rootLink]) {
+        const error = yield* Effect.gen(function* () {
+          const review = yield* ReviewService.ReviewService;
+          return yield* review.getDiffPreview({ cwd: outsideRoot }).pipe(Effect.flip);
+        }).pipe(Effect.provide(layer({ workspaceRoot, baseDir, worktreesDirectory })));
+        assert.strictEqual(error._tag, "VcsRepositoryDetectionError");
+      }
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -176,138 +144,11 @@ describe("ReviewService", () => {
       const result = yield* Effect.gen(function* () {
         const review = yield* ReviewService.ReviewService;
         return yield* review.getDiffPreview({ cwd: workspaceRoot });
-      }).pipe(Effect.provide(makeLayer({ workspaceRoot, baseDir, detectCalls })));
+      }).pipe(Effect.provide(layer({ workspaceRoot, baseDir, detectCalls })));
 
       assert.strictEqual(result.cwd, workspaceRoot);
       assert.deepStrictEqual(result.sources, []);
       assert.deepStrictEqual(detectCalls, [{ cwd: workspaceRoot }]);
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("allows diff preview cwd inside an active registered project root", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-workspace-" });
-      const registeredRoot = yield* fs.makeTempDirectoryScoped({
-        prefix: "t3-review-registered-",
-      });
-      const registeredChild = `${registeredRoot}/packages/web`;
-      yield* fs.makeDirectory(registeredChild, { recursive: true });
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
-      const detectCalls: Array<{ readonly cwd: string }> = [];
-
-      const result = yield* Effect.gen(function* () {
-        const review = yield* ReviewService.ReviewService;
-        return yield* review.getDiffPreview({ cwd: registeredChild });
-      }).pipe(
-        Effect.provide(
-          makeLayer({
-            workspaceRoot,
-            baseDir,
-            detectCalls,
-            registeredWorkspaceRoots: [{ workspaceRoot: registeredRoot }],
-          }),
-        ),
-      );
-
-      assert.strictEqual(result.cwd, registeredChild);
-      assert.deepStrictEqual(detectCalls, [{ cwd: registeredChild }]);
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("allows diff preview cwd inside an active registered sibling worktree", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-workspace-" });
-      const repositoryParent = yield* fs.makeTempDirectoryScoped({
-        prefix: "t3-review-repository-parent-",
-      });
-      const registeredRoot = `${repositoryParent}/repo`;
-      const registeredWorktree = `${repositoryParent}/repo.worktrees/feature`;
-      const registeredWorktreeChild = `${registeredWorktree}/packages/web`;
-      yield* fs.makeDirectory(registeredRoot, { recursive: true });
-      yield* fs.makeDirectory(registeredWorktreeChild, { recursive: true });
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
-      const detectCalls: Array<{ readonly cwd: string }> = [];
-
-      const result = yield* Effect.gen(function* () {
-        const review = yield* ReviewService.ReviewService;
-        return yield* review.getDiffPreview({ cwd: registeredWorktreeChild });
-      }).pipe(
-        Effect.provide(
-          makeLayer({
-            workspaceRoot,
-            baseDir,
-            detectCalls,
-            registeredWorkspaceRoots: [{ workspaceRoot: registeredRoot }],
-            registeredWorktrees: [{ worktreePath: registeredWorktree }],
-          }),
-        ),
-      );
-
-      assert.strictEqual(result.cwd, registeredWorktreeChild);
-      assert.deepStrictEqual(detectCalls, [{ cwd: registeredWorktreeChild }]);
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("rejects diff preview cwd inside a deleted registered sibling worktree", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-workspace-" });
-      const repositoryParent = yield* fs.makeTempDirectoryScoped({
-        prefix: "t3-review-repository-parent-",
-      });
-      const registeredRoot = `${repositoryParent}/repo`;
-      const deletedWorktree = `${repositoryParent}/repo.worktrees/deleted-feature`;
-      yield* fs.makeDirectory(registeredRoot, { recursive: true });
-      yield* fs.makeDirectory(deletedWorktree, { recursive: true });
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
-      const detectCalls: Array<{ readonly cwd: string }> = [];
-
-      const error = yield* Effect.gen(function* () {
-        const review = yield* ReviewService.ReviewService;
-        return yield* review.getDiffPreview({ cwd: deletedWorktree }).pipe(Effect.flip);
-      }).pipe(
-        Effect.provide(
-          makeLayer({
-            workspaceRoot,
-            baseDir,
-            detectCalls,
-            registeredWorkspaceRoots: [{ workspaceRoot: registeredRoot }],
-            registeredWorktrees: [{ worktreePath: deletedWorktree, deleted: true }],
-          }),
-        ),
-      );
-
-      assert.strictEqual(error._tag, "VcsRepositoryDetectionError");
-      assert.deepStrictEqual(detectCalls, []);
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("rejects diff preview cwd inside a deleted registered project root", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-workspace-" });
-      const deletedRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-deleted-" });
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
-      const detectCalls: Array<{ readonly cwd: string }> = [];
-
-      const error = yield* Effect.gen(function* () {
-        const review = yield* ReviewService.ReviewService;
-        return yield* review.getDiffPreview({ cwd: deletedRoot }).pipe(Effect.flip);
-      }).pipe(
-        Effect.provide(
-          makeLayer({
-            workspaceRoot,
-            baseDir,
-            detectCalls,
-            registeredWorkspaceRoots: [{ workspaceRoot: deletedRoot, deleted: true }],
-          }),
-        ),
-      );
-
-      assert.strictEqual(error._tag, "VcsRepositoryDetectionError");
-      assert.deepStrictEqual(detectCalls, []);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -322,7 +163,7 @@ describe("ReviewService", () => {
       const error = yield* Effect.gen(function* () {
         const review = yield* ReviewService.ReviewService;
         return yield* review.getDiffPreview({ cwd: invalidCwd }).pipe(Effect.flip);
-      }).pipe(Effect.provide(makeLayer({ workspaceRoot, baseDir, detectCalls })));
+      }).pipe(Effect.provide(layer({ workspaceRoot, baseDir, detectCalls })));
 
       assert.strictEqual(error._tag, "VcsRepositoryDetectionError");
       if (error._tag !== "VcsRepositoryDetectionError") return;

@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 /** Associates rendered user messages with the workflow instructions that produced their turn. */
 export default Effect.gen(function* () {

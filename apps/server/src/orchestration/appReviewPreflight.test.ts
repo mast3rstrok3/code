@@ -1,20 +1,25 @@
+import { describe } from "vite-plus/test";
 import { it, expect } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 import { ProcessRunner, ProcessSpawnError, type ProcessRunInput } from "../processRunner.ts";
 import { runAppReviewPreflight } from "./appReviewPreflight.ts";
 
-for (const [code, timedOut, expected] of [
-  [0, false, "ready"],
-  [1, false, "waiting"],
-  [null, true, "waiting"],
-  [2, false, "error"],
-  [127, false, "error"],
-  [null, false, "error"],
-] as const) {
+describe.each(
+  [
+    ...([
+      [0, false, "ready"],
+      [1, false, "waiting"],
+      [null, true, "waiting"],
+      [2, false, "error"],
+      [127, false, "error"],
+      [null, false, "error"],
+    ] as const),
+  ].map((scenarioCase) => [scenarioCase] as const),
+)("scenario %s", ([code, timedOut, expected]) => {
   it.effect(`classifies readiness exit ${code}, timeout ${timedOut} as ${expected}`, () =>
     Effect.gen(function* () {
       const calls: ProcessRunInput[] = [];
@@ -53,7 +58,7 @@ for (const [code, timedOut, expected] of [
       });
     }).pipe(Effect.provide(NodeServices.layer)),
   );
-}
+});
 
 it.effect("does not persist process errors or inherit an unrelated preview URL", () =>
   Effect.gen(function* () {

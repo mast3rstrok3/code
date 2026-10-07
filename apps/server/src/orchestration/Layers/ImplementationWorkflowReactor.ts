@@ -81,7 +81,7 @@ import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
-import { HttpClient } from "effect/unstable/http";
+import { HttpClient } from "effect/http";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -2801,11 +2801,12 @@ const make = Effect.gen(function* () {
       })
       .pipe(
         Effect.as(true),
-        Effect.catchTag("OrchestrationCommandInvariantError", (error) =>
-          error.detail === STALE_IMPLEMENTATION_TICKET_STATE_DETAIL
-            ? Effect.succeed(false)
-            : Effect.fail(error),
-        ),
+        Effect.catchTags({
+          OrchestrationCommandInvariantError: (error) =>
+            error.detail === STALE_IMPLEMENTATION_TICKET_STATE_DETAIL
+              ? Effect.succeed(false)
+              : Effect.fail(error),
+        }),
       );
     if (!written) return false;
     locallyUpdatedRuns.set(input.run.id, {

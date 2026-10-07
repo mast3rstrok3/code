@@ -8,7 +8,7 @@ import {
   type OrchestrationImplementationRun,
   type OrchestrationPlanningTicket,
 } from "@t3tools/contracts";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import type { EnvironmentWorkflowThreadShell } from "@t3tools/client-runtime/state/models";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -166,7 +166,7 @@ describe("workflowTicketStatuses", () => {
       session: null,
       latestTurn: null,
       workflowContext: { workflowId, ticketScope: [ticketId] },
-    }) as unknown as EnvironmentThreadShell;
+    }) as unknown as EnvironmentWorkflowThreadShell;
 
   it("counts a ticket once, under the newest run that holds it", () => {
     expect(

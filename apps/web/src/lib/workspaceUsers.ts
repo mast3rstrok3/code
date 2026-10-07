@@ -20,8 +20,10 @@ export function resolveDefaultThreadOwnerUserId(input: {
  * view shows: a new thread belongs to the acting user, so it starts in their project.
  */
 export function isProjectGroupOwnedBy(
-  group: { readonly memberProjects: ReadonlyArray<{ readonly ownerUserId: WorkspaceUserId }> },
+  group: { readonly memberProjects: ReadonlyArray<{ readonly ownerUserId?: WorkspaceUserId }> },
   ownerUserId: WorkspaceUserId,
 ): boolean {
-  return group.memberProjects.some((project) => project.ownerUserId === ownerUserId);
+  return group.memberProjects.some(
+    (project) => (project.ownerUserId ?? DEFAULT_WORKSPACE_USER_ID) === ownerUserId,
+  );
 }

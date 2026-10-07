@@ -1,25 +1,18 @@
+import type { OrchestrationThreadWorkflowRole } from "@t3tools/contracts";
+import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
+import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import * as React from "react";
-import type {
-  ContextMenuItem,
-  EnvironmentId,
-  OrchestrationThreadWorkflowRole,
-  ThreadId,
-} from "@t3tools/contracts";
-import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
 import {
   isAtomCommandInterrupted,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
+import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import type { ContextMenuItem, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
-import type { AsyncResult } from "effect/unstable/reactivity";
+import type { AsyncResult } from "effect/reactivity";
 import { planPinnedReorder } from "@t3tools/client-runtime/state/thread-sort";
-import {
-  collectHierarchyPostOrder,
-  orderHierarchyPostOrder,
-  type HierarchyAccessors,
-} from "@t3tools/shared/threadHierarchy";
 import {
   effectiveSnoozed,
   type ThreadSnoozeShell,
@@ -31,7 +24,9 @@ import {
   type ThreadSortInput,
 } from "../lib/threadSort";
 import type { SidebarThreadSummary, Thread } from "../types";
-import { isLatestTurnSettled } from "../session-logic";
+import { cn } from "../lib/utils";
+import { isLatestRunSettled } from "../session-logic";
+import { resolveServerBackedAppStageLabel } from "../branding.logic";
 
 export function shouldNavigateAfterThreadPark(input: {
   readonly threadKey: string;
@@ -73,8 +68,6 @@ export function resolveSidebarRowAccessibility(input: {
 // so this limit is a direct renderer-heap and server-load multiplier — keep
 // it small; cold opens still render instantly from the cached snapshot.
 const SIDEBAR_THREAD_PREWARM_LIMIT = 3;
-export type SidebarNewThreadEnvMode = "local" | "worktree";
-const SIDEBAR_THREAD_TREE_MAX_VISUAL_DEPTH = 3;
 // A small buffer keeps the next few rows warm without leasing every row that
 // content-visibility leaves mounted below the scroll viewport.
 const SIDEBAR_ROW_SUBSCRIPTION_OVERSCAN_PX = 160;
@@ -136,9 +129,23 @@ export const animateSidebarLayoutChanges: AnimateLayoutChanges = (args) =>
 // the lifecycle action; Sidebar.drag previews the resulting layout. Pinned
 // and active threads keep the dragged position; settled threads use time
 // order. Snoozed rows can leave the shelf, but dropping into it is not
-// supported because snoozing requires a wake time.
+// supported because snoozing requires a wake time. The Working shelf (beta)
+// follows live status, so it is neither a drag source nor a destination.
 
-export type SidebarSection = "pinned" | "active" | "snoozed" | "settled";
+export type SidebarSection = "pinned" | "active" | "working" | "snoozed" | "settled";
+
+/** Resolve the shelf a visible thread belongs to. Snooze is temporary and
+ * wins until its wake boundary; settlement then wins over a stale pin. */
+export function resolveSidebarThreadSection(input: {
+  readonly snoozed: boolean;
+  readonly settled: boolean;
+  readonly pinned: boolean;
+}): SidebarSection {
+  if (input.snoozed) return "snoozed";
+  if (input.settled) return "settled";
+  if (input.pinned) return "pinned";
+  return "active";
+}
 
 /** Sortable ids: thread rows use their scoped key; structural items use a
     colon-free prefix: scoped thread keys always contain a colon. */
@@ -152,6 +159,7 @@ export type SidebarListMarker =
   | "settled-placeholder"
   /** The boundary between pinned and active rows. */
   | "pinned-divider"
+  | "working-header"
   | "snoozed-header"
   | "settled-header";
 
@@ -169,7 +177,7 @@ export function sidebarListItemId(item: SidebarListItem): string {
 
 /** The section a slot belongs to, read off the markers around it: from
     the top down, everything before the pinned divider is pinned, then the
-    inbox until the snoozed header, the shelf until the settled header,
+    inbox until the first shelf header, each shelf until the next header,
     then settled. */
 function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number): SidebarSection {
   let section: SidebarSection = "pinned";
@@ -177,6 +185,7 @@ function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number):
     const item = items[i]!;
     if (item.kind !== "marker") continue;
     if (item.marker === "pinned-divider") section = "active";
+    else if (item.marker === "working-header") section = "working";
     else if (item.marker === "snoozed-header") section = "snoozed";
     else if (item.marker === "settled-header") section = "settled";
   }
@@ -184,7 +193,7 @@ function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number):
 }
 
 /** Resolve the destination section and manual order from an arrayMove across
- * the separators. The snoozed shelf is never a destination. */
+ * the separators. The working and snoozed shelves are never destinations. */
 export type SidebarDropTarget = {
   readonly section: "pinned" | "active" | "settled";
   readonly pinnedOrder: readonly string[];
@@ -202,14 +211,19 @@ export function resolveSidebarDropTarget(
   const moved = items.filter((_, index) => index !== activeIndex);
   moved.splice(overIndex, 0, items[activeIndex]!);
   const section = sectionAtSidebarSlot(moved, overIndex);
-  if (section === "snoozed") return null;
+  if (section === "working" || section === "snoozed") return null;
   const pinnedOrder: string[] = [];
   const activeOrder: string[] = [];
   let currentSection: SidebarSection = "pinned";
   for (const item of moved) {
     if (item.kind === "marker") {
       if (item.marker === "pinned-divider") currentSection = "active";
-      else if (item.marker === "snoozed-header" || item.marker === "settled-header") break;
+      else if (
+        item.marker === "working-header" ||
+        item.marker === "snoozed-header" ||
+        item.marker === "settled-header"
+      )
+        break;
     } else if (currentSection === "pinned") pinnedOrder.push(item.key);
     else activeOrder.push(item.key);
   }
@@ -235,7 +249,8 @@ export type SidebarThreadDropPlan =
     }
   | {
       readonly kind: "move-active";
-      readonly order: readonly string[];
+      /** Null when the inbox is time-ordered: the drop has no placement. */
+      readonly order: readonly string[] | null;
       readonly assignments: ReadonlyArray<{ readonly id: string; readonly orderKey: string }>;
       readonly unpin: boolean;
       readonly unsettle: boolean;
@@ -245,19 +260,47 @@ export type SidebarThreadDropPlan =
 
 /** What dropping in `to` does to a thread lifted from `from`, for the badge
     on the lifted row. Null while reordering inside one section and for the
-    snoozed shelf, which cannot be a drop target. */
+    working and snoozed shelves, which cannot be drop targets. */
 export type SidebarDropVerb = "pin" | "unpin" | "settle" | "unsettle" | "wake";
 
 export function resolveSidebarDropVerb(
   from: SidebarSection,
   to: SidebarSection | null,
 ): SidebarDropVerb | null {
-  if (to === null || to === from || to === "snoozed") return null;
+  if (to === null || to === from || to === "working" || to === "snoozed") return null;
   if (to === "pinned") return "pin";
   if (to === "settled") return "settle";
   if (from === "pinned") return "unpin";
   if (from === "settled") return "unsettle";
   return "wake";
+}
+
+/** Eligible rows between the pressed action and the pointer, in sidebar order. */
+export function resolveSidebarSweepKeys(
+  orderedKeys: readonly string[],
+  originKey: string,
+  targetKey: string,
+  canApply: (key: string) => boolean,
+): string[] {
+  const origin = orderedKeys.indexOf(originKey);
+  const target = orderedKeys.indexOf(targetKey);
+  if (origin === -1 || target === -1) return [];
+  return orderedKeys.slice(Math.min(origin, target), Math.max(origin, target) + 1).filter(canApply);
+}
+
+/** The thread row at a pointer height, clamped to the rows visible in the
+    sidebar's scroll viewport. A gap between rows resolves to the row above
+    it. Rows carry their key in data-thread-item, which departing motion
+    clones drop. */
+export function sidebarThreadKeyAtY(list: HTMLElement, y: number): string | null {
+  const viewport = list.closest('[data-slot="scroll-area-viewport"]')?.getBoundingClientRect();
+  const visibleY = viewport ? Math.min(Math.max(y, viewport.top), viewport.bottom - 1) : y;
+  let key: string | null = null;
+  for (const row of list.querySelectorAll<HTMLElement>("li[data-thread-item]")) {
+    if (key !== null && row.getBoundingClientRect().top > visibleY) break;
+    key = row.dataset.threadItem ?? null;
+  }
+  return key;
 }
 
 export function planSidebarThreadDrop(input: {
@@ -275,6 +318,8 @@ export function planSidebarThreadDrop(input: {
   readonly activeOrder: readonly string[];
   readonly activeKeysById: ReadonlyMap<string, string | null | undefined>;
   readonly activeReorderableKeys?: ReadonlySet<string>;
+  /** Working beta: the inbox sorts by time, so drops only change lifecycle. */
+  readonly activeTimeOrdered?: boolean;
 }): SidebarThreadDropPlan {
   const {
     activeKey,
@@ -292,8 +337,40 @@ export function planSidebarThreadDrop(input: {
   if (input.supportsSettlement === false && (target.section === "settled" || activeSettled)) {
     return { kind: "none" };
   }
+  // Rows whose server cannot store an order (an older server, or a machine
+  // that is offline) are never written. Keyless ones sort outside the keyed
+  // run, so they leave the plan; keyed ones stay as bounds. Before, one keyless row
+  // refused every drop that needed fresh keys for its neighbors.
+  const arrange = (
+    order: readonly string[],
+    keysById: ReadonlyMap<string, string | null | undefined>,
+    writable: ReadonlySet<string> | undefined,
+  ) => {
+    if (!writable) return planPinnedReorder({ orderedIds: order, keysById, movedId: activeKey });
+    if (!writable.has(activeKey)) return null;
+    const assignments = planPinnedReorder({
+      orderedIds: order.filter((key) => writable.has(key) || keysById.get(key) != null),
+      keysById,
+      movedId: activeKey,
+    });
+    return assignments.every(({ id }) => writable.has(id)) ? assignments : null;
+  };
   switch (target.section) {
     case "active": {
+      // Like the settled tail: threads can enter a time-ordered inbox, but
+      // not be arranged inside it.
+      if (input.activeTimeOrdered) {
+        return activeSection === "active"
+          ? { kind: "none" }
+          : {
+              kind: "move-active",
+              order: null,
+              assignments: [],
+              unpin: activePinned,
+              unsettle: activeSettled,
+              unsnooze: activeSection === "snoozed",
+            };
+      }
       const order = target.activeOrder;
       if (
         activeSection === "active" &&
@@ -302,14 +379,8 @@ export function planSidebarThreadDrop(input: {
       ) {
         return { kind: "none" };
       }
-      const assignments = planPinnedReorder({
-        orderedIds: order,
-        keysById: activeKeysById,
-        movedId: activeKey,
-      });
-      if (activeReorderableKeys && assignments.some(({ id }) => !activeReorderableKeys.has(id))) {
-        return { kind: "none" };
-      }
+      const assignments = arrange(order, activeKeysById, activeReorderableKeys);
+      if (assignments === null) return { kind: "none" };
       return {
         kind: "move-active",
         order,
@@ -331,14 +402,8 @@ export function planSidebarThreadDrop(input: {
       ) {
         return { kind: "none" };
       }
-      const assignments = planPinnedReorder({
-        orderedIds: order,
-        keysById: pinnedKeysById,
-        movedId: activeKey,
-      });
-      if (reorderableKeys && assignments.some(({ id }) => !reorderableKeys.has(id))) {
-        return { kind: "none" };
-      }
+      const assignments = arrange(order, pinnedKeysById, reorderableKeys);
+      if (assignments === null) return { kind: "none" };
       if (activeSection === "pinned") {
         return assignments.length === 0
           ? { kind: "none" }
@@ -471,9 +536,7 @@ export async function archiveSelectedThreadEntries<
     const result = await input.archive(entry, () => {
       didArchive = true;
     });
-    if (didArchive || result._tag === "Success") {
-      archivedThreadKeys.push(entry.threadKey);
-    }
+    if (didArchive || result._tag === "Success") archivedThreadKeys.push(entry.threadKey);
     if (result._tag === "Success") continue;
     const failure = result as Extract<TResult, { readonly _tag: "Failure" }>;
     if (didArchive) {
@@ -499,6 +562,36 @@ export function buildMultiSelectThreadContextMenuItems(input: {
     },
     { id: "delete", label: `Delete (${input.count})`, destructive: true },
   ];
+}
+
+export function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "lineage">): boolean {
+  return thread.lineage.relationshipToParent === "subagent";
+}
+
+export function filterSidebarV2VisibleThreads<
+  T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage"> & {
+    environmentId: string;
+    projectId: string;
+  },
+>(threads: readonly T[], scopedProjectKeys: ReadonlySet<string> | null): T[] {
+  return threads.filter(
+    (thread) =>
+      thread.archivedAt === null &&
+      !isSidebarSubagentThread(thread) &&
+      (scopedProjectKeys === null ||
+        scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
+  );
+}
+
+export function getSidebarForkParentThreadId(
+  thread: Pick<SidebarThreadSummary, "forkedFrom" | "lineage">,
+) {
+  if (thread.lineage.relationshipToParent !== "fork") {
+    return null;
+  }
+  return thread.forkedFrom?.type === "run"
+    ? thread.forkedFrom.threadId
+    : thread.lineage.parentThreadId;
 }
 
 export function buildBulkTitleRegenerationContextMenuItem(input: {
@@ -534,31 +627,24 @@ export function buildBulkUnpinContextMenuItem(input: {
 export interface ThreadStatusPill {
   label:
     | "Working"
-    | "Monitoring"
     | "Connecting"
     | "Completed"
-    | "Paused"
     | "Pending Approval"
     | "Awaiting Input"
+    | "Waiting"
     | "Plan Ready";
   colorClass: string;
   dotClass: string;
   pulse: boolean;
 }
 
-// Rollup order mirrors the per-thread resolver exactly: attention states,
-// then active work, then the actionable plan prompt, then passive
-// monitoring. A Monitoring sibling must never hide a Plan Ready thread.
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
-  "Pending Approval": 6,
-  "Awaiting Input": 5,
-  Working: 4,
-  Connecting: 4,
-  "Plan Ready": 3,
-  Monitoring: 2,
-  // A pause outranks Completed: the run stopped mid-flight and is waiting for
-  // the user, which is not the same as having finished.
-  Paused: 2,
+  "Pending Approval": 5,
+  "Awaiting Input": 4,
+  Working: 3,
+  Connecting: 3,
+  Waiting: 2.5,
+  "Plan Ready": 2,
   Completed: 1,
 };
 
@@ -568,12 +654,11 @@ type ThreadStatusInput = Pick<
   | "hasPendingApprovals"
   | "hasPendingUserInput"
   | "interactionMode"
-  | "latestTurn"
-  | "session"
-  | "backgroundLiveness"
-  | "workflowPausedAt"
+  | "latestRun"
+  | "runtime"
 > & {
-  lastVisitedAt?: string | undefined;
+  lastVisitedAt?: string | null | undefined;
+  pendingBackgroundTasks?: SidebarThreadSummary["pendingBackgroundTasks"] | undefined;
 };
 
 export interface ThreadJumpHintVisibilityController {
@@ -581,316 +666,13 @@ export interface ThreadJumpHintVisibilityController {
   dispose: () => void;
 }
 
-export interface SidebarThreadTreeRow<TThread> {
-  readonly thread: TThread;
-  readonly threadKey: string;
-  readonly parentThreadKey: string | null;
-  readonly rootThreadKey: string;
-  readonly depth: number;
-  readonly visualDepth: number;
-  readonly hasChildren: boolean;
+export function resolveSidebarStageBadgeLabel(input: {
+  primaryServerVersion: string | null | undefined;
+  fallbackStageLabel: string;
+}): string {
+  return resolveServerBackedAppStageLabel(input);
 }
 
-interface ThreadTreeRowsCoreOptions<TThread> {
-  readonly getThreadKey: (thread: TThread) => string;
-  readonly getParentThreadKey: (thread: TThread) => string | null;
-  /** Global pre-sort. Also fixes the order siblings are emitted in. */
-  readonly orderThreads: (threads: readonly TThread[]) => TThread[];
-  /** Root ordering, which each sidebar defines differently (v1 rolls the sort
-      key up from descendants, v2 deliberately does not — see the wrappers). */
-  readonly orderRoots: (
-    roots: readonly TThread[],
-    context: { readonly childrenByParentKey: ReadonlyMap<string, TThread[]> },
-  ) => TThread[];
-}
-
-function buildThreadTreeRowsCore<TThread>(
-  threads: readonly TThread[],
-  options: ThreadTreeRowsCoreOptions<TThread>,
-): SidebarThreadTreeRow<TThread>[] {
-  const { getParentThreadKey, getThreadKey } = options;
-  const sortedThreads = options.orderThreads(threads);
-  const threadByKey = new Map<string, TThread>();
-  for (const thread of sortedThreads) {
-    threadByKey.set(getThreadKey(thread), thread);
-  }
-
-  const parentKeyByThreadKey = new Map<string, string | null>();
-  const childrenByParentKey = new Map<string, TThread[]>();
-  for (const thread of sortedThreads) {
-    const threadKey = getThreadKey(thread);
-    const rawParentKey = getParentThreadKey(thread);
-    const parentThreadKey =
-      rawParentKey !== null && rawParentKey !== threadKey && threadByKey.has(rawParentKey)
-        ? rawParentKey
-        : null;
-    parentKeyByThreadKey.set(threadKey, parentThreadKey);
-    if (parentThreadKey !== null) {
-      const children = childrenByParentKey.get(parentThreadKey);
-      if (children === undefined) {
-        childrenByParentKey.set(parentThreadKey, [thread]);
-      } else {
-        children.push(thread);
-      }
-    }
-  }
-
-  const sortRootThreads = (rootThreads: readonly TThread[]): TThread[] =>
-    options.orderRoots(rootThreads, { childrenByParentKey });
-
-  const rows: SidebarThreadTreeRow<TThread>[] = [];
-  const emitted = new Set<string>();
-
-  const emit = (thread: TThread, rootThreadKey: string, depth: number, ancestry: Set<string>) => {
-    const threadKey = getThreadKey(thread);
-    if (emitted.has(threadKey) || ancestry.has(threadKey)) {
-      return;
-    }
-    emitted.add(threadKey);
-    const nextAncestry = new Set(ancestry);
-    nextAncestry.add(threadKey);
-    const children = childrenByParentKey.get(threadKey) ?? [];
-    rows.push({
-      thread,
-      threadKey,
-      parentThreadKey: parentKeyByThreadKey.get(threadKey) ?? null,
-      rootThreadKey,
-      depth,
-      visualDepth: Math.min(depth, SIDEBAR_THREAD_TREE_MAX_VISUAL_DEPTH),
-      hasChildren: children.length > 0,
-    });
-    for (const child of children) {
-      emit(child, rootThreadKey, depth + 1, nextAncestry);
-    }
-  };
-
-  const roots = sortedThreads.filter(
-    (thread) => parentKeyByThreadKey.get(getThreadKey(thread)) === null,
-  );
-  for (const thread of sortRootThreads(roots)) {
-    emit(thread, getThreadKey(thread), 0, new Set());
-  }
-
-  for (const thread of sortRootThreads(sortedThreads)) {
-    const threadKey = getThreadKey(thread);
-    if (!emitted.has(threadKey)) {
-      emit(thread, threadKey, 0, new Set());
-    }
-  }
-
-  return rows;
-}
-
-function resolveDefaultThreadKey(thread: Pick<Thread, "id">): string {
-  return String(thread.id);
-}
-
-function resolveDefaultParentThreadKey(thread: Pick<Thread, "parentThreadId">): string | null {
-  return thread.parentThreadId === null ? null : String(thread.parentThreadId);
-}
-
-export function buildSidebarThreadTreeRows<
-  TThread extends Pick<Thread, "id" | "parentThreadId"> & ThreadSortInput,
->(
-  threads: readonly TThread[],
-  sortOrder: SidebarThreadSortOrder,
-  options?: {
-    readonly getThreadKey?: (thread: TThread) => string;
-    readonly getParentThreadKey?: (thread: TThread) => string | null;
-  },
-): SidebarThreadTreeRow<TThread>[] {
-  const getThreadKey = options?.getThreadKey ?? resolveDefaultThreadKey;
-  const getParentThreadKey = options?.getParentThreadKey ?? resolveDefaultParentThreadKey;
-  // Memoized across both orderRoots calls (roots pass, then the orphan sweep)
-  // so a deep tree resolves each subtree once.
-  const treeSortTimestampByThreadKey = new Map<string, number>();
-
-  return buildThreadTreeRowsCore(threads, {
-    getThreadKey,
-    getParentThreadKey,
-    orderThreads: (input) => sortThreads(input, sortOrder),
-    // v1 rolls a parent's sort key up to the max of its subtree, so a root
-    // rises when any descendant is active.
-    orderRoots: (roots, { childrenByParentKey }) => {
-      const resolveTreeSortTimestamp = (thread: TThread, ancestry: Set<string>): number => {
-        const threadKey = getThreadKey(thread);
-        const existing = treeSortTimestampByThreadKey.get(threadKey);
-        if (existing !== undefined) {
-          return existing;
-        }
-        if (ancestry.has(threadKey)) {
-          return getThreadSortTimestamp(thread, sortOrder);
-        }
-        const nextAncestry = new Set(ancestry);
-        nextAncestry.add(threadKey);
-        let timestamp = getThreadSortTimestamp(thread, sortOrder);
-        for (const child of childrenByParentKey.get(threadKey) ?? []) {
-          timestamp = Math.max(timestamp, resolveTreeSortTimestamp(child, nextAncestry));
-        }
-        treeSortTimestampByThreadKey.set(threadKey, timestamp);
-        return timestamp;
-      };
-
-      return [...roots].sort((left, right) => {
-        const timestampDiff =
-          resolveTreeSortTimestamp(right, new Set()) - resolveTreeSortTimestamp(left, new Set());
-        if (timestampDiff !== 0) {
-          return timestampDiff;
-        }
-        return getThreadKey(right).localeCompare(getThreadKey(left));
-      });
-    },
-  });
-}
-
-/** v2's tree: same structure as v1, opposite ordering philosophy.
-    Roots keep sortThreadsForSidebarV2's static creation order — deliberately
-    NO roll-up, because spawning a sub-thread is activity, and activity must
-    never reorder the list. Siblings run ascending instead, so a workflow reads
-    in execution order (planning → workers → review) top to bottom.
-    With no parent links this reduces exactly to sortThreadsForSidebarV2. */
-export function buildSidebarV2ThreadTreeRows<
-  TThread extends Pick<Thread, "id" | "parentThreadId"> & { readonly createdAt: string },
->(
-  threads: readonly TThread[],
-  options?: {
-    readonly getThreadKey?: (thread: TThread) => string;
-    readonly getParentThreadKey?: (thread: TThread) => string | null;
-  },
-): SidebarThreadTreeRow<TThread>[] {
-  return buildThreadTreeRowsCore(threads, {
-    getThreadKey: options?.getThreadKey ?? resolveDefaultThreadKey,
-    getParentThreadKey: options?.getParentThreadKey ?? resolveDefaultParentThreadKey,
-    orderThreads: (input) =>
-      [...input].toSorted(
-        (left, right) =>
-          parseTimestampMs(left.createdAt) - parseTimestampMs(right.createdAt) ||
-          String(left.id).localeCompare(String(right.id)),
-      ),
-    orderRoots: (roots) => sortThreadsForSidebarV2(roots),
-  });
-}
-
-/** v2 defaults sub-threads to COLLAPSED, so this takes an expanded set rather
-    than v1's collapsed set. Same active-path exception: the open thread and
-    every ancestor stay visible regardless, so navigating to a deep child never
-    leaves the highlighted row hidden. */
-export function selectVisibleSidebarV2TreeRows<TThread>(input: {
-  rows: readonly SidebarThreadTreeRow<TThread>[];
-  expandedThreadKeys: ReadonlySet<string>;
-  activeThreadKey: string | null | undefined;
-}): SidebarThreadTreeRow<TThread>[] {
-  const rowByKey = new Map(input.rows.map((row) => [row.threadKey, row] as const));
-  const activeThreadKey = input.activeThreadKey ?? null;
-  const activePathKeys = new Set<string>();
-  const activePathGuard = new Set<string>();
-  let activeRow = activeThreadKey === null ? null : (rowByKey.get(activeThreadKey) ?? null);
-  while (activeRow !== null && !activePathGuard.has(activeRow.threadKey)) {
-    activePathGuard.add(activeRow.threadKey);
-    activePathKeys.add(activeRow.threadKey);
-    activeRow =
-      activeRow.parentThreadKey === null ? null : (rowByKey.get(activeRow.parentThreadKey) ?? null);
-  }
-
-  const visibleRows: SidebarThreadTreeRow<TThread>[] = [];
-  const rowVisibleByThreadKey = new Map<string, boolean>();
-  for (const row of input.rows) {
-    const parentVisible =
-      row.parentThreadKey === null || rowVisibleByThreadKey.get(row.parentThreadKey) === true;
-    const parentExpanded =
-      row.parentThreadKey === null ||
-      input.expandedThreadKeys.has(row.parentThreadKey) ||
-      activePathKeys.has(row.threadKey);
-    const visible = parentVisible && parentExpanded;
-    rowVisibleByThreadKey.set(row.threadKey, visible);
-    if (visible) {
-      visibleRows.push(row);
-    }
-  }
-  return visibleRows;
-}
-
-export function selectVisibleSidebarThreadRows<TThread>(input: {
-  rows: readonly SidebarThreadTreeRow<TThread>[];
-  activeThreadKey: string | null | undefined;
-  expanded: boolean;
-  previewLimit: number;
-  collapsedThreadKeys?: ReadonlySet<string> | undefined;
-}): {
-  hasHiddenThreads: boolean;
-  visibleRows: SidebarThreadTreeRow<TThread>[];
-  hiddenRows: SidebarThreadTreeRow<TThread>[];
-} {
-  const rootThreadKeys: string[] = [];
-  for (const row of input.rows) {
-    if (row.depth === 0 && !rootThreadKeys.includes(row.rootThreadKey)) {
-      rootThreadKeys.push(row.rootThreadKey);
-    }
-  }
-
-  const activePathKeys = new Set<string>();
-  const rowByKey = new Map(input.rows.map((row) => [row.threadKey, row] as const));
-  const activeThreadKey = input.activeThreadKey ?? null;
-  const selectedActiveRow =
-    activeThreadKey === null ? null : (rowByKey.get(activeThreadKey) ?? null);
-  let activeRow = selectedActiveRow;
-  const activePathGuard = new Set<string>();
-  while (activeRow !== null && !activePathGuard.has(activeRow.threadKey)) {
-    activePathGuard.add(activeRow.threadKey);
-    activePathKeys.add(activeRow.threadKey);
-    activeRow =
-      activeRow.parentThreadKey === null ? null : (rowByKey.get(activeRow.parentThreadKey) ?? null);
-  }
-
-  const applyCollapsedThreadRows = (
-    rows: readonly SidebarThreadTreeRow<TThread>[],
-  ): SidebarThreadTreeRow<TThread>[] => {
-    const collapsedThreadKeys = input.collapsedThreadKeys;
-    if (collapsedThreadKeys === undefined || collapsedThreadKeys.size === 0) {
-      return [...rows];
-    }
-
-    const visibleRows: SidebarThreadTreeRow<TThread>[] = [];
-    const rowVisibleByThreadKey = new Map<string, boolean>();
-    for (const row of rows) {
-      const parentVisible =
-        row.parentThreadKey === null || rowVisibleByThreadKey.get(row.parentThreadKey) === true;
-      const parentExpanded =
-        row.parentThreadKey === null ||
-        !collapsedThreadKeys.has(row.parentThreadKey) ||
-        activePathKeys.has(row.threadKey);
-      const visible = parentVisible && parentExpanded;
-      rowVisibleByThreadKey.set(row.threadKey, visible);
-      if (visible) {
-        visibleRows.push(row);
-      }
-    }
-    return visibleRows;
-  };
-
-  if (input.expanded || rootThreadKeys.length <= input.previewLimit) {
-    return {
-      hasHiddenThreads: false,
-      visibleRows: applyCollapsedThreadRows(input.rows),
-      hiddenRows: [],
-    };
-  }
-
-  const visibleRootKeys = new Set(rootThreadKeys.slice(0, Math.max(0, input.previewLimit)));
-  if (selectedActiveRow !== null) {
-    visibleRootKeys.add(selectedActiveRow.rootThreadKey);
-  }
-
-  const visibleRows = applyCollapsedThreadRows(
-    input.rows.filter((row) => visibleRootKeys.has(row.rootThreadKey)),
-  );
-  const hiddenRows = input.rows.filter((row) => !visibleRootKeys.has(row.rootThreadKey));
-  return {
-    hasHiddenThreads: hiddenRows.length > 0,
-    visibleRows,
-    hiddenRows,
-  };
-}
 export function createThreadJumpHintVisibilityController(input: {
   delayMs: number;
   onVisibilityChange: (visible: boolean) => void;
@@ -971,9 +753,27 @@ export function useThreadJumpHintVisibility(): {
   };
 }
 
+/**
+ * Effective visited watermark for a thread. Servers with visited tracking
+ * project `lastVisitedAt` on the shell and are authoritative — that value is
+ * shared across every device connected to the environment. Pre-tracking
+ * servers omit the field, and the browser's locally persisted watermark keeps
+ * working as before.
+ */
+export function resolveThreadLastVisitedAt(
+  serverLastVisitedAt: string | null | undefined,
+  localLastVisitedAt: string | undefined,
+): string | undefined {
+  // When the server tracks visits it is authoritative — including explicit
+  // rewinds from mark-unread, which a newer browser-local watermark must not
+  // mask. The local value only carries servers without visited tracking.
+  if (serverLastVisitedAt === undefined) return localLastVisitedAt;
+  return serverLastVisitedAt ?? undefined;
+}
+
 export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
-  if (!thread.latestTurn?.completedAt) return false;
-  const completedAt = Date.parse(thread.latestTurn.completedAt);
+  if (!thread.latestRun?.completedAt) return false;
+  const completedAt = Date.parse(thread.latestRun.completedAt);
   if (Number.isNaN(completedAt)) return false;
   if (!thread.lastVisitedAt) return false;
 
@@ -1107,19 +907,58 @@ export function isContextMenuPointerDown(input: {
   return input.isMac && input.button === 0 && input.ctrlKey;
 }
 
-// ── Sidebar thread status model ─────────────────────────────────────
-// Five visual states, three colors: color is reserved for "act now"
+export function resolveThreadRowClassName(input: {
+  isActive: boolean;
+  isSelected: boolean;
+}): string {
+  const baseClassName =
+    "h-8 w-full translate-x-0 cursor-pointer justify-start rounded-md px-2 text-left text-sm select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
+
+  if (input.isSelected && input.isActive) {
+    return cn(
+      baseClassName,
+      "bg-sidebar-row-active text-sidebar-foreground font-medium hover:bg-sidebar-row-active hover:text-sidebar-foreground",
+    );
+  }
+
+  if (input.isSelected) {
+    return cn(
+      baseClassName,
+      "bg-sidebar-row-selected text-sidebar-foreground hover:bg-sidebar-row-active hover:text-sidebar-foreground",
+    );
+  }
+
+  if (input.isActive) {
+    return cn(
+      baseClassName,
+      "bg-sidebar-row-active text-sidebar-foreground font-medium hover:bg-sidebar-row-active hover:text-sidebar-foreground",
+    );
+  }
+
+  return cn(
+    baseClassName,
+    "text-sidebar-muted-foreground/80 hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
+  );
+}
+
+// ── Sidebar v2 status model ─────────────────────────────────────────
+// Six visual states, three colors: color is reserved for "act now"
 // (approval), "in motion" (working), and "broken" (failed). Ready is the
 // unlabeled resting state — the agent stopped and is waiting on the user,
-// whether it finished, asked a question, or proposed a plan.
+// whether it finished, asked a question, or proposed a plan. Waiting
+// (runtime status "idle") is the agent stopped with background work that will
+// wake it (subagents, monitors): not the user's turn yet, so it renders grey
+// like working, not as a false Done. Commands it left running, such as a dev
+// server, do not hold the thread; it reads as ready.
 // Unread completion is tracked separately: it describes whether a ready
 // thread needs attention, not what the thread is currently doing.
 export type SidebarThreadStatus =
   | "approval"
   | "input"
   | "working"
-  | "monitoring"
+  | "waiting"
   | "failed"
+  | "limited"
   | "ready";
 
 export function shouldRecedeSidebarThread(input: {
@@ -1130,7 +969,7 @@ export function shouldRecedeSidebarThread(input: {
   isSelected: boolean;
 }): boolean {
   if (input.isActive || input.isSelected || input.status === "input") return false;
-  if (input.status === "working" || input.status === "monitoring") return true;
+  if (input.status === "working" || input.status === "waiting") return true;
   if (input.status === "ready" || input.status === "approval") {
     return !input.isUnread && !input.isWoke;
   }
@@ -1139,14 +978,8 @@ export function shouldRecedeSidebarThread(input: {
 
 type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
-  | "hasPendingApprovals"
-  | "hasPendingUserInput"
-  | "session"
-  | "backgroundLiveness"
-  | "workflowPausedAt"
+  "hasPendingApprovals" | "hasPendingUserInput" | "runtime"
 >;
-export type SidebarV2StatusInput = SidebarThreadStatusInput;
-export type SidebarV2Status = SidebarThreadStatus;
 
 export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
   if (thread.hasPendingApprovals) {
@@ -1155,38 +988,59 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   if (thread.hasPendingUserInput) {
     return "input";
   }
-  // A stopped workflow is stopped whatever its session row still says. That row
-  // can outlive the agent: the provider's last write is lost when the server
-  // restarts before it lands.
-  if (thread.workflowPausedAt != null) {
-    return "ready";
-  }
-  if (thread.session?.status === "running" || thread.session?.status === "starting") {
+  if (
+    thread.runtime !== null &&
+    ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)
+  ) {
     return "working";
   }
-  // A failed session outranks lingering background liveness: the user must
-  // see the failure, not a stale Working (review finding).
-  if (thread.session?.status === "error") {
-    return "failed";
+  if (thread.runtime?.status === "idle") {
+    return "waiting";
   }
-  // Background work outlives the turn: fleets read as working; monitoring
-  // only when watch loops are the sole live work.
-  if (thread.backgroundLiveness === "working") {
-    return "working";
-  }
-  if (thread.backgroundLiveness === "monitoring") {
-    return "monitoring";
+  if (thread.runtime?.status === "failed") {
+    return thread.runtime.lastErrorClass === "usage_limit" ? "limited" : "failed";
   }
   return "ready";
 }
 
-const resolveSidebarV2Status = resolveSidebarThreadStatus;
+export type SidebarV2TopStatusKind =
+  | "approval"
+  | "done"
+  | "failed"
+  | "limited"
+  | "input"
+  | "waiting"
+  | "woke"
+  | "working";
 
-/** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
-    poison the whole ordering, so it sinks to the epoch instead. */
-function parseTimestampMs(isoDate: string): number {
-  const parsed = Date.parse(isoDate);
-  return Number.isNaN(parsed) ? 0 : parsed;
+export function resolveSidebarV2TopStatus(input: {
+  readonly status: SidebarThreadStatus;
+  readonly isUnread: boolean;
+  readonly isWoke: boolean;
+}): SidebarV2TopStatusKind | null {
+  if (input.status === "working") {
+    return "working";
+  }
+  if (input.status === "waiting") {
+    return "waiting";
+  }
+  if (input.status === "approval") {
+    return "approval";
+  }
+  if (input.status === "input") {
+    return "input";
+  }
+  if (input.status === "failed" || input.status === "limited") {
+    return input.status;
+  }
+  if (input.isWoke) {
+    return "woke";
+  }
+  return input.isUnread ? "done" : null;
+}
+
+export function shouldShowSidebarV2Duration(status: SidebarThreadStatus): boolean {
+  return status === "working";
 }
 
 /** First VALID timestamp wins: `a ?? b` falls through on null, but a present-
@@ -1203,26 +1057,17 @@ export function firstValidTimestampMs(
   return 0;
 }
 
-/** String twin of firstValidTimestampMs for callers that need the ISO string
-    (display labels, tick anchors) rather than epoch ms. */
-function firstValidTimestamp(
-  ...candidates: ReadonlyArray<string | null | undefined>
-): string | null {
-  for (const candidate of candidates) {
-    if (candidate == null) continue;
-    if (!Number.isNaN(Date.parse(candidate))) return candidate;
-  }
-  return null;
-}
-
 export { sortActiveThreadsByOrderKey as sortThreadsForSidebar } from "@t3tools/client-runtime/state/thread-sort";
-
-import { sortActiveThreadsByOrderKey as sortThreadsForSidebarV2 } from "@t3tools/client-runtime/state/thread-sort";
-export { sortThreadsForSidebarV2 };
+// The Working section beta folds and orders the inbox the same way on mobile.
+export {
+  isThreadWorking as isSidebarThreadWorking,
+  sortInboxThreadsByReturn,
+  sortWorkingThreadsBySend,
+} from "@t3tools/client-runtime/state/thread-inbox";
 
 // Pinned-reorder key math and the keyed sort live in client-runtime
 // (state/thread-sort) so web and mobile compute identical pinned orders.
-export { pinOrderKeyBetween, planPinnedReorder } from "@t3tools/client-runtime/state/thread-sort";
+export { pinOrderKeyBetween } from "@t3tools/client-runtime/state/thread-sort";
 export { sortPinnedThreadsByOrderKey as sortPinnedThreadsForSidebar } from "@t3tools/client-runtime/state/thread-sort";
 
 const EMPTY_CONTENT_MATCH_KEYS: ReadonlySet<string> = new Set<string>();
@@ -1300,202 +1145,13 @@ export function reduceSidebarProjectScopeMenuState(
   }
 }
 
-export type SidebarV2Section = "active" | "snoozed" | "settled";
-
-export interface SidebarV2ThreadGroup<TThread> {
-  /** The tree row whose subtree this group is; also its identity. */
-  readonly rootThreadKey: string;
-  readonly section: SidebarV2Section;
-  /** Depth-first, root first. Never split across sections or pages. */
-  readonly rows: readonly SidebarThreadTreeRow<TThread>[];
-}
-
-/** A workflow is one item, not N rows: the whole subtree lands in a single
-    section so its children don't scatter across Active/Snoozed/Settled as they
-    finish. A group is active while ANY member is active — a completed root with
-    workers still running belongs in the inbox.
-
-    Each thread's OWN classification is returned separately: a settled child
-    inside an active group still renders dimmed and still offers un-settle. */
-export function partitionSidebarV2ThreadGroups<TThread>(input: {
-  rows: readonly SidebarThreadTreeRow<TThread>[];
-  classifyThread: (thread: TThread) => SidebarV2Section;
-  /** Wake time; the soonest across members orders the snoozed shelf. */
-  resolveSnoozeSortMs: (thread: TThread) => number;
-  /** When work ended; the latest across members orders the settled tail. */
-  resolveSettledSortMs: (thread: TThread) => number;
-}): {
-  groupsBySection: Record<SidebarV2Section, SidebarV2ThreadGroup<TThread>[]>;
-  sectionByThreadKey: ReadonlyMap<string, SidebarV2Section>;
-  groupCountBySection: Record<SidebarV2Section, number>;
-} {
-  const sectionByThreadKey = new Map<string, SidebarV2Section>();
-  const rootKeyOrder: string[] = [];
-  const rowsByRootKey = new Map<string, SidebarThreadTreeRow<TThread>[]>();
-  for (const row of input.rows) {
-    sectionByThreadKey.set(row.threadKey, input.classifyThread(row.thread));
-    const existing = rowsByRootKey.get(row.rootThreadKey);
-    if (existing === undefined) {
-      rootKeyOrder.push(row.rootThreadKey);
-      rowsByRootKey.set(row.rootThreadKey, [row]);
-    } else {
-      existing.push(row);
-    }
-  }
-
-  const groups = rootKeyOrder.map((rootThreadKey) => {
-    const rows = rowsByRootKey.get(rootThreadKey) ?? [];
-    let hasActive = false;
-    let hasSnoozed = false;
-    let snoozeSortMs = Number.POSITIVE_INFINITY;
-    let settledSortMs = Number.NEGATIVE_INFINITY;
-    for (const row of rows) {
-      const section = sectionByThreadKey.get(row.threadKey);
-      if (section === "active") {
-        hasActive = true;
-      } else if (section === "snoozed") {
-        hasSnoozed = true;
-        snoozeSortMs = Math.min(snoozeSortMs, input.resolveSnoozeSortMs(row.thread));
-      }
-      settledSortMs = Math.max(settledSortMs, input.resolveSettledSortMs(row.thread));
-    }
-    const section: SidebarV2Section = hasActive ? "active" : hasSnoozed ? "snoozed" : "settled";
-    return { group: { rootThreadKey, section, rows }, snoozeSortMs, settledSortMs };
-  });
-
-  const groupsBySection: Record<SidebarV2Section, SidebarV2ThreadGroup<TThread>[]> = {
-    // Active preserves the tree builder's root order, which is v2's static
-    // creation order. Re-sorting here would reintroduce the movement the v2
-    // sort exists to prevent.
-    active: groups.filter((entry) => entry.group.section === "active").map((entry) => entry.group),
-    snoozed: groups
-      .filter((entry) => entry.group.section === "snoozed")
-      .toSorted(
-        (left, right) =>
-          left.snoozeSortMs - right.snoozeSortMs ||
-          left.group.rootThreadKey.localeCompare(right.group.rootThreadKey),
-      )
-      .map((entry) => entry.group),
-    settled: groups
-      .filter((entry) => entry.group.section === "settled")
-      .toSorted(
-        (left, right) =>
-          right.settledSortMs - left.settledSortMs ||
-          left.group.rootThreadKey.localeCompare(right.group.rootThreadKey),
-      )
-      .map((entry) => entry.group),
-  };
-
-  return {
-    groupsBySection,
-    sectionByThreadKey,
-    groupCountBySection: {
-      active: groupsBySection.active.length,
-      snoozed: groupsBySection.snoozed.length,
-      settled: groupsBySection.settled.length,
-    },
-  };
-}
-
-export function resolveSidebarV2GroupSettlePlan<TThread>(input: {
-  groups: readonly SidebarV2ThreadGroup<TThread>[];
-  rootThreadKey: string;
-  isSettled: (threadKey: string, thread: TThread) => boolean;
-  canSettle: (thread: TThread) => boolean;
-}): {
-  readonly rows: readonly SidebarThreadTreeRow<TThread>[];
-  readonly targetRows: readonly SidebarThreadTreeRow<TThread>[];
-  readonly canSettle: boolean;
-} | null {
-  const group = input.groups.find((entry) => entry.rootThreadKey === input.rootThreadKey);
-  if (group === undefined) return null;
-  const targetRows = group.rows.filter((row) => !input.isSettled(row.threadKey, row.thread));
-  return {
-    rows: group.rows,
-    targetRows,
-    canSettle: targetRows.every((row) => input.canSettle(row.thread)),
-  };
-}
-
-const SIDEBAR_V2_STATUS_PRIORITY: Record<SidebarV2Status, number> = {
-  approval: 5,
-  input: 4,
-  working: 3,
-  monitoring: 3,
-  failed: 2,
-  ready: 1,
-};
-
-/** The status a COLLAPSED group has to surface on its root card. Without this,
-    collapsed-by-default would silently bury a child's pending approval. */
-export function resolveHighestPrioritySidebarV2Status(
-  threads: readonly SidebarV2StatusInput[],
-): SidebarV2Status | null {
-  let highest: SidebarV2Status | null = null;
-  for (const thread of threads) {
-    const status = resolveSidebarV2Status(thread);
-    if (
-      highest === null ||
-      SIDEBAR_V2_STATUS_PRIORITY[status] > SIDEBAR_V2_STATUS_PRIORITY[highest]
-    ) {
-      highest = status;
-    }
-  }
-  return highest;
-}
-
-/** Short role label for a nested row, in place of the project title (redundant
-    inside a group). Shell-only by design: workflowProgressLabel needs
-    planningWorkflow/implementationRuns, which live on the thread DETAIL and are
-    not part of OrchestrationThreadShell. Wording mirrors its role arms. */
-export function workflowRoleShortLabel(
-  role: OrchestrationThreadWorkflowRole | null | undefined,
-): string | null {
-  switch (role) {
-    case "planning-orchestrator":
-      return "Planning";
-    case "planning-reviewer":
-      return "Ticket review";
-    case "implementation-orchestrator":
-      return "Build";
-    case "implementation-worker":
-      return "Worker";
-    case "implementation-validator":
-      return "Merge gate";
-    case "implementation-qa-reviewer":
-      return "App review";
-    case "app-review-orchestrator":
-      return "App Review";
-    case "app-review-reviewer":
-      return "Browser review";
-    case "app-review-planner":
-      return "Gap analysis";
-    case "app-review-fixer":
-      return "Implement";
-    case "implementation-fixer":
-    case "product-fix-implementer":
-      return "Fix";
-    case "implementation-code-reviewer":
-      return "Code review";
-    case "fast-feature-implementer":
-      return "Build";
-    default:
-      return null;
-  }
-}
-
-/** The timestamp a working thread's elapsed label counts from: the running
-    turn's start (request time until adoption), falling back to the session's
-    last transition when the turn projection lags behind. Malformed
-    timestamps fall through to the next candidate, not just missing ones. */
+/** The timestamp a working thread's elapsed label counts from: when its
+    current work started (request time until adoption). Background wakes do
+    not reset it. Malformed timestamps fall through to the next candidate. */
 export function resolveWorkingStartedAt(
-  thread: Pick<SidebarThreadSummary, "latestTurn" | "session">,
+  thread: Pick<SidebarThreadSummary, "latestRun" | "runtime">,
 ): string | null {
-  const turn = thread.latestTurn;
-  if (turn && turn.completedAt === null) {
-    return firstValidTimestamp(turn.startedAt, turn.requestedAt, thread.session?.updatedAt);
-  }
-  return firstValidTimestamp(thread.session?.updatedAt);
+  return resolveThreadWorkingStartedAt(thread);
 }
 
 export function formatWorkingDurationLabel(elapsedMs: number): string {
@@ -1529,16 +1185,7 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if (thread.workflowPausedAt != null) {
-    return {
-      label: "Paused",
-      colorClass: "text-muted-foreground",
-      dotClass: "bg-muted-foreground/70",
-      pulse: false,
-    };
-  }
-
-  if (thread.session?.status === "running") {
+  if (thread.runtime?.status === "running" || thread.runtime?.status === "waiting") {
     return {
       label: "Working",
       colorClass: "text-sky-600 dark:text-sky-300/80",
@@ -1547,7 +1194,11 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if (thread.session?.status === "starting") {
+  if (
+    thread.runtime?.status === "preparing" ||
+    thread.runtime?.status === "starting" ||
+    thread.runtime?.status === "queued"
+  ) {
     return {
       label: "Connecting",
       colorClass: "text-sky-600 dark:text-sky-300/80",
@@ -1556,40 +1207,25 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  // An actionable plan prompt outranks lingering background work: it needs
-  // the user's decision, while liveness merely reports (review finding).
+  if (backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])) {
+    return {
+      label: "Waiting",
+      colorClass: "text-sidebar-muted-foreground",
+      dotClass: "bg-sidebar-muted-foreground",
+      pulse: false,
+    };
+  }
+
   const hasPlanReadyPrompt =
     !thread.hasPendingUserInput &&
     thread.interactionMode === "plan" &&
-    isLatestTurnSettled(thread.latestTurn, thread.session) &&
+    isLatestRunSettled(thread.latestRun, thread.runtime) &&
     thread.hasActionableProposedPlan;
   if (hasPlanReadyPrompt) {
     return {
       label: "Plan Ready",
       colorClass: "text-violet-600 dark:text-violet-300/90",
       dotClass: "bg-violet-500 dark:bg-violet-300/90",
-      pulse: false,
-    };
-  }
-
-  // The turn can settle while native background work runs on. Subagent and
-  // workflow fleets read as plain Working; Monitoring is reserved for watch
-  // loops (a parent agent babysitting a PR, tailing checks) with no other
-  // live work. Same recede treatment as Working per inbox-zero.
-  if (thread.backgroundLiveness === "working") {
-    return {
-      label: "Working",
-      colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
-      pulse: true,
-    };
-  }
-
-  if (thread.backgroundLiveness === "monitoring") {
-    return {
-      label: "Monitoring",
-      colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: false,
     };
   }
@@ -1649,77 +1285,6 @@ export function getFallbackThreadIdAfterDelete<
       sortOrder,
     )[0]?.id ?? null
   );
-}
-
-export function expandHierarchySelectionIds<TNode, TId>(input: {
-  readonly nodes: ReadonlyArray<TNode>;
-  readonly selectedIds: ReadonlySet<TId>;
-  readonly accessors: HierarchyAccessors<TNode, TId>;
-}): Set<TId> {
-  const expanded = new Set<TId>();
-  for (const selectedId of input.selectedIds) {
-    for (const node of collectHierarchyPostOrder(input.nodes, selectedId, input.accessors)) {
-      expanded.add(input.accessors.getId(node));
-    }
-  }
-  return expanded;
-}
-
-export function getSelectedHierarchyRootIds<TNode, TId>(input: {
-  readonly nodes: ReadonlyArray<TNode>;
-  readonly selectedIds: ReadonlySet<TId>;
-  readonly accessors: HierarchyAccessors<TNode, TId>;
-}): TId[] {
-  const coveredSelectedIds = new Set<TId>();
-  const rootIds = new Set<TId>();
-  const parentFirst = orderHierarchyPostOrder(input.nodes, input.accessors).toReversed();
-
-  for (const node of parentFirst) {
-    const id = input.accessors.getId(node);
-    if (!input.selectedIds.has(id) || coveredSelectedIds.has(id)) continue;
-    rootIds.add(id);
-    for (const descendant of collectHierarchyPostOrder(input.nodes, id, input.accessors)) {
-      const descendantId = input.accessors.getId(descendant);
-      if (input.selectedIds.has(descendantId)) coveredSelectedIds.add(descendantId);
-    }
-  }
-
-  // Preserve selection order between independent roots.
-  return [...input.selectedIds].filter((id) => rootIds.has(id));
-}
-
-export function getThreadDeleteConfirmationText(title: string): string {
-  return [
-    `Delete thread "${title}"?`,
-    "Any running work in this thread or its sub-threads is canceled.",
-    "This permanently clears this thread, all sub-threads, and their conversation history.",
-  ].join("\n");
-}
-
-export function getMultiThreadDeleteConfirmationText(count: number): string {
-  return [
-    `Delete ${count} thread${count === 1 ? "" : "s"}?`,
-    "Any running work in the selected threads or their descendants is canceled.",
-    "This permanently clears the selected threads, all their descendants, and their conversation history.",
-  ].join("\n");
-}
-
-export function getArchiveConfirmationCopy(hasChildren: boolean): {
-  readonly label: string;
-  readonly accessibleLabel: string;
-  readonly tooltip: string | null;
-} {
-  return hasChildren
-    ? {
-        label: "Archive all",
-        accessibleLabel: "Archive this thread and all sub-threads",
-        tooltip: "Includes all sub-threads",
-      }
-    : {
-        label: "Confirm",
-        accessibleLabel: "Confirm archive",
-        tooltip: null,
-      };
 }
 export function getProjectSortTimestamp(
   project: SidebarProject,
@@ -1825,6 +1390,21 @@ export function sortLogicalProjectsForSidebar<
   );
 }
 
+export function sortSidebarV2ProjectGroups<
+  TProject extends LogicalSidebarProject,
+  TThread extends ScopedSidebarThread & Pick<SidebarThreadSummary, "lineage">,
+>(
+  projects: readonly TProject[],
+  threads: readonly TThread[],
+  sortOrder: SidebarProjectSortOrder,
+): TProject[] {
+  return sortLogicalProjectsForSidebar(
+    projects,
+    filterSidebarV2VisibleThreads(threads, null),
+    sortOrder,
+  );
+}
+
 /**
  * Sorts the cross-environment project collection used by landing surfaces.
  * Project ids are only unique within an environment, and archived threads
@@ -1860,4 +1440,56 @@ export function sortScopedProjectsForSidebar<
       left.environmentId.localeCompare(right.environmentId) ||
       left.id.localeCompare(right.id),
   );
+}
+
+export function workflowRoleShortLabel(
+  role: OrchestrationThreadWorkflowRole | null | undefined,
+): string | null {
+  switch (role) {
+    case "planning-orchestrator":
+      return "Planning";
+    case "planning-reviewer":
+      return "Ticket review";
+    case "implementation-orchestrator":
+      return "Build";
+    case "implementation-worker":
+      return "Worker";
+    case "implementation-validator":
+      return "Merge gate";
+    case "implementation-qa-reviewer":
+      return "App review";
+    case "app-review-orchestrator":
+      return "App Review";
+    case "app-review-reviewer":
+      return "Browser review";
+    case "app-review-planner":
+      return "Gap analysis";
+    case "app-review-fixer":
+      return "Implement";
+    case "implementation-fixer":
+    case "product-fix-implementer":
+      return "Fix";
+    case "implementation-code-reviewer":
+      return "Code review";
+    case "fast-feature-implementer":
+      return "Build";
+    default:
+      return null;
+  }
+}
+
+export function getThreadDeleteConfirmationText(title: string): string {
+  return [
+    `Delete thread "${title}"?`,
+    "Any running work in this thread or its sub-threads is canceled.",
+    "This permanently clears this thread, all sub-threads, and their conversation history.",
+  ].join("\n");
+}
+
+export function getMultiThreadDeleteConfirmationText(count: number): string {
+  return [
+    `Delete ${count} thread${count === 1 ? "" : "s"}?`,
+    "Any running work in the selected threads or their descendants is canceled.",
+    "This permanently clears the selected threads, all their descendants, and their conversation history.",
+  ].join("\n");
 }

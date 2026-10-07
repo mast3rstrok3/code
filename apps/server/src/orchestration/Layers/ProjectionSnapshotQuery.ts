@@ -73,8 +73,8 @@ import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 
 import {
   isPersistenceError,
@@ -1801,7 +1801,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           COUNT(*) AS "eventCount",
           COALESCE(SUM(octet_length(payload_json)), 0) AS "payloadBytes"
-        FROM orchestration_events
+        FROM workflow_events
         WHERE sequence > ${fromSequenceExclusive}
           AND sequence <= ${toSequenceInclusive}
       `,
@@ -2776,7 +2776,7 @@ pending_approval_requests AS (
     execute: ({ threadId, maxSequence }) =>
       sql`
         SELECT MAX(sequence) AS "threadSequence"
-        FROM orchestration_events
+        FROM workflow_events
         WHERE aggregate_kind = 'thread'
           AND stream_id = ${threadId}
           AND sequence <= ${maxSequence}

@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 export const LEGACY_WORKFLOW_DATABASE_RESET_MESSAGE =
   "Legacy workflow database detected. Stop T3 Code, then delete state.sqlite, state.sqlite-wal, and state.sqlite-shm from the configured state directory (~/.t3/dev/ for development or <T3CODE_HOME>/userdata/ for production/desktop) and restart. This reset deletes projects, conversations, workflow artifacts, and other database-backed state; settings, credentials, logs, and attachments outside SQLite are not deleted.";

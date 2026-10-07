@@ -24,7 +24,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { makeSqlStatementCounter } from "../../../integration/SqlStatementCounter.integration.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
@@ -830,7 +830,6 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-base-")))(
             WHERE message_id = 'message-attachments'
           `;
         assert.equal(rows.length, 1);
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         assert.deepEqual(JSON.parse(rows[0]?.attachmentsJson ?? "null"), [
           {
             type: "image",
@@ -1012,7 +1011,6 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-pull
         const synced = yield* readLinks();
         assert.equal(synced.length, 2);
         assert.equal(synced[0]?.snapshotJson, null);
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         assert.deepEqual(JSON.parse(synced[1]?.snapshotJson ?? "null"), snapshot);
         assert.deepEqual(yield* readThreadUpdatedAt(), [{ updatedAt: "2026-01-01T00:00:03.000Z" }]);
 
@@ -1173,7 +1171,6 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-atta
             WHERE message_id = 'message-attachments-safe'
           `;
         assert.equal(rows.length, 1);
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         assert.deepEqual(JSON.parse(rows[0]?.attachmentsJson ?? "null"), [
           {
             type: "image",
@@ -1318,7 +1315,6 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           WHERE message_id = 'message-clear-attachments'
         `;
         assert.equal(rows.length, 1);
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         assert.deepEqual(JSON.parse(rows[0]?.attachmentsJson ?? "null"), []);
       }),
   );
@@ -1454,7 +1450,6 @@ it.layer(
               WHERE message_id = 'message-overwrite'
             `;
       assert.equal(rows.length, 1);
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       assert.deepEqual(JSON.parse(rows[0]?.attachmentsJson ?? "null"), [
         {
           type: "image",

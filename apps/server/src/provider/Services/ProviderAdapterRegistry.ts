@@ -13,7 +13,7 @@ import type * as Effect from "effect/Effect";
 import type * as PubSub from "effect/PubSub";
 import type * as Scope from "effect/Scope";
 
-import type { ProviderAdapterError, ProviderUnsupportedError } from "../Errors.ts";
+import type { ProviderAdapterError, ProviderUnsupportedError } from "../legacyErrors.ts";
 import type { ProviderAdapterShape } from "./ProviderAdapter.ts";
 import type { ProviderContinuationIdentity } from "../ProviderDriver.ts";
 

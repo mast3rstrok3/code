@@ -8,8 +8,15 @@
  * schema is always up to date before the application starts.
  */
 
-import * as Migrator from "effect/unstable/sql/Migrator";
+import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
+
+import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
+import Migration0102 from "./Migrations/055_OrchestrationV2.ts";
+import Migration0103 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
+import Migration0104 from "./Migrations/057_ScheduledTaskWebhooks.ts";
+import Migration0106 from "./Migrations/106_WorkflowEventHistory.ts";
+import Migration0105 from "./Migrations/058_WebhookRelayDeliveries.ts";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -114,7 +121,7 @@ import Migration0101 from "./Migrations/101_PlanningTicketProject.ts";
  * Uses Migrator.fromRecord which parses the key format and
  * returns migrations sorted by ID.
  */
-const migrationEntries = [
+export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
   [3, "CheckpointDiffBlobs", Migration0003],
@@ -227,6 +234,12 @@ const migrationEntries = [
   [99, "ProjectionThreadsAutoSettleDisabledAt", Migration0099],
   [100, "PlanningTicketAppStack", Migration0100],
   [101, "PlanningTicketProject", Migration0101],
+  // Upstream 55 through 58 overlap the fork's existing migration ledger.
+  [102, "OrchestrationV2", Migration0102],
+  [103, "RemoveRedundantProjectionIndexes", Migration0103],
+  [104, "ScheduledTaskWebhooks", Migration0104],
+  [105, "WebhookRelayDeliveries", Migration0105],
+  [106, "WorkflowEventHistory", Migration0106],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -263,7 +276,14 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
-  const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
+  const reconciled =
+    toMigrationInclusive === undefined || toMigrationInclusive >= 102
+      ? yield* reconcileV2PreviewMigration()
+      : [];
+  const executedMigrations = [
+    ...reconciled,
+    ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
+  ];
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")

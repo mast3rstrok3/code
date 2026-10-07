@@ -1,3 +1,4 @@
+import * as McpToolAccess from "../../McpToolAccess.ts";
 import {
   CommandId,
   AppReviewError,
@@ -59,26 +60,26 @@ const sanitizePathSegment = (value: string): string => {
 const resolveAppReview = Effect.fn("AppReviewToolkit.resolveAppReview")(function* (
   reviewId?: AppReviewId,
 ) {
-  const scope = yield* McpInvocationContext.requireMcpCapability("app-review").pipe(
+  const scope = yield* McpInvocationContext.requireThreadMcpCapability("app-review").pipe(
     Effect.mapError((cause) => reviewError(reviewId, cause.message, cause)),
   );
   const snapshotQuery = yield* ProjectionSnapshotQuery;
-  const thread = yield* snapshotQuery.getThreadDetailById(scope.threadId).pipe(
+  const thread = yield* snapshotQuery.getThreadDetailById(scope.thread.threadId).pipe(
     Effect.mapError(
       (cause) =>
         new OrchestrationGetSnapshotError({
-          message: `Failed to load thread ${scope.threadId}.`,
+          message: `Failed to load thread ${scope.thread.threadId}.`,
           cause,
         }),
     ),
   );
   if (Option.isNone(thread)) {
-    return yield* reviewError(reviewId, `Thread ${scope.threadId} was not found.`);
+    return yield* reviewError(reviewId, `Thread ${scope.thread.threadId} was not found.`);
   }
 
   const review =
     reviewId === undefined
-      ? (thread.value.appReviews.find((entry) => entry.reviewThreadId === scope.threadId) ??
+      ? (thread.value.appReviews.find((entry) => entry.reviewThreadId === scope.thread.threadId) ??
         thread.value.appReviews[0])
       : thread.value.appReviews.find((entry) => entry.id === reviewId);
   if (review === undefined) {
@@ -90,7 +91,7 @@ const resolveAppReview = Effect.fn("AppReviewToolkit.resolveAppReview")(function
 
 const dispatchEvidenceUpdate = Effect.fn("AppReviewToolkit.dispatchEvidenceUpdate")(
   function* (input: {
-    readonly scope: McpInvocationContext.McpInvocationScope;
+    readonly scope: McpInvocationContext.McpThreadInvocationScope;
     readonly review: AppReviewRecord;
     readonly evidence: AppReviewEvidence;
   }) {
@@ -100,7 +101,7 @@ const dispatchEvidenceUpdate = Effect.fn("AppReviewToolkit.dispatchEvidenceUpdat
       .dispatch({
         type: "thread.app-review.evidence.update",
         commandId: yield* newCommandId("app-review-evidence", input.review.id),
-        threadId: input.scope.threadId,
+        threadId: input.scope.thread.threadId,
         reviewId: input.review.id,
         evidence: input.evidence,
         createdAt: updatedAt,
@@ -113,7 +114,7 @@ const dispatchEvidenceUpdate = Effect.fn("AppReviewToolkit.dispatchEvidenceUpdat
 );
 
 const invokeBrowser = Effect.fn("AppReviewToolkit.invokeBrowser")(function* <A>(
-  scope: McpInvocationContext.McpInvocationScope,
+  scope: McpInvocationContext.McpThreadInvocationScope,
   operation: "recordingStart" | "recordingStop" | "snapshot",
   tabId: PreviewTabId | undefined,
 ) {
@@ -160,7 +161,7 @@ export const handlers = {
         .dispatch({
           type: "thread.app-review.update",
           commandId: yield* newCommandId("app-review-update", review.id),
-          threadId: scope.threadId,
+          threadId: scope.thread.threadId,
           reviewId: review.id,
           ...(input.status === undefined ? {} : { status: input.status }),
           ...(input.document === undefined ? {} : { document: input.document }),
@@ -305,4 +306,10 @@ export const handlers = {
     }),
 } satisfies Parameters<typeof AppReviewToolkit.toLayer>[0];
 
-export const AppReviewToolkitHandlersLive = AppReviewToolkit.toLayer(handlers);
+export const layer = McpToolAccess.toLayer(AppReviewToolkit, {
+  app_review_get: McpToolAccess.readsAsCaller(handlers.app_review_get),
+  app_review_update: McpToolAccess.actsAsCaller(handlers.app_review_update),
+  app_review_recording_start: McpToolAccess.actsAsCaller(handlers.app_review_recording_start),
+  app_review_recording_stop: McpToolAccess.actsAsCaller(handlers.app_review_recording_stop),
+  app_review_capture_screenshot: McpToolAccess.actsAsCaller(handlers.app_review_capture_screenshot),
+});

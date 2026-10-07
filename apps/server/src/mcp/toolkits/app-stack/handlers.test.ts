@@ -1,3 +1,4 @@
+import { describe } from "vite-plus/test";
 import { DEFAULT_WORKSPACE_USER_ID } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import {
@@ -17,7 +18,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
-import { McpServer, McpSchema } from "effect/unstable/ai";
+import { McpServer, McpSchema } from "effect/ai";
 
 import { AppStackManager } from "../../../appStack/AppStackManager.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -89,12 +90,17 @@ const deviceLease = {
   stopReason: null,
 };
 const invocation = Layer.succeed(McpInvocationContext, {
-  threadId: ThreadId.make("thread-1"),
   environmentId: EnvironmentId.make("env-1"),
-  providerInstanceId: ProviderInstanceId.make("codex"),
-  providerSessionId: "session-1",
+
   capabilities: new Set<McpCapability>(),
   issuedAt: 1,
+  thread: {
+    threadId: ThreadId.make("thread-1"),
+    providerSessionId: "session-1",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  },
+  client: undefined,
+  requestNamespace: "workflow-test",
 });
 
 function harness(
@@ -481,27 +487,30 @@ it.effect("starts the authenticated worktree with its branch and explicit varian
   }).pipe(Effect.provide(test.layer));
 });
 
-for (const variant of ["dev", "prod"] as const) {
-  it.effect(`keeps the calling workflow as owner when creating its ${variant} stack`, () => {
-    const test = harness({
-      worktreePath: "/worktrees/ticket-1",
-      workflowId: "implementation-run-1",
-    });
-    return Effect.gen(function* () {
-      yield* handlers.app_stack_start({ variant });
-      expect(test.operations).toMatchObject([
-        {
-          operation: "autoCreate",
-          input: {
-            worktreePath: "/worktrees/ticket-1",
-            workflowId: "implementation-run-1",
-            variant,
+describe.each([...(["dev", "prod"] as const)].map((scenarioCase) => [scenarioCase] as const))(
+  "scenario %s",
+  (variant) => {
+    it.effect(`keeps the calling workflow as owner when creating its ${variant} stack`, () => {
+      const test = harness({
+        worktreePath: "/worktrees/ticket-1",
+        workflowId: "implementation-run-1",
+      });
+      return Effect.gen(function* () {
+        yield* handlers.app_stack_start({ variant });
+        expect(test.operations).toMatchObject([
+          {
+            operation: "autoCreate",
+            input: {
+              worktreePath: "/worktrees/ticket-1",
+              workflowId: "implementation-run-1",
+              variant,
+            },
           },
-        },
-      ]);
-    }).pipe(Effect.provide(test.layer));
-  });
-}
+        ]);
+      }).pipe(Effect.provide(test.layer));
+    });
+  },
+);
 
 it.effect("reuses an existing stack without provisioning or changing its owner", () => {
   const test = harness({ stack });
@@ -570,22 +579,25 @@ it.effect(
   },
 );
 
-for (const status of ["stopped", "error"] as const) {
-  it.effect(
-    `starts an existing ${status} stack through restart, preserving its configuration`,
-    () => {
-      const test = harness({ stack: { ...stack, status } });
-      return Effect.gen(function* () {
-        const result = yield* handlers.app_stack_start({});
-        expect(result).toMatchObject({
-          created: false,
-          stack: { status: "running", workflowId: "workflow-1" },
-        });
-        expect(test.operations).toEqual([{ operation: "restart", input: { stackId: stack.id } }]);
-      }).pipe(Effect.provide(test.layer));
-    },
-  );
-}
+describe.each([...(["stopped", "error"] as const)].map((scenarioCase) => [scenarioCase] as const))(
+  "scenario %s",
+  (status) => {
+    it.effect(
+      `starts an existing ${status} stack through restart, preserving its configuration`,
+      () => {
+        const test = harness({ stack: { ...stack, status } });
+        return Effect.gen(function* () {
+          const result = yield* handlers.app_stack_start({});
+          expect(result).toMatchObject({
+            created: false,
+            stack: { status: "running", workflowId: "workflow-1" },
+          });
+          expect(test.operations).toEqual([{ operation: "restart", input: { stackId: stack.id } }]);
+        }).pipe(Effect.provide(test.layer));
+      },
+    );
+  },
+);
 
 it.effect("does not start a stack while it is stopping", () => {
   const test = harness({ stack: { ...stack, status: "stopping" } });
@@ -623,24 +635,27 @@ const scopedOperations = [
   },
 ];
 
-for (const operation of scopedOperations) {
-  it.effect(`${operation.name} uses only the stack resolved from this thread`, () => {
-    const test = harness({ stack });
-    return Effect.gen(function* () {
-      yield* operation.run();
-      expect(test.calls).toEqual([{ worktreePath: "/repo/rudi", variant: "dev" }]);
-      expect(test.operations).toEqual([
-        {
-          operation: operation.name,
-          input: {
-            stackId: stack.id,
-            ...(operation.name === "getPodLogs" ? { podName: "api-1", tailLines: 200 } : {}),
+describe.each([...scopedOperations].map((scenarioCase) => [scenarioCase] as const))(
+  "scenario %s",
+  (operation) => {
+    it.effect(`${operation.name} uses only the stack resolved from this thread`, () => {
+      const test = harness({ stack });
+      return Effect.gen(function* () {
+        yield* operation.run();
+        expect(test.calls).toEqual([{ worktreePath: "/repo/rudi", variant: "dev" }]);
+        expect(test.operations).toEqual([
+          {
+            operation: operation.name,
+            input: {
+              stackId: stack.id,
+              ...(operation.name === "getPodLogs" ? { podName: "api-1", tailLines: 200 } : {}),
+            },
           },
-        },
-      ]);
-    }).pipe(Effect.provide(test.layer));
-  });
-}
+        ]);
+      }).pipe(Effect.provide(test.layer));
+    });
+  },
+);
 
 const allOperations = [
   { name: "start", run: () => handlers.app_stack_start({}).pipe(Effect.asVoid) },
@@ -660,15 +675,17 @@ const allOperations = [
   ...scopedOperations,
 ];
 
-for (const input of [
-  { missing: true },
-  { missingProject: true },
-  { enabled: false },
-  { fail: true },
-  { stack: { ...stack, worktreePath: "/another-worktree" } },
-  { stack: { ...stack, variant: "prod" as const } },
-  { stack: { ...stack, composePath: "infra/compose/compose.app-prod.yml" } },
-]) {
+describe.each(
+  [
+    { missing: true },
+    { missingProject: true },
+    { enabled: false },
+    { fail: true },
+    { stack: { ...stack, worktreePath: "/another-worktree" } },
+    { stack: { ...stack, variant: "prod" as const } },
+    { stack: { ...stack, composePath: "infra/compose/compose.app-prod.yml" } },
+  ].map((scenarioCase) => [scenarioCase] as const),
+)("scenario %s", (input) => {
   it.effect(
     `rejects unresolved or mismatched targets without operating: ${JSON.stringify(input)}`,
     () => {
@@ -682,7 +699,7 @@ for (const input of [
       }).pipe(Effect.provide(test.layer));
     },
   );
-}
+});
 
 it.effect("requires a managed stack for mutations and logs", () => {
   const test = harness();
@@ -731,7 +748,9 @@ it.effect("rejects a controller create response for another variant", () => {
   }).pipe(Effect.provide(test.layer));
 });
 
-for (const platform of ["android", "windows"] as const) {
+describe.each(
+  [...(["android", "windows"] as const)].map((scenarioCase) => [scenarioCase] as const),
+)("scenario %s", (platform) => {
   it.effect(`leases ${platform} for the authenticated worktree without local device access`, () => {
     const test = harness({
       worktreePath: "/repo/feature",
@@ -759,7 +778,7 @@ for (const platform of ["android", "windows"] as const) {
       ]);
     }).pipe(Effect.provide(test.layer));
   });
-}
+});
 
 it.effect("reports queued Windows readiness and releases only the supplied device lease", () => {
   const test = harness({ stack: { ...stack, variant: "prod", namespace: "dev-feature-prod" } });

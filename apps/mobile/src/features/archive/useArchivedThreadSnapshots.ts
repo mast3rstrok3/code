@@ -40,7 +40,7 @@ export function useArchivedThreadSnapshots(environmentIds: ReadonlyArray<Environ
   readonly refresh: () => void;
 } {
   const environmentKey = useMemo(
-    () => makeArchivedThreadsEnvironmentKey(environmentIds, DEFAULT_WORKSPACE_USER_VIEW),
+    () => makeArchivedThreadsEnvironmentKey(environmentIds),
     [environmentIds],
   );
   const result = useAtomValue(archivedSnapshotsAtom(environmentKey));

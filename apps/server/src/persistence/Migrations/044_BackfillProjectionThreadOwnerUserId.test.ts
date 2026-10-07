@@ -1,7 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { DEFAULT_WORKSPACE_USER_ID } from "@t3tools/contracts";
 import { runMigrations } from "../Migrations.ts";

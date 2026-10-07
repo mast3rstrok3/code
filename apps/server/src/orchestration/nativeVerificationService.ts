@@ -1,4 +1,4 @@
-import * as NodeCrypto from "node:crypto";
+import { randomUuidV4 } from "../orchestration-v2/RandomUuid.ts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import {
   CommandId,
@@ -167,10 +167,10 @@ export const executeNativeVerification = Effect.fn("NativeVerification.execute")
         if (!alreadyStarted) {
           yield* engine.dispatch({
             type: "thread.turn.start",
-            commandId: CommandId.make(NodeCrypto.randomUUID()),
+            commandId: CommandId.make(yield* randomUuidV4),
             threadId: claim.threadId,
             message: {
-              messageId: MessageId.make(NodeCrypto.randomUUID()),
+              messageId: MessageId.make(yield* randomUuidV4),
               role: "user",
               text: nativeVerificationPrompt(handoff),
               attachments: [],
@@ -232,7 +232,7 @@ export const executeNativeVerification = Effect.fn("NativeVerification.execute")
         );
       yield* engine.dispatch({
         type: "thread.create",
-        commandId: CommandId.make(NodeCrypto.randomUUID()),
+        commandId: CommandId.make(yield* randomUuidV4),
         threadId: claim.threadId,
         projectId: project.id,
         ownerUserId: DEFAULT_WORKSPACE_USER_ID,
@@ -246,10 +246,10 @@ export const executeNativeVerification = Effect.fn("NativeVerification.execute")
       });
       yield* engine.dispatch({
         type: "thread.turn.start",
-        commandId: CommandId.make(NodeCrypto.randomUUID()),
+        commandId: CommandId.make(yield* randomUuidV4),
         threadId: claim.threadId,
         message: {
-          messageId: MessageId.make(NodeCrypto.randomUUID()),
+          messageId: MessageId.make(yield* randomUuidV4),
           role: "user",
           text: nativeVerificationPrompt(handoff),
           attachments: [],
@@ -345,7 +345,7 @@ export const executeNativeVerification = Effect.fn("NativeVerification.execute")
       ? source.value.thread.planningWorkflow?.tickets.find((item) => item.id === ticket.ticketId)
       : undefined;
     if (!plan) return yield* fail("The ticket's acceptance criteria could not be loaded.");
-    const id = NodeCrypto.randomUUID();
+    const id = yield* randomUuidV4;
     const branch = `t3-native/${id}`;
     const review = readModel.appReviewWorkflowRuns?.find(
       (r) => r.id === ticket.appReviewWorkflowRunId,
@@ -418,7 +418,7 @@ export const executeNativeVerification = Effect.fn("NativeVerification.execute")
   }
   yield* engine.dispatch({
     type: "thread.native-verification.update",
-    commandId: CommandId.make(NodeCrypto.randomUUID()),
+    commandId: CommandId.make(yield* randomUuidV4),
     threadId: sourceThreadId,
     runId: run.id,
     ticketId: OrchestrationPlanningTicketId.make(ticket.ticketId),
@@ -433,10 +433,10 @@ export const executeNativeVerification = Effect.fn("NativeVerification.execute")
   if (!handoff) return yield* fail("The handoff update has not reached the read model yet.");
   yield* engine.dispatch({
     type: "thread.activity.append",
-    commandId: CommandId.make(NodeCrypto.randomUUID()),
+    commandId: CommandId.make(yield* randomUuidV4),
     threadId: run.orchestratorThreadId,
     activity: {
-      id: EventId.make(NodeCrypto.randomUUID()),
+      id: EventId.make(yield* randomUuidV4),
       kind: "implementation-native-verification-updated",
       tone: "info",
       summary: `Native verification ${handoff.status}`,

@@ -24,7 +24,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
@@ -3240,12 +3240,14 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
       const detailWithPinnedRequests = yield* snapshotQuery.getThreadDetailById(threadW);
       assert.equal(detailWithPinnedRequests._tag, "Some");
       if (detailWithPinnedRequests._tag === "Some") {
-        const ids = detailWithPinnedRequests.value.activities.map((activity) => activity.id);
+        const ids = new Set(
+          detailWithPinnedRequests.value.activities.map((activity) => activity.id),
+        );
         assert.equal(detailWithPinnedRequests.value.activities.length, 503);
-        assert.equal(ids.includes(asEventId("approval-old")), true);
-        assert.equal(ids.includes(asEventId("user-input-old")), true);
-        assert.equal(ids.includes(asEventId("user-input-closed")), false);
-        assert.equal(ids.includes(asEventId("user-input-tied-z-request")), true);
+        assert.equal(ids.has(asEventId("approval-old")), true);
+        assert.equal(ids.has(asEventId("user-input-old")), true);
+        assert.equal(ids.has(asEventId("user-input-closed")), false);
+        assert.equal(ids.has(asEventId("user-input-tied-z-request")), true);
       }
 
       const windowWithPinnedRequests = yield* snapshotQuery.getThreadDetailSnapshot(threadW, {
@@ -3253,12 +3255,14 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
       });
       assert.equal(windowWithPinnedRequests._tag, "Some");
       if (windowWithPinnedRequests._tag === "Some") {
-        const ids = windowWithPinnedRequests.value.thread.activities.map((activity) => activity.id);
+        const ids = new Set(
+          windowWithPinnedRequests.value.thread.activities.map((activity) => activity.id),
+        );
         assert.equal(windowWithPinnedRequests.value.thread.activities.length, 503);
-        assert.equal(ids.includes(asEventId("approval-old")), true);
-        assert.equal(ids.includes(asEventId("user-input-old")), true);
-        assert.equal(ids.includes(asEventId("user-input-closed")), false);
-        assert.equal(ids.includes(asEventId("user-input-tied-z-request")), true);
+        assert.equal(ids.has(asEventId("approval-old")), true);
+        assert.equal(ids.has(asEventId("user-input-old")), true);
+        assert.equal(ids.has(asEventId("user-input-closed")), false);
+        assert.equal(ids.has(asEventId("user-input-tied-z-request")), true);
       }
     }),
   );
@@ -3894,7 +3898,7 @@ it.effect("filters shell projects by the workspace user view", () => {
 
     const everyone = yield* query.getShellSnapshot({ userView: { kind: "all" } });
     assert.deepStrictEqual(
-      everyone.projects.map((project) => [project.id, project.ownerUserId]),
+      everyone.projects.map((project) => [String(project.id), String(project.ownerUserId)]),
       [
         ["p-nils", "nils"],
         ["p-alex", "alex"],

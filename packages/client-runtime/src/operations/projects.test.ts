@@ -4,7 +4,6 @@ import {
   ProjectId,
   CommandId,
   SourceControlDiscoveryResult,
-  DEFAULT_WORKSPACE_USER_ID,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 
@@ -20,7 +19,6 @@ import {
   getDefaultCloneUrl,
   normalizePastedCloneUrl,
   resolveAddProjectPath,
-  resolveSubmittedAddProjectPath,
   sortAddProjectProviderSources,
 } from "./projects.ts";
 import type { EnvironmentProject } from "../state/models.ts";
@@ -184,37 +182,6 @@ describe("add project shared logic", () => {
     ).toEqual({ ok: true, path: "/work/next" });
   });
 
-  it("resolves typed missing home folders from the expanded browse parent", () => {
-    expect(
-      resolveSubmittedAddProjectPath({
-        rawPath: "~/new-folder",
-        browseResult: { parentPath: "/home/nils" },
-        exactBrowseEntry: null,
-      }),
-    ).toBe("/home/nils/new-folder");
-  });
-
-  it("resolves trailing typed missing home folders from the expanded missing parent", () => {
-    expect(
-      resolveSubmittedAddProjectPath({
-        rawPath: "~/repos/nils/new-folder/",
-        browseResult: null,
-        missingPathParentResult: { parentPath: "/home/nils/repos/nils" },
-        exactBrowseEntry: null,
-      }),
-    ).toBe("/home/nils/repos/nils/new-folder");
-  });
-
-  it("resolves exact home browse entries from their absolute full path", () => {
-    expect(
-      resolveSubmittedAddProjectPath({
-        rawPath: "~/existing",
-        browseResult: { parentPath: "/home/nils" },
-        exactBrowseEntry: { fullPath: "/home/nils/existing" },
-      }),
-    ).toBe("/home/nils/existing");
-  });
-
   it("marks authenticated source control providers as ready", () => {
     const discovery: SourceControlDiscoveryResult = {
       versionControlSystems: [],
@@ -266,7 +233,6 @@ describe("add project shared logic", () => {
         id: ProjectId.make("same-path-other-env"),
         title: "Other",
         workspaceRoot: "/repo",
-        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         createdAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-01T00:00:00.000Z",
         repositoryIdentity: null,
@@ -278,7 +244,6 @@ describe("add project shared logic", () => {
         id: ProjectId.make("project"),
         title: "Repo",
         workspaceRoot: "/repo/",
-        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         createdAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-01T00:00:00.000Z",
         repositoryIdentity: null,
@@ -292,47 +257,17 @@ describe("add project shared logic", () => {
     );
   });
 
-  it("finds duplicates using the resolved absolute add project path", () => {
-    const env = EnvironmentId.make("env");
-    const projects: EnvironmentProject[] = [
-      {
-        environmentId: env,
-        id: ProjectId.make("project"),
-        title: "Repo",
-        workspaceRoot: "/home/nils/repo",
-        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-01T00:00:00.000Z",
-        repositoryIdentity: null,
-        defaultModelSelection: null,
-        scripts: [],
-      },
-    ];
-    const resolvedPath = resolveSubmittedAddProjectPath({
-      rawPath: "~/repo",
-      browseResult: { parentPath: "/home/nils" },
-      exactBrowseEntry: null,
-    });
-
-    expect(findExistingAddProject({ projects, environmentId: env, path: resolvedPath })?.id).toBe(
-      "project",
-    );
-  });
-
-  it("builds the existing project.create command shape", () => {
+  it("builds the V2 project.create mutation", () => {
     expect(
       buildProjectCreateCommand({
         commandId: CommandId.make("command"),
         projectId: ProjectId.make("project"),
-        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         workspaceRoot: "/work/repo",
-        createdAt: "2026-01-01T00:00:00.000Z",
       }),
     ).toMatchObject({
       type: "project.create",
       commandId: "command",
       projectId: "project",
-      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
       title: "repo",
       workspaceRoot: "/work/repo",
       createWorkspaceRootIfMissing: true,

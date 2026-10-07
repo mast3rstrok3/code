@@ -30,8 +30,8 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { Command, Flag } from "effect/unstable/cli";
+import * as SqlClient from "effect/sql/SqlClient";
+import { Command, Flag } from "effect/cli";
 import { CommandId, ThreadId } from "@t3tools/contracts";
 
 import * as ServerConfig from "../src/config.ts";

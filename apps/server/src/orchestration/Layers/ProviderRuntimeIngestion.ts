@@ -1,3 +1,6 @@
+import * as Deferred from "effect/Deferred";
+import { WorkflowRuntimeIngestionError } from "../Services/ProviderRuntimeIngestion.ts";
+import { WorkflowProviderEvents } from "../WorkflowProviderEvents.ts";
 import type { OrchestrationThread, OrchestrationProposedPlan } from "@t3tools/contracts";
 import {
   ApprovalRequestId,
@@ -191,6 +194,11 @@ interface QueuedTextDelta {
 }
 
 type RuntimeIngestionInput =
+  | {
+      readonly source: "native";
+      readonly event: ProviderRuntimeEvent;
+      readonly completed: Deferred.Deferred<void, WorkflowRuntimeIngestionError>;
+    }
   | QueuedTextDelta
   | {
       source: "runtime";
@@ -1151,7 +1159,10 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
-  const providerService = yield* ProviderService;
+  const workflowProviderEvents = yield* Effect.serviceOption(WorkflowProviderEvents);
+  const providerService = Option.isSome(workflowProviderEvents)
+    ? { ...workflowProviderEvents.value, subscribeEvents: undefined }
+    : (yield* Effect.serviceOption(ProviderService)).pipe(Option.getOrThrow);
   const projectionThreadMessages = yield* ProjectionThreadMessageRepository;
   const projectionThreadProposedPlans = yield* ProjectionThreadProposedPlanRepository;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
@@ -5032,6 +5043,13 @@ const make = Effect.gen(function* () {
             payload: { ...input.event.payload, delta: input.chunks.join("") },
           });
         });
+      case "native":
+        return Deferred.complete(
+          input.completed,
+          processRuntimeEvent(input.event).pipe(
+            Effect.mapError((cause) => new WorkflowRuntimeIngestionError({ cause })),
+          ),
+        ).pipe(Effect.asVoid);
       case "runtime":
         return processRuntimeEvent(input.event);
       case "domain":
@@ -5171,6 +5189,12 @@ const make = Effect.gen(function* () {
 
   return {
     start,
+    ingest: (event: ProviderRuntimeEvent) =>
+      Effect.gen(function* () {
+        const completed = yield* Deferred.make<void, WorkflowRuntimeIngestionError>();
+        yield* worker.enqueue({ source: "native", event, completed });
+        yield* Deferred.await(completed);
+      }),
     // The diff worker feeds the lifecycle worker, so drain it first.
     drain: diffWorker.drain.pipe(Effect.andThen(worker.drain)),
   } satisfies ProviderRuntimeIngestionShape;

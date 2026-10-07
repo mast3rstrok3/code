@@ -7,7 +7,6 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerSettings as ContractServerSettings,
-  DEFAULT_WORKSPACE_USER_ID,
 } from "@t3tools/contracts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import * as Effect from "effect/Effect";
@@ -20,13 +19,12 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 
 const makeProjectShell = (workspaceRoot: string): OrchestrationProjectShell => ({
   id: ProjectId.make("project-1"),
-  ownerUserId: DEFAULT_WORKSPACE_USER_ID,
   title: "Imported",
   workspaceRoot,
   defaultModelSelection: null,
@@ -35,45 +33,12 @@ const makeProjectShell = (workspaceRoot: string): OrchestrationProjectShell => (
   updatedAt: "2026-01-01T00:00:00.000Z",
 });
 
-/** Only `getShellSnapshot` is exercised; the rest must not be called. */
-const makeProjectionSnapshotQueryLayer = (importedWorkspaceRoots: ReadonlyArray<string>) =>
-  Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
-    getThreadDetailSnapshotById: () => Effect.die("unused"),
-
-    getAppReviewWorkflowRun: () => Effect.die("Unexpected review lookup"),
-
-    getCommandReadModel: () => Effect.die("unused"),
-    getUserInputActivity: () => Effect.die("unused"),
-    listActivitiesByKind: () => Effect.die("unused"),
-    getSnapshot: () => Effect.die("unused"),
-    getShellSnapshot: () =>
-      Effect.succeed({
-        implementationRuns: [],
-
-        snapshotSequence: 0,
-        projects: importedWorkspaceRoots.map((workspaceRoot) => makeProjectShell(workspaceRoot)),
-        threads: [],
-        updatedAt: "2026-01-01T00:00:00.000Z",
-      }),
-    getDeletedWorktreeThreads: () => Effect.die("unused"),
-    listThreadsWithPullRequests: () => Effect.die("unused"),
-    getArchivedShellSnapshot: () => Effect.die("unused"),
-    getSnapshotSequence: () => Effect.die("unused"),
-    getCounts: () => Effect.die("unused"),
-    getEventReplayStats: () => Effect.die("unused"),
-    getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
-    getProjectShells: () => Effect.die("unused"),
-    getProjectShellById: () => Effect.die("unused"),
-    getImportedAgentSessionSources: () => Effect.succeed([]),
-    getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
-    getThreadCheckpointContext: () => Effect.die("unused"),
-    getFullThreadDiffContext: () => Effect.die("unused"),
-    getThreadShellById: () => Effect.die("unused"),
-    getThreadRuntimeContext: () => Effect.die("unused"),
-    getTurnStartMessage: () => Effect.die("unused"),
-    getThreadDetailById: () => Effect.die("unused"),
-    getThreadDetailSnapshot: () => Effect.die("unused"),
-    searchThreads: () => Effect.die("unused"),
+const layerProjectStore = (importedWorkspaceRoots: ReadonlyArray<string>) =>
+  Layer.mock(ProjectStore.ProjectStoreV2)({
+    listShells: () =>
+      Effect.succeed(
+        importedWorkspaceRoots.map((workspaceRoot) => makeProjectShell(workspaceRoot)),
+      ),
   });
 
 /**
@@ -89,7 +54,7 @@ interface ScannerTestInput {
   readonly providerInstances?: ContractServerSettings["providerInstances"];
 }
 
-const makeScannerTestLayer = (input: ScannerTestInput) =>
+const layerScannerTest = (input: ScannerTestInput) =>
   AgentSessionScanner.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -106,7 +71,7 @@ const makeScannerTestLayer = (input: ScannerTestInput) =>
           input.claudeHomePath,
           input.configBaseDir ?? { prefix: "t3code-scanner-config-" },
         ),
-        makeProjectionSnapshotQueryLayer(input.importedWorkspaceRoots ?? []),
+        layerProjectStore(input.importedWorkspaceRoots ?? []),
       ),
     ),
   );
@@ -115,7 +80,7 @@ const runScan = (input: ScannerTestInput) =>
   Effect.gen(function* () {
     const scanner = yield* AgentSessionScanner.AgentSessionScanner;
     return yield* scanner.scan;
-  }).pipe(Effect.provide(makeScannerTestLayer(input)));
+  }).pipe(Effect.provide(layerScannerTest(input)));
 
 const runRecentThreadOutcomes = (input: ScannerTestInput & { readonly workspaceRoot: string }) =>
   Effect.gen(function* () {
@@ -124,7 +89,7 @@ const runRecentThreadOutcomes = (input: ScannerTestInput & { readonly workspaceR
       Stream.runCollect,
       Effect.map((outcomes) => Array.from(outcomes)),
     );
-  }).pipe(Effect.provide(makeScannerTestLayer(input)));
+  }).pipe(Effect.provide(layerScannerTest(input)));
 
 const runRecentThreads = (input: ScannerTestInput & { readonly workspaceRoot: string }) =>
   runRecentThreadOutcomes(input).pipe(
@@ -881,23 +846,25 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         const fileSystem = yield* FileSystem.FileSystem;
         const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
         const codexHomePath = yield* makeTempDir("t3code-codex-home-");
-        // The exclusions key off the home directory. Point HOME at a scratch
-        // directory for this test so it never writes into the real one, which
-        // is not always writable (a root-owned ~/Downloads, for instance).
-        const home = yield* makeTempDir("t3code-scanner-home-");
-        const previousHome = process.env.HOME;
-        process.env.HOME = home;
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            if (previousHome === undefined) delete process.env.HOME;
-            else process.env.HOME = previousHome;
-          }),
-        );
-        const scratch = path.join(home, "Documents", "Codex", "2026-09-01", "some-conversation");
-        const downloads = path.join(home, "Downloads", "unpacked-archive");
+        // The exclusions key off the real home directory, so these fixtures
+        // must live there. Each run owns a uniquely named subtree and removes
+        // only that subtree, never the shared Codex or Downloads parents.
+        const home = NodeOS.homedir();
+        // Borrow a unique suffix from a scoped temp dir instead of reaching for
+        // Date.now or Math.random, which the Effect lint rejects.
+        const runId = path.basename(yield* makeTempDir("t3code-scanner-test-"));
+        const scratchRoot = path.join(home, "Documents", "Codex", runId);
+        const scratch = path.join(scratchRoot, "2026-09-01", "some-conversation");
+        const downloads = path.join(home, "Downloads", runId);
         const keep = yield* makeTempDir("t3code-workspace-keep-");
         yield* fileSystem.makeDirectory(scratch, { recursive: true });
         yield* fileSystem.makeDirectory(downloads, { recursive: true });
+        yield* Effect.addFinalizer(() =>
+          Effect.all([
+            fileSystem.remove(scratchRoot, { recursive: true }).pipe(Effect.ignore),
+            fileSystem.remove(downloads, { recursive: true }).pipe(Effect.ignore),
+          ]),
+        );
 
         for (const [index, cwd] of [scratch, downloads, keep].entries()) {
           yield* writeTranscript({
@@ -1738,7 +1705,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
           expect(scan.candidates[0]?.threadCount).toBe(5);
           return yield* scanner.recentThreads(workspace).pipe(Stream.runCollect);
         }).pipe(
-          Effect.provide(makeScannerTestLayer({ claudeHomePath, codexHomePath })),
+          Effect.provide(layerScannerTest({ claudeHomePath, codexHomePath })),
           Effect.provideService(FileSystem.FileSystem, trackedFileSystem),
         );
 
@@ -1888,7 +1855,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
                 } else {
                   expect(outcomes).toEqual([{ _tag: "Skipped" }]);
                 }
-              }).pipe(Effect.provide(makeScannerTestLayer({ claudeHomePath, codexHomePath })));
+              }).pipe(Effect.provide(layerScannerTest({ claudeHomePath, codexHomePath })));
             }),
         );
       }
@@ -1959,7 +1926,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
             thread: { providerSessionId: "replaced-session" },
             source: { size: imported.source.size, mtimeMs: imported.source.mtimeMs },
           });
-        }).pipe(Effect.provide(makeScannerTestLayer({ claudeHomePath, codexHomePath })));
+        }).pipe(Effect.provide(layerScannerTest({ claudeHomePath, codexHomePath })));
       }),
     );
 
@@ -2383,7 +2350,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
             Effect.map((items) => Array.from(items)),
           );
         }).pipe(
-          Effect.provide(makeScannerTestLayer({ claudeHomePath, codexHomePath })),
+          Effect.provide(layerScannerTest({ claudeHomePath, codexHomePath })),
           Effect.provideService(FileSystem.FileSystem, simulatedFileSystem),
         );
 
@@ -2606,7 +2573,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
           expect(scan.truncated).toBe(true);
           return yield* scanner.recentThreads(recentWorkspace).pipe(Stream.runCollect);
         }).pipe(
-          Effect.provide(makeScannerTestLayer(input)),
+          Effect.provide(layerScannerTest(input)),
           Effect.provideService(FileSystem.FileSystem, simulatedFileSystem),
         );
 

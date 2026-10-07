@@ -1,3 +1,4 @@
+import * as McpToolAccess from "../../McpToolAccess.ts";
 import { AppStackError, type AppStack, type AppStackVariant } from "@t3tools/contracts";
 import { appStackDisplayName, appStackVariantForComposePath } from "@t3tools/shared/appStack";
 import * as DateTime from "effect/DateTime";
@@ -20,10 +21,16 @@ import {
 const resolveWorkspace = Effect.fn("AppStackToolkit.resolveWorkspace")(function* (
   operation: string,
 ) {
-  const scope = yield* McpInvocationContext;
+  const invocation = yield* McpInvocationContext;
+  if (invocation.thread === undefined)
+    return yield* new AppStackError({
+      operation,
+      message: "App Stack tools require a thread credential.",
+    });
+  const threadId = invocation.thread.threadId;
   const query = yield* ProjectionSnapshotQuery;
   const workspace = yield* Effect.gen(function* () {
-    const thread = yield* query.getThreadShellById(scope.threadId);
+    const thread = yield* query.getThreadShellById(threadId);
     if (Option.isNone(thread)) return undefined;
     const branch = thread.value.branch;
     const workflowId = thread.value.workflowContext?.workflowId;
@@ -288,3 +295,17 @@ export const handlers = {
 } satisfies Parameters<typeof AppStackToolkit.toLayer>[0];
 
 export const AppStackToolkitHandlersLive = AppStackToolkit.toLayer(handlers);
+
+export const layer = McpToolAccess.toLayer(AppStackToolkit, {
+  app_stack_get: McpToolAccess.readsAsCaller(handlers.app_stack_get),
+  app_stack_start: McpToolAccess.actsAsCaller(handlers.app_stack_start),
+  app_stack_stop: McpToolAccess.actsAsCaller(handlers.app_stack_stop),
+  app_stack_restart: McpToolAccess.actsAsCaller(handlers.app_stack_restart),
+  app_stack_delete: McpToolAccess.actsAsCaller(handlers.app_stack_delete),
+  app_stack_list_pods: McpToolAccess.readsAsCaller(handlers.app_stack_list_pods),
+  app_stack_logs: McpToolAccess.readsAsCaller(handlers.app_stack_logs),
+  app_stack_bundle_plan: McpToolAccess.readsAsCaller(handlers.app_stack_bundle_plan),
+  app_stack_device_start: McpToolAccess.actsAsCaller(handlers.app_stack_device_start),
+  app_stack_device_stop: McpToolAccess.actsAsCaller(handlers.app_stack_device_stop),
+  app_stack_device_status: McpToolAccess.readsAsCaller(handlers.app_stack_device_status),
+});

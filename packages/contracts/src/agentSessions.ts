@@ -20,11 +20,6 @@ export const AgentSessionImportSource = Schema.Struct({
 });
 export type AgentSessionImportSource = typeof AgentSessionImportSource.Type;
 
-/** Imported message ids retain their origin after event metadata is projected into SQLite. */
-export function isImportedAgentSessionMessageId(messageId: string): boolean {
-  return messageId.startsWith("import:");
-}
-
 /**
  * Empty for now. Kept as a struct so future scan options (source filters,
  * explicit roots) can be added without a new method.
@@ -113,4 +108,9 @@ export class AgentSessionScanError extends Schema.TaggedError<AgentSessionScanEr
   override get message(): string {
     return `Failed to scan agent sessions during ${this.operation}.`;
   }
+}
+
+/** Imported message IDs remain readable in workflow history. */
+export function isImportedAgentSessionMessageId(messageId: string): boolean {
+  return messageId.startsWith("import:");
 }

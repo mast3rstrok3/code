@@ -10,9 +10,10 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestConsole from "effect/testing/TestConsole";
-import { Command } from "effect/unstable/cli";
+import { Command } from "effect/cli";
 
-import { cli } from "../bin.ts";
+import { themeCommand } from "./theme.ts";
+const cli = Command.make("t3").pipe(Command.withSubcommands([themeCommand]));
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 

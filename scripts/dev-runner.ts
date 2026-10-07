@@ -16,8 +16,8 @@ import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { Argument, Command, Flag } from "effect/unstable/cli";
-import { ChildProcess } from "effect/unstable/process";
+import { Argument, Command, Flag } from "effect/cli";
+import { ChildProcess } from "effect/process";
 
 import { type DevShareError, shareDevServer, unshareDevServer } from "./lib/dev-share.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
@@ -317,6 +317,7 @@ export function createDevRunnerEnv({
 
     const output: NodeJS.ProcessEnv = {
       ...baseEnv,
+      NODE_ENV: "development",
       PORT: String(webPort),
       VITE_DEV_SERVER_URL:
         devUrl?.toString() ??

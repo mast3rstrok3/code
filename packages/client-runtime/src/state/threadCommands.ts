@@ -1,13 +1,16 @@
+import type { ThreadId } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
-import { Atom } from "effect/unstable/reactivity";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import { Atom } from "effect/reactivity";
 import {
   WS_METHODS,
   type EnvironmentId,
-  type OrchestrationShellSnapshot,
+  type OrchestrationV2ShellSnapshot,
 } from "@t3tools/contracts";
 
 import { createOptimisticThreadLifecycle } from "./threadLifecycle.ts";
-import { canSnooze } from "./threadSettled.ts";
+import * as DateTime from "effect/DateTime";
 
 import {
   createAtomCommandScheduler,
@@ -15,40 +18,27 @@ import {
   createEnvironmentRpcCommand,
 } from "./runtime.ts";
 import {
+  type ThreadCommandInput,
   type ArchiveThreadInput,
-  type CancelThreadImplementationRunInput,
+  type CancelQueuedRunInput,
+  type RetryWorkspacePreparationInput,
   type CreateThreadInput,
   type DeleteThreadInput,
+  type EditQueuedRunInput,
   type InterruptThreadTurnInput,
-  type LaunchThreadImplementationRunInput,
-  type LaunchThreadFastFeatureRunInput,
-  type LaunchThreadAppReviewInput,
-  type LaunchThreadAppReviewWorkflowInput,
-  type CancelThreadAppReviewWorkflowInput,
-  type LoadThreadPlanningSpecBundleInput,
-  type CreateThreadPlanningSpecInput,
-  type RequestThreadPlanningTicketReviewInput,
+  type MarkThreadUnreadInput,
+  type ForkThreadFromRunInput,
+  type MergeThreadBackInput,
+  type PromoteQueuedRunInput,
+  type ReorderQueuedRunInput,
   type LinkThreadPullRequestInput,
   type RespondToThreadApprovalInput,
   type RespondToThreadUserInputInput,
   type DismissThreadUserInputInput,
   type RevertThreadCheckpointInput,
-  type RetryThreadImplementationChangeRequestInput,
-  type RerunThreadAppReviewPhaseInput,
-  type RerunThreadImplementationStageInput,
-  type ResetThreadImplementationStageInput,
-  type SetThreadImplementationSkipInput,
-  type RetryThreadImplementationRunInput,
   type SetThreadInteractionModeInput,
-  type SetThreadComposerModeInput,
   type SetThreadRuntimeModeInput,
-  type StartThreadPlanningStageInput,
   type PinThreadInput,
-  type PauseThreadWorkflowInput,
-  type ResumeThreadWorkflowInput,
-  type SetThreadWorkflowStepCyclesInput,
-  type SetThreadWorkflowStepReviewPartsInput,
-  type SetThreadWorkflowStepModelInput,
   type ReorderPinnedThreadInput,
   type ReorderActiveThreadInput,
   type SetThreadAutoSettleInput,
@@ -59,43 +49,32 @@ import {
   type UnarchiveThreadInput,
   type UnlinkThreadPullRequestInput,
   type UnpinThreadInput,
+  type WatchThreadPullRequestInput,
   type UnsettleThreadInput,
   type UnsnoozeThreadInput,
   type UpdateThreadMetadataInput,
+  type VisitThreadInput,
   archiveThread,
-  cancelThreadImplementationRun,
-  createThreadPlanningSpec,
+  cancelQueuedRun,
   createThread,
   deleteThread,
+  editQueuedRun,
   interruptThreadTurn,
-  launchThreadImplementationRun,
-  launchThreadFastFeatureRun,
-  launchThreadAppReview,
-  launchThreadAppReviewWorkflow,
-  cancelThreadAppReviewWorkflow,
-  loadThreadPlanningSpecBundle,
-  requestThreadPlanningTicketReview,
+  forkThreadFromRun,
+  markThreadUnread,
+  mergeThreadBack,
+  promoteQueuedRun,
+  reorderQueuedRun,
+  resumeThreadQueue,
+  retryWorkspacePreparation,
   linkThreadPullRequest,
   respondToThreadApproval,
   respondToThreadUserInput,
   dismissThreadUserInput,
   revertThreadCheckpoint,
-  retryThreadImplementationChangeRequest,
-  rerunThreadAppReviewPhase,
-  rerunThreadImplementationStage,
-  resetThreadImplementationStage,
-  setThreadImplementationSkip,
-  retryThreadImplementationRun,
   setThreadInteractionMode,
-  setThreadComposerMode,
   setThreadRuntimeMode,
-  startThreadPlanningStage,
   pinThread,
-  pauseThreadWorkflow,
-  resumeThreadWorkflow,
-  setThreadWorkflowStepCycles,
-  setThreadWorkflowStepModel,
-  setThreadWorkflowStepReviewParts,
   reorderPinnedThread,
   reorderActiveThread,
   setThreadAutoSettle,
@@ -109,44 +88,37 @@ import {
   unsettleThread,
   unsnoozeThread,
   updateThreadMetadata,
+  visitThread,
+  watchThreadPullRequest,
 } from "../operations/commands.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
+import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+import * as ThreadHistoryController from "./threadHistoryController.ts";
+
+export type LoadEarlierThreadHistoryInput = {
+  readonly threadId: ThreadId;
+};
 
 export type {
   ArchiveThreadInput,
-  CancelThreadImplementationRunInput,
+  CancelQueuedRunInput,
   CreateThreadInput,
   DeleteThreadInput,
+  EditQueuedRunInput,
   InterruptThreadTurnInput,
-  LaunchThreadImplementationRunInput,
-  LaunchThreadFastFeatureRunInput,
-  LaunchThreadAppReviewInput,
-  LaunchThreadAppReviewWorkflowInput,
-  CancelThreadAppReviewWorkflowInput,
-  LoadThreadPlanningSpecBundleInput,
-  CreateThreadPlanningSpecInput,
-  RequestThreadPlanningTicketReviewInput,
+  MarkThreadUnreadInput,
+  ForkThreadFromRunInput,
+  MergeThreadBackInput,
+  PromoteQueuedRunInput,
+  ReorderQueuedRunInput,
   LinkThreadPullRequestInput,
   RespondToThreadApprovalInput,
   RespondToThreadUserInputInput,
   DismissThreadUserInputInput,
   RevertThreadCheckpointInput,
-  RerunThreadAppReviewPhaseInput,
-  RerunThreadImplementationStageInput,
-  ResetThreadImplementationStageInput,
-  RetryThreadImplementationChangeRequestInput,
-  SetThreadImplementationSkipInput,
-  RetryThreadImplementationRunInput,
   SetThreadInteractionModeInput,
-  SetThreadComposerModeInput,
   SetThreadRuntimeModeInput,
-  StartThreadPlanningStageInput,
   PinThreadInput,
-  PauseThreadWorkflowInput,
-  ResumeThreadWorkflowInput,
-  SetThreadWorkflowStepCyclesInput,
-  SetThreadWorkflowStepReviewPartsInput,
-  SetThreadWorkflowStepModelInput,
   ReorderPinnedThreadInput,
   ReorderActiveThreadInput,
   SetThreadAutoSettleInput,
@@ -154,17 +126,20 @@ export type {
   SnoozeThreadInput,
   StartThreadTurnInput,
   StopThreadSessionInput,
+  ThreadCommandInput,
   UnarchiveThreadInput,
   UnlinkThreadPullRequestInput,
   UnpinThreadInput,
   UnsettleThreadInput,
   UnsnoozeThreadInput,
   UpdateThreadMetadataInput,
+  VisitThreadInput,
+  WatchThreadPullRequestInput,
 } from "../operations/commands.ts";
 
 export function createThreadEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | Crypto.Crypto | R, E>,
-  snapshotAtom: (environmentId: EnvironmentId) => Atom.Atom<OrchestrationShellSnapshot | null>,
+  snapshotAtom: (environmentId: EnvironmentId) => Atom.Atom<OrchestrationV2ShellSnapshot | null>,
 ) {
   const scheduler = createAtomCommandScheduler();
   const concurrency = {
@@ -200,37 +175,6 @@ export function createThreadEnvironmentAtoms<R, E>(
     settle: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:settle",
       execute: (input: SettleThreadInput) => settleThread(input),
-      scheduler,
-      concurrency,
-    }),
-    pauseWorkflow: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:workflow:pause",
-      execute: (input: PauseThreadWorkflowInput) => pauseThreadWorkflow(input),
-      scheduler,
-      concurrency,
-    }),
-    resumeWorkflow: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:workflow:resume",
-      execute: (input: ResumeThreadWorkflowInput) => resumeThreadWorkflow(input),
-      scheduler,
-      concurrency,
-    }),
-    setWorkflowStepModel: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:workflow:step-model:set",
-      execute: (input: SetThreadWorkflowStepModelInput) => setThreadWorkflowStepModel(input),
-      scheduler,
-      concurrency,
-    }),
-    setWorkflowStepCycles: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:workflow:step-cycles:set",
-      execute: (input: SetThreadWorkflowStepCyclesInput) => setThreadWorkflowStepCycles(input),
-      scheduler,
-      concurrency,
-    }),
-    setWorkflowStepReviewParts: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:workflow:step-review-parts:set",
-      execute: (input: SetThreadWorkflowStepReviewPartsInput) =>
-        setThreadWorkflowStepReviewParts(input),
       scheduler,
       concurrency,
     }),
@@ -282,6 +226,18 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
+    visit: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:visit",
+      execute: (input: VisitThreadInput) => visitThread(input),
+      scheduler,
+      concurrency,
+    }),
+    markUnread: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:mark-unread",
+      execute: (input: MarkThreadUnreadInput) => markThreadUnread(input),
+      scheduler,
+      concurrency,
+    }),
     updateMetadata: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:update-metadata",
       execute: (input: UpdateThreadMetadataInput) => updateThreadMetadata(input),
@@ -300,6 +256,12 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
+    watchPullRequest: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:watch-pull-request",
+      execute: (input: WatchThreadPullRequestInput) => watchThreadPullRequest(input),
+      scheduler,
+      concurrency,
+    }),
     setRuntimeMode: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:set-runtime-mode",
       execute: (input: SetThreadRuntimeModeInput) => setThreadRuntimeMode(input),
@@ -312,258 +274,11 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
-    setComposerMode: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:set-composer-mode",
-      execute: (input: SetThreadComposerModeInput) => setThreadComposerMode(input),
-      scheduler,
-      concurrency,
-    }),
     startTurn: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:start-turn",
       execute: (input: StartThreadTurnInput) => startThreadTurn(input),
       scheduler,
       concurrency,
-    }),
-    launchAppReview: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:launch-app-review",
-      execute: (input: LaunchThreadAppReviewInput) => launchThreadAppReview(input),
-      scheduler,
-      concurrency: {
-        mode: "serial" as const,
-        key: ({
-          environmentId,
-          input,
-        }: {
-          environmentId: string;
-          input: LaunchThreadAppReviewInput;
-        }) => JSON.stringify([environmentId, input.sourceThreadId, input.reviewThreadId]),
-      },
-    }),
-    launchAppReviewWorkflow: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:launch-app-review-workflow",
-      execute: (input: LaunchThreadAppReviewWorkflowInput) => launchThreadAppReviewWorkflow(input),
-      scheduler,
-      concurrency: {
-        mode: "serial" as const,
-        key: ({
-          environmentId,
-          input,
-        }: {
-          environmentId: string;
-          input: LaunchThreadAppReviewWorkflowInput;
-        }) => JSON.stringify([environmentId, input.targetThreadId]),
-      },
-    }),
-    cancelAppReviewWorkflow: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:cancel-app-review-workflow",
-      execute: (input: CancelThreadAppReviewWorkflowInput) => cancelThreadAppReviewWorkflow(input),
-      scheduler,
-      concurrency: {
-        mode: "serial" as const,
-        key: ({
-          environmentId,
-          input,
-        }: {
-          environmentId: string;
-          input: CancelThreadAppReviewWorkflowInput;
-        }) => JSON.stringify([environmentId, input.runId]),
-      },
-    }),
-    createPlanningSpec: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:planning-spec:create",
-      execute: (input: CreateThreadPlanningSpecInput) => createThreadPlanningSpec(input),
-      scheduler,
-      concurrency,
-    }),
-    startPlanningStage: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:planning-stage:start",
-      execute: (input: StartThreadPlanningStageInput) => startThreadPlanningStage(input),
-      scheduler,
-      concurrency,
-    }),
-    loadPlanningSpecBundle: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:planning-spec-bundle:load",
-      execute: (input: LoadThreadPlanningSpecBundleInput) => loadThreadPlanningSpecBundle(input),
-      scheduler,
-      concurrency,
-    }),
-    requestPlanningTicketReview: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:planning-ticket-review:request",
-      execute: (input: RequestThreadPlanningTicketReviewInput) =>
-        requestThreadPlanningTicketReview(input),
-      scheduler,
-      concurrency: {
-        mode: "serial" as const,
-        key: ({
-          environmentId,
-          input,
-        }: {
-          environmentId: string;
-          input: RequestThreadPlanningTicketReviewInput;
-        }) => JSON.stringify([environmentId, input.threadId, input.specId]),
-      },
-    }),
-    launchImplementationRun: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:implementation-run:launch",
-      execute: (input: LaunchThreadImplementationRunInput) => launchThreadImplementationRun(input),
-      scheduler,
-      concurrency: {
-        mode: "serial" as const,
-        key: ({
-          environmentId,
-          input,
-        }: {
-          environmentId: string;
-          input: LaunchThreadImplementationRunInput;
-        }) => JSON.stringify([environmentId, input.threadId, input.specId]),
-      },
-    }),
-    launchFastFeatureRun: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:fast-feature-run:launch",
-      execute: (input: LaunchThreadFastFeatureRunInput) => launchThreadFastFeatureRun(input),
-      scheduler,
-      concurrency: {
-        mode: "serial" as const,
-        key: ({
-          environmentId,
-          input,
-        }: {
-          environmentId: string;
-          input: LaunchThreadFastFeatureRunInput;
-        }) => JSON.stringify([environmentId, input.threadId, input.proposedPlanId]),
-      },
-    }),
-    retryImplementationChangeRequest: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:implementation-change-request:retry",
-      execute: (input: RetryThreadImplementationChangeRequestInput) =>
-        retryThreadImplementationChangeRequest(input),
-      scheduler,
-      concurrency: {
-        mode: "serial" as const,
-        key: ({
-          environmentId,
-          input,
-        }: {
-          environmentId: string;
-          input: RetryThreadImplementationChangeRequestInput;
-        }) => JSON.stringify([environmentId, input.threadId, input.runId]),
-      },
-    }),
-    retryImplementationRun: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:implementation-run:retry",
-      execute: (input: RetryThreadImplementationRunInput) => retryThreadImplementationRun(input),
-      scheduler,
-      concurrency: {
-        mode: "serial" as const,
-        key: ({
-          environmentId,
-          input,
-        }: {
-          environmentId: string;
-          input: RetryThreadImplementationRunInput;
-        }) => JSON.stringify([environmentId, input.threadId, input.runId]),
-      },
-    }),
-    rerunImplementationStage: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:implementation-run:rerun",
-      execute: (input: RerunThreadImplementationStageInput) =>
-        rerunThreadImplementationStage(input),
-      scheduler,
-      concurrency: {
-        mode: "serial" as const,
-        key: ({
-          environmentId,
-          input,
-        }: {
-          environmentId: string;
-          input: RerunThreadImplementationStageInput;
-        }) =>
-          JSON.stringify([
-            environmentId,
-            input.threadId,
-            input.runId,
-            input.target.kind === "ticket"
-              ? [input.target.ticketId, input.target.stage]
-              : input.target.stage,
-          ]),
-      },
-    }),
-    resetImplementationStage: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:implementation-run:reset",
-      execute: (input: ResetThreadImplementationStageInput) =>
-        resetThreadImplementationStage(input),
-      scheduler,
-      concurrency: {
-        mode: "serial" as const,
-        key: ({
-          environmentId,
-          input,
-        }: {
-          environmentId: string;
-          input: ResetThreadImplementationStageInput;
-        }) =>
-          JSON.stringify([
-            environmentId,
-            input.threadId,
-            input.runId,
-            input.target.kind === "ticket"
-              ? [input.target.ticketId, input.target.stage]
-              : input.target.stage,
-          ]),
-      },
-    }),
-    setImplementationSkip: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:implementation-run:skip",
-      execute: (input: SetThreadImplementationSkipInput) => setThreadImplementationSkip(input),
-      scheduler,
-      concurrency: {
-        mode: "serial" as const,
-        key: ({
-          environmentId,
-          input,
-        }: {
-          environmentId: string;
-          input: SetThreadImplementationSkipInput;
-        }) =>
-          JSON.stringify([
-            environmentId,
-            input.threadId,
-            input.runId,
-            input.target.kind === "ticket"
-              ? [input.target.ticketId, input.target.stage ?? "all"]
-              : input.target.stage,
-          ]),
-      },
-    }),
-    rerunAppReviewPhase: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:app-review-workflow:rerun",
-      execute: (input: RerunThreadAppReviewPhaseInput) => rerunThreadAppReviewPhase(input),
-      scheduler,
-      concurrency: {
-        mode: "serial" as const,
-        key: ({
-          environmentId,
-          input,
-        }: {
-          environmentId: string;
-          input: RerunThreadAppReviewPhaseInput;
-        }) => JSON.stringify([environmentId, input.threadId, input.runId, input.phase]),
-      },
-    }),
-    cancelImplementationRun: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:implementation-run:cancel",
-      execute: (input: CancelThreadImplementationRunInput) => cancelThreadImplementationRun(input),
-      scheduler,
-      concurrency: {
-        mode: "serial" as const,
-        key: ({
-          environmentId,
-          input,
-        }: {
-          environmentId: string;
-          input: CancelThreadImplementationRunInput;
-        }) => JSON.stringify([environmentId, input.threadId, input.runId]),
-      },
     }),
     interruptTurn: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:interrupt-turn",
@@ -601,6 +316,85 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
+    forkFromRun: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:fork-from-run",
+      execute: (input: ForkThreadFromRunInput) => forkThreadFromRun(input),
+      scheduler,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.sourceThreadId]),
+      },
+    }),
+    mergeBack: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:merge-back",
+      execute: (input: MergeThreadBackInput) => mergeThreadBack(input),
+      scheduler,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.sourceThreadId, input.targetThreadId]),
+      },
+    }),
+    resumeThreadQueue: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:resume-queue",
+      execute: (input: ThreadCommandInput) => resumeThreadQueue(input),
+      scheduler,
+      concurrency,
+    }),
+    reorderQueuedRun: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:reorder-queued-run",
+      execute: (input: ReorderQueuedRunInput) => reorderQueuedRun(input),
+      scheduler,
+      concurrency,
+    }),
+    promoteQueuedRun: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:promote-queued-run",
+      execute: (input: PromoteQueuedRunInput) => promoteQueuedRun(input),
+      scheduler,
+      concurrency,
+    }),
+    cancelQueuedRun: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:cancel-queued-run",
+      execute: (input: CancelQueuedRunInput) => cancelQueuedRun(input),
+      scheduler,
+      concurrency,
+    }),
+    retryWorkspacePreparation: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:retry-workspace-preparation",
+      execute: (input: RetryWorkspacePreparationInput) => retryWorkspacePreparation(input),
+      scheduler,
+      concurrency,
+    }),
+    editQueuedRun: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:edit-queued-run",
+      execute: (input: EditQueuedRunInput) => editQueuedRun(input),
+      scheduler,
+      concurrency,
+    }),
+    loadEarlierHistory: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:load-earlier-history",
+      execute: (input: LoadEarlierThreadHistoryInput) =>
+        Effect.gen(function* () {
+          const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+          const controller = yield* Effect.serviceOption(
+            ThreadHistoryController.ThreadHistoryController,
+          );
+          if (Option.isNone(controller)) {
+            return {
+              _tag: "noop",
+            } satisfies ThreadHistoryController.ThreadHistoryLoadEarlierResult;
+          }
+          return yield* controller.value.loadEarlier(
+            supervisor.target.environmentId,
+            input.threadId,
+          );
+        }),
+      scheduler,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.threadId]),
+      },
+    }),
     uploadFeedback: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:commands:thread:upload-feedback",
       tag: WS_METHODS.providerUploadFeedback,
@@ -614,14 +408,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     snapshotAtom: optimistic.snapshotAtom,
     settle: optimistic.wrap(commands.settle, (thread, _input, now, accepted) =>
       !accepted &&
-      (!canSnooze(thread, { now }) ||
-        thread.session?.status === "starting" ||
-        thread.session?.status === "running")
+      (thread.pendingRuntimeRequest !== null ||
+        ["preparing", "queued", "starting", "running", "waiting"].includes(thread.status))
         ? thread
         : {
             ...thread,
-            hasPendingApprovals: false,
-            hasPendingUserInput: false,
+            pendingRuntimeRequest: null,
             settledOverride: "settled",
             settledAt: thread.settledOverride === "settled" ? (thread.settledAt ?? now) : now,
             unsettledAt: null,
@@ -639,21 +431,30 @@ export function createThreadEnvironmentAtoms<R, E>(
       unsettledAt: thread.settledOverride === "active" ? (thread.unsettledAt ?? null) : now,
     })),
     snooze: optimistic.wrap(commands.snooze, (thread, input, now, accepted) =>
-      (!accepted && !canSnooze(thread, { now })) ||
-      !(Date.parse(input.snoozedUntil) > Date.parse(now))
+      (!accepted &&
+        (thread.pendingRuntimeRequest !== null ||
+          ["preparing", "queued", "starting"].includes(thread.status))) ||
+      !(Date.parse(input.snoozedUntil) > DateTime.toEpochMillis(now))
         ? thread
         : {
             ...thread,
-            hasPendingApprovals: false,
-            hasPendingUserInput: false,
-            snoozedUntil: input.snoozedUntil,
-            snoozedAt: thread.snoozedUntil === input.snoozedUntil ? (thread.snoozedAt ?? now) : now,
+            pendingRuntimeRequest: null,
+            snoozedUntil: DateTime.makeUnsafe(input.snoozedUntil),
+            snoozedAt:
+              thread.snoozedUntil != null &&
+              DateTime.formatIso(thread.snoozedUntil) === input.snoozedUntil
+                ? (thread.snoozedAt ?? now)
+                : now,
           },
     ),
     unsnooze: optimistic.wrap(commands.unsnooze, (thread) => ({
       ...thread,
       snoozedUntil: null,
       snoozedAt: null,
+    })),
+    setAutoSettle: optimistic.wrap(commands.setAutoSettle, (thread, input, now) => ({
+      ...thread,
+      autoSettleDisabledAt: input.enabled ? null : (thread.autoSettleDisabledAt ?? now),
     })),
     pin: optimistic.wrap(commands.pin, (thread, input, now) => ({
       ...thread,

@@ -1,3 +1,4 @@
+import * as Schema from "effect/Schema";
 /**
  * ProviderRuntimeIngestionService - Provider runtime ingestion service interface.
  *
@@ -6,6 +7,7 @@
  *
  * @module ProviderRuntimeIngestionService
  */
+import type { ProviderRuntimeEvent } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
@@ -13,6 +15,11 @@ import type * as Scope from "effect/Scope";
 /**
  * ProviderRuntimeIngestionShape - Service API for runtime ingestion lifecycle.
  */
+export class WorkflowRuntimeIngestionError extends Schema.TaggedError<WorkflowRuntimeIngestionError>()(
+  "WorkflowRuntimeIngestionError",
+  { cause: Schema.Defect() },
+) {}
+
 export interface ProviderRuntimeIngestionShape {
   /**
    * Start ingesting provider runtime events into orchestration commands.
@@ -30,6 +37,9 @@ export interface ProviderRuntimeIngestionShape {
    * Intended for test use to replace timing-sensitive sleeps.
    */
   readonly drain: Effect.Effect<void>;
+  readonly ingest?: (
+    event: ProviderRuntimeEvent,
+  ) => Effect.Effect<void, WorkflowRuntimeIngestionError>;
 }
 
 /**

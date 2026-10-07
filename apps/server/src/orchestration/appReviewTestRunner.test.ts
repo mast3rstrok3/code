@@ -1,3 +1,4 @@
+import { describe } from "vite-plus/test";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, expect } from "@effect/vitest";
 import { AppReviewWorkflowRunId, type AppReviewWorkflowCycle } from "@t3tools/contracts";
@@ -9,7 +10,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 import {
   layer as processRunnerLayer,
   ProcessRunner,
@@ -157,7 +158,11 @@ it.effect("retains failure output beyond the inline limit in private logs", () =
   ),
 );
 
-for (const scenario of ["timeout", "log-limit", "write-failure"] as const) {
+describe.each(
+  [...(["timeout", "log-limit", "write-failure"] as const)].map(
+    (scenarioCase) => [scenarioCase] as const,
+  ),
+)("scenario %s", (scenario) => {
   it.effect(`retains honest test diagnostics after ${scenario}`, () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -223,7 +228,7 @@ for (const scenario of ["timeout", "log-limit", "write-failure"] as const) {
       }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
-}
+});
 
 it("uses a repair's failed-test selector and never reopens a passed suite", () => {
   expect(
@@ -400,13 +405,17 @@ it("matches actual executions and ignores duplicate or unrelated results", () =>
   ).toEqual(execution.commands);
 });
 
-for (const [code, timedOut, status, timeoutMinutes] of [
-  [0, false, "passed", undefined],
-  [1, false, "failed", undefined],
-  [null, true, "failed", undefined],
-  [0, false, "passed", 120],
-  [null, true, "failed", 120],
-] as const) {
+describe.each(
+  [
+    ...([
+      [0, false, "passed", undefined],
+      [1, false, "failed", undefined],
+      [null, true, "failed", undefined],
+      [0, false, "passed", 120],
+      [null, true, "failed", 120],
+    ] as const),
+  ].map((scenarioCase) => [scenarioCase] as const),
+)("scenario %s", ([code, timedOut, status, timeoutMinutes]) => {
   it.effect(
     `records command exit ${code}, timeout ${timedOut} with a ${timeoutMinutes ?? 45} minute limit`,
     () =>
@@ -464,7 +473,7 @@ for (const [code, timedOut, status, timeoutMinutes] of [
         });
       }).pipe(Effect.provide(NodeServices.layer)),
   );
-}
+});
 
 it.effect("interrupts the process scope when execution is cancelled", () =>
   Effect.gen(function* () {

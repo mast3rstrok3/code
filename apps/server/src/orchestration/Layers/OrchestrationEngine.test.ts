@@ -31,6 +31,7 @@ import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/sql/SqlClient";
 import { TestClock } from "effect/testing";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -94,7 +95,7 @@ function makeOrchestrationLayer(
           )
         : RepositoryIdentityResolver.layer,
     ),
-    Layer.provide(persistence),
+    Layer.provideMerge(persistence),
     Layer.provideMerge(ServerConfigLayer),
     Layer.provideMerge(NodeServices.layer),
   );
@@ -114,7 +115,7 @@ async function createOrchestrationSystem(
     readModel: () => runtime.runPromise(snapshotQuery.getSnapshot()),
     readThread: (threadId: ThreadId) =>
       runtime.runPromise(snapshotQuery.getThreadDetailById(threadId)),
-    run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
+    run: <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) => runtime.runPromise(effect),
     dispose: () => runtime.dispose(),
   };
 }
@@ -135,6 +136,46 @@ const hasMetricSnapshot = (
   );
 
 describe("OrchestrationEngine", () => {
+  it("imports a native thread whose project was added after the workflow engine started", async () => {
+    const system = await createOrchestrationSystem();
+    try {
+      await system.run(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`
+            INSERT INTO projection_projects
+              (project_id, title, workspace_root, scripts_json, created_at, updated_at, owner_user_id)
+            VALUES ('native-project', 'Native project', '/workspace/native', '[]', ${now()}, ${now()}, 'nils')
+          `;
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("native-thread-import"),
+          threadId: ThreadId.make("native-thread"),
+          projectId: ProjectId.make("native-project"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+          title: "Native thread",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6.1-sol" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: now(),
+          historyImport: true,
+        }),
+      );
+      const snapshot = await system.readModel();
+      expect(snapshot.threads).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "native-thread", projectId: "native-project" }),
+        ]),
+      );
+    } finally {
+      await system.dispose();
+    }
+  });
   it.each(["running", "stopped"] as const)(
     "sends async answers with a %s session and rejects old duplicate replies",
     async (status) => {

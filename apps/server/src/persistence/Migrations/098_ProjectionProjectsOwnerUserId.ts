@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 // Projects created before ownership existed belong to the default workspace user,
 // matching the decoding default on `ProjectCreatedPayload.ownerUserId`.

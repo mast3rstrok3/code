@@ -1,3 +1,4 @@
+import { describe } from "vite-plus/test";
 // @effect-diagnostics nodeBuiltinImport:off - bundle worktree tests build real git checkouts on disk.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
@@ -11,7 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 
 import * as ServerConfig from "../config.ts";
@@ -993,7 +994,9 @@ it.effect("derives the variant from the compose file name for listed stacks", ()
   }).pipe(Effect.provide(layer));
 });
 
-for (const platform of ["android", "windows"] as const) {
+describe.each(
+  [...(["android", "windows"] as const)].map((scenarioCase) => [scenarioCase] as const),
+)("scenario %s", (platform) => {
   it.effect(`authenticates ${platform} lifecycle calls and preserves queue and lease data`, () => {
     const requests: Array<HttpClientRequest.HttpClientRequest> = [];
     const lease = { ...deviceLeaseJson, platform };
@@ -1067,7 +1070,7 @@ for (const platform of ["android", "windows"] as const) {
       ]);
     }).pipe(Effect.provide(layer));
   });
-}
+});
 
 it.effect("preserves lease conflicts and does not retry a device mutation", () => {
   const requests: Array<HttpClientRequest.HttpClientRequest> = [];

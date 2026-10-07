@@ -1,5 +1,5 @@
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -19,7 +19,7 @@ const makeOrchestrationCommandReceiptRepository = Effect.gen(function* () {
     Request: OrchestrationCommandReceipt,
     execute: (receipt) =>
       sql`
-        INSERT INTO orchestration_command_receipts (
+        INSERT INTO workflow_command_receipts (
           command_id,
           aggregate_kind,
           aggregate_id,
@@ -65,7 +65,7 @@ const makeOrchestrationCommandReceiptRepository = Effect.gen(function* () {
           status,
           error,
           result_json AS "resultJson"
-        FROM orchestration_command_receipts
+        FROM workflow_command_receipts
         WHERE command_id = ${commandId}
       `,
   });

@@ -16,7 +16,7 @@ import {
 } from "./filePreview.ts";
 
 describe("workspace file previews", () => {
-  it.each(["report.html", "report.HTM", "document.pdf?download=1"])(
+  it.each(["report.html", "report.HTM", "document#draft.pdf", "reports?old/document.pdf"])(
     "recognizes browser preview path %s",
     (path) => {
       expect(isWorkspaceBrowserPreviewPath(path)).toBe(true);
@@ -28,7 +28,9 @@ describe("workspace file previews", () => {
     "icon.png",
     "photo.JPEG",
     "animation.gif",
-    "vector.svg#mark",
+    "vector#mark.svg",
+    "photo?edited.JPEG",
+    "images#archive/icon.png",
     "texture.webp",
     "image.avif",
   ])("recognizes image preview path %s", (path) => {
@@ -42,19 +44,26 @@ describe("workspace file previews", () => {
     expect(isWorkspacePreviewEntryPath(path)).toBe(true);
   });
 
-  it.each(["README.md", "src/index.ts", "image.png.ts", "png"])(
-    "rejects non-preview path %s",
-    (path) => {
-      expect(isWorkspacePreviewEntryPath(path)).toBe(false);
-    },
-  );
+  it.each([
+    "README.md",
+    "src/index.ts",
+    "image.png.ts",
+    "png",
+    "image.png#notes.txt",
+    "image.svg?notes.txt",
+    "document.pdf?download=1",
+    "report.html#notes.txt",
+    "image%2Epng",
+  ])("rejects non-preview path %s", (path) => {
+    expect(isWorkspacePreviewEntryPath(path)).toBe(false);
+  });
 
   it.each([
     ["recording.webm", "video/webm"],
-    ["clip.MP4?download=1", "video/mp4"],
+    ["clip.MP4", "video/mp4"],
     ["icon.png", "image/png"],
     ["photo.jpeg", "image/jpeg"],
-    ["vector.svg#mark", "image/svg+xml"],
+    ["vector.svg", "image/svg+xml"],
     ["animation.gif", "image/gif"],
     ["texture.webp", "image/webp"],
     ["image.avif", "image/avif"],

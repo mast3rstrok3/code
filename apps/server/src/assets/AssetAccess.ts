@@ -1,8 +1,15 @@
-import type { AssetResource, AppReviewId } from "@t3tools/contracts";
 import {
-  AssetAttachmentNotFoundError,
+  AppReviewId,
   AssetAppReviewEvidenceNotFoundError,
   AssetAppReviewEvidenceResolutionError,
+  APP_REVIEW_RECORDING_EVIDENCE_ID,
+  APP_REVIEW_TEST_RECORDING_SUFFIX,
+} from "@t3tools/contracts";
+import { appReviewTestRecordingsDir } from "../orchestration/appReviewTestRunner.ts";
+import { ProjectionThreadAppReviewRepository } from "../persistence/Services/ProjectionThreadAppReviews.ts";
+import type { AssetResource } from "@t3tools/contracts";
+import {
+  AssetAttachmentNotFoundError,
   AssetGitHubMediaUrlValidationError,
   AssetPreviewTypeValidationError,
   AssetProjectFaviconInspectionError,
@@ -15,19 +22,17 @@ import {
   AssetWorkspacePathValidationError,
   AssetWorkspaceResolutionError,
   AssetWorkspaceRootNormalizationError,
-  APP_REVIEW_RECORDING_EVIDENCE_ID,
-  APP_REVIEW_TEST_RECORDING_SUFFIX,
+  ThreadId,
   ToolActivityNativeAppReference,
+  TurnItemId,
 } from "@t3tools/contracts";
 import {
   audioMimeTypeFromExtension,
   hostPreviewMimeTypeFromExtension,
   isWorkspaceImagePreviewPath,
   isWorkspacePreviewEntryPath,
-  isWorkspaceVideoPreviewPath,
   WORKSPACE_BROWSER_PREVIEW_EXTENSIONS,
   WORKSPACE_IMAGE_PREVIEW_EXTENSIONS,
-  WORKSPACE_VIDEO_PREVIEW_EXTENSIONS,
 } from "@t3tools/shared/filePreview";
 import {
   IMAGE_DIMENSIONS_HEADER_BYTES,
@@ -36,10 +41,11 @@ import {
 } from "@t3tools/shared/imageDimensions";
 import { githubMediaFetchUrl, githubMediaFileName } from "@t3tools/shared/githubMedia";
 import { PROJECT_FAVICON_FALLBACK_MARKER } from "@t3tools/shared/projectFavicon";
+import { MAX_TOOL_OUTPUT_IMAGE_BASE64_LENGTH, toolOutputImages } from "@t3tools/shared/toolOutput";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -55,8 +61,8 @@ import {
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { parseAttachmentFileExtension, resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
-import { appReviewTestRecordingsDir } from "../orchestration/appReviewTestRunner.ts";
-import { ProjectionThreadAppReviewRepository } from "../persistence/Services/ProjectionThreadAppReviews.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import { expandHomePathWith } from "../pathExpansion.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
@@ -81,7 +87,6 @@ const inlinePreviewMimeTypeForExtension = (extension: string) =>
 const PREVIEW_ASSET_EXTENSIONS = new Set([
   ...WORKSPACE_BROWSER_PREVIEW_EXTENSIONS,
   ...WORKSPACE_IMAGE_PREVIEW_EXTENSIONS,
-  ...WORKSPACE_VIDEO_PREVIEW_EXTENSIONS,
   ".css",
   ".js",
   ".mjs",
@@ -136,6 +141,12 @@ const AssetClaimsSchema = Schema.Union([
   }),
   Schema.Struct({
     version: Schema.Literal(1),
+    kind: Schema.Literal("project-favicon-external"),
+    filePath: Schema.String,
+    expiresAt: Schema.Number,
+  }),
+  Schema.Struct({
+    version: Schema.Literal(1),
     kind: Schema.Literal("app-review-evidence"),
     reviewId: Schema.String,
     evidenceId: Schema.String,
@@ -150,14 +161,16 @@ const AssetClaimsSchema = Schema.Union([
   }),
   Schema.Struct({
     version: Schema.Literal(1),
-    kind: Schema.Literal("project-favicon-external"),
-    filePath: Schema.String,
+    kind: Schema.Literal("native-app-icon"),
+    app: ToolActivityNativeAppReference,
     expiresAt: Schema.Number,
   }),
   Schema.Struct({
     version: Schema.Literal(1),
-    kind: Schema.Literal("native-app-icon"),
-    app: ToolActivityNativeAppReference,
+    kind: Schema.Literal("tool-output-image"),
+    threadId: ThreadId,
+    itemId: TurnItemId,
+    index: Schema.Number,
     expiresAt: Schema.Number,
   }),
   Schema.Struct({
@@ -183,6 +196,11 @@ export type ResolvedAsset =
       readonly fileName?: string;
       readonly mimeType?: string;
       readonly file?: OpenMediaFile;
+    }
+  | {
+      readonly kind: "bytes";
+      readonly bytes: Uint8Array;
+      readonly mimeType: string;
     }
   | {
       readonly kind: "github-media";
@@ -219,6 +237,24 @@ const optionOnNotFound = <A, R>(
         error.reason._tag === "NotFound" ? Effect.succeed(Option.none<A>()) : Effect.fail(error),
     }),
   );
+
+/**
+ * Decodes one image a tool returned inline; null when the stored item has no
+ * such image, or it is larger than a provider turn accepts.
+ */
+const readToolOutputImage = Effect.fn("AssetAccess.readToolOutputImage")(function* (input: {
+  readonly threadId: ThreadId;
+  readonly itemId: TurnItemId;
+  readonly index: number;
+}) {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const item = yield* orchestrator.getTurnItem(input);
+  const image =
+    item?.type === "dynamic_tool" ? toolOutputImages(item.output)[input.index] : undefined;
+  return image?.data === undefined || image.data.length > MAX_TOOL_OUTPUT_IMAGE_BASE64_LENGTH
+    ? null
+    : { mimeType: image.mimeType, bytes: Buffer.from(image.data, "base64") };
+});
 
 const resolveCanonicalFile = Effect.fn("AssetAccess.resolveCanonicalFile")(function* (
   filePath: string,
@@ -272,72 +308,6 @@ const resolveCanonicalWorkspaceFileForRequest = (input: {
     ),
     Effect.orElseSucceed(() => null),
   );
-
-/**
- * Resolve an App Review evidence file server-side from the review projection.
- * The stored evidence path is authoritative — clients never supply paths — and
- * must sit under `stateDir/preview-artifacts`.
- */
-const resolveAppReviewEvidenceFile = Effect.fn("AssetAccess.resolveAppReviewEvidenceFile")(
-  function* (input: { readonly reviewId: string; readonly evidenceId: string }) {
-    const repository = yield* ProjectionThreadAppReviewRepository;
-    const config = yield* ServerConfig.ServerConfig;
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-
-    const review = yield* repository.getById({ reviewId: input.reviewId as AppReviewId });
-    if (Option.isNone(review)) return null;
-
-    const evidence = review.value.evidence;
-    const evidencePath =
-      input.evidenceId === APP_REVIEW_RECORDING_EVIDENCE_ID
-        ? evidence.recording.status === "saved"
-          ? evidence.recording.path
-          : null
-        : (evidence.screenshots.find((shot) => shot.id === input.evidenceId)?.path ?? null);
-    if (!evidencePath) return null;
-
-    const [artifactsRoot, canonicalFile] = yield* Effect.all([
-      optionOnNotFound(fileSystem.realPath(path.join(config.stateDir, "preview-artifacts"))),
-      optionOnNotFound(fileSystem.realPath(evidencePath)),
-    ]);
-    if (Option.isNone(artifactsRoot) || Option.isNone(canonicalFile)) return null;
-
-    const relative = path.relative(artifactsRoot.value, canonicalFile.value);
-    if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return null;
-
-    const info = yield* optionOnNotFound(fileSystem.stat(canonicalFile.value));
-    return Option.isSome(info) && info.value.type === "File" ? canonicalFile.value : null;
-  },
-);
-
-/**
- * Resolve an E2E test recording. The test runner stores every recording as
- * `<runId>/<recordingId>.rrweb.jsonl`, so the ids locate the file and the
- * containment check rejects an id that tries to leave the run's directory.
- */
-const resolveAppReviewTestRecordingFile = Effect.fn(
-  "AssetAccess.resolveAppReviewTestRecordingFile",
-)(function* (input: { readonly runId: string; readonly recordingId: string }) {
-  const config = yield* ServerConfig.ServerConfig;
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-
-  const runDir = appReviewTestRecordingsDir(path, config.stateDir, input.runId);
-  const [canonicalRunDir, canonicalFile] = yield* Effect.all([
-    optionOnNotFound(fileSystem.realPath(runDir)),
-    optionOnNotFound(
-      fileSystem.realPath(
-        path.join(runDir, `${input.recordingId}${APP_REVIEW_TEST_RECORDING_SUFFIX}`),
-      ),
-    ),
-  ]);
-  if (Option.isNone(canonicalRunDir) || Option.isNone(canonicalFile)) return null;
-  if (path.dirname(canonicalFile.value) !== canonicalRunDir.value) return null;
-
-  const info = yield* optionOnNotFound(fileSystem.stat(canonicalFile.value));
-  return Option.isSome(info) && info.value.type === "File" ? canonicalFile.value : null;
-});
 
 /**
  * Reads pixel dimensions from an image's header so clients can reserve the
@@ -483,33 +453,101 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
       ? yield* readImageDimensionsFromHeader(canonicalFile)
       : null;
     return {
-      claims:
-        isWorkspaceImagePreviewPath(resolved.relativePath) ||
-        isWorkspaceVideoPreviewPath(resolved.relativePath)
-          ? {
-              version: 1 as const,
-              kind: "workspace-file-exact" as const,
-              workspaceRoot: canonicalWorkspaceRoot,
-              relativePath: resolved.relativePath,
-              expiresAt: input.expiresAt,
-            }
-          : {
-              version: 1 as const,
-              kind: "workspace-file" as const,
-              workspaceRoot: canonicalWorkspaceRoot,
-              baseRelativePath: path.dirname(resolved.relativePath),
-              expiresAt: input.expiresAt,
-            },
+      claims: isWorkspaceImagePreviewPath(resolved.relativePath)
+        ? {
+            version: 1 as const,
+            kind: "workspace-file-exact" as const,
+            workspaceRoot: canonicalWorkspaceRoot,
+            relativePath: resolved.relativePath,
+            expiresAt: input.expiresAt,
+          }
+        : {
+            version: 1 as const,
+            kind: "workspace-file" as const,
+            workspaceRoot: canonicalWorkspaceRoot,
+            baseRelativePath: path.dirname(resolved.relativePath),
+            expiresAt: input.expiresAt,
+          },
       fileName: path.basename(resolved.relativePath),
       imageDimensions,
     };
   },
 );
 
+/**
+ * Resolve an App Review evidence file server-side from the review projection.
+ * The stored evidence path is authoritative and
+ * must sit under `stateDir/preview-artifacts`.
+ */
+const resolveAppReviewEvidenceFile = Effect.fn("AssetAccess.resolveAppReviewEvidenceFile")(
+  function* (input: { readonly reviewId: string; readonly evidenceId: string }) {
+    const repositoryOption = yield* Effect.serviceOption(ProjectionThreadAppReviewRepository);
+    if (Option.isNone(repositoryOption)) return null;
+    const repository = repositoryOption.value;
+    const config = yield* ServerConfig.ServerConfig;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+
+    const review = yield* repository.getById({ reviewId: input.reviewId as AppReviewId });
+    if (Option.isNone(review)) return null;
+
+    const evidence = review.value.evidence;
+    const evidencePath =
+      input.evidenceId === APP_REVIEW_RECORDING_EVIDENCE_ID
+        ? evidence.recording.status === "saved"
+          ? evidence.recording.path
+          : null
+        : (evidence.screenshots.find((shot) => shot.id === input.evidenceId)?.path ?? null);
+    if (!evidencePath) return null;
+
+    const [artifactsRoot, canonicalFile] = yield* Effect.all([
+      optionOnNotFound(fileSystem.realPath(path.join(config.stateDir, "preview-artifacts"))),
+      optionOnNotFound(fileSystem.realPath(evidencePath)),
+    ]);
+    if (Option.isNone(artifactsRoot) || Option.isNone(canonicalFile)) return null;
+
+    const relative = path.relative(artifactsRoot.value, canonicalFile.value);
+    if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return null;
+
+    const info = yield* optionOnNotFound(fileSystem.stat(canonicalFile.value));
+    return Option.isSome(info) && info.value.type === "File" ? canonicalFile.value : null;
+  },
+);
+
+/**
+ * Resolve an E2E test recording. The test runner stores every recording as
+ * `<runId>/<recordingId>.rrweb.jsonl`, so the ids locate the file and the
+ * containment check rejects an id that tries to leave the run's directory.
+ */
+const resolveAppReviewTestRecordingFile = Effect.fn(
+  "AssetAccess.resolveAppReviewTestRecordingFile",
+)(function* (input: { readonly runId: string; readonly recordingId: string }) {
+  const config = yield* ServerConfig.ServerConfig;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+
+  const runDir = appReviewTestRecordingsDir(path, config.stateDir, input.runId);
+  const [canonicalRunDir, canonicalFile] = yield* Effect.all([
+    optionOnNotFound(fileSystem.realPath(runDir)),
+    optionOnNotFound(
+      fileSystem.realPath(
+        path.join(runDir, `${input.recordingId}${APP_REVIEW_TEST_RECORDING_SUFFIX}`),
+      ),
+    ),
+  ]);
+  if (Option.isNone(canonicalRunDir) || Option.isNone(canonicalFile)) return null;
+  if (path.dirname(canonicalFile.value) !== canonicalRunDir.value) return null;
+
+  const info = yield* optionOnNotFound(fileSystem.stat(canonicalFile.value));
+  return Option.isSome(info) && info.value.type === "File" ? canonicalFile.value : null;
+});
+
 export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (input: {
   readonly resource: AssetResource;
   readonly workspaceRoot?: string;
   readonly projectFaviconPath?: string;
+  /** The project's clone has not landed, so its icon is reported missing without a lookup. */
+  readonly projectCheckoutPending?: boolean;
 }) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -522,7 +560,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
 
   switch (input.resource._tag) {
     case "media-file": {
-      let requestedPath = input.resource.path;
+      let requestedPath = expandHomePathWith(input.resource.path, path);
       if (!path.isAbsolute(requestedPath)) {
         if (!input.workspaceRoot) {
           return yield* new AssetWorkspaceContextNotFoundError({ resource: input.resource });
@@ -664,17 +702,20 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         ),
       );
       const faviconResolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
-      const faviconPath = yield* faviconResolver
-        .resolvePath(workspaceRoot, input.projectFaviconPath ?? undefined)
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new AssetProjectFaviconResolutionError({
-                resource: input.resource,
-                cause,
-              }),
-          ),
-        );
+      // A lookup in a half-cloned checkout would cache a miss that outlives the clone.
+      const faviconPath = input.projectCheckoutPending
+        ? null
+        : yield* faviconResolver
+            .resolvePath(workspaceRoot, input.projectFaviconPath ?? undefined)
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new AssetProjectFaviconResolutionError({
+                    resource: input.resource,
+                    cause,
+                  }),
+              ),
+            );
       const isExternalOverride =
         faviconPath !== null &&
         input.projectFaviconPath !== undefined &&
@@ -742,7 +783,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
           ),
         );
         const revision = yield* crypto.digest("SHA-256", faviconBytes).pipe(
-          Effect.map(Encoding.encodeHex),
+          Effect.map(Hex.encode),
           Effect.mapError(
             (cause) =>
               new AssetProjectFaviconInspectionError({
@@ -755,6 +796,28 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       } else {
         fileName = PROJECT_FAVICON_FALLBACK_MARKER;
       }
+      break;
+    }
+    case "tool-output-image": {
+      const image = yield* readToolOutputImage(input.resource).pipe(
+        Effect.mapError(
+          (cause) => new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause }),
+        ),
+      );
+      if (image === null) {
+        return yield* new AssetWorkspaceAssetNotFoundError({ resource: input.resource });
+      }
+      claims = {
+        version: 1,
+        kind: "tool-output-image",
+        threadId: input.resource.threadId,
+        itemId: input.resource.itemId,
+        index: input.resource.index,
+        expiresAt,
+      };
+      // The allowed types are all `image/<extension>`.
+      fileName = `image-${input.resource.index + 1}.${image.mimeType.slice("image/".length)}`;
+      imageDimensions = readImageDimensions(image.bytes);
       break;
     }
     case "app-review-evidence": {
@@ -965,6 +1028,20 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
       cwd: claims.cwd,
       expiresAt: claims.expiresAt,
     } satisfies ResolvedAsset;
+  }
+
+  if (claims.kind === "tool-output-image") {
+    const image = yield* readToolOutputImage(claims).pipe(
+      Effect.tapError((cause) =>
+        Effect.logError("Failed to read tool output image.", {
+          threadId: claims.threadId,
+          itemId: claims.itemId,
+          cause,
+        }),
+      ),
+      Effect.orElseSucceed(() => null),
+    );
+    return image ? ({ kind: "bytes", ...image } satisfies ResolvedAsset) : null;
   }
 
   if (claims.kind === "native-app-icon") {

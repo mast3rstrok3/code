@@ -13,7 +13,7 @@ import type * as Effect from "effect/Effect";
 import type {
   ProviderSessionDirectoryPersistenceError,
   ProviderValidationError,
-} from "../Errors.ts";
+} from "../legacyErrors.ts";
 
 export interface ProviderRuntimeBinding {
   readonly threadId: ThreadId;

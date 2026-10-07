@@ -2,15 +2,15 @@ import type { EnvironmentConnectionPhase } from "../connection/presentation.ts";
 import type {
   CommandId,
   EnvironmentId,
-  FilesystemBrowseEntry,
-  FilesystemBrowseResult,
-  OrchestrationCommand,
+  ProjectMutation,
   ProjectId,
+  WorkspaceUserId,
+  ServerConfig,
   SourceControlDiscoveryResult,
   SourceControlProviderKind,
   SourceControlRepositoryInfo,
-  WorkspaceUserId,
 } from "@t3tools/contracts";
+import { newProjectFolderName } from "@t3tools/shared/path";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
@@ -19,8 +19,6 @@ import {
   appendBrowsePathSegment,
   ensureBrowseDirectoryPath,
   findProjectByPath,
-  getBrowseLeafPathSegment,
-  hasTrailingPathSeparator,
   inferProjectTitleFromPath,
   isExplicitRelativeProjectPath,
   isUnsupportedWindowsProjectPath,
@@ -38,6 +36,19 @@ export function canCreateProjectInEnvironment(
   connectionPhase: EnvironmentConnectionPhase | null | undefined,
 ): boolean {
   return connectionPhase === "connected";
+}
+
+/**
+ * The Scratch folder an environment offers threads without a project right
+ * now, or null while it is not connected or has none.
+ */
+export function availableScratchWorkspaceRoot(
+  connectionPhase: EnvironmentConnectionPhase | null | undefined,
+  serverConfig: Pick<ServerConfig, "scratchWorkspaceRoot"> | null | undefined,
+): string | null {
+  return canCreateProjectInEnvironment(connectionPhase)
+    ? (serverConfig?.scratchWorkspaceRoot ?? null)
+    : null;
 }
 
 export type AddProjectRemoteSourceReadiness = Record<
@@ -208,60 +219,6 @@ export function getAddProjectInitialQuery(baseDirectory: string | null | undefin
   return trimmed.length === 0 ? "~/" : ensureBrowseDirectoryPath(trimmed);
 }
 
-export function resolveSubmittedAddProjectPath(input: {
-  readonly rawPath: string;
-  readonly browseResult?: Pick<FilesystemBrowseResult, "parentPath"> | null;
-  readonly missingPathParentResult?: Pick<FilesystemBrowseResult, "parentPath"> | null;
-  readonly exactBrowseEntry?: Pick<FilesystemBrowseEntry, "fullPath"> | null;
-}): string {
-  const rawPath = input.rawPath.trim();
-  if (rawPath.length === 0) {
-    return "";
-  }
-
-  if (hasTrailingPathSeparator(rawPath)) {
-    if (input.browseResult?.parentPath) {
-      return input.browseResult.parentPath;
-    }
-
-    const missingParentPath = input.missingPathParentResult?.parentPath;
-    const leafPathSegment = getBrowseLeafPathSegment(trimTrailingBrowsePathSeparators(rawPath));
-    if (missingParentPath && leafPathSegment.length > 0 && leafPathSegment !== "~") {
-      return resolveProjectPathForDispatch(
-        `${ensureBrowseDirectoryPath(missingParentPath)}${leafPathSegment}`,
-        null,
-      );
-    }
-
-    return rawPath;
-  }
-
-  if (input.exactBrowseEntry) {
-    return input.exactBrowseEntry.fullPath;
-  }
-
-  const browseParentPath = input.browseResult?.parentPath;
-  const leafPathSegment = getBrowseLeafPathSegment(rawPath).trim();
-  if (browseParentPath && leafPathSegment.length > 0) {
-    return resolveProjectPathForDispatch(
-      `${ensureBrowseDirectoryPath(browseParentPath)}${leafPathSegment}`,
-      null,
-    );
-  }
-
-  return rawPath;
-}
-
-function trimTrailingBrowsePathSeparators(value: string): string {
-  if (value === "/" || value === "\\" || /^~[/\\]?$/.test(value)) {
-    return value;
-  }
-  if (/^[a-zA-Z]:[/\\]?$/.test(value)) {
-    return value;
-  }
-  return value.replace(/[/\\]+$/g, "");
-}
-
 /**
  * Folder name `git clone` would pick, from either a looked-up repository or a
  * pasted clone URL. Providers report `owner/repo`, Azure DevOps reports
@@ -307,6 +264,36 @@ export function getCloneDestinationPath(
     return directoryPath;
   }
   return `${ensureBrowseDirectoryPath(directoryPath)}${name}`;
+}
+
+/**
+ * Where `projects.createNew` will put a project named `name`. The server adds
+ * `-2`, `-3`, ... when that folder is taken, so this is a preview.
+ */
+export function getNewProjectPathPreview(newProjectsRoot: string, name: string): string {
+  return getCloneDestinationPath(newProjectsRoot, newProjectFolderName(name));
+}
+
+/**
+ * The GitHub account a new project would be published under, or null when
+ * GitHub is not ready on that environment. A ready GitHub with an unknown
+ * account still publishes; `gh` picks the signed-in user.
+ */
+export function getNewProjectGitHubTarget(
+  discovery: SourceControlDiscoveryResult | null,
+): { readonly account: string | null } | null {
+  if (!buildAddProjectRemoteSourceReadiness(discovery).github.ready) return null;
+  const github = discovery?.sourceControlProviders.find((provider) => provider.kind === "github");
+  return { account: github ? Option.getOrNull(github.auth.account) : null };
+}
+
+/** `owner/folder` for publishing a new project, or just the folder for `gh` to place. */
+export function getNewProjectGitHubRepository(
+  target: { readonly account: string | null },
+  workspaceRoot: string,
+): string {
+  const folderName = workspaceRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? "";
+  return target.account ? `${target.account}/${folderName}` : folderName;
 }
 
 /**
@@ -367,19 +354,17 @@ export function findExistingAddProject(input: {
 export function buildProjectCreateCommand(input: {
   readonly commandId: CommandId;
   readonly projectId: ProjectId;
-  readonly ownerUserId: WorkspaceUserId;
   readonly workspaceRoot: string;
-  readonly createdAt: string;
-}): Extract<OrchestrationCommand, { type: "project.create" }> {
+  readonly ownerUserId?: WorkspaceUserId;
+}): Extract<ProjectMutation, { type: "project.create" }> {
   return {
     type: "project.create",
     commandId: input.commandId,
     projectId: input.projectId,
-    ownerUserId: input.ownerUserId,
+    ...(input.ownerUserId === undefined ? {} : { ownerUserId: input.ownerUserId }),
     title: inferProjectTitleFromPath(input.workspaceRoot),
     workspaceRoot: input.workspaceRoot,
     createWorkspaceRootIfMissing: true,
     defaultModelSelection: null,
-    createdAt: input.createdAt,
   };
 }

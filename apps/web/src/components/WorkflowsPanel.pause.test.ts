@@ -1,5 +1,5 @@
 import type { AppReviewWorkflowRun } from "@t3tools/contracts";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import type { EnvironmentWorkflowThreadShell } from "@t3tools/client-runtime/state/models";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -16,8 +16,8 @@ const thread = (
   id: string,
   parentThreadId: string | null,
   workflowPausedAt: string | null = null,
-): EnvironmentThreadShell =>
-  ({ id, parentThreadId, workflowPausedAt }) as unknown as EnvironmentThreadShell;
+): EnvironmentWorkflowThreadShell =>
+  ({ id, parentThreadId, workflowPausedAt }) as unknown as EnvironmentWorkflowThreadShell;
 
 describe("workflowPauseOf", () => {
   const all = [
@@ -74,7 +74,7 @@ describe("runningThreadIdsOf", () => {
       parentThreadId,
       workflowPausedAt,
       session: { status: "running" },
-    }) as unknown as EnvironmentThreadShell;
+    }) as unknown as EnvironmentWorkflowThreadShell;
 
   it("ignores a thread under a pause, so a stopped scope never reads as busy", () => {
     // The session row can outlive the agent: the provider's last write is lost
@@ -116,7 +116,7 @@ describe("workflow step restart", () => {
     const runningPlanner = {
       ...thread("planner", "controller"),
       session: { status: "running" },
-    } as unknown as EnvironmentThreadShell;
+    } as unknown as EnvironmentWorkflowThreadShell;
 
     expect(appReviewRunActiveThreadIsBusy(appReviewRun, [runningPlanner])).toBe(true);
   });

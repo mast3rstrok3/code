@@ -19,7 +19,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { TestClock } from "effect/testing";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 import { ProcessRunner, type ProcessRunInput } from "../../processRunner.ts";
 import { layerTest as serverConfigLayerTest } from "../../config.ts";
 import { describe, expect, it } from "vite-plus/test";
@@ -4016,71 +4016,74 @@ for (const mode of ["e2e", "fixing", "fixing-existing", "validation"] as const) 
   }
 }
 
-for (const ticketId of [undefined, "TICKET-1"]) {
-  it(`recovers prerequisites only for the current ${ticketId ?? "final"} review owner`, () => {
-    const base = failedImplementationReview(ticketId);
-    const failed: AppReviewWorkflowRun = {
-      ...base,
-      status: "running",
-      activePhase: "fixing",
-      failure: { ...base.failure!, reason: "review-blocked", phase: "fixing" },
-      prerequisiteCheck: {
-        phase: "fixing",
-        cycleNumber: 1,
-        cwd: "/assigned/worktree",
-        previewUrl: base.previewTargets[0]!,
-        command: "node check.mjs",
-        nextCheckAt: now,
-      },
-    };
-    const parent = {
-      id: "implementation-run-1",
-      status: "needs-human-attention",
-      automationHalt: {
-        stage: "app-review",
-        category: "review-blocked",
-        ticketId,
-        detail: "Waiting for DB",
-        haltedAt: now,
-      },
-      appReviewWorkflowRunIds: [failed.id],
-      ticketStates: [
-        { ticketId: "TICKET-1", status: "app-reviewing", appReviewWorkflowRunId: failed.id },
-      ],
-    } as unknown as OrchestrationImplementationRun;
-    expect(appReviewPrerequisiteRecoveryIsCurrent(failed, [parent])).toBe(true);
-    expect(appReviewPrerequisiteRecoveryIsCurrent(failed, [])).toBe(false);
-    expect(appReviewPrerequisiteRecoveryIsCurrent({ ...failed, status: "passed" }, [parent])).toBe(
-      false,
-    );
-    expect(
-      appReviewPrerequisiteRecoveryIsCurrent(
-        { ...failed, prerequisiteCheck: { ...failed.prerequisiteCheck!, cycleNumber: 2 } },
-        [parent],
-      ),
-    ).toBe(false);
-    expect(
-      appReviewPrerequisiteRecoveryIsCurrent(failed, [{ ...parent, status: "canceled" }]),
-    ).toBe(false);
-    expect(
-      appReviewPrerequisiteRecoveryIsCurrent(failed, [
-        { ...parent, automationHalt: { ...parent.automationHalt!, stage: "code-review" } },
-      ]),
-    ).toBe(false);
-    expect(
-      appReviewPrerequisiteRecoveryIsCurrent(failed, [
-        {
-          ...parent,
-          appReviewWorkflowRunIds: [AppReviewWorkflowRunId.make("replacement")],
-          ticketStates: parent.ticketStates.map((state) => ({
-            ...state,
-            appReviewWorkflowRunId: AppReviewWorkflowRunId.make("replacement"),
-          })),
+describe.each([undefined, "TICKET-1"].map((scenarioCase) => [scenarioCase] as const))(
+  "scenario %s",
+  (ticketId) => {
+    it(`recovers prerequisites only for the current ${ticketId ?? "final"} review owner`, () => {
+      const base = failedImplementationReview(ticketId);
+      const failed: AppReviewWorkflowRun = {
+        ...base,
+        status: "running",
+        activePhase: "fixing",
+        failure: { ...base.failure!, reason: "review-blocked", phase: "fixing" },
+        prerequisiteCheck: {
+          phase: "fixing",
+          cycleNumber: 1,
+          cwd: "/assigned/worktree",
+          previewUrl: base.previewTargets[0]!,
+          command: "node check.mjs",
+          nextCheckAt: now,
         },
-      ]),
-    ).toBe(false);
-  });
-}
+      };
+      const parent = {
+        id: "implementation-run-1",
+        status: "needs-human-attention",
+        automationHalt: {
+          stage: "app-review",
+          category: "review-blocked",
+          ticketId,
+          detail: "Waiting for DB",
+          haltedAt: now,
+        },
+        appReviewWorkflowRunIds: [failed.id],
+        ticketStates: [
+          { ticketId: "TICKET-1", status: "app-reviewing", appReviewWorkflowRunId: failed.id },
+        ],
+      } as unknown as OrchestrationImplementationRun;
+      expect(appReviewPrerequisiteRecoveryIsCurrent(failed, [parent])).toBe(true);
+      expect(appReviewPrerequisiteRecoveryIsCurrent(failed, [])).toBe(false);
+      expect(
+        appReviewPrerequisiteRecoveryIsCurrent({ ...failed, status: "passed" }, [parent]),
+      ).toBe(false);
+      expect(
+        appReviewPrerequisiteRecoveryIsCurrent(
+          { ...failed, prerequisiteCheck: { ...failed.prerequisiteCheck!, cycleNumber: 2 } },
+          [parent],
+        ),
+      ).toBe(false);
+      expect(
+        appReviewPrerequisiteRecoveryIsCurrent(failed, [{ ...parent, status: "canceled" }]),
+      ).toBe(false);
+      expect(
+        appReviewPrerequisiteRecoveryIsCurrent(failed, [
+          { ...parent, automationHalt: { ...parent.automationHalt!, stage: "code-review" } },
+        ]),
+      ).toBe(false);
+      expect(
+        appReviewPrerequisiteRecoveryIsCurrent(failed, [
+          {
+            ...parent,
+            appReviewWorkflowRunIds: [AppReviewWorkflowRunId.make("replacement")],
+            ticketStates: parent.ticketStates.map((state) => ({
+              ...state,
+              appReviewWorkflowRunId: AppReviewWorkflowRunId.make("replacement"),
+            })),
+          },
+        ]),
+      ).toBe(false);
+    });
+  },
+);
 
 it("keeps readiness waits out of provider crash recovery", () => {
   const base = reviewingRun();

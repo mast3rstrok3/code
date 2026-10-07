@@ -1,45 +1,22 @@
-import { browseInputEndPaddingClass } from "./CommandPalette.logic";
 import { describe, expect, it, vi } from "vite-plus/test";
-import {
-  DEFAULT_WORKSPACE_USER_ID,
-  EnvironmentId,
-  ProjectId,
-  ProviderInstanceId,
-  ThreadId,
-} from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import type { Project, Thread } from "../types";
+import { makeThreadFixture } from "../test-fixtures";
 import {
   buildBrowseGroups,
   buildCommandPaletteProjectMetadata,
+  buildCommandPaletteRows,
   buildProjectActionItems,
   buildThreadActionItems,
   buildLinkedThreadActionItems,
   enumerateCommandPaletteItems,
   filterPinnedBrowseEntries,
   filterCommandPaletteGroups,
+  findHighlightedCommandPaletteItem,
   reduceCommandPaletteUiState,
-  resolveBrowseDirectoryQuery,
   type CommandPaletteActionItem,
   type CommandPaletteGroup,
 } from "./CommandPalette.logic";
-
-describe("resolveBrowseDirectoryQuery", () => {
-  it("enters selected Unix and Windows directories", () => {
-    expect(resolveBrowseDirectoryQuery("/home/nils/repos/nils")).toBe("/home/nils/repos/nils/");
-    expect(resolveBrowseDirectoryQuery("C:\\Users\\nils\\repos")).toBe("C:\\Users\\nils\\repos\\");
-  });
-});
-
-describe("browseInputEndPaddingClass", () => {
-  it("reserves the widest space for the create action", () => {
-    expect(
-      browseInputEndPaddingClass({
-        willCreateProjectPath: true,
-        hasHighlightedBrowseItem: false,
-      }),
-    ).toContain("pe-38");
-  });
-});
 
 describe("linked pull request thread navigation", () => {
   it("keeps archived relations searchable and routes them through the PR environment", async () => {
@@ -333,7 +310,6 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     id: PROJECT_ID,
     environmentId: LOCAL_ENVIRONMENT_ID,
     title: "Project",
-    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     workspaceRoot: "/workspace/project",
     defaultModelSelection: null,
     scripts: [],
@@ -344,36 +320,28 @@ function makeProject(overrides: Partial<Project> = {}): Project {
 }
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
-  return {
+  return makeThreadFixture({
     id: ThreadId.make("thread-1"),
     environmentId: LOCAL_ENVIRONMENT_ID,
     projectId: PROJECT_ID,
-    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
-    parentThreadId: null,
-    workflowRole: null,
     title: "Thread",
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
     runtimeMode: "full-access",
     interactionMode: "default",
-    session: null,
+    runtime: null,
     messages: [],
     proposedPlans: [],
-    planningWorkflow: null,
     createdAt: "2026-03-01T00:00:00.000Z",
     archivedAt: null,
     settledOverride: null,
     settledAt: null,
     deletedAt: null,
     updatedAt: "2026-03-01T00:00:00.000Z",
-    latestTurn: null,
+    latestRun: null,
     branch: null,
     worktreePath: null,
-    checkpoints: [],
-    appReviews: [],
-    pullRequests: [],
-    activities: [],
     ...overrides,
-  };
+  });
 }
 
 describe("buildProjectActionItems", () => {
@@ -399,25 +367,6 @@ describe("buildProjectActionItems", () => {
 });
 
 describe("buildThreadActionItems", () => {
-  it("keeps workflow child threads recoverable in global search", () => {
-    const items = buildThreadActionItems({
-      threads: [
-        makeThread({ id: ThreadId.make("root"), title: "Workflow root" }),
-        makeThread({
-          id: ThreadId.make("child"),
-          parentThreadId: ThreadId.make("root"),
-          title: "Hidden implementation worker",
-        }),
-      ],
-      projectTitleById: new Map([[PROJECT_ID, "Project"]]),
-      sortOrder: "updated_at",
-      icon: null,
-      runThread: async (_thread) => undefined,
-    });
-
-    expect(items.map((item) => item.value).sort()).toEqual(["thread:child", "thread:root"]);
-  });
-
   it("orders threads by most recent activity and formats timestamps from updatedAt", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-25T12:00:00.000Z"));
@@ -758,28 +707,6 @@ describe("buildThreadActionItems", () => {
 });
 
 describe("buildBrowseGroups", () => {
-  it("passes the selected browse entry name to navigation", async () => {
-    const browseTo = vi.fn();
-    const groups = buildBrowseGroups({
-      browseEntries: [{ name: "repos", fullPath: "/home/nils/repos" }],
-
-      browseQuery: "~/",
-      canBrowseUp: false,
-      upIcon: null,
-      directoryIcon: null,
-      browseUp: vi.fn(),
-      browseTo,
-    });
-
-    const item = groups[0]?.items[0];
-    expect(item?.kind).toBe("action");
-    if (item?.kind !== "action") return;
-
-    await item.run();
-
-    expect(browseTo).toHaveBeenCalledWith("repos");
-  });
-
   it("waits for asynchronous browse navigation actions", async () => {
     let finishNavigation: (() => void) | undefined;
     const browseTo = vi.fn(
@@ -922,5 +849,48 @@ describe("filterCommandPaletteGroups", () => {
       "setting:default-model",
       "setting:keybinding-modelPicker.toggle",
     ]);
+  });
+});
+
+describe("virtualized command palette rows", () => {
+  const action = (value: string, disabled = false): CommandPaletteActionItem => ({
+    kind: "action",
+    value,
+    searchTerms: [],
+    title: value,
+    icon: null,
+    ...(disabled ? { disabled } : {}),
+    run: async () => {},
+  });
+  const groups: CommandPaletteGroup[] = [
+    { value: "actions", label: "Actions", items: [action("new-thread"), action("offline", true)] },
+    { value: "threads", label: "Threads", items: [action("thread-a"), action("thread-b")] },
+  ];
+
+  it("keeps group order and headings while indexing only enabled items", () => {
+    const { rows, itemValues, rowIndexByItemIndex } = buildCommandPaletteRows(groups);
+
+    expect(rows.map((row) => (row.kind === "label" ? `# ${row.label}` : row.key))).toEqual([
+      "# Actions",
+      "actions:new-thread",
+      "actions:offline",
+      "# Threads",
+      "threads:thread-a",
+      "threads:thread-b",
+    ]);
+    expect(itemValues).toEqual(["new-thread", "thread-a", "thread-b"]);
+    expect(rowIndexByItemIndex).toEqual([1, 4, 5]);
+    expect(rows.flatMap((row) => (row.kind === "item" ? [row.itemIndex] : []))).toEqual([
+      0,
+      null,
+      1,
+      2,
+    ]);
+  });
+
+  it("resolves Enter to the highlighted item without needing its row mounted", () => {
+    expect(findHighlightedCommandPaletteItem(groups, "thread-b")?.value).toBe("thread-b");
+    expect(findHighlightedCommandPaletteItem(groups, "offline")).toBeNull();
+    expect(findHighlightedCommandPaletteItem(groups, null)).toBeNull();
   });
 });

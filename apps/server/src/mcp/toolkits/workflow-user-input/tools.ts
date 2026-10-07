@@ -1,3 +1,5 @@
+import { OrchestratorMcpFailure } from "@t3tools/contracts";
+import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import {
   OrchestrationDispatchCommandError,
   OrchestrationGetSnapshotError,
@@ -10,7 +12,7 @@ import {
   WorkflowUserInputResult,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as WorkflowUserInputBroker from "../../WorkflowUserInputBroker.ts";
@@ -30,6 +32,7 @@ export const WorkflowRequestUserInputTool = Tool.make("workflow_request_user_inp
   }),
   success: WorkflowUserInputResult,
   failure: Schema.Union([
+    OrchestratorMcpFailure,
     WorkflowUserInputError,
     OrchestrationDispatchCommandError,
     OrchestrationGetSnapshotError,
@@ -37,6 +40,7 @@ export const WorkflowRequestUserInputTool = Tool.make("workflow_request_user_inp
     McpCapabilityUnavailableError,
   ]),
   dependencies: [
+    ThreadManagementService.ThreadManagementService,
     McpInvocationContext.McpInvocationContext,
     WorkflowUserInputBroker.WorkflowUserInputBroker,
     OrchestrationEngineService,

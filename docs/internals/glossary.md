@@ -13,23 +13,21 @@ Terms whose meaning matters across T3 Code. Architecture and lifecycle constrain
 | Workspace root | The project's base filesystem directory on the environment.                                       |
 | Worktree       | A separate Git checkout a thread can use instead of the project's main checkout.                  |
 | Thread         | The durable conversation and work history for a project. It survives provider process exits.      |
-| Turn           | One user-to-agent work cycle. Provider work can finish before checkpoint and diff work settles.   |
+| Turn           | One user-to-agent cycle, a V2 run. Provider work can end before checkpoint and diff work settles. |
 | Activity       | A non-message timeline item, such as a tool action, approval, or failure.                         |
 | T3 home        | The base data directory. Runtime state normally lives under its `userdata` directory.             |
 
 ## Orchestration
 
-| Term                    | Meaning                                                                                      |
-| ----------------------- | -------------------------------------------------------------------------------------------- |
-| Command                 | A request to change domain state. Accepting it does not mean its side effects have finished. |
-| Event                   | A persisted fact produced by a command.                                                      |
-| Decider                 | The pure logic that turns a command and current state into events.                           |
-| Projection / read model | A view of current state derived from persisted events.                                       |
-| Projector               | The logic that applies events to a read model.                                               |
-| Reactor                 | A worker that performs follow-up work in response to recorded intent or runtime signals.     |
-| Command receipt         | A durable record of a command's result, used to make retries idempotent.                     |
-| Runtime receipt         | A test-only signal that an asynchronous milestone completed.                                 |
-| Quiesced                | The relevant follow-up workers have finished, beyond the provider turn merely ending.        |
+| Term                    | Meaning                                                                                                   |
+| ----------------------- | --------------------------------------------------------------------------------------------------------- |
+| Command                 | A request to change domain state. Accepting it does not mean its side effects have finished.              |
+| Event                   | A persisted fact produced by a command.                                                                   |
+| Orchestrator            | The service that serializes commands and decides their events from current state, without I/O.            |
+| Projection / read model | A persisted view of current state, committed in the same transaction as the events that change it.        |
+| Command receipt         | A durable record of a command's result, used to make retries idempotent.                                  |
+| Outbox effect           | Side-effect intent committed with the events, such as starting a provider turn or capturing a checkpoint. |
+| Effect worker           | The worker that runs outbox effects after commit and feeds their results back as commands.                |
 
 ## Providers and checkpoints
 
@@ -88,7 +86,7 @@ A supporting reference a skill can load on demand with `workflow_doc_get` — fo
 
 #### Product grill
 
-The codebase-grounded, product-only composition of the shared Grilling primitive. It asks every currently unblocked product-decision question in numbered frontier rounds and ends in a `product-intent-locked` directive parsed by [workflowDirectives.ts][27]. Fast Feature and Full Feature begin here.
+The codebase-grounded, product-only composition of the shared Grilling primitive. It asks every currently unblocked product-decision question in numbered frontier rounds and ends in a `product-intent-locked` directive parsed by [workflowDirectives.ts][27]. Full Feature begins here. Fast Feature starts with provider-native planning.
 
 #### Engineering grill
 
@@ -170,22 +168,22 @@ The per-worktree development stack (dev servers, preview) that implementation ru
 [3]: ../../apps/server/src/vcs/GitVcsDriverCore.ts
 [4]: ../../apps/server/src/orchestration/projector.ts
 [5]: ../../apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts
-[6]: ../../apps/server/src/orchestration/Layers/CheckpointReactor.ts
+[6]: ../../apps/server/src/orchestration-v2/CheckpointService.ts
 [7]: ../../apps/server/src/orchestration/Layers/OrchestrationEngine.ts
 [8]: ../../apps/server/src/orchestration/decider.ts
 [9]: ../../apps/server/src/orchestration/commandInvariants.ts
 [10]: ../../apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts
 [11]: ../../apps/server/src/orchestration/Layers/ProjectionPipeline.ts
-[12]: ../../apps/server/src/orchestration/Layers/ProviderCommandReactor.ts
+[12]: ../../apps/server/src/orchestration/WorkflowRuntimeBridge.ts
 [13]: ../../apps/server/src/orchestration/Services/RuntimeReceiptBus.ts
-[14]: ../../apps/server/src/provider/Layers/ProviderService.ts
+[14]: ../../apps/server/src/orchestration-v2/ProviderSessionManager.ts
 [15]: ../../apps/server/src/provider/Services/ProviderAdapter.ts
 [16]: ./providers.md
-[17]: ../../apps/server/src/provider/Layers/CodexAdapter.ts
+[17]: ../../apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts
 [18]: ../user/permission-modes.md
 [19]: ../../apps/server/src/checkpointing/CheckpointStore.ts
 [20]: ../../apps/server/src/checkpointing/CheckpointDiffQuery.ts
-[21]: ../../apps/server/src/persistence/Services/ProjectionCheckpoints.ts
+[21]: ../../apps/server/src/orchestration-v2/CheckpointService.ts
 [22]: ../../apps/server/src/checkpointing/Utils.ts
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
 [24]: ./overview.md
@@ -196,7 +194,7 @@ The per-worktree development stack (dev servers, preview) that implementation ru
 [29]: ../../apps/server/src/orchestration/Layers/ImplementationWorkflowReactor.ts
 [30]: ../user/app-stacks.md
 [31]: ../user/workflow-catalog.md
-[32]: ../../apps/server/src/orchestration/Layers/StaleTurnReconciler.ts
+[32]: ../../apps/server/src/orchestration-v2/ProviderRuntimeRecoveryService.ts
 [33]: ../../apps/server/src/orchestration/workflowNudge.ts
 [34]: ../../apps/server/src/environmentTheme.ts
 [35]: ../user/appearance.md
@@ -206,7 +204,7 @@ The per-worktree development stack (dev servers, preview) that implementation ru
 | Term                 | Meaning                                                                                                                                                                                  |
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Pull request link    | A persisted thread association identified by host, repository, and number. Links can cross projects within an environment and carry a server-maintained snapshot.                        |
-| Pull request sync    | The reactor that refreshes each distinct linked review once per cadence and discovers native stack layers. Explicit refreshes and failed stack reads trigger another read.               |
+| Pull request sync    | The worker that refreshes each distinct linked review once per cadence and discovers native stack layers. Explicit refreshes and failed stack reads trigger another read.                |
 | Current pull request | The link used by single-review controls and older clients. Open work takes precedence; a completed single chain points at its top layer. Unrelated terminal links use the latest update. |
 
 ## Composer context

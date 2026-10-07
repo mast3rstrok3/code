@@ -47,8 +47,8 @@ import * as Redacted from "effect/Redacted";
 import * as Semaphore from "effect/Semaphore";
 import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { ChildProcessSpawner } from "effect/process";
 
 import * as ServerConfig from "../config.ts";
 import { createBundleWorktree, removeBundleWorktree } from "./bundleWorktrees.ts";

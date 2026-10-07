@@ -14,7 +14,7 @@ function keybindingsEvent(
     type: "keybindingsUpdated",
     payload: {
       keybindings: [],
-      tickets: [],
+      issues: [],
     },
     ...overrides,
   };
@@ -44,7 +44,7 @@ describe("keybindings update toast policy", () => {
         keybindingsEvent({
           payload: {
             keybindings: [],
-            tickets: [
+            issues: [
               {
                 kind: "keybindings.malformed-config",
                 message: "Expected JSON array",

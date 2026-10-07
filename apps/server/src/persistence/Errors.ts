@@ -70,8 +70,6 @@ export class PersistenceDecodeError extends Schema.TaggedError<PersistenceDecode
     return `Decode error in ${this.operation}: ${this.ticket}`;
   }
 }
-const isPersistenceSqlError = Schema.is(PersistenceSqlError);
-const isPersistenceDecodeError = Schema.is(PersistenceDecodeError);
 
 /**
  * Read a SQLite condition through SQL error wrappers.
@@ -121,9 +119,6 @@ export function toPersistenceDecodeError(operation: string) {
     PersistenceDecodeError.fromSchemaError(operation, cause);
 }
 
-export const isPersistenceError = (u: unknown) =>
-  isPersistenceSqlError(u) || isPersistenceDecodeError(u);
-
 export type OrchestrationEventStoreError = PersistenceSqlError | PersistenceDecodeError;
 
 export type OrchestrationCommandReceiptRepositoryError =
@@ -136,3 +131,8 @@ export type AuthSessionRepositoryError = PersistenceSqlError | PersistenceDecode
 export type PullRequestFilesViewedRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 
 export type ProjectionRepositoryError = PersistenceSqlError | PersistenceDecodeError;
+
+export const isPersistenceError = (
+  value: unknown,
+): value is PersistenceSqlError | PersistenceDecodeError =>
+  Schema.is(PersistenceSqlError)(value) || Schema.is(PersistenceDecodeError)(value);
