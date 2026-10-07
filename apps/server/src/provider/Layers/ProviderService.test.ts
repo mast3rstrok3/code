@@ -1,4 +1,7 @@
-import { WorkspaceUserEnvironment } from "../../workspaceUserCredentials.ts";
+import {
+  WORKSPACE_USER_PATH_PREFIX,
+  WorkspaceUserEnvironment,
+} from "../../workspaceUserCredentials.ts";
 import {
   DEFAULT_WORKSPACE_USER,
   DEFAULT_WORKSPACE_USER_ID,
@@ -5191,6 +5194,7 @@ describe("agent browser access", () => {
       readonly withoutOrchestration?: boolean;
       readonly withoutMcpCredential?: boolean;
       readonly workflowPromptId?: string;
+      readonly serverConfigLayer?: typeof serverConfigTestLayer;
       readonly onStarted?: (
         provider: ProviderService.ProviderService["Service"],
       ) => Effect.Effect<void, ProviderServiceError>;
@@ -5337,7 +5341,7 @@ describe("agent browser access", () => {
                     },
           }),
         ),
-        Layer.provide(serverConfigTestLayer),
+        Layer.provide(options?.serverConfigLayer ?? serverConfigTestLayer),
         Layer.provide(AnalyticsService.layerTest),
         Layer.provide(
           Layer.succeed(
@@ -5512,6 +5516,39 @@ describe("agent browser access", () => {
         },
       });
       assert.equal(environments[2]?.GH_TOKEN, "grace-token");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("gives the agent every owner token and the gh shim when the user saved several", () =>
+    Effect.gen(function* () {
+      const environments: NodeJS.ProcessEnv[] = [];
+      // Outside a repository the first owner token is the primary one.
+      const ownerTokens = [
+        { owner: "mast3rstrok3", personalAccessToken: "test-default-token" },
+        { owner: "nightingale-ai-com", personalAccessToken: "org-token" },
+      ];
+      yield* startSessionWith(false, asThreadId("thread-owner-tokens"), undefined, false, {
+        serverConfigLayer: ServerConfig.layerTest(process.cwd(), {
+          prefix: "provider-service-owner-tokens-",
+        }).pipe(Layer.provide(NodeServices.layer)),
+        userContext: {
+          users: [{ ...testDefaultUser, github: { personalAccessToken: "", ownerTokens } }],
+          ownerUserId: () => DEFAULT_WORKSPACE_USER_ID,
+          environments,
+          onStarted: () =>
+            Effect.sync(() => {
+              const [environment] = environments;
+              assert.equal(environment?.T3CODE_GITHUB_OWNER_TOKEN_NIGHTINGALE_AI_COM, "org-token");
+              assert.equal(
+                environment?.T3CODE_GITHUB_OWNER_TOKEN_MAST3RSTROK3,
+                "test-default-token",
+              );
+              const shimDirectory = environment?.[WORKSPACE_USER_PATH_PREFIX];
+              assert.ok(shimDirectory && NodeFS.existsSync(NodePath.join(shimDirectory, "gh")));
+            }),
+        },
+      });
+      assert.equal(environments.length, 1);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 

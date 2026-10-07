@@ -1,5 +1,7 @@
 import {
+  ensureGithubCliShim,
   resolveWorkspaceUserCredentials,
+  WORKSPACE_USER_PATH_PREFIX,
   workspaceUserProviderEnvironment,
   WorkspaceUserEnvironment,
 } from "../../workspaceUserCredentials.ts";
@@ -606,6 +608,20 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       Effect.orElseSucceed(() => null),
     );
   };
+  const hostPlatform = yield* HostProcessPlatform;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const pathService = yield* Path.Path;
+  // Written once per server. Without it, gh falls back to the thread's primary token.
+  const githubCliShimDirectory = yield* Effect.cached(
+    hostPlatform === "win32"
+      ? Effect.succeed(undefined)
+      : ensureGithubCliShim(serverConfig.stateDir).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, pathService),
+          Effect.tapError((cause) => Effect.logWarning("GitHub CLI shim unavailable", { cause })),
+          Effect.orElseSucceed(() => undefined),
+        ),
+  );
   const workspaceUserEnvironment = Effect.fn("ProviderService.workspaceUserEnvironment")(function* (
     threadId: ThreadId,
     cwd: string | undefined,
@@ -616,12 +632,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       Effect.mapError((error) => toValidationError("startSession", error.message)),
     );
     sessionOwners.set(threadId, user);
-    return workspaceUserProviderEnvironment(credentials);
+    const environment = workspaceUserProviderEnvironment(credentials);
+    if (!credentials.githubOwnerTokens) return environment;
+    const shimDirectory = yield* githubCliShimDirectory;
+    return shimDirectory
+      ? { ...environment, [WORKSPACE_USER_PATH_PREFIX]: shimDirectory }
+      : environment;
   });
   const issueMcpCredential =
     options?.issueMcpCredential ?? McpSessionRegistry.issueActiveMcpCredential;
-  const fileSystem = yield* FileSystem.FileSystem;
-  const pathService = yield* Path.Path;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const pendingCompactions = new Map<ThreadId, PendingCompaction>();
   const timedOutNativeCompactions = new Set<ThreadId>();
@@ -1079,7 +1098,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   });
 
   /** Install only the local CLI here. device_open supplies a separate config for each host. */
-  const hostPlatform = yield* HostProcessPlatform;
   const agentDeviceEnvironment = Effect.gen(function* () {
     const devices = yield* Effect.serviceOption(DeviceService.DeviceService);
     if (Option.isNone(devices)) return undefined;

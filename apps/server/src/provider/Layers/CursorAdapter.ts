@@ -1,4 +1,7 @@
-import { WorkspaceUserEnvironment } from "../../workspaceUserCredentials.ts";
+import {
+  WorkspaceUserEnvironment,
+  withWorkspaceUserEnvironment,
+} from "../../workspaceUserCredentials.ts";
 /**
  * CursorAdapterLive — Cursor CLI (`agent acp`) via ACP.
  *
@@ -548,13 +551,13 @@ export function makeCursorAdapter(
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
           const acp = yield* makeCursorAcpRuntime({
             cursorSettings: effectiveCursorSettings,
-            environment: {
-              ...McpProviderSession.withAgentDeviceEnvironment(
+            environment: withWorkspaceUserEnvironment(
+              McpProviderSession.withAgentDeviceEnvironment(
                 options?.environment ?? process.env,
                 mcpSession,
               ),
-              ...(yield* WorkspaceUserEnvironment),
-            },
+              yield* WorkspaceUserEnvironment,
+            ),
             childProcessSpawner,
             cwd,
             runtimeMode: input.runtimeMode,

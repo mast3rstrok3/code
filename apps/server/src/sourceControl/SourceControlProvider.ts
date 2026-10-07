@@ -31,6 +31,8 @@ export interface SourceControlProviderContext {
 
 export interface SourceControlCredentialContext {
   readonly githubPersonalAccessToken?: string;
+  /** Every owner token the user saved, so git and gh can route by repository owner. */
+  readonly githubOwnerTokens?: ReadonlyArray<{ readonly owner: string; readonly token: string }>;
   readonly gitIdentity?: { readonly name: string; readonly email: string };
 }
 

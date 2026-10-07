@@ -1,4 +1,7 @@
-import { WorkspaceUserEnvironment } from "../../workspaceUserCredentials.ts";
+import {
+  WorkspaceUserEnvironment,
+  withWorkspaceUserEnvironment,
+} from "../../workspaceUserCredentials.ts";
 /**
  * CodexAdapterLive - Scoped live implementation for the Codex provider adapter.
  *
@@ -2342,7 +2345,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           binaryPath: effectiveConfig.binaryPath,
           launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, effectiveEnvironment),
           ...(effectiveEnvironment || Object.keys(ownerEnvironment).length > 0
-            ? { environment: { ...(effectiveEnvironment ?? process.env), ...ownerEnvironment } }
+            ? {
+                environment: withWorkspaceUserEnvironment(
+                  effectiveEnvironment ?? process.env,
+                  ownerEnvironment,
+                ),
+              }
             : {}),
           ...(effectiveConfig.homePath ? { homePath: effectiveConfig.homePath } : {}),
           ...(isCodexResumeCursorSchema(input.resumeCursor)

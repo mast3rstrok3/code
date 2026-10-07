@@ -1,4 +1,7 @@
-import { WorkspaceUserEnvironment } from "../../workspaceUserCredentials.ts";
+import {
+  WorkspaceUserEnvironment,
+  withWorkspaceUserEnvironment,
+} from "../../workspaceUserCredentials.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 /**
  * ClaudeAdapterLive - Scoped live implementation for the Claude Agent provider adapter.
@@ -5059,10 +5062,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         canUseTool,
         onUserDialog,
         supportedDialogKinds: ["resume_return"],
-        env: {
-          ...McpProviderSession.withAgentDeviceEnvironment(claudeEnvironment, mcpSession),
-          ...workspaceUserEnvironment,
-        },
+        env: withWorkspaceUserEnvironment(
+          McpProviderSession.withAgentDeviceEnvironment(claudeEnvironment, mcpSession),
+          workspaceUserEnvironment,
+        ),
         additionalDirectories,
         ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),
         ...(mcpServers ? { mcpServers } : {}),

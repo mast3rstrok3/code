@@ -1,4 +1,7 @@
-import { WorkspaceUserEnvironment } from "../../workspaceUserCredentials.ts";
+import {
+  WorkspaceUserEnvironment,
+  withWorkspaceUserEnvironment,
+} from "../../workspaceUserCredentials.ts";
 import {
   EventId,
   type OpenCodeSettings,
@@ -2873,13 +2876,13 @@ export function makeOpenCodeAdapter(
                 directory,
                 serverUrl,
                 ...(serverPassword ? { serverPassword } : {}),
-                environment: {
-                  ...McpProviderSession.withAgentDeviceEnvironment(
+                environment: withWorkspaceUserEnvironment(
+                  McpProviderSession.withAgentDeviceEnvironment(
                     options?.environment ?? process.env,
                     mcpSession,
                   ),
-                  ...(yield* WorkspaceUserEnvironment),
-                },
+                  yield* WorkspaceUserEnvironment,
+                ),
               });
               const client = openCodeRuntime.createOpenCodeSdkClient({
                 baseUrl: server.url,
