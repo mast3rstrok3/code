@@ -64,7 +64,7 @@ vi.mock("../../state/environments", () => {
     environmentId,
     label: environmentId,
     connection: { phase: "connected" },
-    entry: { target: { _tag: "DirectConnectionTarget" } },
+    entry: { enabled: true, target: { _tag: "DirectConnectionTarget" } },
   });
   const primary = environment("primary");
   return {
@@ -72,7 +72,10 @@ vi.mock("../../state/environments", () => {
     useEnvironments: () => ({ environments: [environment(state.selectedEnvironment)] }),
   };
 });
-vi.mock("../../state/server", () => ({
+vi.mock("../../state/server", async () => ({
+  primaryServerSettingsAtom: (await import("effect/reactivity")).Atom.make(
+    (await import("@t3tools/contracts")).DEFAULT_SERVER_SETTINGS,
+  ),
   serverEnvironment: {
     providersValueAtom: () => state.providers,
     configValueAtom: () => state.config,

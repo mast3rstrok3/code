@@ -104,6 +104,8 @@ export type GitBranchPullRequest = NonNullable<VcsStatusResult["pr"]> & {
   readonly updatedAt: string | null;
   readonly closedAt?: string | null;
   readonly mergedAt?: string | null;
+  /** The pull request's head commit, when the host read reports it. */
+  readonly headSha?: string | null;
 };
 
 interface SourceControlTextGenerationSettings {
@@ -210,6 +212,7 @@ interface PullRequestInfo extends OpenPrInfo, PullRequestHeadRemoteInfo {
   closedAt?: string | null;
   mergedAt?: string | null;
   updatedAt: Option.Option<DateTime.Utc>;
+  headSha?: string | undefined;
 }
 
 const pullRequestUpdatedAtDescOrder: Order.Order<PullRequestInfo> = Order.mapInput(
@@ -474,6 +477,7 @@ function toPullRequestInfo(summary: ChangeRequest): PullRequestInfo {
     url: summary.url,
     baseRefName: summary.baseRefName,
     headRefName: summary.headRefName,
+    ...(summary.headSha !== undefined ? { headSha: summary.headSha } : {}),
     state: summary.state ?? "open",
     ...(summary.isDraft === true ? { isDraft: true } : {}),
     closedAt: summary.closedAt ?? null,
@@ -2463,6 +2467,7 @@ export const make = Effect.gen(function* () {
       ...toStatusPr(latest),
       closedAt: latest.closedAt ?? null,
       mergedAt: latest.mergedAt ?? null,
+      headSha: latest.headSha ?? null,
       // Hosting CLIs can select an upstream repository instead of origin.
       // The returned PR URL names the repository that actually owns it.
       repositoryKey: pullRequestRepositoryKey(latest.url),
@@ -2835,15 +2840,7 @@ export const make = Effect.gen(function* () {
         const wantsPr = input.action === "create_pr" || input.action === "commit_push_pr";
         let credentials = options?.credentials;
         if (input.threadId !== undefined) {
-          if (Option.isNone(projectionQuery)) {
-            return yield* new GitManagerError({
-              operation: "resolveThreadOwner",
-              cwd: input.cwd,
-              detail:
-                "Cannot resolve the thread owner. GitHub credentials are required for thread Git actions.",
-            });
-          }
-          const thread = yield* projectionQuery.value.getThreadShellById(input.threadId).pipe(
+          const nativeThread = yield* threads.getThreadShell(input.threadId).pipe(
             Effect.mapError(
               (cause) =>
                 new GitManagerError({
@@ -2854,6 +2851,22 @@ export const make = Effect.gen(function* () {
                 }),
             ),
           );
+          const thread =
+            nativeThread !== null
+              ? Option.some(nativeThread)
+              : Option.isSome(projectionQuery)
+                ? yield* projectionQuery.value.getThreadShellById(input.threadId).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new GitManagerError({
+                          operation: "resolveThreadOwner",
+                          cwd: input.cwd,
+                          detail: "Could not read the thread owner.",
+                          cause,
+                        }),
+                    ),
+                  )
+                : Option.none();
           if (Option.isNone(thread)) {
             return yield* new GitManagerError({
               operation: "resolveThreadOwner",

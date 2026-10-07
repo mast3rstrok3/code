@@ -5,7 +5,51 @@ import * as Exit from "effect/Exit";
 import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import { migrationManifest, runMigrations } from "./Migrations.ts";
+import { migrationEntries } from "./Migrations.ts";
+import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
+
+// Published upstream previews use upstream IDs. Fork ledger upgrades have their own migration tests.
+const upstreamIds = new Map([
+  [87, 44],
+  [88, 45],
+  [89, 46],
+  [90, 47],
+  [91, 48],
+  [92, 49],
+  [93, 50],
+  [94, 51],
+  [96, 52],
+  [97, 53],
+  [99, 54],
+  [102, 55],
+  [103, 56],
+  [104, 57],
+  [105, 58],
+  [107, 59],
+]);
+const previewEntries = migrationEntries
+  .filter(([id]) => id <= 43 || upstreamIds.has(id))
+  .map(([id, name, migration]) => [upstreamIds.get(id) ?? id, name, migration] as const)
+  .sort(([left], [right]) => left - right);
+const migrationManifest = previewEntries.map(([id, name]) => [id, name] as const);
+const runMigrations = Effect.fn("runPreviewMigrations")(function* ({
+  toMigrationInclusive,
+}: { toMigrationInclusive?: number } = {}) {
+  const reconciled =
+    toMigrationInclusive === undefined || toMigrationInclusive >= 55
+      ? yield* reconcileV2PreviewMigration()
+      : [];
+  const executed = yield* Migrator.make({})({
+    loader: Migrator.fromRecord(
+      Object.fromEntries(
+        previewEntries
+          .filter(([id]) => toMigrationInclusive === undefined || id <= toMigrationInclusive)
+          .map(([id, name, migration]) => [`${id}_${name}`, migration]),
+      ),
+    ),
+  });
+  return [...reconciled, ...executed];
+});
 import PullRequestFilesViewed from "./Migrations/053_PullRequestFilesViewed.ts";
 import RemoveRedundantProjectionIndexes from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
 import OrchestrationV2 from "./Migrations/055_OrchestrationV2.ts";
@@ -39,6 +83,7 @@ describe("V2 preview upgrade", () => {
         [56, "RemoveRedundantProjectionIndexes"],
         [57, "ScheduledTaskWebhooks"],
         [58, "WebhookRelayDeliveries"],
+        [59, "McpAppModelContext"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -120,6 +165,7 @@ describe("V2 preview upgrade", () => {
         [56, "RemoveRedundantProjectionIndexes"],
         [57, "ScheduledTaskWebhooks"],
         [58, "WebhookRelayDeliveries"],
+        [59, "McpAppModelContext"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

@@ -15,6 +15,7 @@ import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 import Migration0102 from "./Migrations/055_OrchestrationV2.ts";
 import Migration0103 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
 import Migration0104 from "./Migrations/057_ScheduledTaskWebhooks.ts";
+import Migration0107 from "./Migrations/059_McpAppModelContext.ts";
 import Migration0106 from "./Migrations/106_WorkflowEventHistory.ts";
 import Migration0105 from "./Migrations/058_WebhookRelayDeliveries.ts";
 
@@ -240,6 +241,8 @@ export const migrationEntries = [
   [104, "ScheduledTaskWebhooks", Migration0104],
   [105, "WebhookRelayDeliveries", Migration0105],
   [106, "WorkflowEventHistory", Migration0106],
+  // Upstream ID 59 is already in the fork ledger.
+  [107, "McpAppModelContext", Migration0107],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

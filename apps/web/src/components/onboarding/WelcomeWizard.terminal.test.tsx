@@ -64,7 +64,10 @@ vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({ environments: [remoteEnvironment] }),
   usePrimaryEnvironment: () => primaryEnvironment,
 }));
-vi.mock("../../state/server", () => ({
+vi.mock("../../state/server", async () => ({
+  primaryServerSettingsAtom: (await import("effect/reactivity")).Atom.make(
+    (await import("@t3tools/contracts")).DEFAULT_SERVER_SETTINGS,
+  ),
   serverEnvironment: {
     providersValueAtom: (id: EnvironmentId) => state.providers.get(id)!,
     configValueAtom: (id: EnvironmentId) => state.configs.get(id)!,
@@ -151,6 +154,7 @@ const primaryEnvironment = {
   label: "This computer",
   connection: { phase: "connected" },
   entry: {
+    enabled: true,
     target: new PrimaryConnectionTarget({
       environmentId: primaryId,
       label: "This computer",
@@ -164,6 +168,7 @@ const remoteEnvironment = {
   label: "Paired computer",
   connection: { phase: "connected" },
   entry: {
+    enabled: true,
     target: new BearerConnectionTarget({
       environmentId: remoteId,
       label: "Paired computer",

@@ -402,6 +402,14 @@
     "./state/workflows": {
       "types": "./src/state/workflows.ts",
       "default": "./src/state/workflows.ts"
+    },
+    "./mcp-apps": {
+      "types": "./src/mcpApps/host.ts",
+      "default": "./src/mcpApps/host.ts"
+    },
+    "./state/mcp-apps": {
+      "types": "./src/state/mcpApps.ts",
+      "default": "./src/state/mcpApps.ts"
     }
   },
   "scripts": {

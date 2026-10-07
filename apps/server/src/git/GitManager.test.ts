@@ -22,7 +22,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 import { ChildProcessSpawner } from "effect/process";
-import { expect } from "vite-plus/test";
+import { expect, vi } from "vite-plus/test";
 import type {
   GitActionProgressEvent,
   GitManagerServiceError,
@@ -32,6 +32,7 @@ import type {
 
 import {
   DEFAULT_SERVER_SETTINGS,
+  DEFAULT_WORKSPACE_USER_ID,
   EventId,
   GitCommandError,
   ProjectId,
@@ -1368,6 +1369,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
                 url: "https://github.com/pingdotgg/t3code/pull/216",
                 baseRefName: "main",
                 headRefName: "feature/saved-branch",
+                headRefOid: "a".repeat(40),
                 state: "OPEN",
                 updatedAt: "2026-04-03T15:00:00Z",
               },
@@ -1387,6 +1389,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         url: "https://github.com/pingdotgg/t3code/pull/216",
         baseRef: "main",
         headRef: "feature/saved-branch",
+        headSha: "a".repeat(40),
         state: "open",
         closedAt: null,
         mergedAt: null,
@@ -1664,6 +1667,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
                 url: "https://github.com/pingdotgg/codething-mvp/pull/220",
                 baseRefName: "main",
                 headRefName: "feature/shared-pr-cache",
+                headRefOid: "a".repeat(40),
                 state: "MERGED",
                 updatedAt: "2026-04-07T15:00:00Z",
               },
@@ -1675,6 +1679,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
                 url: "https://github.com/pingdotgg/codething-mvp/pull/221",
                 baseRefName: "main",
                 headRefName: "feature/shared-pr-cache",
+                headRefOid: "b".repeat(40),
                 state: "OPEN",
                 updatedAt: "2026-04-08T15:00:00Z",
               },
@@ -1691,6 +1696,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
 
       expect(status.pr?.state).toBe("merged");
       expect(pullRequest?.state).toBe("merged");
+      expect(pullRequest?.headSha).toBe("a".repeat(40));
       expect(ghCalls.filter((call) => call.startsWith("pr list "))).toHaveLength(1);
       const refreshed = yield* manager.branchPullRequest(
         { cwd: repoDir, branch: "feature/shared-pr-cache" },
@@ -1699,6 +1705,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       expect(refreshed).toMatchObject({
         number: 221,
         state: "open",
+        headSha: "b".repeat(40),
         repositoryKey: "github.com/pingdotgg/codething-mvp",
       });
       expect(ghCalls.filter((call) => call.startsWith("pr list "))).toHaveLength(2);
@@ -3123,6 +3130,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
       yield* initRepo(repoDir);
       NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "hello\nproject\n");
+      const ownerUserId = DEFAULT_WORKSPACE_USER_ID;
       const projectId = ProjectId.make("project:git-settings");
       const threadId = ThreadId.make("thread:git-settings");
       const projectModel: ModelSelection = {
@@ -3137,6 +3145,13 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
 
       const { manager } = yield* makeManager({
         serverSettings: {
+          workspaceUsers: [
+            {
+              id: ownerUserId,
+              displayName: "Test Owner",
+              github: { personalAccessToken: "test-token" },
+            },
+          ],
           projectSettingsOverrides: { [projectId]: { textGenerationModelSelection: projectModel } },
         },
         textGeneration: {
@@ -3175,6 +3190,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
             providerInstanceId,
             occurredAt: createdAt,
             payload: {
+              ownerUserId,
               createdBy: "user",
               creationSource: "web",
               id: threadId,
@@ -3202,12 +3218,19 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       });
 
       // The checkout is not the project's root, so only the thread can name the project.
-      yield* manager.runStackedAction({
-        actionId: "test-action-id",
-        cwd: repoDir,
-        action: "commit",
-        threadId,
-      });
+      const identityRequest = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: 1, login: "test-owner" }), { status: 200 }),
+        );
+      yield* manager
+        .runStackedAction({
+          actionId: "test-action-id",
+          cwd: repoDir,
+          action: "commit",
+          threadId,
+        })
+        .pipe(Effect.ensuring(Effect.sync(() => identityRequest.mockRestore())));
 
       expect(generatedModelSelection).toEqual(projectModel);
     }),

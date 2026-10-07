@@ -13,7 +13,7 @@ layer("055_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        Array.from({ length: 106 }, (_, index) => index + 1).filter((id) => id !== 52),
+        Array.from({ length: 107 }, (_, index) => index + 1).filter((id) => id !== 52),
       );
     }),
   );
@@ -30,8 +30,22 @@ layer("055_OrchestrationV2", (it) => {
         [104, "ScheduledTaskWebhooks"],
         [105, "WebhookRelayDeliveries"],
         [106, "WorkflowEventHistory"],
+        [107, "McpAppModelContext"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
+
+      const ledger = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+        SELECT migration_id, name FROM effect_sql_migrations
+        WHERE migration_id >= 102 ORDER BY migration_id
+      `;
+      assert.deepStrictEqual(ledger, [
+        { migration_id: 102, name: "OrchestrationV2" },
+        { migration_id: 103, name: "RemoveRedundantProjectionIndexes" },
+        { migration_id: 104, name: "ScheduledTaskWebhooks" },
+        { migration_id: 105, name: "WebhookRelayDeliveries" },
+        { migration_id: 106, name: "WorkflowEventHistory" },
+        { migration_id: 107, name: "McpAppModelContext" },
+      ]);
 
       const tables = yield* sql<{ readonly name: string }>`
         SELECT name
