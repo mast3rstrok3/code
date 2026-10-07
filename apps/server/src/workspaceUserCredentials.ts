@@ -5,6 +5,8 @@ import type {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import type { SourceControlCredentialContext } from "./sourceControl/SourceControlProvider.ts";
 
@@ -196,8 +198,13 @@ export const resolveWorkspaceUserCredentials = Effect.fn("resolveWorkspaceUserCr
           }),
       ),
     );
+    const githubOwnerTokens = (user.github.ownerTokens ?? []).flatMap((entry) => {
+      const ownerToken = entry.personalAccessToken.trim();
+      return ownerToken ? [{ owner: entry.owner.trim(), token: ownerToken }] : [];
+    });
     return {
       githubPersonalAccessToken: token,
+      ...(githubOwnerTokens.length > 0 ? { githubOwnerTokens } : {}),
       gitIdentity: {
         name,
         email: `${account.id}+${account.login}@users.noreply.github.com`,
@@ -220,27 +227,165 @@ export function workspaceUserGitEnvironment(
     : {};
 }
 
+const GITHUB_OWNER_TOKEN_PREFIX = "T3CODE_GITHUB_OWNER_TOKEN_";
+
+/**
+ * The variable holding a user's token for one GitHub owner, e.g.
+ * `T3CODE_GITHUB_OWNER_TOKEN_NIGHTINGALE_AI_COM`. GitHub owner names are
+ * letters, digits and single hyphens and compare case-insensitively, so
+ * upper-casing and turning hyphens into underscores cannot collide.
+ */
+export function githubOwnerTokenVariable(owner: string): string | undefined {
+  const key = owner.trim().toUpperCase().replaceAll("-", "_");
+  return /^[A-Z0-9_]+$/.test(key) ? `${GITHUB_OWNER_TOKEN_PREFIX}${key}` : undefined;
+}
+
+// Shell lines that set `token` from `$owner` with the same mapping as githubOwnerTokenVariable.
+const SHELL_OWNER_TOKEN = [
+  'key=$(printf %s "$owner" | tr abcdefghijklmnopqrstuvwxyz- ABCDEFGHIJKLMNOPQRSTUVWXYZ_)',
+  `case $key in ''|*[!A-Z0-9_]*) token= ;; *) token=$(printenv "${GITHUB_OWNER_TOKEN_PREFIX}$key") ;; esac`,
+];
+
+/**
+ * Git credential helper for github.com. With `useHttpPath` set, git sends the
+ * repository path, so the first path segment names the owner; ssh remotes are
+ * rewritten to https first and arrive the same way. Answers with that owner's
+ * token, or GH_TOKEN when the user saved none for it. Tokens stay in the
+ * environment; the helper only reads them.
+ */
+const GITHUB_CREDENTIAL_HELPER = [
+  "!f() {",
+  'test "$1" = get || return 0',
+  "owner=",
+  "while IFS= read -r line; do",
+  "case $line in path=*) owner=${line#path=}; owner=${owner#/}; owner=${owner%%/*} ;; esac",
+  "done",
+  ...SHELL_OWNER_TOKEN,
+  "token=${token:-$GH_TOKEN}",
+  'test -n "$token" || return 0',
+  "printf 'username=x-access-token\\npassword=%s\\n' \"$token\"",
+  "}; f",
+].join("\n");
+
+/**
+ * `gh` reads only GH_TOKEN, so this shim picks the owner from `-R/--repo`, an
+ * `api repos/<owner>/...` path, `gh repo <command> <owner>/<repo>`, GH_REPO, or
+ * the checkout's base remote (the one `gh repo set-default` chose, else origin),
+ * sets GH_TOKEN to that owner's token when there is one, and runs the real gh.
+ */
+const GITHUB_CLI_SHIM = [
+  "#!/bin/sh",
+  "# Written by T3 Code. Uses the thread owner's token for the repository this gh call targets.",
+  "set -f",
+  "shim_dir=${0%/*}",
+  "real_path=",
+  "saved_ifs=$IFS",
+  "IFS=:",
+  "for entry in $PATH; do",
+  '  test "$entry" = "$shim_dir" || real_path=${real_path:+$real_path:}$entry',
+  "done",
+  "IFS=$saved_ifs",
+  "set +f",
+  "repo=",
+  "prev=",
+  'for arg in "$@"; do',
+  "  case $prev in -R|--repo) repo=$arg ;; esac",
+  "  case $arg in --repo=*) repo=${arg#--repo=} ;; -R?*) repo=${arg#-R} ;; esac",
+  "  prev=$arg",
+  "done",
+  'if [ -z "$repo" ] && [ "$1" = api ]; then',
+  '  for arg in "$@"; do',
+  // `{owner}` is gh's placeholder for the checkout's repository, resolved below.
+  "    case $arg in repos/{*|/repos/{*) break ;; repos/*/*|/repos/*/*) repo=${arg#/}; repo=${repo#repos/}; break ;; esac",
+  "  done",
+  "fi",
+  'if [ -z "$repo" ] && [ "$1" = repo ]; then',
+  "  case $3 in -*) ;; */*) repo=$3 ;; esac",
+  "fi",
+  "repo=${repo:-$GH_REPO}",
+  'if [ -z "$repo" ]; then',
+  "  remote=$(git config --get-regexp '^remote\\..*\\.gh-resolved$' 2>/dev/null)",
+  "  remote=${remote%%.gh-resolved*}",
+  "  remote=${remote#remote.}",
+  '  repo=$(git config --get "remote.${remote:-origin}.url" 2>/dev/null)',
+  "fi",
+  "repo=${repo#*://}",
+  "repo=${repo#*@}",
+  "repo=${repo#github.com[:/]}",
+  "owner=",
+  "case $repo in */*) owner=${repo%%/*} ;; esac",
+  ...SHELL_OWNER_TOKEN,
+  'if [ -n "$token" ]; then',
+  "  GH_TOKEN=$token",
+  "  GITHUB_TOKEN=$token",
+  "  export GH_TOKEN GITHUB_TOKEN",
+  "fi",
+  "PATH=$real_path",
+  "export PATH",
+  'exec gh "$@"',
+  "",
+].join("\n");
+
+/**
+ * Writes the gh shim to `<stateDir>/github/bin` and returns that directory.
+ * The script holds no tokens; it reads them from the environment.
+ */
+export const ensureGithubCliShim = Effect.fn("ensureGithubCliShim")(function* (stateDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const directory = path.join(stateDir, "github", "bin");
+  yield* fs.makeDirectory(directory, { recursive: true });
+  const shimPath = path.join(directory, "gh");
+  // Rename into place so an agent running the previous copy never reads a partial file.
+  const tempPath = `${shimPath}.${process.pid}.tmp`;
+  yield* fs.writeFileString(tempPath, GITHUB_CLI_SHIM);
+  yield* fs.chmod(tempPath, 0o700);
+  yield* fs.rename(tempPath, shimPath);
+  return directory;
+});
+
+/** Set in a workspace user environment to prepend a directory to the provider's PATH. */
+export const WORKSPACE_USER_PATH_PREFIX = "T3CODE_WORKSPACE_USER_PATH_PREFIX";
+
+/** Layers the thread owner's environment over a provider's, prepending the owner's tools to PATH. */
+export function withWorkspaceUserEnvironment(
+  base: NodeJS.ProcessEnv,
+  owner: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const { [WORKSPACE_USER_PATH_PREFIX]: prefix, ...rest } = owner;
+  if (!prefix) return { ...base, ...rest };
+  return { ...base, ...rest, PATH: base.PATH ? `${prefix}:${base.PATH}` : prefix };
+}
+
 export function workspaceUserProviderEnvironment(
   credentials: SourceControlCredentialContext | undefined,
 ): NodeJS.ProcessEnv {
   const token = credentials?.githubPersonalAccessToken;
+  const ownerTokens: NodeJS.ProcessEnv = {};
+  for (const { owner, token: ownerToken } of credentials?.githubOwnerTokens ?? []) {
+    const variable = githubOwnerTokenVariable(owner);
+    if (variable && !(variable in ownerTokens)) ownerTokens[variable] = ownerToken;
+  }
   return {
     ...workspaceUserGitEnvironment(credentials),
     ...(token
       ? {
+          ...ownerTokens,
           GH_TOKEN: token,
           GITHUB_TOKEN: token,
           GH_HOST: "github.com",
           GH_DEBUG: "",
-          GIT_CONFIG_COUNT: "4",
+          GIT_CONFIG_COUNT: "5",
           GIT_CONFIG_KEY_0: "credential.https://github.com.helper",
           GIT_CONFIG_VALUE_0: "",
           GIT_CONFIG_KEY_1: "credential.https://github.com.helper",
-          GIT_CONFIG_VALUE_1: "!gh auth git-credential",
-          GIT_CONFIG_KEY_2: "url.https://github.com/.insteadOf",
-          GIT_CONFIG_VALUE_2: "git@github.com:",
+          GIT_CONFIG_VALUE_1: GITHUB_CREDENTIAL_HELPER,
+          GIT_CONFIG_KEY_2: "credential.https://github.com.useHttpPath",
+          GIT_CONFIG_VALUE_2: "true",
           GIT_CONFIG_KEY_3: "url.https://github.com/.insteadOf",
-          GIT_CONFIG_VALUE_3: "ssh://git@github.com/",
+          GIT_CONFIG_VALUE_3: "git@github.com:",
+          GIT_CONFIG_KEY_4: "url.https://github.com/.insteadOf",
+          GIT_CONFIG_VALUE_4: "ssh://git@github.com/",
         }
       : {}),
   };

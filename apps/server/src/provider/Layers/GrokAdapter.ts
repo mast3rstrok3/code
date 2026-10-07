@@ -1,4 +1,7 @@
-import { WorkspaceUserEnvironment } from "../../workspaceUserCredentials.ts";
+import {
+  WorkspaceUserEnvironment,
+  withWorkspaceUserEnvironment,
+} from "../../workspaceUserCredentials.ts";
 import {
   ApprovalRequestId,
   type GrokSettings,
@@ -1010,13 +1013,13 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
           const acp = yield* makeGrokAcpRuntime({
             grokSettings,
-            environment: {
-              ...McpProviderSession.withAgentDeviceEnvironment(
+            environment: withWorkspaceUserEnvironment(
+              McpProviderSession.withAgentDeviceEnvironment(
                 options?.environment ?? process.env,
                 mcpSession,
               ),
-              ...(yield* WorkspaceUserEnvironment),
-            },
+              yield* WorkspaceUserEnvironment,
+            ),
             childProcessSpawner,
             cwd,
             runtimeMode: input.runtimeMode,
