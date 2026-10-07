@@ -14,6 +14,7 @@ import { ProductWorkflowReactor } from "../Services/ProductWorkflowReactor.ts";
 import { PreviewLifecycleReactor } from "../Services/PreviewLifecycleReactor.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import * as ThreadSettlementReactor from "../ThreadSettlementReactor.ts";
+import * as AppStackLifecycleReactor from "../AppStackLifecycleReactor.ts";
 import * as PullRequestSyncReactor from "../PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "../ThreadPullRequestReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
@@ -29,6 +30,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const previewLifecycleReactor = yield* PreviewLifecycleReactor;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
   const threadSettlementReactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+  const appStackLifecycleReactor = yield* AppStackLifecycleReactor.AppStackLifecycleReactor;
   const pullRequestSyncReactor = yield* PullRequestSyncReactor.PullRequestSyncReactor;
   const threadPullRequestReactor = yield* ThreadPullRequestReactor.ThreadPullRequestReactor;
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
@@ -62,6 +64,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* appReviewWorkflowReactor.start();
     yield* previewLifecycleReactor.start();
     yield* threadDeletionReactor.start();
+    yield* appStackLifecycleReactor.start();
     yield* threadPullRequestReactor.start();
     yield* threadSettlementReactor.start();
     yield* pullRequestSyncReactor.start();
@@ -78,6 +81,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* checkpointReactor.drain;
     yield* providerRuntimeIngestion.drain;
     yield* checkpointReactor.drain;
+    yield* appStackLifecycleReactor.drain;
   });
 
   return {

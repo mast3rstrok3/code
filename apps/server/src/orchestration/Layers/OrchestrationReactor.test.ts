@@ -11,6 +11,7 @@ import { ProductWorkflowReactor } from "../Services/ProductWorkflowReactor.ts";
 import { PreviewLifecycleReactor } from "../Services/PreviewLifecycleReactor.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import * as ThreadSettlementReactor from "../ThreadSettlementReactor.ts";
+import * as AppStackLifecycleReactor from "../AppStackLifecycleReactor.ts";
 import * as PullRequestSyncReactor from "../PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "../ThreadPullRequestReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
@@ -26,6 +27,15 @@ describe("OrchestrationReactor", () => {
         const started: string[] = [];
 
         const layer = Layer.effect(OrchestrationReactor, makeOrchestrationReactor).pipe(
+          Layer.provideMerge(
+            Layer.succeed(AppStackLifecycleReactor.AppStackLifecycleReactor, {
+              start: () => {
+                started.push("app-stack-lifecycle-reactor");
+                return Effect.void;
+              },
+              drain: Effect.void,
+            }),
+          ),
           Layer.provideMerge(
             Layer.succeed(StorageCleanup, {
               start: () => {
@@ -193,6 +203,7 @@ describe("OrchestrationReactor", () => {
           "app-review-workflow-reactor",
           "preview-lifecycle-reactor",
           "thread-deletion-reactor",
+          "app-stack-lifecycle-reactor",
           "thread-pull-request-reactor",
           "thread-settlement-reactor",
           "pull-request-sync-reactor",
@@ -211,6 +222,7 @@ describe("OrchestrationReactor", () => {
           "app-review-workflow-reactor",
           "preview-lifecycle-reactor",
           "thread-deletion-reactor",
+          "app-stack-lifecycle-reactor",
           "thread-pull-request-reactor",
           "thread-settlement-reactor",
           "pull-request-sync-reactor",

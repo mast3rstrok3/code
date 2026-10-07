@@ -72,6 +72,7 @@ import { ImplementationWorkflowReactor } from "../src/orchestration/Services/Imp
 import { AppReviewWorkflowReactor } from "../src/orchestration/Services/AppReviewWorkflowReactor.ts";
 import { PreviewLifecycleReactor } from "../src/orchestration/Services/PreviewLifecycleReactor.ts";
 import * as ThreadSettlementReactor from "../src/orchestration/ThreadSettlementReactor.ts";
+import * as AppStackLifecycleReactor from "../src/orchestration/AppStackLifecycleReactor.ts";
 import * as PullRequestSyncReactor from "../src/orchestration/PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "../src/orchestration/ThreadPullRequestReactor.ts";
 import { OrchestrationReactor } from "../src/orchestration/Services/OrchestrationReactor.ts";
@@ -396,6 +397,12 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(VcsProcess.layer),
     );
     const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
+      Layer.provideMerge(
+        Layer.succeed(AppStackLifecycleReactor.AppStackLifecycleReactor, {
+          start: () => Effect.void,
+          drain: Effect.void,
+        }),
+      ),
       Layer.provideMerge(
         Layer.succeed(StorageCleanup.StorageCleanup, {
           start: () => Effect.void,

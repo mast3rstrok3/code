@@ -54,6 +54,12 @@ explicitly when needed. Starting reuses an existing stack or resumes a stopped o
 the namespace, while deleting removes it. Explicit stop, restart, and delete actions apply even
 when the stack is protected.
 
+When a thread settles, T3 Code stops its unprotected dev and prod stacks to free resources.
+This includes automatic settlement after a pull request merges or closes. Stacks stay running
+while another active thread uses their worktree or workflow. A bundle stays running if any
+member is protected or still in use. Standing `dev` and `main` deployments stay running.
+Restart a stopped stack from the App Stack panel when you need it again.
+
 Stacks created for a workflow are labeled **Workflow-owned**. If historical implementation runs
 map more than one visible stack to the same workflow, the panel reports the conflict but never
 deletes either stack automatically.
@@ -200,4 +206,4 @@ and never provision a duplicate stack.
 Workflow orchestration sends its durable workflow ID when no existing worktree stack can be reused.
 When that workflow later moves to another implementation worktree, the controller replaces only
 the stack owned by that workflow. Shared, manual, and standing `dev`/`main` stacks are protected.
-Completed and canceled workflows retain their latest stack for testing.
+Completed and canceled workflows retain their latest stack for testing until their threads settle.

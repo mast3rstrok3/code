@@ -106,6 +106,10 @@ vp lint <files>
 vp run --filter <package> typecheck
 ```
 
+If a host's `vp` wrapper loads Vite+ from another checkout, run these commands with
+`./node_modules/.bin/vp` from this worktree. Mixing runners can fail Effect test collection
+with `Cannot read properties of undefined (reading 'config')` before any tests run.
+
 Use `vp run lint:mobile` for native mobile changes. CI owns the full suite; see
 [ci.yml](../../.github/workflows/ci.yml) for its current jobs.
 The [manual Windows lane](../../.github/workflows/windows-tests.yml) is available for focused

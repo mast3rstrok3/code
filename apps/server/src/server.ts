@@ -104,6 +104,7 @@ import { AppReviewWorkflowReactorLive } from "./orchestration/Layers/AppReviewWo
 import * as WorkflowDrainCoordinator from "./orchestration/WorkflowDrainCoordinator.ts";
 import * as ProviderIngestionBacklog from "./orchestration/ProviderIngestionBacklog.ts";
 import * as ThreadSettlementReactor from "./orchestration/ThreadSettlementReactor.ts";
+import * as AppStackLifecycleReactor from "./orchestration/AppStackLifecycleReactor.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.ts";
 import * as ThreadPullRequestReactor from "./orchestration/ThreadPullRequestReactor.ts";
@@ -284,6 +285,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(StorageCleanup.layer),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(ThreadSettlementReactor.layer),
+  Layer.provideMerge(AppStackLifecycleReactor.layer),
   Layer.provideMerge(PullRequestSyncReactor.layer),
   Layer.provideMerge(ThreadPullRequestReactor.layer),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
