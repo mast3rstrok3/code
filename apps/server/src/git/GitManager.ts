@@ -2852,22 +2852,22 @@ export const make = Effect.gen(function* () {
             ),
           );
           const thread =
-            nativeThread !== null
-              ? Option.some(nativeThread)
-              : Option.isSome(projectionQuery)
-                ? yield* projectionQuery.value.getThreadShellById(input.threadId).pipe(
-                    Effect.mapError(
-                      (cause) =>
-                        new GitManagerError({
-                          operation: "resolveThreadOwner",
-                          cwd: input.cwd,
-                          detail: "Could not read the thread owner.",
-                          cause,
-                        }),
-                    ),
-                  )
-                : Option.none();
-          if (Option.isNone(thread)) {
+            nativeThread ??
+            (Option.isSome(projectionQuery)
+              ? yield* projectionQuery.value.getThreadShellById(input.threadId).pipe(
+                  Effect.map(Option.getOrNull),
+                  Effect.mapError(
+                    (cause) =>
+                      new GitManagerError({
+                        operation: "resolveThreadOwner",
+                        cwd: input.cwd,
+                        detail: "Could not read the thread owner.",
+                        cause,
+                      }),
+                  ),
+                )
+              : null);
+          if (thread === null) {
             return yield* new GitManagerError({
               operation: "resolveThreadOwner",
               cwd: input.cwd,
@@ -2898,7 +2898,7 @@ export const make = Effect.gen(function* () {
               : null,
           );
           credentials = yield* resolveWorkspaceUserCredentials(
-            settings.workspaceUsers.find((user) => user.id === thread.value.ownerUserId),
+            settings.workspaceUsers.find((user) => user.id === thread.ownerUserId),
             { repositoryOwner: ownerLogin, requireRepositoryAccess: wantsPush || wantsPr },
           ).pipe(
             Effect.mapError(
