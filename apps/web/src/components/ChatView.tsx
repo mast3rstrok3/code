@@ -1,5 +1,9 @@
+import { workflowPresetStartsInDedicatedWorkspace } from "@t3tools/shared/orchestrationImplementation";
 import { ThreadAppStackIndicator } from "./ThreadAppStackIndicator";
 import { WorkflowRuntimePanel } from "./WorkflowRuntimePanel";
+import { AppReviewControllerStatus } from "./AppReviewThreadStatus";
+import { AppStackLogsPanel } from "./AppStackLogsPanel";
+import { resolveThreadRouteSearch } from "../threadRoutes";
 import { AppStackPanel } from "./AppStackPanel";
 import { ChatCanvas } from "./chat/ChatCanvas";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
@@ -1775,6 +1779,9 @@ export default function ChatView(props: ChatViewProps) {
     (store) => store.setStickyModelSelection,
   );
   const timestampFormat = settings.timestampFormat;
+  const focusedWorkflowId = useLocation({
+    select: (location) => resolveThreadRouteSearch(location.search).workflow ?? null,
+  });
   const navigate = useNavigate();
   const citationLocation = useLocation({
     select: (location) => ({
@@ -1821,6 +1828,7 @@ export default function ChatView(props: ChatViewProps) {
   const setComposerDraftThreadContexts = useComposerDraftStore((store) => store.setThreadContexts);
   const setComposerDraftModelSelection = useComposerDraftStore((store) => store.setModelSelection);
   const setComposerDraftRuntimeMode = useComposerDraftStore((store) => store.setRuntimeMode);
+  const setComposerDraftMode = useComposerDraftStore((store) => store.setComposerMode);
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (store) => store.setInteractionMode,
   );
@@ -2247,6 +2255,11 @@ export default function ChatView(props: ChatViewProps) {
   }, [activeThreadKnownSessions]);
   const activeThreadRef = useActiveThreadRef(activeThread);
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
+  useEffect(() => {
+    if (focusedWorkflowId && activeThreadRef && isServerThread) {
+      useRightPanelStore.getState().open(activeThreadRef, "workflows");
+    }
+  }, [focusedWorkflowId, activeThreadRef, isServerThread]);
   const activeEnvironmentServerBrowser = useEnvironmentSupportsServerBrowser(
     activeThreadRef?.environmentId ?? null,
   );
@@ -5365,7 +5378,7 @@ export default function ChatView(props: ChatViewProps) {
     (mode: ProviderInteractionMode) => {
       if (mode === "plan" && !interactionModeEnabled) return;
       if (mode === interactionMode) return;
-      setComposerDraftInteractionMode(composerDraftTarget, mode);
+      setComposerDraftMode(composerDraftTarget, mode, null);
       if (isLocalDraftThread) {
         setDraftThreadContext(composerDraftTarget, { interactionMode: mode });
       }
@@ -5377,7 +5390,7 @@ export default function ChatView(props: ChatViewProps) {
       isLocalDraftThread,
       scheduleComposerFocus,
       composerDraftTarget,
-      setComposerDraftInteractionMode,
+      setComposerDraftMode,
       setDraftThreadContext,
     ],
   );
@@ -6943,8 +6956,15 @@ export default function ChatView(props: ChatViewProps) {
       ? (pendingServerThreadStartFromOriginByThreadId[activeThread?.id ?? ""] ??
         activeProjectSettings.settings.newWorktreesStartFromOrigin)
       : false;
+  const draftWorkflowPreset = useComposerDraftStore(
+    (store) => store.getComposerDraft(composerDraftTarget)?.workflowPreset,
+  );
+  const activeWorkflowPreset =
+    draftWorkflowPreset === undefined ? activeThread?.workflowPreset : draftWorkflowPreset;
   const sendEnvMode = resolveSendEnvMode({
-    requestedEnvMode: envMode,
+    requestedEnvMode: workflowPresetStartsInDedicatedWorkspace(activeWorkflowPreset)
+      ? "worktree"
+      : envMode,
     isGitRepo,
   });
   const localCheckoutBranchMismatch = useMemo(
@@ -8781,7 +8801,21 @@ export default function ChatView(props: ChatViewProps) {
       selectedModelSelection: ctxSelectedModelSelection,
       interactionMode: sendInteractionMode,
       interactionModeEnabled: sendInteractionModeEnabled,
+      clearWorkflowMode: clearWorkflowModeForSend,
+      workflowPreset: sendWorkflowPreset,
+      workflowImplementationSettings: sendWorkflowImplementationSettings,
+      workflowPromptId: sendWorkflowPromptId,
     } = sendCtx;
+    if (
+      multipleModelSelections !== null &&
+      (sendWorkflowPreset !== null || sendWorkflowPromptId !== null)
+    ) {
+      setThreadError(
+        activeThread.id,
+        "Select a single model before starting a workflow or skill. Workflow steps can use their own model overrides.",
+      );
+      return;
+    }
     const annotationImageAlreadyAttached =
       directAnnotation?.image !== undefined &&
       sendContextImages.some((image) => image.id === directAnnotation.image?.id);
@@ -9871,6 +9905,10 @@ export default function ChatView(props: ChatViewProps) {
           runtimeMode,
           interactionMode: sendInteractionMode,
           dispatchMode: turnDispatchMode,
+          clearWorkflowMode: clearWorkflowModeForSend,
+          workflowPreset: sendWorkflowPreset,
+          workflowImplementationSettings: sendWorkflowImplementationSettings,
+          workflowPromptId: sendWorkflowPromptId,
           ...(bootstrap ? { bootstrap } : {}),
           createdAt: messageCreatedAt,
         },
@@ -10883,7 +10921,39 @@ export default function ChatView(props: ChatViewProps) {
     (renderedRightPanelSurface?.kind === "workflows" ||
       renderedRightPanelSurface?.kind === "app-review") &&
     activeThreadRef ? (
-      <WorkflowRuntimePanel threadRef={activeThreadRef} />
+      <WorkflowRuntimePanel
+        key={`${activeThreadKey}:${renderedRightPanelSurface.kind}`}
+        threadRef={activeThreadRef}
+        initialReviewOpen={renderedRightPanelSurface.kind === "app-review"}
+        focusedWorkflowId={focusedWorkflowId}
+        sourceSettled={latestRunSettled}
+        sourceContext={
+          latestRunSettled
+            ? {
+                turnId: null,
+                messages: timelineMessages.slice(
+                  Math.max(
+                    0,
+                    timelineMessages.findLastIndex((message) => message.role === "user"),
+                  ),
+                ),
+              }
+            : null
+        }
+        previewTargets={
+          activePreviewState.snapshot && activePreviewState.snapshot.navStatus._tag !== "Idle"
+            ? [activePreviewState.snapshot.navStatus.url]
+            : []
+        }
+      />
+    ) : renderedRightPanelSurface?.kind === "logs" ? (
+      <AppStackLogsPanel
+        environmentId={activeThreadRef.environmentId}
+        timestampFormat={timestampFormat}
+        activeThreadWorktreePath={activeThread?.worktreePath}
+        workspaceRoot={activeWorkspaceRoot}
+        gitCwd={gitCwd}
+      />
     ) : renderedRightPanelSurface?.kind === "app-stack" && activeThreadRef && activeProject ? (
       <AppStackPanel
         threadRef={activeThreadRef}
@@ -11429,6 +11499,11 @@ export default function ChatView(props: ChatViewProps) {
                 onManualNavigation={cancelTimelineLiveFollowForUserNavigation}
                 cancelPositionRestoreRef={cancelPositionRestoreRef}
                 hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
+                emptyPlaceholder={
+                  activeThread?.workflowRole === "app-review-orchestrator" && activeThreadRef ? (
+                    <AppReviewControllerStatus threadRef={activeThreadRef} />
+                  ) : undefined
+                }
                 topFadeEnabled={!hasTimelineTopBanner}
                 {...(paintOnlyDisplayedTimeline || threadHistoryControls === undefined
                   ? {}
@@ -11913,6 +11988,22 @@ export default function ChatView(props: ChatViewProps) {
           onAddPullRequest={addPullRequestSurface}
           onAddPullRequests={addPullRequestsSurface}
           onAddDevice={addDeviceSurface}
+          onAddAppStack={() =>
+            activeThreadRef && useRightPanelStore.getState().open(activeThreadRef, "app-stack")
+          }
+          onAddReview={() =>
+            activeThreadRef && useRightPanelStore.getState().open(activeThreadRef, "app-review")
+          }
+          onAddWorkflows={() =>
+            activeThreadRef && useRightPanelStore.getState().open(activeThreadRef, "workflows")
+          }
+          appStackAvailable={activeThreadRef !== null && activeProject !== null}
+          reviewAvailable={isServerThread && activeThreadRef !== null}
+          workflowsAvailable={isServerThread && activeThreadRef !== null}
+          onAddLogs={() =>
+            activeThreadRef && useRightPanelStore.getState().open(activeThreadRef, "logs")
+          }
+          logsAvailable={activeEnvironmentConnectionPhase === "connected"}
           browserAvailable={canOperatePreview && browserAvailable}
           terminalAvailable={activeProject !== null && canOperateTerminal}
           diffAvailable={isServerThread && isGitRepo}
@@ -11971,6 +12062,22 @@ export default function ChatView(props: ChatViewProps) {
             onAddPullRequest={addPullRequestSurface}
             onAddPullRequests={addPullRequestsSurface}
             onAddDevice={addDeviceSurface}
+            onAddAppStack={() =>
+              activeThreadRef && useRightPanelStore.getState().open(activeThreadRef, "app-stack")
+            }
+            onAddReview={() =>
+              activeThreadRef && useRightPanelStore.getState().open(activeThreadRef, "app-review")
+            }
+            onAddWorkflows={() =>
+              activeThreadRef && useRightPanelStore.getState().open(activeThreadRef, "workflows")
+            }
+            appStackAvailable={activeThreadRef !== null && activeProject !== null}
+            reviewAvailable={isServerThread && activeThreadRef !== null}
+            workflowsAvailable={isServerThread && activeThreadRef !== null}
+            onAddLogs={() =>
+              activeThreadRef && useRightPanelStore.getState().open(activeThreadRef, "logs")
+            }
+            logsAvailable={activeEnvironmentConnectionPhase === "connected"}
             browserAvailable={canOperatePreview && browserAvailable}
             terminalAvailable={activeProject !== null && canOperateTerminal}
             diffAvailable={isServerThread && isGitRepo}

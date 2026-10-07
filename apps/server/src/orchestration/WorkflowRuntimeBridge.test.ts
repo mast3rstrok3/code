@@ -1,3 +1,4 @@
+import { createEmptyReadModel } from "./projector.ts";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -6,7 +7,14 @@ import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { runMigrations } from "../persistence/Migrations.ts";
-import { DEFAULT_SERVER_SETTINGS, type ProviderRuntimeEvent } from "@t3tools/contracts";
+import {
+  CommandId,
+  MessageId,
+  ProjectId,
+  DEFAULT_SERVER_SETTINGS,
+  type OrchestrationCommand,
+  type ProviderRuntimeEvent,
+} from "@t3tools/contracts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { ProviderRuntimeIngestionService } from "./Services/ProviderRuntimeIngestion.ts";
@@ -341,6 +349,110 @@ effectIt.effect("reopens archived workflow metadata without recreating its threa
         yield* bridge.start;
         yield* bridge.drain;
         expect(commands).toEqual(["thread.unarchive"]);
+      }).pipe(Effect.provide(dependencies));
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  ),
+);
+
+// The first workflow RPC must work even before the native subscription imports the launch.
+effectIt.effect("imports a newly launched native thread before applying its workflow mode", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const commands: OrchestrationCommand[] = [];
+      const sql = yield* SqlClient.SqlClient;
+      const dependencies = Layer.mergeAll(
+        Layer.mock(OrchestrationEngineService)({
+          subscribeDomainEvents: Effect.succeed(Stream.never),
+          dispatch: (command) =>
+            Effect.gen(function* () {
+              commands.push(command);
+              if (command.type === "thread.create") {
+                yield* sql`INSERT INTO projection_threads (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode, created_at, updated_at)
+              VALUES ('thread', 'project', 'Workflow', '{"instanceId":"codex","model":"gpt-6.1-sol"}', 'full-access', 'default', ${at}, ${at})`;
+              }
+              return { sequence: 1 };
+            }).pipe(Effect.orDie),
+        }),
+        Layer.mock(ProjectionSnapshotQuery)({
+          getCommandReadModel: () => Effect.succeed(createEmptyReadModel(at)),
+        }),
+        Layer.mock(OrchestratorV2)({ getThreadProjection: () => Effect.succeed(projection) }),
+        Layer.mock(EventStoreV2)({}),
+        Layer.mock(ProjectService)({
+          getById: () =>
+            Effect.succeed(
+              Option.some({
+                id: ProjectId.make("project"),
+                title: "Project",
+                workspaceRoot: "/workspace",
+                repositoryIdentity: null,
+                faviconPath: null,
+                defaultModelSelection: null,
+                scripts: [],
+                createdAt: at,
+                updatedAt: at,
+                deletedAt: null,
+              }),
+            ),
+        }),
+        Layer.mock(ServerSettingsService)({}),
+        Layer.mock(ProviderInstanceRegistry)({}),
+        Layer.mock(WorkflowUserInputBroker)({}),
+        Layer.mock(ProviderRuntimeIngestionService)({}),
+        layerProviderEvents,
+      );
+      yield* Effect.gen(function* () {
+        yield* runMigrations();
+        const bridge = yield* make;
+        const command = {
+          type: "thread.composer-mode.set" as const,
+          commandId: CommandId.make("mode"),
+          threadId: projection.thread.id,
+          interactionMode: "product-workflow" as const,
+          workflowPreset: "fast-feature" as const,
+          createdAt: at,
+        };
+        yield* Effect.all(
+          [
+            bridge.dispatchCommand(command),
+            bridge.dispatchCommand({ ...command, commandId: CommandId.make("concurrent-mode") }),
+          ],
+          { concurrency: "unbounded" },
+        );
+        expect(commands.map((command) => command.type)).toEqual([
+          "project.create",
+          "thread.create",
+          "thread.composer-mode.set",
+          "thread.composer-mode.set",
+        ]);
+        expect(commands[1]).toMatchObject({
+          worktreePath: "/workspace/feature",
+          historyImport: true,
+        });
+        yield* bridge.dispatchCommand({ ...command, commandId: CommandId.make("mode-again") });
+        expect(commands.filter((command) => command.type === "thread.create")).toHaveLength(1);
+        yield* bridge.dispatchCommand({
+          type: "thread.turn.start",
+          commandId: CommandId.make("prepared-workflow-turn"),
+          threadId: projection.thread.id,
+          interactionMode: "product-workflow",
+          runtimeMode: "full-access",
+          createdAt: at,
+          message: {
+            messageId: MessageId.make("brief"),
+            role: "user",
+            text: "Implement the feature",
+            attachments: [],
+          },
+        });
+        expect(commands.slice(-2)).toMatchObject([
+          {
+            type: "thread.meta.update",
+            worktreePath: "/workspace/feature",
+            commandId: "workflow:observe:workspace:prepared-workflow-turn",
+          },
+          { type: "thread.turn.start" },
+        ]);
       }).pipe(Effect.provide(dependencies));
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   ),

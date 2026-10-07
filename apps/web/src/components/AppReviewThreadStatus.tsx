@@ -1,8 +1,14 @@
-import type { AppReviewWorkflowRun } from "@t3tools/contracts";
+import type { AppReviewWorkflowRun, ScopedThreadRef } from "@t3tools/contracts";
 import { AlertTriangleIcon, CheckCircle2Icon, CircleDotIcon, XCircleIcon } from "lucide-react";
 
-import { appReviewRunFailureSummary, appReviewRunStatusLabel } from "./AppReviewPanel.logic";
+import {
+  appReviewRunFailureSummary,
+  appReviewRunStatusLabel,
+  selectLatestAppReviewControllerRun,
+} from "./AppReviewPanel.logic";
 import { Button } from "./ui/button";
+import { useAppReviewWorkflowRuns } from "~/state/workflows";
+import { useRightPanelStore } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
 
 const STATUS_COPY = {
@@ -77,4 +83,15 @@ export function AppReviewThreadStatus(props: {
       </section>
     </div>
   );
+}
+
+export function AppReviewControllerStatus({ threadRef }: { threadRef: ScopedThreadRef }) {
+  const runs = useAppReviewWorkflowRuns(threadRef.environmentId);
+  const run = selectLatestAppReviewControllerRun(runs, threadRef.threadId);
+  return run ? (
+    <AppReviewThreadStatus
+      run={run}
+      onOpenDetails={() => useRightPanelStore.getState().open(threadRef, "app-review")}
+    />
+  ) : null;
 }

@@ -1,7 +1,11 @@
 import { EventStoreV2 } from "../orchestration-v2/EventStore.ts";
 import { WorkflowUserInputBroker } from "../mcp/WorkflowUserInputBroker.ts";
 import { ProviderInstanceRegistry } from "../provider/ProviderInstanceRegistry.ts";
-import type { OrchestrationMessage } from "@t3tools/contracts";
+import type {
+  OrchestrationMessage,
+  OrchestrationCommand,
+  DispatchResult,
+} from "@t3tools/contracts";
 import {
   CommandId,
   DEFAULT_WORKSPACE_USER_ID,
@@ -19,6 +23,8 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import * as Schema from "effect/Schema";
+import type { OrchestrationDispatchError } from "./Errors.ts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -26,6 +32,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
 import type * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -303,9 +310,24 @@ export function workflowRuntimeEvents(
   return [];
 }
 
+export class WorkflowThreadImportError extends Schema.TaggedError<WorkflowThreadImportError>()(
+  "WorkflowThreadImportError",
+  {
+    threadId: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message() {
+    return "Failed to prepare the thread for workflow commands.";
+  }
+}
+
 export class WorkflowRuntimeBridge extends Context.Service<
   WorkflowRuntimeBridge,
   {
+    readonly dispatchCommand: (
+      command: OrchestrationCommand,
+    ) => Effect.Effect<DispatchResult, WorkflowThreadImportError | OrchestrationDispatchError>;
     readonly start: Effect.Effect<void, never, Scope.Scope>;
     readonly drain: Effect.Effect<void>;
   }
@@ -340,8 +362,10 @@ export const make = Effect.gen(function* () {
   const workflowRecord = (threadId: ThreadId) => sql<{
     readonly deleted_at: string | null;
     readonly archived_at: string | null;
+    readonly worktree_path: string | null;
+    readonly branch: string | null;
   }>`
-    SELECT deleted_at, archived_at FROM projection_threads WHERE thread_id = ${threadId} LIMIT 1
+    SELECT deleted_at, archived_at, worktree_path, branch FROM projection_threads WHERE thread_id = ${threadId} LIMIT 1
   `;
   // Subscribe during layer construction, before startup recovery can emit workflow commands.
   const commands = yield* engine.subscribeDomainEvents;
@@ -402,6 +426,51 @@ export const make = Effect.gen(function* () {
     retryPersisted(executeAndRecord(event)),
   );
 
+  const importLock = yield* Semaphore.make(1);
+  const importNativeThread = Effect.fn("WorkflowRuntimeBridge.importNativeThread")(function* (
+    thread: OrchestrationV2ThreadProjection["thread"],
+    commandId: CommandId,
+  ) {
+    const records = yield* workflowRecord(thread.id);
+    if (records.length === 0) {
+      const projectOption = yield* projects.getById(thread.projectId, { includeDeleted: true });
+      if (Option.isNone(projectOption))
+        return yield* Effect.die(new Error("Workflow project was not found"));
+      const project = projectOption.value;
+      const readModel = yield* snapshots.getCommandReadModel();
+      if (!readModel.projects.some((old) => old.id === project.id)) {
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make(`${commandId}:project`),
+          projectId: project.id,
+          title: project.title,
+          workspaceRoot: project.workspaceRoot,
+          ownerUserId: project.ownerUserId ?? DEFAULT_WORKSPACE_USER_ID,
+          createdAt: project.createdAt,
+        });
+      }
+      yield* engine.dispatch({
+        type: "thread.create",
+        commandId,
+        threadId: thread.id,
+        projectId: thread.projectId,
+        title: thread.title,
+        modelSelection: thread.modelSelection,
+        runtimeMode: thread.runtimeMode,
+        interactionMode: thread.interactionMode,
+        branch: thread.branch,
+        worktreePath: thread.worktreePath,
+        ownerUserId: thread.ownerUserId ?? DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: thread.lineage.parentThreadId,
+        workflowRole: thread.workflowRole ?? null,
+        workflowContext: thread.workflowContext ?? null,
+        workflowPreset: thread.workflowPreset ?? null,
+        createdAt: DateTime.formatIso(thread.createdAt),
+        historyImport: true,
+      });
+    }
+  }, importLock.withPermit);
+
   const observeNative = Effect.fn("WorkflowRuntimeBridge.observeNative")(function* (
     stored: OrchestrationV2StoredEvent,
   ) {
@@ -409,44 +478,7 @@ export const make = Effect.gen(function* () {
     const commandId = CommandId.make(`${OBSERVATION_PREFIX}${event.id}`);
     if (event.type === "thread.created") {
       const thread = event.payload;
-      const records = yield* workflowRecord(thread.id);
-      if (records.length === 0) {
-        const projectOption = yield* projects.getById(thread.projectId, { includeDeleted: true });
-        if (Option.isNone(projectOption))
-          return yield* Effect.die(new Error("Workflow project was not found"));
-        const project = projectOption.value;
-        const readModel = yield* snapshots.getCommandReadModel();
-        if (!readModel.projects.some((old) => old.id === project.id)) {
-          yield* engine.dispatch({
-            type: "project.create",
-            commandId: CommandId.make(`${commandId}:project`),
-            projectId: project.id,
-            title: project.title,
-            workspaceRoot: project.workspaceRoot,
-            ownerUserId: project.ownerUserId ?? DEFAULT_WORKSPACE_USER_ID,
-            createdAt: project.createdAt,
-          });
-        }
-        yield* engine.dispatch({
-          type: "thread.create",
-          commandId,
-          threadId: thread.id,
-          projectId: thread.projectId,
-          title: thread.title,
-          modelSelection: thread.modelSelection,
-          runtimeMode: thread.runtimeMode,
-          interactionMode: thread.interactionMode,
-          branch: thread.branch,
-          worktreePath: thread.worktreePath,
-          ownerUserId: thread.ownerUserId ?? DEFAULT_WORKSPACE_USER_ID,
-          parentThreadId: thread.lineage.parentThreadId,
-          workflowRole: thread.workflowRole ?? null,
-          workflowContext: thread.workflowContext ?? null,
-          workflowPreset: thread.workflowPreset ?? null,
-          createdAt: DateTime.formatIso(thread.createdAt),
-          historyImport: true,
-        });
-      }
+      yield* importNativeThread(thread, commandId);
     }
     // Native lifecycle changes must reach the workflow metadata and App Stack reactors.
     if (
@@ -572,7 +604,44 @@ export const make = Effect.gen(function* () {
       .streamStoredEventsFrom({ afterSequence: nativeHead })
       .pipe(Stream.runForEach(nativeWorker.enqueue), Effect.forkScoped);
   });
+  const dispatchCommand = Effect.fn("WorkflowRuntimeBridge.dispatchCommand")(function* (
+    command: OrchestrationCommand,
+  ) {
+    const threadId =
+      "threadId" in command
+        ? command.threadId
+        : "targetThreadId" in command
+          ? command.targetThreadId
+          : null;
+    if (threadId !== null && command.type !== "thread.create") {
+      // A native launch can reach this RPC before the event subscription imports it.
+      yield* Effect.gen(function* () {
+        const [record] = yield* workflowRecord(threadId);
+        if (record !== undefined && command.type !== "thread.turn.start") return;
+        const projection = yield* native.getThreadProjection(threadId);
+        yield* importNativeThread(
+          projection.thread,
+          CommandId.make(`${OBSERVATION_PREFIX}import:${threadId}`),
+        );
+        if (
+          record !== undefined &&
+          (record.worktree_path !== projection.thread.worktreePath ||
+            record.branch !== projection.thread.branch)
+        ) {
+          yield* engine.dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.make(`${OBSERVATION_PREFIX}workspace:${command.commandId}`),
+            threadId,
+            worktreePath: projection.thread.worktreePath,
+            branch: projection.thread.branch,
+          });
+        }
+      }).pipe(Effect.mapError((cause) => new WorkflowThreadImportError({ threadId, cause })));
+    }
+    return yield* engine.dispatch(command, { priority: "interactive" });
+  });
   return {
+    dispatchCommand,
     start: start.pipe(Effect.orDie),
     drain: commandWorker.drain.pipe(
       Effect.andThen(nativeWorker.drain),

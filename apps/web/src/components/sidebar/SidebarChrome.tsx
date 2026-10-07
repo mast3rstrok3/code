@@ -1,4 +1,13 @@
-import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import { useHandleNewThread } from "~/hooks/useHandleNewThread";
+import { useRightPanelStore } from "~/rightPanelStore";
+import {
+  ArrowLeftIcon,
+  ChartNoAxesColumnIcon,
+  SettingsIcon,
+  LayersIcon,
+  WorkflowIcon,
+  ClipboardCheckIcon,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
@@ -172,6 +181,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     select: (location) => isSidebarUtilityPage(location.pathname),
   });
   const pullRequestsSupported = usePullRequestsSupported();
+  const { routeThreadRef } = useHandleNewThread();
   const closeMobileSidebar = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
@@ -202,37 +212,67 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   }, [closeMobileSidebar, navigateToMainApp]);
 
   return (
-    <SidebarMenu className="flex-row items-center">
-      {isOnUtilityPage ? (
-        <SidebarMenuItem className="min-w-0 flex-1">
-          <SidebarMenuButton onClick={handleBackClick}>
-            <ArrowLeftIcon />
-            <span>Back</span>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-      ) : (
-        <>
+    <>
+      {!isOnUtilityPage && routeThreadRef ? (
+        <SidebarMenu className="flex-row items-center">
           <SidebarUtilityItem
-            icon={<SettingsIcon />}
-            label="Settings"
-            onClick={handleSettingsClick}
+            icon={<LayersIcon />}
+            label="App Stack"
+            onClick={() => {
+              closeMobileSidebar();
+              useRightPanelStore.getState().open(routeThreadRef, "app-stack");
+            }}
           />
-          {pullRequestsSupported ? (
+          <SidebarUtilityItem
+            icon={<WorkflowIcon />}
+            label="Workflows"
+            onClick={() => {
+              closeMobileSidebar();
+              useRightPanelStore.getState().open(routeThreadRef, "workflows");
+            }}
+          />
+          <SidebarUtilityItem
+            icon={<ClipboardCheckIcon />}
+            label="App Review"
+            onClick={() => {
+              closeMobileSidebar();
+              useRightPanelStore.getState().open(routeThreadRef, "app-review");
+            }}
+          />
+        </SidebarMenu>
+      ) : null}
+      <SidebarMenu className="flex-row items-center">
+        {isOnUtilityPage ? (
+          <SidebarMenuItem className="min-w-0 flex-1">
+            <SidebarMenuButton onClick={handleBackClick}>
+              <ArrowLeftIcon />
+              <span>Back</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        ) : (
+          <>
             <SidebarUtilityItem
-              icon={<PullRequestGlyph.pullRequest />}
-              label="Pull Requests"
-              onClick={handlePullRequestsClick}
+              icon={<SettingsIcon />}
+              label="Settings"
+              onClick={handleSettingsClick}
             />
-          ) : null}
-          <SidebarUtilityItem
-            icon={<ChartNoAxesColumnIcon />}
-            label="Usage"
-            onClick={handleUsageClick}
-          />
-        </>
-      )}
-      <SidebarUpdatePill />
-    </SidebarMenu>
+            {pullRequestsSupported ? (
+              <SidebarUtilityItem
+                icon={<PullRequestGlyph.pullRequest />}
+                label="Pull Requests"
+                onClick={handlePullRequestsClick}
+              />
+            ) : null}
+            <SidebarUtilityItem
+              icon={<ChartNoAxesColumnIcon />}
+              label="Usage"
+              onClick={handleUsageClick}
+            />
+          </>
+        )}
+        <SidebarUpdatePill />
+      </SidebarMenu>
+    </>
   );
 });
 

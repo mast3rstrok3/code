@@ -1,3 +1,4 @@
+import * as WorkflowRuntimeBridge from "./orchestration/WorkflowRuntimeBridge.ts";
 import { NativeVerificationError } from "@t3tools/contracts";
 import { executeNativeVerification } from "./orchestration/nativeVerificationService.ts";
 import { PreviewCoordinator } from "./preview/PreviewCoordinator.ts";
@@ -1294,6 +1295,7 @@ const layerWsRpc = (
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const workflowEngine = yield* OrchestrationEngineService;
+      const workflowBridge = yield* WorkflowRuntimeBridge.WorkflowRuntimeBridge;
       const workflowPath = yield* Path.Path;
       const workflowSnapshots = yield* ProjectionSnapshotQuery;
       const appStackManager = yield* AppStackManager;
@@ -1846,9 +1848,7 @@ const layerWsRpc = (
           startup
             .enqueueCommand(
               Schema.decodeUnknownEffect(OrchestrationCommand)(input.command).pipe(
-                Effect.flatMap((command) =>
-                  workflowEngine.dispatch(command, { priority: "interactive" }),
-                ),
+                Effect.flatMap((command) => workflowBridge.dispatchCommand(command)),
               ),
             )
             .pipe(

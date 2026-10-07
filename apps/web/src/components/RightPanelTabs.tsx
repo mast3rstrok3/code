@@ -21,6 +21,10 @@ import {
   ChevronRight,
   FileDiff,
   Files,
+  Layers,
+  ClipboardCheck,
+  Workflow,
+  ScrollText,
   Globe2,
   Plus,
   TerminalSquare,
@@ -128,6 +132,10 @@ interface RightPanelTabsProps {
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
   onAddDevice: () => void;
+  onAddAppStack?: (() => void) | undefined;
+  onAddReview?: (() => void) | undefined;
+  onAddWorkflows?: (() => void) | undefined;
+  onAddLogs?: (() => void) | undefined;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
@@ -135,6 +143,10 @@ interface RightPanelTabsProps {
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
   deviceAvailable: boolean;
+  appStackAvailable?: boolean | undefined;
+  reviewAvailable?: boolean | undefined;
+  workflowsAvailable?: boolean | undefined;
+  logsAvailable?: boolean | undefined;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   children: ReactNode;
 }
@@ -325,6 +337,10 @@ function RightPanelEmptyState(props: {
   onAddPullRequest: () => void;
   onAddPullRequests: () => void;
   onAddDevice: () => void;
+  onAddAppStack?: (() => void) | undefined;
+  onAddReview?: (() => void) | undefined;
+  onAddWorkflows?: (() => void) | undefined;
+  onAddLogs?: (() => void) | undefined;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
@@ -332,6 +348,10 @@ function RightPanelEmptyState(props: {
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
   deviceAvailable: boolean;
+  appStackAvailable?: boolean | undefined;
+  reviewAvailable?: boolean | undefined;
+  workflowsAvailable?: boolean | undefined;
+  logsAvailable?: boolean | undefined;
 }) {
   // -1 means no highlight: it only appears on hover or arrow use.
   const [highlight, setHighlight] = useState(-1);
@@ -384,6 +404,38 @@ function RightPanelEmptyState(props: {
       available: props.pullRequestsAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.pullRequests,
       onClick: props.onAddPullRequests,
+    },
+    {
+      label: "App Stack",
+      icon: Layers,
+      shortcut: "S",
+      available: props.appStackAvailable === true,
+      disabledReason: "App Stack requires a project thread.",
+      onClick: () => props.onAddAppStack?.(),
+    },
+    {
+      label: "App Review",
+      icon: ClipboardCheck,
+      shortcut: "R",
+      available: props.reviewAvailable === true,
+      disabledReason: "App Review requires a started thread.",
+      onClick: () => props.onAddReview?.(),
+    },
+    {
+      label: "Logs",
+      icon: ScrollText,
+      shortcut: "G",
+      available: props.logsAvailable === true,
+      disabledReason: "Connect the environment to inspect stack logs.",
+      onClick: () => props.onAddLogs?.(),
+    },
+    {
+      label: "Workflows",
+      icon: Workflow,
+      shortcut: "W",
+      available: props.workflowsAvailable === true,
+      disabledReason: "Workflows require a started thread.",
+      onClick: () => props.onAddWorkflows?.(),
     },
     {
       label: "Device",
@@ -590,6 +642,8 @@ function surfaceTitle(
       return "App Review";
     case "app-stack":
       return "App Stack";
+    case "logs":
+      return "Logs";
     case "diff":
       return "Diff";
     case "files":
@@ -666,8 +720,13 @@ function SurfaceIcon({
       return <PreviewFavicon capturedUrl={capturedUrl} url={url} />;
     }
     case "workflows":
+      return <Workflow className="size-3 shrink-0" />;
     case "app-review":
+      return <ClipboardCheck className="size-3 shrink-0" />;
     case "app-stack":
+      return <Layers className="size-3 shrink-0" />;
+    case "logs":
+      return <ScrollText className="size-3 shrink-0" />;
     case "diff":
       return <FileDiff className="size-3 shrink-0" />;
     case "files":
@@ -919,6 +978,38 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       available: props.pullRequestsAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.pullRequests,
       onClick: props.onAddPullRequests,
+    },
+    {
+      label: "App Stack",
+      icon: Layers,
+      shortcut: "S",
+      available: props.appStackAvailable === true,
+      disabledReason: "App Stack requires a project thread.",
+      onClick: () => props.onAddAppStack?.(),
+    },
+    {
+      label: "App Review",
+      icon: ClipboardCheck,
+      shortcut: "R",
+      available: props.reviewAvailable === true,
+      disabledReason: "App Review requires a started thread.",
+      onClick: () => props.onAddReview?.(),
+    },
+    {
+      label: "Logs",
+      icon: ScrollText,
+      shortcut: "G",
+      available: props.logsAvailable === true,
+      disabledReason: "Connect the environment to inspect stack logs.",
+      onClick: () => props.onAddLogs?.(),
+    },
+    {
+      label: "Workflows",
+      icon: Workflow,
+      shortcut: "W",
+      available: props.workflowsAvailable === true,
+      disabledReason: "Workflows require a started thread.",
+      onClick: () => props.onAddWorkflows?.(),
     },
     {
       label: "Device",
@@ -1411,6 +1502,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddPullRequest={props.onAddPullRequest}
             onAddPullRequests={props.onAddPullRequests}
             onAddDevice={props.onAddDevice}
+            onAddAppStack={props.onAddAppStack}
+            onAddReview={props.onAddReview}
+            onAddWorkflows={props.onAddWorkflows}
+            onAddLogs={props.onAddLogs}
+            logsAvailable={props.logsAvailable}
+            appStackAvailable={props.appStackAvailable}
+            reviewAvailable={props.reviewAvailable}
+            workflowsAvailable={props.workflowsAvailable}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}

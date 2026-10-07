@@ -1,13 +1,16 @@
+import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import { UserInputRequestedPayload, ApprovalRequestId } from "@t3tools/contracts";
 import { randomUUID } from "~/lib/utils";
 import { AppReviewWorkflowRunId } from "@t3tools/contracts";
 import { useWorkflowCatalog } from "~/workflowCatalogState";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import {
   CommandId,
+  ThreadId,
+  WorkflowId,
   MessageId,
   type ClientOrchestrationCommand,
   type ScopedThreadRef,
@@ -22,12 +25,16 @@ import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { buildWorkflowViewModel, selectWorkflowRootForThread } from "~/workflowModel";
 import { useWorkflowSnapshot, useWorkflowThread, workflowEnvironment } from "~/state/workflows";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { buildThreadRouteParams } from "~/threadRoutes";
+import { buildThreadRouteParams, buildWorkflowRouteUrl } from "~/threadRoutes";
 import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { WorkflowsPanel } from "./WorkflowsPanel";
 import { AppReviewPanel } from "./AppReviewPanel";
 import { Button } from "./ui/button";
-import ChatMarkdown from "./ChatMarkdown";
+import { WorkflowInstructionsPanel } from "./WorkflowInstructionsPanel";
+import { useThreadShell } from "~/state/entities";
+import { useEnvironmentQuery } from "~/state/query";
+import { useRightPanelStore } from "~/rightPanelStore";
+import type { BrowserAppReviewSourceContext } from "./ChatView.logic";
 
 const questionPayload = Schema.Struct({
   ...UserInputRequestedPayload.fields,
@@ -37,9 +44,24 @@ const resolvedPayload = Schema.Struct({ requestId: Schema.String });
 const decodeQuestionPayload = Schema.decodeUnknownOption(questionPayload);
 const decodeResolvedPayload = Schema.decodeUnknownOption(resolvedPayload);
 
-export function WorkflowRuntimePanel({ threadRef }: { threadRef: ScopedThreadRef }) {
+export function WorkflowRuntimePanel({
+  threadRef,
+  initialReviewOpen = false,
+  focusedWorkflowId = null,
+  sourceSettled,
+  sourceContext,
+  previewTargets,
+}: {
+  threadRef: ScopedThreadRef;
+  initialReviewOpen?: boolean;
+  focusedWorkflowId?: WorkflowId | null;
+  sourceSettled: boolean;
+  sourceContext: BrowserAppReviewSourceContext | null;
+  previewTargets: ReadonlyArray<string>;
+}) {
   const snapshot = useWorkflowSnapshot(threadRef.environmentId);
   const detail = useWorkflowThread(threadRef);
+  const nativeThread = useThreadShell(threadRef);
   const catalog = useWorkflowCatalog(threadRef.environmentId);
   const settings = useEnvironmentSettings(threadRef.environmentId);
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
@@ -66,13 +88,16 @@ export function WorkflowRuntimePanel({ threadRef }: { threadRef: ScopedThreadRef
     });
   }, [detail.data]);
   const dispatch = useAtomCommand(workflowEnvironment.dispatchCommand);
+  const canDispatch = useAtomValue(
+    workflowEnvironment.dispatchCommand.permissionAtom(threadRef.environmentId),
+  );
   const navigate = useNavigate();
   const [preset, setPreset] = useState<WorkflowPreset>("implementation");
   const [brief, setBrief] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [document, setDocument] = useState<string | null>(null);
-  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
   const threads = useMemo(
     () =>
       (snapshot.data?.threads ?? []).map((thread) => ({
@@ -86,14 +111,48 @@ export function WorkflowRuntimePanel({ threadRef }: { threadRef: ScopedThreadRef
     environmentId: threadRef.environmentId,
     id: threadRef.threadId,
   });
-  const planning = detail.data?.planningWorkflow;
+  const rootId = workflow?.root.id ?? threadRef.threadId;
+  const rootDetail = useWorkflowThread({ ...threadRef, threadId: rootId });
+  const artifacts = useEnvironmentQuery(
+    rootDetail.data === null
+      ? null
+      : workflowEnvironment.artifacts({
+          environmentId: threadRef.environmentId,
+          input: { projectId: rootDetail.data.projectId, threadId: rootId },
+        }),
+  );
+  const refreshArtifacts = artifacts.refresh;
+  useEffect(() => {
+    refreshArtifacts();
+  }, [snapshot.dataUpdatedAt, refreshArtifacts]);
+  const planning = rootDetail.data?.planningWorkflow;
+  const workflowBase = () => ({ ...base(), threadId: rootId });
+  const setConcurrency = (change: {
+    maxParallelTickets?: number;
+    maxParallelAppReviews?: number;
+  }) => {
+    const root = workflow?.root;
+    if (!root) return;
+    void send({
+      type: "thread.composer-mode.set",
+      ...workflowBase(),
+      interactionMode: root.interactionMode,
+      workflowPreset: root.workflowPreset ?? null,
+      workflowImplementationSettings: {
+        ...(root.workflowImplementationSettings ?? settings.implementation),
+        ...change,
+      },
+    });
+  };
   const send = async (command: ClientOrchestrationCommand) => {
+    if (!canDispatch) return false;
     setBusy(true);
     setError(null);
     try {
       const result = await dispatch({ environmentId: threadRef.environmentId, input: { command } });
       if (result._tag !== "Success")
         setError("The workflow command failed. Check the notification for details.");
+      if (result._tag === "Success") detail.refresh();
       return result._tag === "Success";
     } finally {
       setBusy(false);
@@ -110,7 +169,7 @@ export function WorkflowRuntimePanel({ threadRef }: { threadRef: ScopedThreadRef
       params: buildThreadRouteParams({ environmentId: threadRef.environmentId, threadId }),
     });
   const launch = async () => {
-    const thread = detail.data;
+    const thread = nativeThread ?? detail.data;
     if (!thread || !brief.trim()) return;
     const definition = WORKFLOW_PRESET_DEFINITION_BY_ID[preset];
     if (
@@ -138,7 +197,8 @@ export function WorkflowRuntimePanel({ threadRef }: { threadRef: ScopedThreadRef
       },
     });
   };
-  if (snapshot.error || detail.error) return <p role="alert">{snapshot.error ?? detail.error}</p>;
+  if (snapshot.error || (detail.error && !nativeThread))
+    return <p role="alert">{snapshot.error ?? detail.error}</p>;
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto">
       <div className="flex flex-col gap-2 p-3">
@@ -148,9 +208,6 @@ export function WorkflowRuntimePanel({ threadRef }: { threadRef: ScopedThreadRef
             value={preset}
             onChange={(event) => setPreset(event.target.value as WorkflowPreset)}
           >
-            <option value="implementation">Implementation</option>
-            <option value="fast-feature">Fast feature</option>
-            <option value="full-feature">Full feature</option>
             {WORKFLOW_PRESET_DEFINITIONS.map((definition) => (
               <option
                 key={definition.id}
@@ -171,7 +228,10 @@ export function WorkflowRuntimePanel({ threadRef }: { threadRef: ScopedThreadRef
           value={brief}
           onChange={(event) => setBrief(event.target.value)}
         />
-        <Button disabled={busy || !detail.data || !brief.trim()} onClick={() => void launch()}>
+        <Button
+          disabled={!canDispatch || busy || (!nativeThread && !detail.data) || !brief.trim()}
+          onClick={() => void launch()}
+        >
           Start workflow
         </Button>
         {error ? <p role="alert">{error}</p> : null}
@@ -293,7 +353,10 @@ export function WorkflowRuntimePanel({ threadRef }: { threadRef: ScopedThreadRef
           <Button variant="outline" size="sm" onClick={() => setDocument(null)}>
             Close document
           </Button>
-          <ChatMarkdown text={document} cwd={undefined} />
+          <WorkflowInstructionsPanel
+            environmentId={threadRef.environmentId}
+            workflowPromptId={document}
+          />
         </div>
       ) : null}
       {reviewOpen ? (
@@ -301,42 +364,71 @@ export function WorkflowRuntimePanel({ threadRef }: { threadRef: ScopedThreadRef
           mode="sidebar"
           threadRef={threadRef}
           launchInFlight={busy}
-          launchDisabled={!detail.data}
-          sourceSettled={detail.data?.settledOverride === "settled"}
-          sourceContext={null}
-          previewTargets={[]}
+          launchDisabled={!canDispatch || (!nativeThread && !detail.data)}
+          sourceSettled={sourceSettled}
+          sourceContext={sourceContext}
+          previewTargets={previewTargets}
+          workflowArtifacts={artifacts.data}
+          onOpenPlanArtifact={() => {
+            setReviewOpen(false);
+            useRightPanelStore.getState().open(threadRef, "workflows");
+          }}
           onOpenThread={openThread}
           onLaunch={(request) => {
-            if (!detail.data) return;
+            const source = nativeThread ?? detail.data;
+            if (!source || !sourceSettled) return;
             void send({
               type: "thread.app-review-workflow.launch",
               commandId: CommandId.make(randomUUID()),
               targetThreadId: threadRef.threadId,
-              controllerThreadId: threadRef.threadId,
+              controllerThreadId: ThreadId.make(randomUUID()),
               caller: { type: "standalone", sourceThreadId: threadRef.threadId },
               briefMarkdown: request.brief,
+              supportingContextMarkdown:
+                sourceContext?.messages
+                  .map((message) => `${message.role}: ${message.text}`)
+                  .join("\n\n") ?? null,
               previewTargets: request.reviewUrl ? [request.reviewUrl] : [],
               previewTargetsPinned: Boolean(request.reviewUrl),
               reviewOnly: request.reviewOnly,
-              cycleBudget: request.cycleBudget,
-              modelSelection: detail.data.modelSelection,
+              cycleBudget: request.reviewOnly ? 1 : request.cycleBudget,
+              modelSelection: source.modelSelection,
               createdAt: new Date().toISOString(),
             });
           }}
           onStop={(run) =>
-            void send({ type: "thread.app-review-workflow.cancel", ...base(), runId: run.id })
+            void send({
+              type: "thread.app-review-workflow.cancel",
+              ...base(),
+              threadId: run.controllerThreadId,
+              runId: run.id,
+            })
           }
         />
       ) : null}
       <WorkflowsPanel
         workflow={workflow}
+        defaultMaxParallelTickets={settings.implementation.maxParallelTickets}
+        defaultMaxParallelAppReviews={settings.implementation.maxParallelAppReviews}
+        onSetMaxParallelTickets={
+          canDispatch ? (maxParallelTickets) => setConcurrency({ maxParallelTickets }) : undefined
+        }
+        onSetMaxParallelAppReviews={
+          canDispatch
+            ? (maxParallelAppReviews) => setConcurrency({ maxParallelAppReviews })
+            : undefined
+        }
         activeThreadKey={scopedThreadKey(threadRef)}
-        focusedWorkflowId={null}
-        timestampFormat="locale"
-        implementationRuns={snapshot.data?.implementationRuns ?? []}
-        appReviewWorkflowRuns={snapshot.data?.appReviewWorkflowRuns ?? []}
-        tickets={planning?.tickets ?? []}
-        spec={planning?.spec ?? null}
+        focusedWorkflowId={focusedWorkflowId}
+        timestampFormat={settings.timestampFormat}
+        implementationRuns={
+          artifacts.data?.implementationRuns ?? snapshot.data?.implementationRuns ?? []
+        }
+        appReviewWorkflowRuns={
+          artifacts.data?.appReviewWorkflowRuns ?? snapshot.data?.appReviewWorkflowRuns ?? []
+        }
+        tickets={artifacts.data?.tickets ?? planning?.tickets ?? []}
+        spec={artifacts.data?.spec ?? planning?.spec ?? null}
         skillTitlesById={
           new Map(
             catalog.status === "loaded"
@@ -347,7 +439,7 @@ export function WorkflowRuntimePanel({ threadRef }: { threadRef: ScopedThreadRef
         onOpenSkill={(id) =>
           setDocument(
             catalog.status === "loaded"
-              ? (catalog.catalog.skills.find((skill) => skill.id === id)?.promptText ?? id)
+              ? (catalog.catalog.skills.find((skill) => skill.id === id)?.promptIds[0] ?? id)
               : id,
           )
         }
@@ -355,38 +447,52 @@ export function WorkflowRuntimePanel({ threadRef }: { threadRef: ScopedThreadRef
         onOpenAppReview={() => setReviewOpen(true)}
         onCopyWorkflowLink={(id) =>
           void navigator.clipboard.writeText(
-            `${window.location.href}#workflow=${encodeURIComponent(id)}`,
+            buildWorkflowRouteUrl({
+              currentHref: window.location.href,
+              environmentId: threadRef.environmentId,
+              rootThreadId: rootId,
+              workflowId: WorkflowId.make(id),
+            }),
           )
         }
-        onPauseWorkflow={() => void send({ type: "thread.workflow.pause", ...base() })}
-        onResumeWorkflow={() => void send({ type: "thread.workflow.resume", ...base() })}
+        onPauseWorkflow={() => void send({ type: "thread.workflow.pause", ...workflowBase() })}
+        onResumeWorkflow={() => void send({ type: "thread.workflow.resume", ...workflowBase() })}
         onRetryImplementationRun={(runId) =>
-          void send({ type: "thread.implementation-run.retry", ...base(), runId })
+          void send({ type: "thread.implementation-run.retry", ...workflowBase(), runId })
         }
         onRerunImplementationStage={({ runId, target }) =>
-          void send({ type: "thread.implementation-run.rerun", ...base(), runId, target })
+          void send({ type: "thread.implementation-run.rerun", ...workflowBase(), runId, target })
         }
         onResetImplementationStage={({ runId, target }) =>
-          void send({ type: "thread.implementation-run.reset", ...base(), runId, target })
+          void send({ type: "thread.implementation-run.reset", ...workflowBase(), runId, target })
         }
         onSetImplementationSkip={({ runId, target, skipped }) =>
-          void send({ type: "thread.implementation-run.skip", ...base(), runId, target, skipped })
+          void send({
+            type: "thread.implementation-run.skip",
+            ...workflowBase(),
+            runId,
+            target,
+            skipped,
+          })
         }
         onRerunAppReviewPhase={({ appReviewRunId, phase }) =>
           void send({
             type: "thread.app-review-workflow.rerun",
-            ...base(),
+            ...workflowBase(),
+            threadId:
+              snapshot.data?.appReviewWorkflowRuns?.find((run) => run.id === appReviewRunId)
+                ?.controllerThreadId ?? rootId,
             runId: AppReviewWorkflowRunId.make(appReviewRunId),
             phase,
           })
         }
         onRestartPlanningStage={(stage) =>
-          void send({ type: "thread.planning-stage.start", ...base(), stage })
+          void send({ type: "thread.planning-stage.start", ...workflowBase(), stage })
         }
         onSetStepModel={(key, modelSelection) =>
           void send({
             type: "thread.workflow.step-model.set",
-            ...base(),
+            ...workflowBase(),
             workflowPromptId: key.workflowPromptId,
             ...(key.stepWorkflowPromptId === undefined
               ? {}
@@ -397,7 +503,7 @@ export function WorkflowRuntimePanel({ threadRef }: { threadRef: ScopedThreadRef
         onSetStepCycles={(key, maxCycles) =>
           void send({
             type: "thread.workflow.step-cycles.set",
-            ...base(),
+            ...workflowBase(),
             workflowPromptId: key.workflowPromptId,
             ...(key.stepWorkflowPromptId === undefined
               ? {}
@@ -408,7 +514,7 @@ export function WorkflowRuntimePanel({ threadRef }: { threadRef: ScopedThreadRef
         onSetStepReviewParts={(key, reviewParts) =>
           void send({
             type: "thread.workflow.step-review-parts.set",
-            ...base(),
+            ...workflowBase(),
             workflowPromptId: key.workflowPromptId,
             ...(key.stepWorkflowPromptId === undefined
               ? {}
@@ -421,11 +527,11 @@ export function WorkflowRuntimePanel({ threadRef }: { threadRef: ScopedThreadRef
         defaultStepReviewParts={settings.workflowStepReviewParts}
         onStopThreads={(ids) => {
           for (const threadId of ids)
-            void send({ type: "thread.session.stop", ...base(), threadId });
+            void send({ type: "thread.session.stop", ...workflowBase(), threadId });
         }}
         onResumeThreads={(ids) => {
           for (const threadId of ids)
-            void send({ type: "thread.workflow.resume", ...base(), threadId });
+            void send({ type: "thread.workflow.resume", ...workflowBase(), threadId });
         }}
       />
     </div>

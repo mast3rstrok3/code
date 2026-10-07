@@ -16,15 +16,18 @@ import {
   TurnItemId,
   WS_METHODS,
   type OrchestrationV2Command,
+  type ClientOrchestrationCommand,
   type OrchestrationV2ThreadLaunchInput,
   type OrchestrationV2ThreadProjection,
   type ProjectMutation,
+  type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import {
@@ -73,13 +76,21 @@ const TARGET = new PrimaryConnectionTarget({
 
 const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(function* (input: {
   readonly commands: OrchestrationV2Command[];
+  readonly workflowCommands?: ClientOrchestrationCommand[];
   readonly projects: ProjectMutation[];
   readonly launches?: OrchestrationV2ThreadLaunchInput[];
   readonly projection?: OrchestrationV2ThreadProjection;
+  readonly worktreeSetup?: Stream.Stream<WorktreeSetupSnapshot | null>;
   readonly projectionRequests?: ThreadId[];
   readonly advertiseServerResolvedCommandContext?: boolean;
 }) {
   const client = {
+    [WS_METHODS.subscribeWorktreeSetup]: () => input.worktreeSetup ?? Stream.empty,
+    [WS_METHODS.workflowDispatchCommand]: ({ command }: { command: ClientOrchestrationCommand }) =>
+      Effect.sync(() => {
+        input.workflowCommands?.push(command);
+        return { sequence: 1 };
+      }),
     [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
       Effect.sync(() => {
         input.commands.push(command);
@@ -274,6 +285,194 @@ describe("V2 environment commands", () => {
           checkpointId,
         },
       ]);
+    }).pipe(Effect.provide(layerTestCrypto)),
+  );
+
+  it.effect("launches a workflow draft without sending an ordinary provider turn first", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const launches: OrchestrationV2ThreadLaunchInput[] = [];
+      const workflowCommands: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor({
+        commands,
+        projects: [],
+        launches,
+        workflowCommands,
+      });
+      yield* startThreadTurn({
+        commandId: CommandId.make("launch-workflow"),
+        threadId: v2ThreadId,
+        createdAt: "2026-10-07T00:00:00.000Z",
+        message: {
+          messageId: MessageId.make("workflow-message"),
+          role: "user",
+          text: "Build the feature",
+          attachments: [],
+        },
+        runtimeMode: "full-access",
+        interactionMode: "product-workflow",
+        workflowPreset: "fast-feature",
+        workflowPromptId: "implementation.fast-feature.codex",
+        bootstrap: {
+          createThread: {
+            projectId: ProjectId.make("project-1"),
+            title: "Feature",
+            modelSelection: v2Projection.thread.modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "product-workflow",
+            branch: null,
+            worktreePath: null,
+            createdAt: "2026-10-07T00:00:00.000Z",
+          },
+        },
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      expect(launches).toHaveLength(1);
+      expect(launches[0]?.initialMessage).toBeUndefined();
+      expect(commands).toEqual([]);
+      expect(workflowCommands).toMatchObject([
+        { type: "thread.composer-mode.set", workflowPreset: "fast-feature" },
+        {
+          type: "thread.turn.start",
+          workflowPromptId: "implementation.fast-feature.codex",
+          message: { text: "Build the feature" },
+        },
+      ]);
+    }).pipe(Effect.provide(layerTestCrypto)),
+  );
+
+  it.effect(
+    "waits for worktree preparation before starting a workflow and rejects failed setup",
+    () =>
+      Effect.gen(function* () {
+        const running: WorktreeSetupSnapshot = {
+          threadId: v2ThreadId,
+          phase: "running",
+          startedAt: "2026-10-07T00:00:00.000Z",
+          endedAt: null,
+          branch: "feature",
+          baseRef: "dev",
+          worktreePath: null,
+          setupScript: null,
+          stages: [],
+          error: null,
+          sequence: 1,
+        };
+        for (const phase of ["done", "failed"] as const) {
+          const workflowCommands: ClientOrchestrationCommand[] = [];
+          const setup = Stream.make(null, running).pipe(
+            Stream.concat(
+              Stream.fromEffect(
+                Effect.sync(() => {
+                  expect(workflowCommands).toEqual([]);
+                  return {
+                    ...running,
+                    phase,
+                    sequence: 2,
+                    error: phase === "failed" ? "Setup script failed" : null,
+                  };
+                }),
+              ),
+            ),
+          );
+          const supervisor = yield* makeSupervisor({
+            commands: [],
+            projects: [],
+            workflowCommands,
+            worktreeSetup: setup,
+          });
+          const result = yield* startThreadTurn({
+            threadId: v2ThreadId,
+            message: {
+              messageId: MessageId.make("workflow-message"),
+              role: "user",
+              text: "Build a feature",
+              attachments: [],
+            },
+            runtimeMode: "full-access",
+            interactionMode: "product-workflow",
+            workflowPreset: "fast-feature",
+            workflowPromptId: "implementation.fast-feature.codex",
+            bootstrap: {
+              createThread: {
+                projectId: ProjectId.make("project-1"),
+                title: "Feature",
+                modelSelection: v2Projection.thread.modelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "product-workflow",
+                branch: null,
+                worktreePath: null,
+                createdAt: "2026-10-07T00:00:00.000Z",
+              },
+              prepareWorktree: {
+                projectCwd: "/workspace/project",
+                branch: "feature",
+                baseBranch: "dev",
+              },
+            },
+          }).pipe(
+            Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+            Effect.exit,
+          );
+          expect(result._tag).toBe(phase === "done" ? "Success" : "Failure");
+          expect(workflowCommands.map((command) => command.type)).toEqual(
+            phase === "done" ? ["thread.composer-mode.set", "thread.turn.start"] : [],
+          );
+        }
+      }).pipe(Effect.provide(layerTestCrypto)),
+  );
+
+  it.effect("routes a Build skill through the workflow runtime on an existing native thread", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const workflowCommands: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [], workflowCommands });
+      yield* startThreadTurn({
+        commandId: CommandId.make("skill-turn"),
+        threadId: v2ThreadId,
+        message: {
+          messageId: MessageId.make("skill-message"),
+          role: "user",
+          text: "Review the change",
+          attachments: [],
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        workflowPromptId: "matt-pocock.code-review",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      expect(commands).toEqual([]);
+      expect(workflowCommands).toMatchObject([
+        { type: "thread.composer-mode.set", workflowPreset: null },
+        { type: "thread.turn.start", workflowPromptId: "matt-pocock.code-review" },
+      ]);
+    }).pipe(Effect.provide(layerTestCrypto)),
+  );
+
+  it.effect("clears workflow mode before sending an ordinary Build turn", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const workflowCommands: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [], workflowCommands });
+      yield* startThreadTurn({
+        commandId: CommandId.make("build-turn"),
+        threadId: v2ThreadId,
+        clearWorkflowMode: true,
+        message: {
+          messageId: MessageId.make("build-message"),
+          role: "user",
+          text: "Build directly",
+          attachments: [],
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      expect(workflowCommands).toMatchObject([
+        {
+          type: "thread.composer-mode.set",
+          workflowPreset: null,
+          workflowImplementationSettings: null,
+        },
+      ]);
+      expect(commands).toMatchObject([{ type: "message.dispatch", text: "Build directly" }]);
     }).pipe(Effect.provide(layerTestCrypto)),
   );
 

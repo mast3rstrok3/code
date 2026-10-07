@@ -1649,6 +1649,19 @@ describe("resolveComposerProviderSelection", () => {
 });
 
 describe("resolveComposerInteractionMode", () => {
+  it.each(["planning-workflow", "implementation-workflow", "product-workflow"] as const)(
+    "keeps %s available when the legacy plan mode setting is off",
+    (interactionMode) => {
+      expect(
+        resolveComposerInteractionMode({
+          planModeEnabled: false,
+          provider: { showInteractionModeToggle: false },
+          interactionMode,
+        }),
+      ).toEqual({ enabled: false, interactionMode });
+    },
+  );
+
   it("resets a restored plan draft when the selected instance does not support plan mode", () => {
     expect(
       resolveComposerInteractionMode({

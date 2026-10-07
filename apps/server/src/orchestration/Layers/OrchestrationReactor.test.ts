@@ -25,7 +25,7 @@ it.effect(
         reconcileStartup: () => record(`${label}:recover`),
       });
       const dependencies = Layer.mergeAll(
-        Layer.succeed(WorkflowRuntimeBridge, {
+        Layer.mock(WorkflowRuntimeBridge)({
           start: record("native:start"),
           drain: record("native:drain"),
         }),

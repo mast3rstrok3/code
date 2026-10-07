@@ -22,8 +22,9 @@ import {
   SparklesIcon,
   WorkflowIcon,
 } from "lucide-react";
-import { memo, type KeyboardEvent, useState } from "react";
+import { memo, type KeyboardEvent } from "react";
 import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
+import { useComposerMenuState } from "./useComposerMenuState";
 import { ComposerControl, ComposerControlChevron, ComposerControlIcon } from "./ComposerControl";
 
 export type ComposerPrimaryMode = "build" | "plan" | "workflow";
@@ -163,14 +164,14 @@ export function ComposerModePickerContent(props: {
     readonly description: string;
     readonly icon: typeof BotIcon;
   }> = [
+    {
+      id: "build",
+      label: "Build",
+      description: "Make implementation changes.",
+      icon: BotIcon,
+    },
     ...(props.showPrimaryModes
       ? ([
-          {
-            id: "build",
-            label: "Build",
-            description: "Make implementation changes.",
-            icon: BotIcon,
-          },
           {
             id: "plan",
             label: "Plan",
@@ -243,8 +244,10 @@ export function ComposerModePickerContent(props: {
 /** The composer's separate Build, Plan, Workflow, and Skills selector. */
 export const ComposerModeControl = memo(function ComposerModeControl(props: {
   readonly controls: ComposerModeControls;
+  readonly hidden?: boolean | undefined;
+  readonly size?: "sm" | "xs" | undefined;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useComposerMenuState(props.hidden);
   const display = buildComposerModeTriggerDisplay(props.controls);
 
   return (
@@ -254,10 +257,11 @@ export const ComposerModeControl = memo(function ComposerModeControl(props: {
           <ComposerControl
             className="max-w-48 min-w-0 shrink justify-start overflow-hidden whitespace-nowrap"
             aria-label={display.label}
+            size={props.size ?? "sm"}
           />
         }
       >
-        <ComposerControlIcon icon={display.icon} />
+        <ComposerControlIcon icon={display.icon} size={props.size ?? "sm"} />
         <span className="min-w-0 truncate">{display.label}</span>
         <ComposerControlChevron />
       </MenuTrigger>

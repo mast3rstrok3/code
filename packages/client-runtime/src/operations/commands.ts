@@ -30,10 +30,14 @@ import {
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
+import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
+import * as Stream from "effect/Stream";
+import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
 import * as Effect from "effect/Effect";
 
-import { getInitialServerConfig, request } from "../rpc/client.ts";
+import { getInitialServerConfig, request, subscribe } from "../rpc/client.ts";
 
 interface CommandMetadata {
   readonly commandId?: CommandId;
@@ -168,7 +172,16 @@ interface StartThreadBootstrap {
   readonly runSetupScript?: boolean;
 }
 
+export class WorkflowWorkspacePreparationError extends Schema.TaggedError<WorkflowWorkspacePreparationError>()(
+  "WorkflowWorkspacePreparationError",
+  { threadId: Schema.String, message: Schema.String },
+) {}
+
 export interface StartThreadTurnInput extends ThreadCommandInput {
+  readonly clearWorkflowMode?: boolean;
+  readonly workflowPreset?: import("@t3tools/contracts").WorkflowPreset | null;
+  readonly workflowImplementationSettings?: import("@t3tools/contracts").ImplementationWorkflowSettings;
+  readonly workflowPromptId?: string | null;
   readonly manualContinuationOfRunId?: RunId;
   readonly message: {
     readonly messageId: MessageId;
@@ -650,6 +663,37 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     input.message.attachments,
     attachments,
   );
+  const workflowTurn = input.workflowPromptId != null || input.workflowPreset != null;
+  const startWorkflowTurn = Effect.fnUntraced(function* () {
+    const createdAt = input.createdAt ?? DateTime.formatIso(yield* DateTime.now);
+    yield* request(WS_METHODS.workflowDispatchCommand, {
+      command: {
+        type: "thread.composer-mode.set",
+        commandId: CommandId.make(`${commandId}:workflow-mode`),
+        threadId: input.threadId,
+        interactionMode: input.interactionMode,
+        workflowPreset: input.workflowPreset ?? null,
+        ...(input.workflowImplementationSettings === undefined
+          ? {}
+          : { workflowImplementationSettings: input.workflowImplementationSettings }),
+        createdAt,
+      },
+    });
+    return yield* request(WS_METHODS.workflowDispatchCommand, {
+      command: {
+        type: "thread.turn.start",
+        commandId,
+        threadId: input.threadId,
+        message: { ...input.message, attachments, ...(context ? { context } : {}) },
+        ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+        ...(input.workflowPromptId == null ? {} : { workflowPromptId: input.workflowPromptId }),
+        ...(input.titleSeed === undefined ? {} : { titleSeed: input.titleSeed }),
+        runtimeMode: input.runtimeMode,
+        interactionMode: input.interactionMode,
+        createdAt,
+      },
+    });
+  });
   const bootstrap = input.bootstrap?.createThread;
   const prepareWorktree = input.bootstrap?.prepareWorktree;
   if (bootstrap !== undefined || prepareWorktree !== undefined) {
@@ -678,7 +722,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
                 ? {}
                 : { branch: bootstrap.branch }),
             };
-    return yield* request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
+    const launch = yield* request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
       commandId,
       creationSource: input.creationSource ?? "web",
       threadId: input.threadId,
@@ -690,15 +734,53 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       runtimeMode: input.runtimeMode,
       interactionMode: input.interactionMode,
       workspaceStrategy,
-      initialMessage: {
-        messageId: input.message.messageId,
-        text: input.message.text,
-        ...(context ? { context } : {}),
-        attachments,
+      ...(workflowTurn
+        ? {}
+        : {
+            initialMessage: {
+              messageId: input.message.messageId,
+              text: input.message.text,
+              ...(context ? { context } : {}),
+              attachments,
+            },
+          }),
+    });
+    if (workflowTurn && workspaceStrategy.type === "worktree") {
+      const setup = yield* subscribe(WS_METHODS.subscribeWorktreeSetup, {
+        threadId: input.threadId,
+      }).pipe(
+        Stream.filter((snapshot) => snapshot !== null && snapshot.phase !== "running"),
+        Stream.runHead,
+      );
+      if (Option.isNone(setup) || setup.value === null || setup.value.phase !== "done") {
+        return yield* Effect.fail(
+          new WorkflowWorkspacePreparationError({
+            threadId: input.threadId,
+            message: Option.isSome(setup)
+              ? (setup.value?.error ?? "Workflow workspace preparation did not complete.")
+              : "Workflow workspace preparation did not complete.",
+          }),
+        );
+      }
+    }
+    return workflowTurn ? yield* startWorkflowTurn() : launch;
+  }
+
+  if (workflowTurn) return yield* startWorkflowTurn();
+
+  if (input.clearWorkflowMode) {
+    yield* request(WS_METHODS.workflowDispatchCommand, {
+      command: {
+        type: "thread.composer-mode.set",
+        commandId: CommandId.make(`${commandId}:workflow-mode`),
+        threadId: input.threadId,
+        interactionMode: input.interactionMode,
+        workflowPreset: null,
+        workflowImplementationSettings: null,
+        createdAt: input.createdAt ?? DateTime.formatIso(yield* DateTime.now),
       },
     });
   }
-
   const requestedMode = input.dispatchMode ?? "auto";
   if (requestedMode === "start") {
     return yield* dispatch({

@@ -60,6 +60,10 @@ const isClosedViewEntry = (entry: unknown): entry is ClosedViewEntry => {
   const surface = view.surface;
   if (!surface || typeof surface.id !== "string") return false;
   switch (surface.kind) {
+    case "workflows":
+    case "app-review":
+    case "app-stack":
+    case "logs":
     case "diff":
     case "files":
     case "pull-requests":

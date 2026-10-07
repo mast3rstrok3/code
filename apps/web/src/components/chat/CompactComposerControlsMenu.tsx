@@ -1,3 +1,8 @@
+import {
+  ComposerModePickerContent,
+  resolveComposerPrimaryMode,
+  type ComposerModeControls,
+} from "./ComposerModePicker";
 import { ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
 import { memo, type ReactNode } from "react";
 import { EllipsisIcon } from "lucide-react";
@@ -14,6 +19,7 @@ import { useComposerMenuProps } from "./composerEventScope";
 import { useComposerMenuState } from "./useComposerMenuState";
 
 export const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(props: {
+  modeControls?: ComposerModeControls | undefined;
   interactionMode: ProviderInteractionMode;
   runtimeMode: RuntimeMode;
   runtimeModeOptions: ReadonlyArray<{
@@ -59,7 +65,33 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             <MenuDivider />
           </>
         ) : null}
-        {props.showInteractionModeToggle ? (
+        {props.modeControls ? (
+          <>
+            <ComposerModePickerContent
+              activeMode={resolveComposerPrimaryMode(props.modeControls)}
+              buildSkills={props.modeControls.buildSkills}
+              showPrimaryModes={props.modeControls.showPrimaryModes}
+              workflowAvailable={props.modeControls.workflowAvailable}
+              onOpenSkills={() => {
+                setOpen(false);
+                props.modeControls?.onOpenCatalog("skills");
+              }}
+              onOpenWorkflow={() => {
+                setOpen(false);
+                props.modeControls?.onOpenCatalog("workflows");
+              }}
+              onSelectPrimary={(mode) => {
+                props.modeControls?.onBuildSkillChange(null);
+                props.modeControls?.onInteractionModeChange(
+                  mode === "build" ? "default" : "plan",
+                  null,
+                );
+                setOpen(false);
+              }}
+            />
+            <MenuDivider />
+          </>
+        ) : props.showInteractionModeToggle ? (
           <>
             <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Mode</div>
             <MenuRadioGroup

@@ -1,4 +1,5 @@
-"use client";
+import { LayersIcon, ClipboardCheckIcon, WorkflowIcon, ScrollTextIcon } from "lucide-react";
+("use client");
 
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
@@ -1890,6 +1891,26 @@ function OpenCommandPaletteDialog(props: {
   }, [clearOpenIntent, browseNavigation, openIntent, projectThreadItems, pushPaletteView]);
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
+  if (activeThread !== null) {
+    const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+    for (const [kind, title, Icon] of [
+      ["app-stack", "Open App Stack", LayersIcon],
+      ["app-review", "Open App Review", ClipboardCheckIcon],
+      ["workflows", "Open workflows", WorkflowIcon],
+      ["logs", "Open stack logs", ScrollTextIcon],
+    ] as const) {
+      actionItems.push({
+        kind: "action",
+        value: `action:open-${kind}`,
+        title,
+        searchTerms: [kind, "workflow", "panel"],
+        icon: <Icon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          useRightPanelStore.getState().open(threadRef, kind);
+        },
+      });
+    }
+  }
 
   if (projects.length > 0) {
     const activeProjectTitle =

@@ -25,6 +25,7 @@ const RIGHT_PANEL_KINDS = [
   "workflows",
   "app-review",
   "app-stack",
+  "logs",
   "diff",
   "files",
   "file",
@@ -47,6 +48,7 @@ export type RightPanelSurface =
   | { id: "workflows"; kind: "workflows" }
   | { id: "app-review"; kind: "app-review" }
   | { id: "app-stack"; kind: "app-stack" }
+  | { id: "logs"; kind: "logs" }
   | { id: `browser:${string}`; kind: "preview"; resourceId: string }
   | { id: "browser:new"; kind: "preview"; resourceId: null }
   | { id: "device" | `device:${string}`; kind: "device"; target?: DeviceTabTarget; title?: string }
@@ -218,6 +220,8 @@ const singletonSurface = (
       return { id: "app-review", kind };
     case "app-stack":
       return { id: "app-stack", kind };
+    case "logs":
+      return { id: "logs", kind };
     case "diff":
       return { id: "diff", kind };
     case "files":

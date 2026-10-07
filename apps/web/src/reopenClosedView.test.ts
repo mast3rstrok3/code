@@ -45,6 +45,26 @@ beforeEach(() => {
 });
 
 describe("reopenClosedView", () => {
+  it.each(["workflows", "app-review", "app-stack", "logs"] as const)(
+    "restores a closed %s panel without creating a browser session",
+    async (kind) => {
+      const openPreview = vi.fn();
+      useRightPanelStore.getState().open(threadRef, kind);
+      useRightPanelStore.getState().closeSurface(threadRef, kind);
+      const view = useClosedViewStore.getState().entries.at(-1);
+      expect(view).toBeDefined();
+      const reopened = await reopenClosedView(view!, { openPreview, workspaceAvailable: true });
+      expect(reopened).toBe(true);
+      const state = selectThreadRightPanelState(
+        useRightPanelStore.getState().byThreadKey,
+        threadRef,
+      );
+      expect(state.activeSurfaceId).toBe(kind);
+      expect(state.isOpen).toBe(true);
+      expect(openPreview).not.toHaveBeenCalled();
+    },
+  );
+
   it("restores a file tab at its line without creating a browser session", async () => {
     const openPreview = vi.fn();
     const reopened = await reopenClosedView(

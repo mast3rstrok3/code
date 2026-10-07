@@ -635,7 +635,8 @@ export function resolveComposerInteractionMode(input: {
     input.provider.showInteractionModeToggle !== false;
   return {
     enabled,
-    interactionMode: enabled ? input.interactionMode : "default",
+    interactionMode:
+      input.interactionMode.endsWith("-workflow") || enabled ? input.interactionMode : "default",
   };
 }
 

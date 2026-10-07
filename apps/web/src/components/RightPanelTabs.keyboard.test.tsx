@@ -139,6 +139,23 @@ describe("right panel new-tab shortcut", () => {
     },
   );
 
+  it.each([
+    ["s", "appStackAvailable", "onAddAppStack"],
+    ["r", "reviewAvailable", "onAddReview"],
+    ["w", "workflowsAvailable", "onAddWorkflows"],
+    ["g", "logsAvailable", "onAddLogs"],
+  ] as const)(
+    "opens the restored %s panel from the launcher",
+    async (key, availability, callback) => {
+      const openPanel = vi.fn();
+      await renderPanel({ [availability]: true, [callback]: openPanel });
+      await press("t", { metaKey: true });
+      expect((await press(key)).defaultPrevented).toBe(true);
+      expect(openPanel).toHaveBeenCalledOnce();
+      expect(document.querySelector('[role="menu"]:not([data-closed])')).toBeNull();
+    },
+  );
+
   it("leaves the shortcut alone while the mounted panel is closed", async () => {
     await renderPanel({ open: false });
     expect((await press("t", { metaKey: true })).defaultPrevented).toBe(false);
