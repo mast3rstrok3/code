@@ -9,6 +9,7 @@ T3 Code is a minimal GUI for coding agents. A Node WebSocket server wraps provid
 - Code-dev deployments intentionally include the checkout's tracked and uncommitted changes. The deploy
   is rejected unless the checked-out branch is exactly `dev`; it never fetches, resets, cleans, commits,
   or installs dependencies.
+- If GitHub rejects a push with HTTP 403 while `gh auth status` lists both an active `GH_TOKEN` and a stored login for the same account, retry with `env -u GH_TOKEN -u GITHUB_TOKEN git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin dev`. This uses the stored login without changing global credentials.
 - Code-dev does not hot-reload. After changing the checkout, deploy it explicitly with
   `sudo systemctl start code-dev-t3code-deploy.service`. Inspect the deployment with
   `systemctl status code-dev-t3code-deploy.service` or
