@@ -10,8 +10,6 @@ import {
   DEFAULT_RUNTIME_MODE,
   FinalRegressionState,
   IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS,
-  IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS,
-  IMPLEMENTATION_RUN_MAX_QA_CYCLES,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
   IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
   type ChatImageAttachment,
@@ -94,8 +92,6 @@ it("exports the QA repair cap with deprecated compatibility aliases", () => {
   assert.strictEqual(IMPLEMENTATION_RUN_MAX_QA_REPAIRS, 10);
   assert.strictEqual(IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS, 3);
   assert.strictEqual(IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES, 5);
-  assert.strictEqual(IMPLEMENTATION_RUN_MAX_QA_CYCLES, IMPLEMENTATION_RUN_MAX_QA_REPAIRS);
-  assert.strictEqual(IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS, IMPLEMENTATION_RUN_MAX_QA_REPAIRS);
 });
 
 it("runs five planning ticket review cycles by default and never more than twenty", () => {

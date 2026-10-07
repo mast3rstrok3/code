@@ -158,7 +158,7 @@ const McpElicitationForm = Schema.Struct({
 const isMcpElicitationMetadata = Schema.is(McpElicitationMetadata);
 const isMcpElicitationForm = Schema.is(McpElicitationForm);
 
-export const WORKFLOW_REQUEST_USER_INPUT_TOOL_NAME = "workflow_request_user_input";
+const WORKFLOW_REQUEST_USER_INPUT_TOOL_NAME = "workflow_request_user_input";
 
 export const WorkflowRequestUserInputArguments = Schema.Struct({
   questions: WorkflowUserInputQuestions,

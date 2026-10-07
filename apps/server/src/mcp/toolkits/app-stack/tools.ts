@@ -113,7 +113,7 @@ const AppStackDeviceStopTool = Tool.make("app_stack_device_stop", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, true);
 
-export const AppStackGetTool = Tool.make("app_stack_get", {
+const AppStackGetTool = Tool.make("app_stack_get", {
   description:
     "Read current App Stack status and service URLs for this thread's workspace. Defaults to the dev variant; request prod to inspect its production build. Resolves the workspace from the authenticated thread. Does not start, stop, or change a stack.",
   parameters: WorkspaceInput,

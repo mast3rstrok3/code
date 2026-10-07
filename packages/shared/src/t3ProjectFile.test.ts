@@ -45,6 +45,8 @@ describe("buildT3ProjectFileJsonSchema", () => {
       "e2eCommands",
       "e2eConcurrency",
       "e2ePreflight",
+      "e2ePrepare",
+      "e2eTimeoutMinutes",
       "iconPath",
       "scripts",
       "validationCommands",

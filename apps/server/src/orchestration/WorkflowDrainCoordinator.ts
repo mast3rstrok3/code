@@ -13,7 +13,7 @@ import * as Schema from "effect/Schema";
 import { ServerConfig } from "../config.ts";
 import { ServerLifecycleEvents } from "../serverLifecycleEvents.ts";
 
-export const WORKFLOW_DRAIN_TIMEOUT_MS = 90_000;
+const WORKFLOW_DRAIN_TIMEOUT_MS = 90_000;
 
 interface PlannedRestartMarker {
   readonly operationId: string;
@@ -54,7 +54,7 @@ const decodeMarker = Schema.decodeUnknownOption(PlannedRestartMarkerJson);
 const encodeMarker = Schema.encodeSync(PlannedRestartMarkerJson);
 const encodeRuntimeMarker = Schema.encodeSync(RuntimeMarkerJson);
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

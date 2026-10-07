@@ -27,8 +27,7 @@ const TERMINAL_STATES = new Set<WorkflowStageExecution["state"]>([
 
 export const WORKFLOW_PROVIDER_LEASE_MS = 5 * 60 * 1_000;
 export const WORKFLOW_CRASH_RECOVERY_MS = 8 * 60 * 60 * 1_000;
-export const WORKFLOW_RATE_LIMIT_PARK_MS = 5 * 60 * 60 * 1_000;
-export const DURABLE_VALIDATION_JOB_LEASE_MS = 2 * 60 * 1_000;
+const DURABLE_VALIDATION_JOB_LEASE_MS = 2 * 60 * 1_000;
 
 export function workflowStageTargetKey(target: WorkflowStageTarget): string {
   switch (target.kind) {
@@ -914,10 +913,6 @@ export function reconcileWorkflowState(
   }
 
   return actions.sort((left, right) => left.commandId.localeCompare(right.commandId));
-}
-
-export function workflowExecutionIsActive(execution: WorkflowStageExecution): boolean {
-  return ACTIVE_STATES.has(execution.state);
 }
 
 function recoverExecutionAtStartup(

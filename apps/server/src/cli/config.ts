@@ -81,7 +81,7 @@ const tailscaleServePortFlag = Flag.Int("tailscale-serve-port").pipe(
   Flag.withDescription("HTTPS port for Tailscale Serve when --tailscale-serve is enabled."),
   Flag.optional,
 );
-export const previewBrowserFlag = Flag.Literals(
+const previewBrowserFlag = Flag.Literals(
   "preview-browser",
   ServerConfig.PreviewBrowserMode.literals,
 ).pipe(Flag.withDescription("Server-hosted browser preview mode: auto or off."), Flag.optional);

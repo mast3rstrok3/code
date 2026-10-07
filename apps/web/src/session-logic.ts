@@ -48,7 +48,6 @@ export { formatDuration } from "@t3tools/shared/orchestrationTiming";
 
 export {
   workEntryDisplayIndicatesToolFailure,
-  workEntryIndicatesToolFailure,
   workEntryIndicatesToolSuccess,
   workLogEntryIsToolLike,
   type WorkLogToolLifecycleStatus,

@@ -1461,7 +1461,7 @@ function executionTargetLabel(execution: WorkflowStageExecution): string {
   return target.stage.replaceAll("-", " ");
 }
 
-export function latestWorkflowStageExecutions(
+function latestWorkflowStageExecutions(
   executions: readonly WorkflowStageExecution[],
 ): readonly WorkflowStageExecution[] {
   const byTarget = new Map<string, WorkflowStageExecution>();

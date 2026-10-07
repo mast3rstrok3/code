@@ -38,12 +38,14 @@ vi.mock("../../state/environments", () => {
     usePrimaryEnvironment: () => environment,
   };
 });
-vi.mock("../../state/server", () => ({
+vi.mock("../../state/server", async () => ({
   serverEnvironment: {
     providersValueAtom: () => [],
     configValueAtom: () => null,
     refreshProviders: "refresh",
   },
+  // `useAtomValue` is mocked to return its argument, so the atom is the settings.
+  primaryServerSettingsAtom: (await import("@t3tools/contracts")).DEFAULT_SERVER_SETTINGS,
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: (value: unknown) => value }));
 vi.mock("../../onboarding/useProjectScans", () => ({

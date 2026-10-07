@@ -658,7 +658,7 @@ export function successfulFixAction(
   return run.caller.type === "standalone" ? "review" : "await-preview-refresh";
 }
 
-export const APP_REVIEW_PHASE_MAX_LAUNCHES = 2;
+const APP_REVIEW_PHASE_MAX_LAUNCHES = 2;
 export const APP_REVIEW_FIX_RESULT_MAX_CONTINUATIONS = 1;
 export const APP_REVIEW_VALIDATION_MAX_REPAIRS = 3;
 export const APP_REVIEW_RECOVERY_SWEEP_INTERVAL_MS = 30_000;
@@ -5165,7 +5165,7 @@ ${result.outputMarkdown}`,
 });
 
 /** Name what moved between two workspace revisions, for a stale-run failure. */
-export const workspaceRevisionChanges = (
+const workspaceRevisionChanges = (
   recorded: AppReviewWorkflowWorkspaceRevision,
   current: AppReviewWorkflowWorkspaceRevision,
 ) =>

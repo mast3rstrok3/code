@@ -28,7 +28,7 @@ export class PreviewRecordingPolicy extends Context.Service<
   PreviewRecordingPolicyShape
 >()("t3/preview/PreviewRecordingPolicy") {}
 
-export const makePreviewRecordingPolicy = Effect.gen(function* () {
+const makePreviewRecordingPolicy = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const threads = yield* ProjectionThreadRepository;
   const projects = yield* ProjectionProjectRepository;

@@ -10,25 +10,6 @@ import { useMemo } from "react";
 import { useProjectFileQuery } from "~/components/files/projectFilesQueryState";
 
 const NO_SCRIPTS: ReadonlyArray<T3ProjectFileScript> = [];
-const EMPTY_ENVIRONMENT_ID = EnvironmentId.make("t3-project-file-disabled");
-
-export function useT3ProjectFile(
-  environmentId: EnvironmentId | null,
-  cwd: string | null,
-): T3ProjectFile | null {
-  const enabled = environmentId !== null && cwd !== null;
-  const query = useProjectFileQuery(
-    environmentId ?? EMPTY_ENVIRONMENT_ID,
-    cwd ?? "",
-    T3_PROJECT_FILE_NAME,
-    enabled,
-  );
-  const contents = query.data && !query.data.truncated ? query.data.contents : null;
-  return useMemo(() => {
-    if (contents === null) return null;
-    return parseT3ProjectFile(contents);
-  }, [contents]);
-}
 
 export interface T3ProjectFileState {
   /**

@@ -105,7 +105,7 @@ const AppReviewBrowserToolFailure = Schema.Union([
 const appReviewTool = <T extends Tool.Any>(tool: T): T =>
   tool.annotate(Tool.OpenWorld, true).annotate(Tool.Destructive, true) as T;
 
-export const AppReviewGetTool = Tool.make("app_review_get", {
+const AppReviewGetTool = Tool.make("app_review_get", {
   description:
     "Load the durable App Review record linked to this workflow thread, including status, document, and captured evidence (recording + screenshots).",
   parameters: AppReviewLookupInput,
@@ -118,7 +118,7 @@ export const AppReviewGetTool = Tool.make("app_review_get", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 
-export const AppReviewUpdateTool = appReviewTool(
+const AppReviewUpdateTool = appReviewTool(
   Tool.make("app_review_update", {
     description:
       "Persist the App Review document and/or final status. Send the complete document each time, not a partial patch. Blocked checks use blockerKind coverage-gap when tests or assertions can be added in the worktree, or external-prerequisite for missing credentials, billing, approvals, services, or controller actions. Explain the missing coverage or prerequisite and recovery action in notes. E2E checks may include replayUrl when the test runner publishes an inspectable web replay. Passed browser sections require a saved recording and screenshot. Failed browser sections accept the same complete evidence, or screenshot-backed findings with failed checks when recording finalization failed. A browser check this cycle did not exercise, because an earlier cycle passed it and the repair could not reach it, is repeated with status passed and carriedFromCycle set to the cycle that ran it.",
@@ -129,7 +129,7 @@ export const AppReviewUpdateTool = appReviewTool(
   }).annotate(Tool.Title, "Update App Review record"),
 );
 
-export const AppReviewRecordingStartTool = appReviewTool(
+const AppReviewRecordingStartTool = appReviewTool(
   Tool.make("app_review_recording_start", {
     description:
       "Start the browser screen recording for this App Review. Call after preview_open and before exercising the feature. Returns the updated recording evidence.",
@@ -140,7 +140,7 @@ export const AppReviewRecordingStartTool = appReviewTool(
   }).annotate(Tool.Title, "Start App Review recording"),
 );
 
-export const AppReviewRecordingStopTool = appReviewTool(
+const AppReviewRecordingStopTool = appReviewTool(
   Tool.make("app_review_recording_stop", {
     description:
       "Stop the browser screen recording and attach the saved video to this App Review's evidence. Returns the updated recording evidence; status 'failed' means no video was saved.",
@@ -151,7 +151,7 @@ export const AppReviewRecordingStopTool = appReviewTool(
   }).annotate(Tool.Title, "Stop App Review recording"),
 );
 
-export const AppReviewCaptureScreenshotTool = appReviewTool(
+const AppReviewCaptureScreenshotTool = appReviewTool(
   Tool.make("app_review_capture_screenshot", {
     description:
       "Capture a captioned screenshot of the current preview tab and attach it to this App Review's evidence. Use at each meaningful application state; findings can reference the returned id in evidenceIds.",

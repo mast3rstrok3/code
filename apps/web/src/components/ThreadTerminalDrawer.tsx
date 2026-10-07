@@ -119,16 +119,6 @@ export function writeTerminalOutputUpdate(
   }
 }
 
-export function pasteTextIntoTerminal(
-  terminal: Pick<GhosttyTerminalSurface, "paste" | "focus"> | null,
-  text: string,
-): boolean {
-  if (terminal === null || text.length === 0) return false;
-  terminal.paste(text);
-  terminal.focus();
-  return true;
-}
-
 function parseTerminalColor(value: string, fallback: GhosttyColor): GhosttyColor {
   if (typeof document === "undefined") return fallback;
 

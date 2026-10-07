@@ -1861,6 +1861,6 @@ export const makeWithAdapter = Effect.fn("ServerBrowserManager.makeWithAdapter")
   serverBrowserManagerMake,
 );
 
-export const make = makeWithAdapter(defaultAdapter);
+const make = makeWithAdapter(defaultAdapter);
 
 export const layer = Layer.effect(ServerBrowserManager, make);

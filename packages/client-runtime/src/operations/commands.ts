@@ -481,20 +481,6 @@ export const startThreadPlanningStage: (input: StartThreadPlanningStageInput) =>
     });
   });
 
-export const launchThreadPlanningWorkflow: (
-  input: LaunchThreadPlanningWorkflowInput,
-) => CommandEffect = Effect.fn("EnvironmentCommands.launchThreadPlanningWorkflow")(
-  function* (input) {
-    const metadata = yield* timestampedCommandMetadata(input);
-    return yield* dispatch({
-      ...input,
-      type: "thread.planning-workflow.launch",
-      commandId: metadata.commandId,
-      createdAt: metadata.createdAt,
-    });
-  },
-);
-
 export const loadThreadPlanningSpecBundle: (
   input: LoadThreadPlanningSpecBundleInput,
 ) => CommandEffect = Effect.fn("EnvironmentCommands.loadThreadPlanningSpecBundle")(

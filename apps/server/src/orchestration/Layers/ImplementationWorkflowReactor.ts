@@ -255,7 +255,7 @@ export function summarizeTicketAppReviewHalt(input: {
   };
 }
 
-export function appReviewFailureContinuationMarkdown(run: AppReviewWorkflowRun): string | null {
+function appReviewFailureContinuationMarkdown(run: AppReviewWorkflowRun): string | null {
   const outcome = run.outcome ?? run.status;
   if (outcome === "passed") return null;
   const base =
@@ -736,7 +736,7 @@ export function automationHaltMatchesTicketRerun(input: {
  * surfaces the next sibling once it lands. Empty when the halt is not such a
  * group or the ticket is not part of it.
  */
-export function haltedTicketAppReviewGroup(input: {
+function haltedTicketAppReviewGroup(input: {
   readonly run: Pick<OrchestrationImplementationRun, "automationHalt" | "skips" | "ticketStates">;
   readonly ticketId: string;
 }): ReadonlyArray<string> {
@@ -832,7 +832,7 @@ function automationHaltMatchesRunRerun(input: {
  * the review is then an orphan, and what it reports is about a ticket that has
  * moved on.
  */
-export function ticketAwaitsAppReviewRun(
+function ticketAwaitsAppReviewRun(
   state: OrchestrationImplementationTicketState,
   appReviewWorkflowRunId: string,
 ): boolean {
@@ -935,7 +935,7 @@ export function findAwaitingNestedAppReview(
   return run !== undefined && nestedAppReviewAwaitsPreviewRefresh(run) ? run : null;
 }
 
-export function nestedAppReviewOwnsActivePhase(run: AppReviewWorkflowRun): boolean {
+function nestedAppReviewOwnsActivePhase(run: AppReviewWorkflowRun): boolean {
   return (
     run.status === "running" &&
     run.activePhase !== null &&
@@ -2403,10 +2403,7 @@ function reopenInterruptedWorker(
  * spent the launch budget without a result being recorded. A successful result
  * from the ticket's worker answers that halt.
  */
-export function workerHaltAwaitsResult(
-  run: OrchestrationImplementationRun,
-  ticketId: string,
-): boolean {
+function workerHaltAwaitsResult(run: OrchestrationImplementationRun, ticketId: string): boolean {
   const halt = run.automationHalt;
   return (
     halt !== null &&

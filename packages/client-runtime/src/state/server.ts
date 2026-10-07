@@ -483,22 +483,6 @@ function serverConfigStateChanges(
   );
 }
 
-export function projectServerWelcome(
-  current: Option.Option<ServerLifecycleWelcomePayload>,
-  event:
-    | { readonly type: "welcome"; readonly payload: ServerLifecycleWelcomePayload }
-    | { readonly type: "ready" | "draining"; readonly payload: unknown },
-): readonly [
-  Option.Option<ServerLifecycleWelcomePayload>,
-  ReadonlyArray<ServerLifecycleWelcomePayload>,
-] {
-  if (event.type !== "welcome") {
-    return [current, []];
-  }
-  const welcome = event.payload as ServerLifecycleWelcomePayload;
-  return [Option.some(welcome), [welcome]];
-}
-
 export function applyServerWelcomeEvent(
   current: EnvironmentServerWelcomeState,
   session: RpcSession,

@@ -84,7 +84,7 @@ export class PreviewCoordinator extends Context.Service<
   }
 >()("t3/preview/PreviewCoordinator") {}
 
-export const make = Effect.gen(function* PreviewCoordinatorMake() {
+const make = Effect.gen(function* PreviewCoordinatorMake() {
   const manager = yield* PreviewManager.PreviewManager;
   const browser = yield* ServerBrowserManager.ServerBrowserManager;
 

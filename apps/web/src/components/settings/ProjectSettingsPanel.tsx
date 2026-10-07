@@ -58,7 +58,7 @@ const ProjectIconPickerDialog = lazy(() =>
 );
 
 /** `null` is the no-override case: the server's own recording mode applies. */
-export function recordingModeLabel(mode: PreviewRecordingMode | null): string {
+function recordingModeLabel(mode: PreviewRecordingMode | null): string {
   switch (mode) {
     case "auto":
       return "Automatic";

@@ -386,11 +386,7 @@ export function setProjectExpanded(
   };
 }
 
-export function setThreadTreeExpanded(
-  state: UiState,
-  threadKey: string,
-  expanded: boolean,
-): UiState {
+function setThreadTreeExpanded(state: UiState, threadKey: string, expanded: boolean): UiState {
   if ((state.threadTreeExpandedByKey[threadKey] ?? false) === expanded) {
     return state;
   }

@@ -32,7 +32,6 @@ import {
 } from "../lib/threadSort";
 import type { SidebarThreadSummary, Thread } from "../types";
 import { isLatestTurnSettled } from "../session-logic";
-import { resolveServerBackedAppStageLabel } from "../branding.logic";
 
 export function shouldNavigateAfterThreadPark(input: {
   readonly threadKey: string;
@@ -73,9 +72,9 @@ export function resolveSidebarRowAccessibility(input: {
 // activities, growing as agents work) for as long as the row stays visible,
 // so this limit is a direct renderer-heap and server-load multiplier — keep
 // it small; cold opens still render instantly from the cached snapshot.
-export const SIDEBAR_THREAD_PREWARM_LIMIT = 3;
+const SIDEBAR_THREAD_PREWARM_LIMIT = 3;
 export type SidebarNewThreadEnvMode = "local" | "worktree";
-export const SIDEBAR_THREAD_TREE_MAX_VISUAL_DEPTH = 3;
+const SIDEBAR_THREAD_TREE_MAX_VISUAL_DEPTH = 3;
 // A small buffer keeps the next few rows warm without leasing every row that
 // content-visibility leaves mounted below the scroll viewport.
 const SIDEBAR_ROW_SUBSCRIPTION_OVERSCAN_PX = 160;
@@ -892,13 +891,6 @@ export function selectVisibleSidebarThreadRows<TThread>(input: {
     hiddenRows,
   };
 }
-
-export function resolveSidebarStageBadgeLabel(input: {
-  primaryServerVersion: string | null | undefined;
-  fallbackStageLabel: string;
-}): string {
-  return resolveServerBackedAppStageLabel(input);
-}
 export function createThreadJumpHintVisibilityController(input: {
   delayMs: number;
   onVisibilityChange: (visible: boolean) => void;
@@ -1188,11 +1180,11 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   return "ready";
 }
 
-export const resolveSidebarV2Status = resolveSidebarThreadStatus;
+const resolveSidebarV2Status = resolveSidebarThreadStatus;
 
 /** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
     poison the whole ordering, so it sinks to the epoch instead. */
-export function parseTimestampMs(isoDate: string): number {
+function parseTimestampMs(isoDate: string): number {
   const parsed = Date.parse(isoDate);
   return Number.isNaN(parsed) ? 0 : parsed;
 }
@@ -1403,19 +1395,6 @@ export function partitionSidebarV2ThreadGroups<TThread>(input: {
       settled: groupsBySection.settled.length,
     },
   };
-}
-
-export function flattenSidebarV2ThreadGroups<TThread>(
-  groups: readonly SidebarV2ThreadGroup<TThread>[],
-): SidebarThreadTreeRow<TThread>[] {
-  return groups.flatMap((group) => [...group.rows]);
-}
-
-export function findSidebarV2ThreadGroupIndex<TThread>(
-  groups: readonly SidebarV2ThreadGroup<TThread>[],
-  threadKey: string,
-): number {
-  return groups.findIndex((group) => group.rows.some((row) => row.threadKey === threadKey));
 }
 
 export function resolveSidebarV2GroupSettlePlan<TThread>(input: {

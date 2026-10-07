@@ -177,19 +177,6 @@ export function deriveLogicalProjectKeyFromSettings(
   });
 }
 
-export function deriveLogicalProjectKeyFromRef(
-  projectRef: ScopedProjectRef,
-  project:
-    | Pick<EnvironmentProject, "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity">
-    | null
-    | undefined,
-  options?: {
-    readonly groupingMode?: SidebarProjectGroupingMode;
-  },
-): string {
-  return project ? deriveLogicalProjectKey(project, options) : scopedProjectKey(projectRef);
-}
-
 export function deriveDraftProjectKey(input: {
   readonly projectRef: ScopedProjectRef;
   readonly project:
