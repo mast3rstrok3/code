@@ -78,6 +78,19 @@ export const runPreviewAutomationRequests = <E, R, E2, R2>(
     Stream.runDrain,
   );
 
+/**
+ * Serves broker requests for the lifetime of the scope. The broker ends a
+ * host's stream when it evicts the host after an unanswered request. A desktop
+ * host re-registers on reconnect; the server host has to do it here, or every
+ * later preview call fails with no available host until the server restarts.
+ */
+export const servePreviewAutomationRequests = <E, R, E2, R2>(
+  stream: Stream.Stream<PreviewAutomationStreamEvent, E, R>,
+  handleRequest: (
+    event: Extract<PreviewAutomationStreamEvent, { readonly type: "request" }>,
+  ) => Effect.Effect<void, E2, R2>,
+) => runPreviewAutomationRequests(stream, handleRequest).pipe(Effect.forever);
+
 export const layer = Layer.effectDiscard(
   Effect.gen(function* ServerPreviewAutomationHost() {
     const config = yield* ServerConfig.ServerConfig;
@@ -287,7 +300,7 @@ export const layer = Layer.effectDiscard(
         : OPERATIONS_WITHOUT_RECORDING,
     });
 
-    yield* runPreviewAutomationRequests(stream, (event) =>
+    yield* servePreviewAutomationRequests(stream, (event) =>
       handleRequest(event.request).pipe(
         Effect.flatMap((result) => respond(event.connectionId, event.request, result)),
         Effect.catchCause((cause) => fail(event.connectionId, event.request, cause)),
