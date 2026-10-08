@@ -4960,7 +4960,8 @@ export default function Sidebar() {
           <SidebarGroup className="z-[1]">
             <SidebarThreadHeader
               searchFieldRef={headerSearchRef}
-              hasProjects={projectGroups.length > 0}
+              // A user with no projects yet still needs the filter to switch back.
+              hasProjects={projectGroups.length > 0 || scopedWorkspaceUser !== null}
               projectScope={
                 <Combobox
                   items={projectScopeItems}
@@ -5012,7 +5013,7 @@ export default function Sidebar() {
                     {scopedWorkspaceUser ? (
                       <span
                         aria-hidden
-                        className="absolute -right-0.5 -bottom-0.5 flex size-3.5 items-center justify-center rounded-full bg-primary text-4xs font-semibold text-primary-foreground"
+                        className="absolute right-px bottom-px flex size-3.5 items-center justify-center rounded-full bg-primary text-4xs font-semibold text-primary-foreground"
                       >
                         {scopedWorkspaceUser.displayName.slice(0, 1).toUpperCase()}
                       </span>

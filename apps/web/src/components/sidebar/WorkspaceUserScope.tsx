@@ -35,7 +35,6 @@ export function WorkspaceUserViewSync() {
 export function WorkspaceUserScopeToggle() {
   const { workspaceUsers, view } = useWorkspaceUserView();
   const updateSettings = useUpdateClientSettings();
-  if (workspaceUsers.length < 2) return null;
   return (
     <ToggleGroup
       aria-label="Show threads for"

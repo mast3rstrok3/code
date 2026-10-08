@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, ProjectId, type Project } from "@t3tools/contracts";
+import { CommandId, ProjectId, WorkspaceUserId, type Project } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 
@@ -7,6 +7,7 @@ import { projectMutationOperation } from "./ProjectMutation.ts";
 import { type ProjectService } from "./ProjectService.ts";
 
 const projectId = ProjectId.make("project:mutation-mapping");
+const ownerUserId = WorkspaceUserId.make("alex");
 const project = {
   id: projectId,
   title: "Mapping",
@@ -39,6 +40,8 @@ it.effect("preserves every project mutation field", () =>
       type: "project.create",
       commandId: CommandId.make("command:create"),
       projectId,
+      ownerUserId,
+      previewRecordingMode: "video",
       title: "Created",
       workspaceRoot: "/work/created",
       createWorkspaceRootIfMissing: true,
@@ -49,6 +52,8 @@ it.effect("preserves every project mutation field", () =>
       type: "project.update",
       commandId: CommandId.make("command:update"),
       projectId,
+      ownerUserId,
+      previewRecordingMode: "video",
       title: "Updated",
       workspaceRoot: "/work/updated",
       defaultModelSelection: null,
@@ -69,6 +74,8 @@ it.effect("preserves every project mutation field", () =>
       {
         commandId: "command:create",
         projectId,
+        ownerUserId,
+        previewRecordingMode: "video",
         title: "Created",
         workspaceRoot: "/work/created",
         createWorkspaceRootIfMissing: true,
@@ -78,6 +85,8 @@ it.effect("preserves every project mutation field", () =>
       {
         commandId: "command:update",
         projectId,
+        ownerUserId,
+        previewRecordingMode: "video",
         title: "Updated",
         workspaceRoot: "/work/updated",
         defaultModelSelection: null,
