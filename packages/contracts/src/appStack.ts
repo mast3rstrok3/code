@@ -134,6 +134,10 @@ export const AppStack = Schema.Struct({
   // The compose services this stack leaves out. Controllers that predate
   // omitted services never send it.
   omittedServices: Schema.optionalKey(Schema.NullOr(Schema.Array(TrimmedNonEmptyString))),
+  // A platform worktree's record (healthcare-infra): it names no app, runs no
+  // pods and has no namespace, and its id is the bundleId of the apps it
+  // started. Stop, restart and delete belong on it. Older controllers omit it.
+  platform: Schema.optionalKey(Schema.Boolean),
 });
 export type AppStack = typeof AppStack.Type;
 
@@ -242,19 +246,42 @@ export const AppStackBundlePlanMember = Schema.Struct({
 });
 export type AppStackBundlePlanMember = typeof AppStackBundlePlanMember.Type;
 
-/** Every platform app a worktree can bundle with, the worktree's own app first. */
+/**
+ * Every platform app a worktree can bundle with, the worktree's own app first.
+ * A platform worktree's plan (`platform: true`) has no app of its own: `app`
+ * is null and every member is an app it starts.
+ */
 export const AppStackBundlePlan = Schema.Struct({
-  app: TrimmedNonEmptyString,
+  app: Schema.NullOr(TrimmedNonEmptyString),
   branch: TrimmedNonEmptyString,
+  // Older controllers omit it and refuse a platform worktree's plan.
+  platform: Schema.optionalKey(Schema.Boolean),
   members: Schema.Array(AppStackBundlePlanMember),
 });
 export type AppStackBundlePlan = typeof AppStackBundlePlan.Type;
+
+/** Create the chosen apps' missing worktrees on the branch without starting anything. */
+export const AppStackCreateBundleWorktreesInput = Schema.Struct({
+  worktreePath: TrimmedNonEmptyString,
+  gitBranch: Schema.optional(NullableTrimmedNonEmptyString),
+  variant: Schema.optional(AppStackVariant),
+  // Defaults to every platform app.
+  bundle: Schema.optional(AppStackBundleSelection),
+});
+export type AppStackCreateBundleWorktreesInput = typeof AppStackCreateBundleWorktreesInput.Type;
 
 export const AppStackCreatedWorktree = Schema.Struct({
   repositoryPath: TrimmedNonEmptyString,
   worktreePath: TrimmedNonEmptyString,
 });
 export type AppStackCreatedWorktree = typeof AppStackCreatedWorktree.Type;
+
+export const AppStackCreateBundleWorktreesResult = Schema.Struct({
+  // The plan as it was before the worktrees were created.
+  plan: AppStackBundlePlan,
+  createdWorktrees: Schema.Array(AppStackCreatedWorktree),
+});
+export type AppStackCreateBundleWorktreesResult = typeof AppStackCreateBundleWorktreesResult.Type;
 
 export const AppStackAutoCreateResult = Schema.Struct({
   // Null only for reserved branches, which are served by a standing

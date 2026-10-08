@@ -2,10 +2,12 @@ import { OrchestratorMcpFailure } from "@t3tools/contracts";
 import { ThreadManagementService } from "../../../orchestration-v2/ThreadManagementService.ts";
 import {
   AppStack,
+  AppStackAppName,
   AppStackAutoCreateResult,
   AppStackBundlePlan,
   AppStackBundleSelection,
   AppStackByWorktreeResult,
+  AppStackCreateBundleWorktreesResult,
   AppStackDeleteResult,
   AppStackDevicePlatform,
   AppStackDeviceStartInput,
@@ -43,8 +45,19 @@ const StartInput = Schema.Struct({
   omitServices: Schema.optionalKey(AppStackOmittedServices),
 });
 export type StartInput = typeof StartInput.Type;
-const PodLogsInput = Schema.Struct({
+const CreateWorktreesInput = Schema.Struct({
   ...WorkspaceInput.fields,
+  bundle: Schema.optionalKey(AppStackBundleSelection),
+});
+export type CreateWorktreesInput = typeof CreateWorktreesInput.Type;
+// A platform workspace's stack runs no pods; its apps do, so pod tools name one.
+const MemberInput = Schema.Struct({
+  ...WorkspaceInput.fields,
+  app: Schema.optionalKey(AppStackAppName),
+});
+export type MemberInput = typeof MemberInput.Type;
+const PodLogsInput = Schema.Struct({
+  ...MemberInput.fields,
   podName: AppStackGetPodLogsInput.fields.podName,
   containerName: AppStackGetPodLogsInput.fields.containerName,
   tailLines: AppStackGetPodLogsInput.fields.tailLines,
@@ -122,10 +135,11 @@ const AppStackDeviceStopTool = Tool.make("app_stack_device_stop", {
 
 const AppStackGetTool = Tool.make("app_stack_get", {
   description:
-    "Read current App Stack status and service URLs for this thread's workspace. Defaults to the dev variant; request prod to inspect its production build. Resolves the workspace from the authenticated thread. Does not start, stop, or change a stack.",
+    "Read current App Stack status and service URLs for this thread's workspace. Defaults to the dev variant; request prod to inspect its production build. Resolves the workspace from the authenticated thread. A bundled stack also returns bundle, every stack of the bundle with its status and URLs. A platform workspace (healthcare-infra) has a stack with platform: true that runs no pods; its apps, their namespaces and URLs are in bundle. Does not start, stop, or change a stack.",
   parameters: WorkspaceInput,
   success: Schema.Struct({
     ...AppStackByWorktreeResult.fields,
+    bundle: Schema.NullOr(Schema.Array(AppStack)),
     worktreePath: TrimmedNonEmptyString,
     variant: AppStackVariant,
     enabled: Schema.Boolean,
@@ -142,7 +156,7 @@ const AppStackGetTool = Tool.make("app_stack_get", {
 
 const AppStackStartTool = Tool.make("app_stack_start", {
   description:
-    'Start or reuse this thread\'s workspace App Stack. Defaults to dev; prod must be explicit and needs a prod compose contract. Uses the workspace and branch from the authenticated thread. Preserves existing workflow ownership; new stacks are manually owned. Pass bundle, a list of other platform apps such as ["cortex", "medical-repository"] or "all", to run those apps from their worktrees on the same branch next to this one; missing worktrees are created from origin, and every app left out keeps using its standing dev copy. Pass omitServices, such as {"rudi": ["codex-runner"]}, to leave compose services of this app or a bundled one out; services that depend on them start without them. With either set, a running stack of this workspace that bundles or omits differently is replaced. app_stack_bundle_plan lists the app and service names. Returns current status and URLs, which may not be ready yet; use app_stack_get to check readiness.',
+    'Start or reuse this thread\'s workspace App Stack. Defaults to dev; prod must be explicit and needs a prod compose contract. Uses the workspace and branch from the authenticated thread. Preserves existing workflow ownership; new stacks are manually owned. Pass bundle, a list of other platform apps such as ["cortex", "medical-repository"] or "all", to run those apps from their worktrees on the same branch next to this one; missing worktrees are created from origin where app_stack_bundle_plan shows, and every app left out keeps using its standing dev copy. From a platform workspace (healthcare-infra) the stack always runs apps from this branch: every app by default, or the bundle list; its stack record runs no pods and stop, restart and delete act on all of its apps. Pass omitServices, such as {"rudi": ["codex-runner"]}, to leave compose services of this app or a bundled one out; services that depend on them start without them. With either set, a running stack of this workspace that bundles or omits differently is replaced. app_stack_bundle_plan lists the app and service names. Returns current status and URLs, which may not be ready yet; use app_stack_get to check readiness.',
   parameters: StartInput,
   success: AppStackAutoCreateResult,
   failure: Schema.Union([AppStackError, OrchestratorMcpFailure]),
@@ -156,7 +170,7 @@ const AppStackStartTool = Tool.make("app_stack_start", {
 
 const AppStackBundlePlanTool = Tool.make("app_stack_bundle_plan", {
   description:
-    "List the platform apps this workspace's App Stack can bundle, with each app's compose services and the worktree on this branch that would run it (found: false means app_stack_start would create it). The first member is this workspace's own app. Defaults to dev. Changes nothing. Use the names for app_stack_start's bundle and omitServices, or for a ticket's appStack.",
+    "List the platform apps this workspace's App Stack can bundle, with each app's compose services and the worktree on this branch that would run it (found: false means app_stack_start or app_stack_create_worktrees would create it there). The first member is this workspace's own app. For a platform workspace (healthcare-infra) the plan has platform: true and app: null, and every member is an app it starts. Defaults to dev. Changes nothing. Use the names for app_stack_start's bundle and omitServices, or for a ticket's appStack.",
   parameters: WorkspaceInput,
   success: AppStackBundlePlan,
   failure: Schema.Union([AppStackError, OrchestratorMcpFailure]),
@@ -168,9 +182,23 @@ const AppStackBundlePlanTool = Tool.make("app_stack_bundle_plan", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
+const AppStackCreateWorktreesTool = Tool.make("app_stack_create_worktrees", {
+  description:
+    "Create the worktrees app_stack_bundle_plan reports as missing (found: false), on this thread's branch and at the paths the plan gives, without starting any pods. From a platform workspace (healthcare-infra) this puts every chosen repository's worktree in the feature folder next to this one, so an agent can work across them. Pass bundle, \"all\" (the default) or a list of apps. A branch already on origin is tracked; otherwise it starts from the plan's base branch. Returns the plan and the created worktrees; existing worktrees are left alone.",
+  parameters: CreateWorktreesInput,
+  success: AppStackCreateBundleWorktreesResult,
+  failure: Schema.Union([AppStackError, OrchestratorMcpFailure]),
+  dependencies,
+})
+  .annotate(Tool.Title, "Create this branch's worktrees for other platform apps")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, true);
+
 const AppStackStopTool = Tool.make("app_stack_stop", {
   description:
-    "Stop this thread's workspace App Stack, keeping its namespace for restart. Defaults to dev. Explicit stops also stop protected stacks. Resolves the stack from the authenticated thread; cannot target another workspace.",
+    "Stop this thread's workspace App Stack, keeping its namespace for restart. Defaults to dev. Explicit stops also stop protected stacks. A bundled stack stops with every stack of its bundle. Resolves the stack from the authenticated thread; cannot target another workspace.",
   parameters: WorkspaceInput,
   success: AppStack,
   failure: Schema.Union([AppStackError, OrchestratorMcpFailure]),
@@ -184,7 +212,7 @@ const AppStackStopTool = Tool.make("app_stack_stop", {
 
 const AppStackRestartTool = Tool.make("app_stack_restart", {
   description:
-    "Restart this thread's workspace App Stack using its existing configuration and workflow ownership. Defaults to dev. Interrupts running services, including protected stacks. Use app_stack_get afterwards to check readiness.",
+    "Restart this thread's workspace App Stack using its existing configuration and workflow ownership. Defaults to dev. Interrupts running services, including protected stacks. A bundle restarts whole, with the same apps and left-out services; a platform bundle always restarts from its platform record. Use app_stack_get afterwards to check readiness.",
   parameters: WorkspaceInput,
   success: AppStack,
   failure: Schema.Union([AppStackError, OrchestratorMcpFailure]),
@@ -198,7 +226,7 @@ const AppStackRestartTool = Tool.make("app_stack_restart", {
 
 const AppStackDeleteTool = Tool.make("app_stack_delete", {
   description:
-    "Delete this thread's workspace App Stack and its Kubernetes namespace, including resources and data stored in that namespace. Defaults to dev. Explicit deletion also deletes protected stacks. Use app_stack_stop instead when the namespace should be kept.",
+    "Delete this thread's workspace App Stack and its Kubernetes namespace, including resources and data stored in that namespace. Defaults to dev. Explicit deletion also deletes protected stacks. A bundled stack is deleted with every stack of its bundle. Use app_stack_stop instead when the namespace should be kept.",
   parameters: WorkspaceInput,
   success: AppStackDeleteResult,
   failure: Schema.Union([AppStackError, OrchestratorMcpFailure]),
@@ -212,8 +240,8 @@ const AppStackDeleteTool = Tool.make("app_stack_delete", {
 
 const AppStackListPodsTool = Tool.make("app_stack_list_pods", {
   description:
-    "List pods, containers, readiness, and restart counts for this thread's workspace App Stack. Defaults to dev. Use the returned pod and container names with app_stack_logs.",
-  parameters: WorkspaceInput,
+    "List pods, containers, readiness, and restart counts for this thread's workspace App Stack. Defaults to dev. Pass app to read another app of this stack's bundle; a platform workspace's stack runs no pods, so it needs app. Use the returned pod and container names with app_stack_logs, passing the same app.",
+  parameters: MemberInput,
   success: AppStackListPodsResult,
   failure: Schema.Union([AppStackError, OrchestratorMcpFailure]),
   dependencies,
@@ -226,7 +254,7 @@ const AppStackListPodsTool = Tool.make("app_stack_list_pods", {
 
 const AppStackLogsTool = Tool.make("app_stack_logs", {
   description:
-    "Read recent logs from a pod in this thread's workspace App Stack. Defaults to dev and the last 200 lines; tailLines accepts 1 to 5000. Use app_stack_list_pods to find pod and container names. Cannot read another workspace's logs.",
+    "Read recent logs from a pod in this thread's workspace App Stack. Defaults to dev and the last 200 lines; tailLines accepts 1 to 5000. Pass app to read another app of this stack's bundle, which a platform workspace needs. Use app_stack_list_pods to find pod and container names. Cannot read another workspace's logs.",
   parameters: PodLogsInput,
   success: AppStackGetPodLogsResult,
   failure: Schema.Union([AppStackError, OrchestratorMcpFailure]),
@@ -242,6 +270,7 @@ export const AppStackToolkit = Toolkit.make(
   AppStackGetTool,
   AppStackStartTool,
   AppStackBundlePlanTool,
+  AppStackCreateWorktreesTool,
   AppStackStopTool,
   AppStackRestartTool,
   AppStackDeleteTool,

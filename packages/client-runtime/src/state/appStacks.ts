@@ -59,6 +59,12 @@ export function createAppStackEnvironmentAtoms<R, E>(
       staleTimeMs: 5_000,
       idleTtlMs: 60_000,
     }),
+    createBundleWorktrees: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:app-stack:create-bundle-worktrees",
+      tag: WS_METHODS.appStackCreateBundleWorktrees,
+      scheduler: lifecycleScheduler,
+      concurrency: stackLifecycleConcurrency,
+    }),
     stop: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:app-stack:stop",
       tag: WS_METHODS.appStackStop,

@@ -1949,6 +1949,8 @@ const layerWsRpc = (
         [WS_METHODS.appStackGet]: (input) => appStackManager.get(input),
         [WS_METHODS.appStackAutoCreate]: (input) => appStackManager.autoCreate(input),
         [WS_METHODS.appStackBundlePlan]: (input) => appStackManager.bundlePlan(input),
+        [WS_METHODS.appStackCreateBundleWorktrees]: (input) =>
+          appStackManager.createBundleWorktrees(input),
         [WS_METHODS.appStackStop]: (input) => appStackManager.stop(input),
         [WS_METHODS.appStackSetProtected]: (input) => appStackManager.setProtected(input),
         [WS_METHODS.appStackRestart]: (input) => appStackManager.restart(input),

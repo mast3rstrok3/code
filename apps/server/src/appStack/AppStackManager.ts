@@ -4,6 +4,8 @@ import {
   AppStackBundlePlan,
   type AppStackBundlePlanInput,
   type AppStackBundleSelection,
+  type AppStackCreateBundleWorktreesInput,
+  type AppStackCreateBundleWorktreesResult,
   type AppStackCreatedWorktree,
   type AppStackOmittedServices,
   AppStackByWorktreeResult,
@@ -133,6 +135,13 @@ export class AppStackManager extends Context.Service<
     readonly bundlePlan: (
       input: AppStackBundlePlanInput,
     ) => Effect.Effect<AppStackBundlePlan, AppStackError>;
+    /**
+     * Creates the chosen apps' missing worktrees where the bundle plan puts
+     * them, without starting anything.
+     */
+    readonly createBundleWorktrees: (
+      input: AppStackCreateBundleWorktreesInput,
+    ) => Effect.Effect<AppStackCreateBundleWorktreesResult, AppStackError>;
     readonly stop: (input: AppStackGetInput) => Effect.Effect<AppStack, AppStackError>;
     readonly setProtected: (
       input: AppStackSetProtectedInput,
@@ -191,6 +200,7 @@ export class AppStackManager extends Context.Service<
                 ? unavailable("autoCreate", "Omitted app stack services")
                 : native.autoCreate(input),
           bundlePlan: () => unavailable("bundlePlan", "Bundled app stacks"),
+          createBundleWorktrees: () => unavailable("createBundleWorktrees", "Bundled app stacks"),
           startDevice: () => unavailable("startDevice"),
           stopDevice: () => unavailable("stopDevice"),
           getDeviceLease: () => unavailable("getDeviceLease"),
@@ -559,26 +569,28 @@ export class AppStackManager extends Context.Service<
       const bundlePlan = (input: AppStackBundlePlanInput) =>
         requestBundlePlan("bundlePlan", input, "all");
 
-      // The controller starts a bundle only when every chosen app has a
-      // worktree on the branch, and never creates one itself.
-      const autoCreateBundle = Effect.fn("AppStackManager.autoCreateBundle")(function* (
-        input: AppStackAutoCreateInput,
-        bundle: AppStackBundleSelection,
+      const removeWorktrees = (worktrees: ReadonlyArray<AppStackCreatedWorktree>) =>
+        Effect.forEach(worktrees, (worktree) => removeBundleWorktree(runCommand, worktree), {
+          discard: true,
+        });
+
+      // The controller never creates worktrees; its plan says where each
+      // missing one belongs (the feature folder first), and Code creates it.
+      // A failure takes back the ones this call made.
+      const createMissingWorktrees = Effect.fn("AppStackManager.createMissingWorktrees")(function* (
+        operation: string,
+        plan: AppStackBundlePlan,
       ) {
-        const variant = input.variant ?? "dev";
-        const plan = yield* requestBundlePlan(
-          "autoCreate",
-          { worktreePath: input.worktreePath, gitBranch: input.gitBranch, variant },
-          bundle,
-        );
         const createdWorktrees: Array<AppStackCreatedWorktree> = [];
+        const removeCreated = Effect.suspend(() => removeWorktrees([...createdWorktrees]));
         for (const member of plan.members) {
           if (member.found) continue;
           const repositoryPath = member.repositoryPath ?? null;
           const worktreePath = member.worktreePath ?? null;
           if (repositoryPath === null || worktreePath === null) {
+            yield* removeCreated;
             return yield* new AppStackError({
-              operation: "autoCreate",
+              operation,
               reason: "invalid_response",
               message: `The controller has no checkout of ${member.repository} for ${member.app}, so its worktree cannot be created.`,
             });
@@ -588,9 +600,44 @@ export class AppStackManager extends Context.Service<
             worktreePath,
             branch: plan.branch,
             baseBranch: member.baseBranch,
-          });
+          }).pipe(Effect.tapError(() => removeCreated));
           createdWorktrees.push({ repositoryPath, worktreePath });
         }
+        return createdWorktrees;
+      });
+
+      const createBundleWorktrees = Effect.fn("AppStackManager.createBundleWorktrees")(function* (
+        input: AppStackCreateBundleWorktreesInput,
+      ) {
+        const plan = yield* requestBundlePlan(
+          "createBundleWorktrees",
+          {
+            worktreePath: input.worktreePath,
+            gitBranch: input.gitBranch,
+            variant: input.variant ?? "dev",
+          },
+          input.bundle ?? "all",
+        );
+        const createdWorktrees = yield* createMissingWorktrees("createBundleWorktrees", plan);
+        return { plan, createdWorktrees };
+      });
+
+      // The controller starts a bundle only when every chosen app has a
+      // worktree on the branch, and never creates one itself.
+      const autoCreateBundle = Effect.fn("AppStackManager.autoCreateBundle")(function* (
+        input: AppStackAutoCreateInput,
+        bundle: AppStackBundleSelection,
+        knownPlan?: AppStackBundlePlan,
+      ) {
+        const variant = input.variant ?? "dev";
+        const plan =
+          knownPlan ??
+          (yield* requestBundlePlan(
+            "autoCreate",
+            { worktreePath: input.worktreePath, gitBranch: input.gitBranch, variant },
+            bundle,
+          ));
+        const createdWorktrees = yield* createMissingWorktrees("autoCreate", plan);
         const base = yield* requireBaseUrl("autoCreate");
         const result = yield* executeJson(
           "autoCreate",
@@ -609,15 +656,7 @@ export class AppStackManager extends Context.Service<
         ).pipe(
           // Nobody would ever record or remove worktrees made for a bundle the
           // controller refused, so take them back.
-          Effect.tapError(() =>
-            Effect.forEach(
-              createdWorktrees,
-              (worktree) => removeBundleWorktree(runCommand, worktree),
-              {
-                discard: true,
-              },
-            ),
-          ),
+          Effect.tapError(() => removeWorktrees(createdWorktrees)),
         );
         yield* requireOmittedServicesSupport(input, [result.stack, ...(result.bundle ?? [])]);
         return {
@@ -628,6 +667,27 @@ export class AppStackManager extends Context.Service<
           createdWorktrees,
         };
       });
+
+      /**
+       * A platform worktree (healthcare-infra) always starts a bundle, every
+       * app unless the request names some, so its missing worktrees have to
+       * exist first. Only the plan says whether a worktree is one; a worktree
+       * whose contract names no app, or an older controller, fails the plan
+       * and starts as before.
+       */
+      const platformPlan = (input: AppStackAutoCreateInput) =>
+        requestBundlePlan(
+          "autoCreate",
+          {
+            worktreePath: input.worktreePath,
+            gitBranch: input.gitBranch,
+            variant: input.variant ?? "dev",
+          },
+          "all",
+        ).pipe(
+          Effect.map((plan) => (plan.platform === true ? plan : null)),
+          Effect.orElseSucceed(() => null),
+        );
 
       const autoCreateRequest = Effect.fn("AppStackManager.autoCreateRequest")(function* (
         input: AppStackAutoCreateInput,
@@ -658,6 +718,10 @@ export class AppStackManager extends Context.Service<
             frontendServiceName: existing.frontendServiceName,
           };
         }
+        // A worktree that already has an app stack is no platform worktree.
+        const knownApp = existing?.stack != null && existing.stack.platform !== true;
+        const plan = input.bundle === undefined && !knownApp ? yield* platformPlan(input) : null;
+        if (plan !== null) return yield* autoCreateBundle(input, "all", plan);
         const base = yield* requireBaseUrl("autoCreate");
         const result = yield* executeJson(
           "autoCreate",
@@ -754,20 +818,28 @@ export class AppStackManager extends Context.Service<
       });
 
       const restart = Effect.fn("AppStackManager.restart")(function* (input: AppStackGetInput) {
-        const stack = yield* get(input);
+        const requested = yield* get(input);
+        const bundleStacks =
+          requested.bundleId == null
+            ? []
+            : (yield* list({})).stacks.filter((member) => member.bundleId === requested.bundleId);
+        // A platform bundle belongs to its record. Restarting from an app
+        // member would rebuild the bundle around that app and drop the record.
+        const stack =
+          bundleStacks.find(
+            (member) => member.platform === true && member.id === requested.bundleId,
+          ) ?? requested;
         // The controller stops every member of a bundle; start them together again,
         // each leaving out what it left out before. Restart creates new rows, so
         // the shape has to be sent again.
-        const members =
-          stack.bundleId == null
-            ? []
-            : (yield* list({})).stacks.filter(
-                (member) => member.bundleId === stack.bundleId && member.id !== stack.id,
-              );
-        const bundle =
+        const members = bundleStacks.filter((member) => member.id !== stack.id);
+        const memberApps = members.flatMap((member) => (member.app ? [member.app] : []));
+        const bundle: AppStackBundleSelection | undefined =
           stack.bundleId == null
             ? undefined
-            : members.flatMap((member) => (member.app ? [member.app] : []));
+            : memberApps.length === 0 && stack.platform === true
+              ? "all"
+              : memberApps;
         const omitServices =
           stack.omittedServices === undefined
             ? undefined
@@ -778,7 +850,7 @@ export class AppStackManager extends Context.Service<
                     : [],
                 ),
               );
-        yield* stop(input);
+        yield* stop({ stackId: stack.id });
         const result = yield* autoCreate({
           worktreePath: stack.worktreePath,
           displayName: displayNameForRestart(stack),
@@ -902,7 +974,8 @@ export class AppStackManager extends Context.Service<
         const tailLines = limit.tailLines;
         const listResult = yield* list({});
         const stacks = yield* Effect.forEach(
-          listResult.stacks,
+          // A platform record runs no pods; its apps are listed on their own.
+          listResult.stacks.filter((stack) => stack.platform !== true),
           (stack) =>
             getStackPodLogs({ stackId: stack.id, tailLines }).pipe(
               Effect.map((result) => ({
@@ -1011,6 +1084,7 @@ export class AppStackManager extends Context.Service<
         get,
         autoCreate,
         bundlePlan,
+        createBundleWorktrees,
         stop,
         setProtected,
         workflowTeardown,

@@ -1,6 +1,8 @@
 import {
   type AppStack,
+  type AppStackBundlePlanMember,
   type AppStackGetPodLogsResult,
+  type AppStackOmittedServices,
   type AppStackPod,
   type EnvironmentId,
   type ScopedThreadRef,
@@ -66,8 +68,12 @@ import {
   appStackBundleApps,
   appStackBundleMemberDescription,
   appStackProtectionAction,
+  appStackPlatformMembers,
   appStackSelectionState,
+  appStackStartShape,
   autoCreateNotice,
+  defaultAppStackBundleSelection,
+  missingAppStackBundleMembers,
   isProtectedAppStack,
   isTransitioningAppStackStatus,
   orderAppStacksForPanel,
@@ -229,6 +235,77 @@ function StackServices({ stack }: { readonly stack: AppStack }) {
               </Tooltip>
             ) : null}
           </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The apps a platform record started, each with its status and frontend. */
+function PlatformMembers(props: { readonly members: ReadonlyArray<AppStack> }) {
+  if (props.members.length === 0) {
+    return <div className="text-xs text-muted-foreground">No apps reported.</div>;
+  }
+  return (
+    <div className="space-y-1.5">
+      {props.members.map((member) => {
+        const preview = primaryPreviewForStack(member);
+        return (
+          <div
+            key={member.id}
+            className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md bg-muted/40 px-2 py-1.5"
+          >
+            <div className="min-w-0">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate text-xs font-medium">{member.app ?? member.id}</span>
+                <StatusBadge status={member.status} />
+              </div>
+              <div className="truncate text-2xs text-muted-foreground">
+                {member.namespace ? `namespace ${member.namespace}` : "namespace pending"}
+                {preview ? ` · ${preview.url}` : ""}
+              </div>
+            </div>
+            {preview ? (
+              <a
+                href={preview.url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                aria-label={`Open ${member.app ?? member.id}`}
+              >
+                <ExternalLinkIcon className="size-3.5" />
+              </a>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The compose services of one checked app; unchecked ones are left out. */
+function BundleMemberServices(props: {
+  readonly member: AppStackBundlePlanMember;
+  readonly omitted: ReadonlyArray<string>;
+  readonly onToggle: (service: string, included: boolean) => void;
+}) {
+  const services = props.member.services ?? [];
+  if (services.length === 0) return null;
+  const included = services.filter((service) => !props.omitted.includes(service));
+  return (
+    <div className="ml-7 flex flex-wrap gap-x-3 gap-y-1 pb-1">
+      {services.map((service) => {
+        const checked = !props.omitted.includes(service);
+        return (
+          <label key={service} className="flex items-center gap-1.5 text-2xs">
+            <Checkbox
+              checked={checked}
+              // The controller refuses an app with every service left out.
+              disabled={checked && included.length === 1}
+              onCheckedChange={(next) => props.onToggle(service, Boolean(next))}
+            />
+            {service}
+          </label>
         );
       })}
     </div>
@@ -447,8 +524,18 @@ export function AppStackPanel(props: AppStackPanelProps) {
   const [createVariant, setCreateVariant] = useState<AppStackVariant>("dev");
   const [manualPath, setManualPath] = useState(currentWorktreePath);
   const [manualNamespace, setManualNamespace] = useState("");
-  // Other platform apps checked to run from their worktrees next to this one.
-  const [bundleSelection, setBundleSelection] = useState<ReadonlySet<string>>(() => new Set());
+  // Platform apps checked to run from their worktrees on the branch, and the
+  // compose services left out, by app. Each holds for the worktree and
+  // variant it was made for; until then the plan's default applies: every
+  // app for a platform worktree, none besides its own for an app worktree.
+  const [bundleChoice, setBundleChoice] = useState<{
+    readonly key: string;
+    readonly apps: ReadonlySet<string>;
+  } | null>(null);
+  const [omittedChoice, setOmittedChoice] = useState<{
+    readonly key: string;
+    readonly services: AppStackOmittedServices;
+  } | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<AutoCreateNotice | null>(null);
   const [pendingActions, setPendingActions] = useState<ReadonlyMap<string, StackPendingAction>>(
@@ -535,7 +622,8 @@ export function AppStackPanel(props: AppStackPanelProps) {
   const browseEntries = (browseQuery.data?.entries ?? []).slice(0, 8);
   const browseParentPath =
     browsePath.length > 0 ? getBrowseParentPath(ensureBrowseDirectoryPath(browsePath)) : null;
-  // Fails for a worktree whose contract names no platform app; it starts alone.
+  // Fails for a worktree whose contract names neither a platform app nor
+  // `platform`, and on controllers that predate bundles; it then starts alone.
   const bundlePlanQuery = useEnvironmentQuery(
     isCreateOpen && stackBackendEnabled && submittedPath
       ? appStackEnvironment.bundlePlan({
@@ -549,11 +637,26 @@ export function AppStackPanel(props: AppStackPanelProps) {
       : null,
   );
   const bundlePlan = bundlePlanQuery.data ?? null;
-  const submittedBundle = useMemo(
+  const isPlatformPlan = bundlePlan?.platform === true;
+  const choiceKey = `${submittedPath}\u0000${createVariant}`;
+  const bundleSelection = useMemo(
     () =>
-      (bundlePlan?.members ?? []).flatMap((member) =>
-        member.app !== bundlePlan?.app && bundleSelection.has(member.app) ? [member.app] : [],
-      ),
+      bundleChoice?.key === choiceKey
+        ? bundleChoice.apps
+        : defaultAppStackBundleSelection(bundlePlan),
+    [bundleChoice, bundlePlan, choiceKey],
+  );
+  const omittedServices = useMemo(
+    () => (omittedChoice?.key === choiceKey ? omittedChoice.services : {}),
+    [choiceKey, omittedChoice],
+  );
+  const startShape = useMemo(
+    () => appStackStartShape(bundlePlan, bundleSelection, omittedServices),
+    [bundlePlan, bundleSelection, omittedServices],
+  );
+  const submittedBundle = startShape?.bundle ?? [];
+  const missingBundleMembers = useMemo(
+    () => missingAppStackBundleMembers(bundlePlan, bundleSelection),
     [bundlePlan, bundleSelection],
   );
   const currentStackQuery = useEnvironmentQuery(
@@ -639,6 +742,9 @@ export function AppStackPanel(props: AppStackPanelProps) {
     reportFailure: false,
   });
   const deleteStack = useAtomCommand(appStackEnvironment.delete, { reportFailure: false });
+  const createBundleWorktrees = useAtomCommand(appStackEnvironment.createBundleWorktrees, {
+    reportFailure: false,
+  });
 
   const refreshStacks = useCallback(() => {
     statusQuery.refresh();
@@ -705,6 +811,7 @@ export function AppStackPanel(props: AppStackPanelProps) {
       requestedNamespace?: string | null,
       requestedVariant?: AppStackVariant | null,
       bundle?: ReadonlyArray<string>,
+      omitServices?: AppStackOmittedServices,
     ) => {
       const normalizedPath = normalizeWorktreePath(worktreePath);
       if (!normalizedPath) return;
@@ -731,6 +838,7 @@ export function AppStackPanel(props: AppStackPanelProps) {
             workflowId: sourceStack?.workflowId ?? undefined,
             variant,
             ...(bundle && bundle.length > 0 ? { bundle: [...bundle] } : {}),
+            ...(omitServices === undefined ? {} : { omitServices }),
           },
         });
         if (result._tag === "Failure") {
@@ -943,18 +1051,64 @@ export function AppStackPanel(props: AppStackPanelProps) {
 
   const runCreateStart = useCallback(() => {
     if (!stackBackendEnabled || !submittedPath || submittedPathStartKey === null) return;
-    if (pendingActions.has(submittedPathStartKey)) return;
-    void runStart(submittedPath, null, submittedNamespace, createVariant, submittedBundle);
+    if (startShape === null || pendingActions.has(submittedPathStartKey)) return;
+    void runStart(
+      submittedPath,
+      null,
+      submittedNamespace,
+      createVariant,
+      startShape.bundle,
+      startShape.omitServices,
+    );
   }, [
     createVariant,
     pendingActions,
     runStart,
     stackBackendEnabled,
-    submittedBundle,
+    startShape,
     submittedNamespace,
     submittedPath,
     submittedPathStartKey,
   ]);
+
+  const worktreesKey = submittedPath ? `worktrees:${submittedPath}` : null;
+  const runCreateWorktrees = async () => {
+    if (!stackBackendEnabled || !submittedPath || worktreesKey === null) return;
+    if (pendingActions.has(worktreesKey) || missingBundleMembers.length === 0) return;
+    setPendingAction(worktreesKey, "start");
+    setActionError(null);
+    setActionNotice(null);
+    try {
+      const result = await createBundleWorktrees({
+        environmentId: props.environmentId,
+        input: {
+          worktreePath: submittedPath,
+          gitBranch: props.activeThread?.branch ?? null,
+          variant: createVariant,
+          bundle: missingBundleMembers.map((member) => member.app),
+        },
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          setActionError(actionErrorMessage(squashAtomCommandFailure(result)));
+        }
+        return;
+      }
+      const paths = result.value.createdWorktrees.map((worktree) => worktree.worktreePath);
+      setActionNotice({
+        kind: "created-worktrees",
+        message:
+          paths.length === 0
+            ? "Every checked app already has a worktree on this branch."
+            : `Created ${paths.length === 1 ? "a worktree" : "worktrees"}: ${paths.join(", ")}`,
+        url: null,
+        stackId: null,
+      });
+      bundlePlanQuery.refresh();
+    } finally {
+      setPendingAction(worktreesKey, null);
+    }
+  };
 
   const browseToPath = useCallback((path: string) => {
     setManualPath(ensureBrowseDirectoryPath(path));
@@ -1005,6 +1159,11 @@ export function AppStackPanel(props: AppStackPanelProps) {
     const bundleApps = appStackBundleApps(stack, listedStacks);
     const variant = stack.variant ?? appStackVariantForComposePath(stack.composePath);
     const stackName = displayStackName(stack);
+    const isPlatform = stack.platform === true;
+    // A stopped bundle starts again in its shape; a plain start would drop
+    // the other apps and the services it left out.
+    const startsByRestart =
+      stack.bundleId != null && (stack.status === "stopped" || stack.status === "error");
 
     return (
       <div
@@ -1065,8 +1224,11 @@ export function AppStackPanel(props: AppStackPanelProps) {
               </span>
               <span className="mt-1 block truncate text-xs text-muted-foreground">
                 {repoBranch ? `${repoBranch} · ` : ""}
-                {bundleApps ? `bundle ${bundleApps.join(" + ")} · ` : ""}
-                {stack.namespace ? `namespace ${stack.namespace}` : "namespace pending"}
+                {isPlatform ? "platform · " : ""}
+                {bundleApps ? `bundle ${bundleApps.join(" + ")}` : ""}
+                {isPlatform
+                  ? ""
+                  : `${bundleApps ? " · " : ""}${stack.namespace ? `namespace ${stack.namespace}` : "namespace pending"}`}
               </span>
             </span>
           </button>
@@ -1128,20 +1290,24 @@ export function AppStackPanel(props: AppStackPanelProps) {
                   ) : null}
                 </>
               ) : null}
+              {isPlatform ? null : (
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  onClick={() => toggleInspectStack(stack)}
+                  data-pressed={inspectSelected ? "" : undefined}
+                  aria-label={`Inspect Kubernetes pods and logs for ${stackName}`}
+                >
+                  <Rows3Icon className="size-3.5" />
+                  Inspect
+                </Button>
+              )}
               <Button
                 size="xs"
                 variant="ghost"
-                onClick={() => toggleInspectStack(stack)}
-                data-pressed={inspectSelected ? "" : undefined}
-                aria-label={`Inspect Kubernetes pods and logs for ${stackName}`}
-              >
-                <Rows3Icon className="size-3.5" />
-                Inspect
-              </Button>
-              <Button
-                size="xs"
-                variant="ghost"
-                onClick={() => void runStart(stack.worktreePath, stack)}
+                onClick={() =>
+                  void (startsByRestart ? runRestart(stack) : runStart(stack.worktreePath, stack))
+                }
                 disabled={pendingAction !== undefined}
                 aria-label={`Start ${stackName}`}
               >
@@ -1193,9 +1359,13 @@ export function AppStackPanel(props: AppStackPanelProps) {
               </div>
             ) : null}
             <div className="mt-3">
-              <StackServices stack={stack} />
+              {isPlatform ? (
+                <PlatformMembers members={appStackPlatformMembers(stack, listedStacks)} />
+              ) : (
+                <StackServices stack={stack} />
+              )}
             </div>
-            {inspectSelected ? (
+            {inspectSelected && !isPlatform ? (
               <StackKubernetesInspect
                 stack={stack}
                 pods={podsQuery.data?.pods ?? []}
@@ -1348,32 +1518,76 @@ export function AppStackPanel(props: AppStackPanelProps) {
                     <div className="text-xs font-medium">Apps on {bundlePlan.branch}</div>
                     <div className="text-xs text-muted-foreground">
                       Checked apps run from their worktrees on this branch and reach each other.
-                      Unchecked apps stay on their standing dev copies.
+                      Unchecked apps stay on their standing dev copies. Unchecked services do not
+                      start.
                     </div>
                     <AppStackBundleAppChecklist
                       plan={bundlePlan}
                       selected={bundleSelection}
-                      onToggle={(app, checked) =>
-                        setBundleSelection((current) => {
-                          const next = new Set(current);
-                          if (checked) next.add(app);
-                          else next.delete(app);
-                          return next;
-                        })
-                      }
+                      onToggle={(app, checked) => {
+                        const apps = new Set(bundleSelection);
+                        if (checked) apps.add(app);
+                        else apps.delete(app);
+                        setBundleChoice({ key: choiceKey, apps });
+                      }}
                       describe={(member, state) =>
                         appStackBundleMemberDescription(member, {
                           ...state,
                           branch: bundlePlan.branch,
                         })
                       }
+                      renderDetails={(member, state) =>
+                        state.selected ? (
+                          <BundleMemberServices
+                            member={member}
+                            omitted={omittedServices[member.app] ?? []}
+                            onToggle={(service, included) => {
+                              const services = new Set(omittedServices[member.app] ?? []);
+                              if (included) services.delete(service);
+                              else services.add(service);
+                              setOmittedChoice({
+                                key: choiceKey,
+                                services: {
+                                  ...omittedServices,
+                                  [member.app]: [...services].sort(),
+                                },
+                              });
+                            }}
+                          />
+                        ) : null
+                      }
                     />
+                    {missingBundleMembers.length > 0 ? (
+                      <div className="flex items-center justify-between gap-2 pt-1">
+                        <div className="min-w-0 text-xs text-muted-foreground">
+                          Start creates the missing worktrees first.
+                        </div>
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          onClick={() => void runCreateWorktrees()}
+                          disabled={
+                            !stackBackendEnabled ||
+                            (worktreesKey !== null && pendingActions.has(worktreesKey))
+                          }
+                        >
+                          {worktreesKey !== null && pendingActions.has(worktreesKey) ? (
+                            <LoaderIcon className="size-3.5 animate-spin" />
+                          ) : (
+                            <FolderIcon className="size-3.5" />
+                          )}
+                          Create worktrees only
+                        </Button>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
                 <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
-                  {submittedBundle.length > 0 ? (
+                  {isPlatformPlan || submittedBundle.length > 0 ? (
                     <div className="self-center truncate text-xs text-muted-foreground">
-                      Each app gets its own namespace.
+                      {startShape === null
+                        ? "Check at least one app."
+                        : "Each app gets its own namespace."}
                     </div>
                   ) : (
                     <Input
@@ -1390,6 +1604,7 @@ export function AppStackPanel(props: AppStackPanelProps) {
                     disabled={
                       !stackBackendEnabled ||
                       !submittedPath ||
+                      startShape === null ||
                       (submittedPathStartKey !== null && pendingActions.has(submittedPathStartKey))
                     }
                   >
