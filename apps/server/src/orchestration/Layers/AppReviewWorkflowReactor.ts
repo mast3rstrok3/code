@@ -25,16 +25,20 @@ import {
   type OrchestrationImplementationRun,
   type OrchestrationReadModel,
   type OrchestrationThread,
+  type ReviewTestPlatform,
   type TurnId,
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
 } from "@t3tools/contracts";
 import {
   resolveReviewTestPlatforms,
   REVIEW_TEST_PLATFORM_LABELS,
+  REVIEW_TEST_PLATFORMS,
+  reviewTestPlatformsForHost,
   resolveLayeredAppReviewStepParts,
   type AppReviewParts,
 } from "@t3tools/shared/appReviewParts";
 import { makeDrainableWorker, type DrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { extractPreviewUrls } from "@t3tools/shared/preview";
 import { resolveAppReviewE2eCommands } from "@t3tools/shared/t3ProjectFile";
 import * as Cause from "effect/Cause";
@@ -1468,6 +1472,7 @@ export function terminalReviewPassFailure(input: {
 export function buildE2eReviewPrompt(input: {
   readonly run: AppReviewWorkflowRun;
   readonly cycle: AppReviewWorkflowCycle;
+  readonly hostPlatform: NodeJS.Platform;
   readonly e2eCommands: ReadonlyArray<string>;
   readonly priorFindingIds: ReadonlyArray<string>;
 }): string {
@@ -1508,6 +1513,7 @@ export function buildE2eReviewPrompt(input: {
               "Record each command as one check with the exact id shown.",
             ]),
       ...buildPlatformTestInstructions(input.run),
+      buildHostPlatformInstruction(input.hostPlatform),
       "Set blockerKind on every blocked check, including the aggregate e2e-ticket check. Use external-prerequisite if a check combines missing coverage with an external prerequisite.",
       "Summarize test results in notes. When command output publishes an inspectable web replay URL, copy it into that check's replayUrl field so a human can open it from the App Review panel.",
       "A failing command is a failed check. Turn each distinct in-scope product failure into an actionable finding. Keep unrelated or pre-existing failures in check notes or note-severity findings.",
@@ -2633,6 +2639,7 @@ const make = Effect.gen(function* () {
       text: buildE2eReviewPrompt({
         run,
         cycle,
+        hostPlatform: yield* HostProcessPlatform,
         e2eCommands,
         priorFindingIds: prior.findingIds,
       }),
@@ -5231,6 +5238,19 @@ export const programmaticReviewRecord = (
 };
 
 export const AppReviewWorkflowReactorLive = Layer.effect(AppReviewWorkflowReactor, make);
+
+/** Which platforms this server can test, so the reviewer picks the ones a change affects. */
+function buildHostPlatformInstruction(hostPlatform: NodeJS.Platform): string {
+  const available = reviewTestPlatformsForHost(hostPlatform);
+  const unavailable = REVIEW_TEST_PLATFORMS.filter((platform) => !available.includes(platform));
+  const label = (platforms: readonly ReviewTestPlatform[]) =>
+    platforms.map((platform) => REVIEW_TEST_PLATFORM_LABELS[platform]).join(", ");
+  return [
+    `This server can run E2E tests on ${label(available)}.`,
+    unavailable.length === 0 ? "" : ` ${label(unavailable)} cannot run here.`,
+    " Beyond the selected platforms, decide from the brief and the changed code which available platforms the change affects, and test those too. Record each one as an e2e-platform-<id> check. Do not test or require platforms that cannot run here.",
+  ].join("");
+}
 
 function buildPlatformTestInstructions(run: AppReviewWorkflowRun): string[] {
   if (run.testPlatforms === undefined || platformCheckIds(run).length === 0) return [];

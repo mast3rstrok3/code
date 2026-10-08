@@ -2370,6 +2370,7 @@ it("runs only E2E cycles even when older scope and settings enable browser revie
 it("keeps the end-to-end test in its own durable section", () => {
   const prompt = buildE2eReviewPrompt({
     run: run(),
+    hostPlatform: "linux",
     cycle: carryCycle(1, AppReviewId.make("app-review-1")),
     priorFindingIds: [],
     e2eCommands: ["pnpm e2e:review"],
@@ -2398,6 +2399,7 @@ it("keeps the browser prompt free of E2E commands", () => {
 it("gives the E2E thread every project command with a stable check id", () => {
   const prompt = buildE2eReviewPrompt({
     run: run(),
+    hostPlatform: "linux",
     cycle: carryCycle(1, AppReviewId.make("app-review-1")),
     priorFindingIds: [],
     e2eCommands: ["pnpm test:e2e", "pnpm test:e2e:mobile"],
@@ -3177,6 +3179,7 @@ describe("current validation results", () => {
     expect(ids).toEqual(["e2e-ticket"]);
     const prompt = buildE2eReviewPrompt({
       run: ticketRun,
+      hostPlatform: "linux",
       cycle: carryCycle(1, AppReviewId.make("app-review-1")),
       priorFindingIds: [],
       e2eCommands: ["all-e2e"],
@@ -3433,6 +3436,7 @@ it("directs selected platforms to real runners and retains browser recording evi
   const cycle = carryCycle(1, AppReviewId.make("app-review-platforms"));
   const prompt = buildE2eReviewPrompt({
     run: selectedRun,
+    hostPlatform: "linux",
     cycle,
     priorFindingIds: [],
     e2eCommands: ["pnpm e2e"],
@@ -3451,6 +3455,23 @@ it("directs selected platforms to real runners and retains browser recording evi
   expect(browser).toContain("rrweb session recording");
   expect(browser).toContain("captioned screenshots");
   expect(browser).not.toContain("e2e-platform-");
+});
+
+it("lets the reviewer add the platforms this server can test", () => {
+  const prompt = (hostPlatform: NodeJS.Platform) =>
+    buildE2eReviewPrompt({
+      run: run(),
+      hostPlatform,
+      cycle: carryCycle(1, AppReviewId.make("app-review-host")),
+      priorFindingIds: [],
+      e2eCommands: ["pnpm e2e"],
+    });
+  expect(prompt("linux")).toContain(
+    "This server can run E2E tests on Web, Windows, Android. iOS, macOS cannot run here.",
+  );
+  expect(prompt("darwin")).toContain(
+    "This server can run E2E tests on Web, Windows, Android, iOS, macOS. Beyond",
+  );
 });
 
 for (const verdict of ["passed", "failed", "rejected", "draining"] as const) {
@@ -4224,6 +4245,7 @@ describe("combined acceptance and validation reuse", () => {
     expect(e2eCheckIdsForCommands(["all-e2e"], active)).toEqual(["e2e-feature"]);
     const prompt = buildE2eReviewPrompt({
       run: active,
+      hostPlatform: "linux",
       cycle: active.cycles[1]!,
       e2eCommands: ["all-e2e"],
       priorFindingIds: ["authz-gap"],

@@ -163,6 +163,19 @@ export const REVIEW_TEST_PLATFORM_LABELS: Record<ReviewTestPlatform, string> = {
   ios: "iOS",
   macos: "macOS",
 };
+/**
+ * The platforms E2E tests can reach from a server on `hostPlatform`. Web runs
+ * anywhere, and Android and Windows run on emulators, VMs, or cluster guests;
+ * iOS and macOS need Apple hardware.
+ */
+export function reviewTestPlatformsForHost(
+  hostPlatform: NodeJS.Platform,
+): readonly ReviewTestPlatform[] {
+  return hostPlatform === "darwin"
+    ? REVIEW_TEST_PLATFORMS
+    : REVIEW_TEST_PLATFORMS.filter((platform) => platform !== "ios" && platform !== "macos");
+}
+
 export const TICKET_APP_REVIEW_PARTS_KEY = {
   workflowPromptId: APP_REVIEW_WORKFLOW_PROMPT_ID,
   stepWorkflowPromptId: "implementation.tdd.codex",
