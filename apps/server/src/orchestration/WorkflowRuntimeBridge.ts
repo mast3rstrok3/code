@@ -471,6 +471,25 @@ export const make = Effect.gen(function* () {
     }
   }, importLock.withPermit);
 
+  // Observations copy state the native runtime already committed. A refusal from the
+  // workflow engine is permanent (its receipt replays it), so retrying would loop
+  // forever and hold server startup; log it and move on instead.
+  const mirrorNative = (command: OrchestrationCommand) => {
+    const skip = (error: OrchestrationDispatchError) =>
+      Effect.logWarning("Workflow bridge skipped a refused native observation", {
+        commandId: command.commandId,
+        error,
+      });
+    return engine.dispatch(command).pipe(
+      Effect.asVoid,
+      Effect.catchTags({
+        OrchestrationCommandInvariantError: skip,
+        OrchestrationThreadSettleBlockedError: skip,
+        OrchestrationCommandPreviouslyRejectedError: skip,
+      }),
+    );
+  };
+
   const observeNative = Effect.fn("WorkflowRuntimeBridge.observeNative")(function* (
     stored: OrchestrationV2StoredEvent,
   ) {
@@ -510,13 +529,13 @@ export const make = Effect.gen(function* () {
                   ? "thread.unarchive"
                   : "thread.delete";
         if (type === "thread.unsettle")
-          yield* engine.dispatch({ type, commandId, threadId: event.threadId, reason: "user" });
-        else yield* engine.dispatch({ type, commandId, threadId: event.threadId });
+          yield* mirrorNative({ type, commandId, threadId: event.threadId, reason: "user" });
+        else yield* mirrorNative({ type, commandId, threadId: event.threadId });
       }
     }
     if (event.type === "thread.metadata-updated" && event.payload.deletedAt === null) {
       const thread = event.payload;
-      yield* engine.dispatch({
+      yield* mirrorNative({
         type: "thread.meta.update",
         commandId,
         threadId: thread.id,

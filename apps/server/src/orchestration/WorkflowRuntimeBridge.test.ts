@@ -11,10 +11,12 @@ import {
   CommandId,
   MessageId,
   ProjectId,
+  ThreadId,
   DEFAULT_SERVER_SETTINGS,
   type OrchestrationCommand,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
+import { OrchestrationThreadSettleBlockedError } from "./Errors.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { ProviderRuntimeIngestionService } from "./Services/ProviderRuntimeIngestion.ts";
@@ -349,6 +351,55 @@ effectIt.effect("reopens archived workflow metadata without recreating its threa
         yield* bridge.start;
         yield* bridge.drain;
         expect(commands).toEqual(["thread.unarchive"]);
+      }).pipe(Effect.provide(dependencies));
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  ),
+);
+
+// A refused mirror replays its refusal on every retry, which once held startup forever.
+effectIt.effect("skips a native observation the workflow engine refuses", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const settled = decodeNative({
+        sequence: 1,
+        commandId: null,
+        event: { ...nativeThread.event, id: "native:settle", type: "thread.settled" },
+      });
+      const dependencies = Layer.mergeAll(
+        Layer.mock(OrchestrationEngineService)({
+          subscribeDomainEvents: Effect.succeed(Stream.never),
+          readEvents: () => Stream.empty,
+          dispatch: () =>
+            Effect.fail(
+              new OrchestrationThreadSettleBlockedError({ threadId: ThreadId.make("thread") }),
+            ),
+        }),
+        Layer.mock(ProjectionSnapshotQuery)({}),
+        Layer.mock(OrchestratorV2)({ streamStoredEventsFrom: () => Stream.never }),
+        Layer.mock(EventStoreV2)({
+          latestSequence: () => Effect.succeed(1),
+          read: () => Stream.make(settled),
+        }),
+        Layer.mock(ProjectService)({}),
+        Layer.mock(ServerSettingsService)({}),
+        Layer.mock(ProviderInstanceRegistry)({}),
+        Layer.mock(WorkflowUserInputBroker)({}),
+        Layer.mock(ProviderRuntimeIngestionService)({
+          start: () => Effect.void,
+          drain: Effect.void,
+        }),
+        layerProviderEvents,
+      );
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations();
+        yield* sql`INSERT INTO projection_threads (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode, created_at, updated_at)
+        VALUES ('thread', 'project', 'Workflow', '{"instanceId":"codex","model":"gpt-6.1-sol"}', 'full-access', 'default', ${at}, ${at})`;
+        const bridge = yield* make;
+        yield* bridge.start;
+        expect(yield* sql`SELECT sequence FROM workflow_runtime_cursor WHERE id = 1`).toEqual([
+          { sequence: 1 },
+        ]);
       }).pipe(Effect.provide(dependencies));
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   ),
