@@ -52,15 +52,15 @@ function render(
 }
 
 describe("EngineeringWorkflowSettings", () => {
-  it("starts with the model, planning, and implementation sections collapsed", () => {
+  it("shows review models up front with the phase sections collapsed", () => {
     const markup = render();
 
-    expect(markup).toContain("Model setup");
+    expect(markup).toContain("Review models");
     expect(markup).toContain("Planning phase");
     expect(markup).toContain("5 steps");
     expect(markup).toContain("Implementation phase");
     expect(markup).toContain("6 steps");
-    expect(markup.match(/aria-expanded="false"/g)).toHaveLength(3);
+    expect(markup.match(/aria-expanded="false"/g)).toHaveLength(2);
   });
 
   it("counts removed implementation steps without changing their order", () => {

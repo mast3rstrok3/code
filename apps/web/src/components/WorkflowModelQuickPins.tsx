@@ -34,10 +34,11 @@ export function WorkflowModelQuickPins(props: {
     <div className="space-y-3 rounded-lg border border-border/70 bg-muted/20 p-3">
       <div>
         <div className="text-3xs font-medium uppercase tracking-wider text-muted-foreground">
-          Quick model assignments
+          Review models
         </div>
         <p className="mt-1 text-2xs leading-relaxed text-muted-foreground">
-          Set common review roles here, or tune them in their chronological steps below.
+          These reviews use the chosen model whatever model started the workflow. Tune single phases
+          in the steps below.
         </p>
       </div>
       {actions.map((action) => {

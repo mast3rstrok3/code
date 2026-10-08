@@ -636,55 +636,22 @@ function WorkflowPhaseSection(
   );
 }
 
-function WorkflowModelSetup(
-  props: EngineeringWorkflowSettingsProps & {
-    readonly effectivePinFor: (key: WorkflowModelPinKey) => ModelSelection;
-  },
-) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="max-w-lg overflow-hidden rounded-lg border border-border/70">
-      <Collapsible onOpenChange={setOpen} open={open}>
-        <CollapsibleTrigger className="flex min-h-12 w-full items-center gap-2 px-3 text-left outline-none hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-          {open ? (
-            <ChevronDownIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-          ) : (
-            <ChevronRightIcon
-              aria-hidden="true"
-              className="size-4 shrink-0 text-muted-foreground"
-            />
-          )}
-          <span className="min-w-0">
-            <span className="block text-xs font-semibold text-foreground">Model setup</span>
-            <span className="mt-0.5 block truncate text-2xs text-muted-foreground">
-              Preselected workflow and review models
-            </span>
-          </span>
-        </CollapsibleTrigger>
-        <CollapsiblePanel>
-          <div className="border-t border-border/60 p-3">
-            <WorkflowModelQuickPins
-              preset={props.preset}
-              pinFor={props.pinFor}
-              selectionFor={props.effectivePinFor}
-              rootModelSelection={props.rootModelSelection}
-              rootLabel={props.rootLabel}
-              choices={props.choices}
-              onSetStepModels={props.onSetStepModels}
-            />
-          </div>
-        </CollapsiblePanel>
-      </Collapsible>
-    </div>
-  );
-}
-
 export function EngineeringWorkflowSettings(props: EngineeringWorkflowSettingsProps) {
   const targets = engineeringWorkflowDefaultSteps(props.preset);
   const effectivePinFor = (key: WorkflowModelPinKey) => effectiveSelection(props, key);
   return (
     <div className="space-y-3">
-      <WorkflowModelSetup {...props} effectivePinFor={effectivePinFor} />
+      <div className="max-w-lg">
+        <WorkflowModelQuickPins
+          preset={props.preset}
+          pinFor={props.pinFor}
+          selectionFor={effectivePinFor}
+          rootModelSelection={props.rootModelSelection}
+          rootLabel={props.rootLabel}
+          choices={props.choices}
+          onSetStepModels={props.onSetStepModels}
+        />
+      </div>
       <div className="max-w-lg rounded-lg border border-border/70 p-3">
         <TicketTestPlatformPicker
           overrides={props.stepReviewParts}

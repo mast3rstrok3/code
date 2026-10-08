@@ -7,41 +7,32 @@ import {
 
 import type { WorkflowModelPinKey } from "./WorkflowModelPins";
 
-const APP_REVIEW_PROMPT_ID = "implementation.e2e-app-review.codex";
-const APP_REVIEW_STEP_ID = "implementation.browser-app-review.codex";
+const APP_REVIEW_PROMPT_ID = "implementation.browser-app-review.codex";
 const CODE_REVIEW_PROMPT_ID = "implementation.code-review.codex";
-const TICKET_WAVE_PROMPT_ID = "implementation.tdd.codex";
 
 export interface WorkflowModelQuickAction {
-  readonly id: "e2e-review" | "ticket-code-review" | "final-code-review";
+  readonly id: "app-review" | "code-review";
   readonly label: string;
   readonly description: string;
   readonly pinKeys: ReadonlyArray<WorkflowModelPinKey>;
 }
 
+// Each role pins its step wherever it runs: as a root step (the final review)
+// and as a sub-step of "Execute ticket waves" (the per-ticket review). App
+// Review phases inherit the pin on their review, so one choice covers E2E
+// testing, gap analysis, and repair.
 const QUICK_ACTION_DEFINITIONS = [
   {
-    id: "e2e-review",
-    label: "E2E tests",
-    description: "Set the test runner model for ticket and combined App Reviews.",
+    id: "app-review",
+    label: "App Review",
+    description: "Runs E2E tests, gap analysis, and repairs for ticket and final App Reviews.",
     workflowPromptId: APP_REVIEW_PROMPT_ID,
-    matches: (key: WorkflowModelPinKey) =>
-      key.stepWorkflowPromptId === TICKET_WAVE_PROMPT_ID ||
-      key.stepWorkflowPromptId === APP_REVIEW_STEP_ID,
   },
   {
-    id: "ticket-code-review",
-    label: "Ticket Code Review",
-    description: "Set the model that reviews each ticket after its implementation and App Review.",
+    id: "code-review",
+    label: "Code Review",
+    description: "Reviews and fixes each ticket and the final branch.",
     workflowPromptId: CODE_REVIEW_PROMPT_ID,
-    matches: (key: WorkflowModelPinKey) => key.stepWorkflowPromptId === "implementation.tdd.codex",
-  },
-  {
-    id: "final-code-review",
-    label: "Final Code Review",
-    description: "Set the model for final validation, pull request creation, and green checks.",
-    workflowPromptId: CODE_REVIEW_PROMPT_ID,
-    matches: (key: WorkflowModelPinKey) => key.stepWorkflowPromptId === undefined,
   },
 ] as const;
 
@@ -56,21 +47,14 @@ function pinKeysForPrompt(
   const byId = new Map<string, WorkflowModelPinKey>();
   for (const definition of definitions) {
     for (const step of definition.helpSteps) {
+      if (step.skillId === undefined) continue;
       if (step.skillId === workflowPromptId) {
         const key = { workflowPromptId };
         byId.set(pinKeyId(key), key);
       }
-      if (step.skillId === undefined) continue;
       for (const subStep of step.subSteps ?? []) {
-        const ticketE2e =
-          workflowPromptId === APP_REVIEW_PROMPT_ID &&
-          step.skillId === TICKET_WAVE_PROMPT_ID &&
-          subStep.workflowPromptId === APP_REVIEW_STEP_ID;
-        if (subStep.workflowPromptId !== workflowPromptId && !ticketE2e) continue;
-        const key = {
-          workflowPromptId,
-          stepWorkflowPromptId: step.skillId,
-        };
+        if (subStep.workflowPromptId !== workflowPromptId) continue;
+        const key = { workflowPromptId, stepWorkflowPromptId: step.skillId };
         byId.set(pinKeyId(key), key);
       }
     }
@@ -89,7 +73,7 @@ export function workflowModelQuickActions(
         ? []
         : [WORKFLOW_PRESET_DEFINITION_BY_ID[preset]];
   return QUICK_ACTION_DEFINITIONS.flatMap((action) => {
-    const pinKeys = pinKeysForPrompt(definitions, action.workflowPromptId).filter(action.matches);
+    const pinKeys = pinKeysForPrompt(definitions, action.workflowPromptId);
     return pinKeys.length === 0 ? [] : [{ ...action, pinKeys }];
   });
 }

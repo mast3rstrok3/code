@@ -12,7 +12,7 @@ Built-in skills run as workflow steps. Read their instructions in Settings → S
 
 ## Choosing a workflow
 
-On web and desktop, open a thread and select **Workflows** in its header. Choose Implementation, Fast feature, Full feature, or an Engineering workflow variant, enter a brief, then select **Start workflow**. The run uses the thread's selected provider and model. Use **Settings → Workflows** for standing defaults and the running workflow's Settings menu for changes to that run. Select **App Review** in the Workflows panel to launch a standalone review.
+On web and desktop, open a thread and select **Workflows** in its header. Choose Implementation, Fast feature, Full feature, or an Engineering workflow variant, enter a brief, then select **Start workflow**. The run uses the thread's selected provider and model. Use **Settings → Workflows** for standing defaults and the running workflow's Settings menu for changes to that run. **Review models** at the top of the Engineering Workflow defaults picks the App Review and Code Review models for every new run, whatever model starts the workflow. Select **App Review** in the Workflows panel to launch a standalone review.
 
 - **Quick Feature** uses the provider CLI's Plan mode, answers its questions automatically, builds and validates the change, then stops.
 - **Feature** adds Final App Review, Final Code Review, pull-request creation, and pull-request babysitting to Quick Feature.

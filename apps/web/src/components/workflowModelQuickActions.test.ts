@@ -12,41 +12,31 @@ const selection: ModelSelection = {
 };
 
 describe("workflowModelQuickActions", () => {
-  it("offers concrete review roles for the Engineering Workflow", () => {
+  it("pins each review role for ticket and final reviews of the Engineering Workflow", () => {
     const actions = workflowModelQuickActions("planning");
     expect(actions.map((action) => [action.id, action.label])).toEqual([
-      ["e2e-review", "E2E tests"],
-      ["ticket-code-review", "Ticket Code Review"],
-      ["final-code-review", "Final Code Review"],
+      ["app-review", "App Review"],
+      ["code-review", "Code Review"],
     ]);
-    const e2eBrowserReview = actions.find((action) => action.id === "e2e-review");
-    const ticketCodeReview = actions.find((action) => action.id === "ticket-code-review");
-    const finalCodeReview = actions.find((action) => action.id === "final-code-review");
-
-    expect(e2eBrowserReview?.pinKeys).toEqual([
+    expect(actions.find((action) => action.id === "app-review")?.pinKeys).toEqual([
       {
-        workflowPromptId: "implementation.e2e-app-review.codex",
+        workflowPromptId: "implementation.browser-app-review.codex",
         stepWorkflowPromptId: "implementation.tdd.codex",
       },
-      {
-        workflowPromptId: "implementation.e2e-app-review.codex",
-        stepWorkflowPromptId: "implementation.browser-app-review.codex",
-      },
+      { workflowPromptId: "implementation.browser-app-review.codex" },
     ]);
-    expect(ticketCodeReview?.pinKeys).toEqual([
+    expect(actions.find((action) => action.id === "code-review")?.pinKeys).toEqual([
       {
         workflowPromptId: "implementation.code-review.codex",
         stepWorkflowPromptId: "implementation.tdd.codex",
       },
-    ]);
-    expect(finalCodeReview?.pinKeys).toEqual([
       { workflowPromptId: "implementation.code-review.codex" },
     ]);
   });
 
-  it("only offers the E2E test assignment in the App Review workflow", () => {
+  it("only offers the App Review assignment in the App Review workflow", () => {
     expect(workflowModelQuickActions("app-review").map((action) => action.id)).toEqual([
-      "e2e-review",
+      "app-review",
     ]);
   });
 
@@ -73,9 +63,9 @@ describe("workflowModelQuickActions", () => {
     });
   });
 
-  it("reports mixed when ticket and standalone App Review models differ", () => {
+  it("reports mixed when ticket and final App Review models differ", () => {
     const keys = workflowModelQuickActions("planning").find(
-      (action) => action.id === "e2e-review",
+      (action) => action.id === "app-review",
     )!.pinKeys;
     const otherSelection: ModelSelection = {
       instanceId: ProviderInstanceId.make("claudeAgent"),
