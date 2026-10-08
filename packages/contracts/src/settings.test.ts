@@ -307,9 +307,9 @@ describe("ClaudeSettings auto-compaction", () => {
 });
 
 describe("Engineering Workflow settings", () => {
-  it("runs every optional review and publication step by default", () => {
+  it("runs every optional step except Ticket App Review by default", () => {
     expect(decodeServerSettings({}).implementation).toEqual({
-      ticketAppReviewEnabled: true,
+      ticketAppReviewEnabled: false,
       appReviewEnabled: true,
       finalCodeReviewEnabled: true,
       pullRequestCreationEnabled: true,

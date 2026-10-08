@@ -296,7 +296,7 @@ function EngineeringWorkflowStepControls(
   ) {
     const implementationSelection = effectiveSelection(props, TDD_STEP_KEY);
     const ticketReviewSelection = effectiveSelection(props, TICKET_APP_REVIEW_KEY);
-    const ticketAppReviewEnabled = implementationSettings?.ticketAppReviewEnabled !== false;
+    const ticketAppReviewEnabled = implementationSettings?.ticketAppReviewEnabled === true;
     return (
       <div className="divide-y divide-border/60 overflow-hidden rounded-md border border-border/60">
         <div className="p-3">
@@ -374,7 +374,7 @@ function EngineeringWorkflowStepControls(
         <div className="grid gap-4 p-3 sm:grid-cols-2">
           <StepModelControl
             label="Ticket Code Review"
-            note="reviews the ticket after implementation and App Review"
+            note="reviews the ticket after its implementation"
             pinKey={TICKET_CODE_REVIEW_KEY}
             pinFor={props.pinFor}
             inheritedSelection={inheritedSelection(

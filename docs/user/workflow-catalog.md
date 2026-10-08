@@ -16,8 +16,8 @@ On web and desktop, open a thread and select **Workflows** in its header. Choose
 
 - **Quick Feature** uses the provider CLI's Plan mode, answers its questions automatically, builds and validates the change, then stops.
 - **Feature** adds Final App Review, Final Code Review, pull-request creation, and pull-request babysitting to Quick Feature.
-- **Quick Engineering** runs the full engineering sequence with ticket and Final App Reviews off by default.
-- **Engineering** begins with Grill with Docs, then proceeds through Planning and the full Implementation workflow.
+- **Quick Engineering** runs the full engineering sequence with Final App Review off by default.
+- **Engineering** begins with Grill with Docs, then proceeds through Planning and the full Implementation workflow. Each ticket is implemented and code-reviewed in its own worktree; the Final App Review and Final Code Review test the merged branch.
 - **Wayfinder** will replace Grill with Docs with a Wayfinder planning phase. It is under development.
 
 These names are variants of the Engineering workflow. The Workflows panel also offers Implementation, Fast feature, and Full feature directly. Open a running step's settings to change its model, cycle budget, or optional reviews. Remove an optional step with its X button. The row stays in its original position as an Add action, so you can restore it without rebuilding the sequence. Ticket App Review, Final App Review, Final Code Review, pull-request creation, and pull-request babysitting use this control. Each App Review opens into automated E2E testing, gap analysis, and repair. E2E testing starts enabled and can be removed or restored for ticket and final reviews. Browser review runs only when you request it directly. Removing pull-request creation also removes babysitting. Adding babysitting restores pull-request creation. The choices are stored with the run and do not change later runs.
@@ -239,7 +239,7 @@ Interactive grill threads use T3's own `workflow_request_user_input` tool, which
 
 ## Verifying a ticket on another machine
 
-To implement tickets before testing the combined app, disable **Ticket App Review** and keep **Final App Review** enabled. In an existing run, skip the App Review stage on unfinished tickets, then start their blocked stage again. Workers and Code Review still check the implementation with focused tests and static checks. Browser E2E, native-device evidence, and related test-environment or coverage gaps move to the final review. Earlier failed reports remain available there. A completed ticket does not mean its deferred acceptance passed.
+Ticket App Review is off by default, so tickets are implemented before the combined app is tested and **Final App Review** runs every E2E suite against the merged branch. Add **Ticket App Review** when a ticket must pass its own E2E tests before merging. In an existing run, skip the App Review stage on unfinished tickets, then start their blocked stage again. Workers and Code Review still check the implementation with focused tests and static checks. Browser E2E, native-device evidence, and related test-environment or coverage gaps move to the final review. Earlier failed reports remain available there. A completed ticket does not mean its deferred acceptance passed.
 
 Use native verification when a ticket needs an OS or simulator that the workflow server cannot run. The web and desktop Workflows panel can hand a committed ticket to another connected T3 environment. The original server keeps the workflow and its history. Independent tickets can continue while this ticket and its dependents wait.
 

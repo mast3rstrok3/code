@@ -47,8 +47,10 @@ export interface WorkflowPresetDefinition {
   readonly implementationDefaults?: ImplementationWorkflowSettings;
 }
 
+// Tickets get only their Code Review; the Final App Review tests the merged
+// branch once instead of once per ticket.
 const FULL_IMPLEMENTATION_DEFAULTS: ImplementationWorkflowSettings = {
-  ticketAppReviewEnabled: true,
+  ticketAppReviewEnabled: false,
   appReviewEnabled: true,
   finalCodeReviewEnabled: true,
   pullRequestCreationEnabled: true,
@@ -453,7 +455,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
           {
             label: "Ticket App Review",
             workflowPromptId: "implementation.browser-app-review.codex",
-            note: "the review's own agents follow the App Review step",
+            note: "off by default; the review's own agents follow the App Review step",
           },
           {
             label: "Ticket Code Review",
@@ -472,7 +474,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Final App Review",
         skillId: "implementation.browser-app-review.codex",
         threadBoundary: "new review thread",
-        note: "automatic E2E commands, gap analysis and repairs; five test cycles maximum",
+        note: "automatic; tests the merged branch with all E2E suites, gap analysis and repairs; five test cycles maximum",
         subSteps: APP_REVIEW_SUB_STEPS,
       },
       {
@@ -503,11 +505,9 @@ const FAST_ENGINEERING_WORKFLOW_DEFINITION: WorkflowPresetDefinition = {
   ...ENGINEERING_WORKFLOW_DEFINITION,
   id: "fast-engineering",
   label: "Quick Engineering",
-  description:
-    "Run the full engineering sequence with ticket and Final App Reviews skipped by default.",
+  description: "Run the full engineering sequence with the Final App Review skipped by default.",
   implementationDefaults: {
     ...FULL_IMPLEMENTATION_DEFAULTS,
-    ticketAppReviewEnabled: false,
     appReviewEnabled: false,
   },
 };

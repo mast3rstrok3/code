@@ -288,7 +288,7 @@ export const MaxParallelTickets = Schema.Int.check(
 export const ImplementationWorkflowSettings = Schema.Struct({
   maxParallelTickets: Schema.optionalKey(MaxParallelTickets),
   maxParallelAppReviews: Schema.optionalKey(MaxParallelTickets),
-  ticketAppReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  ticketAppReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   appReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   finalCodeReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   pullRequestCreationEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),

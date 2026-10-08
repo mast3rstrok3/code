@@ -37,14 +37,14 @@ describe("workflow presets", () => {
 
   it("sets optional stages from each preset without changing global defaults", () => {
     expect(implementationDefaultsForWorkflowPreset("quick-plan")).toEqual({
-      ticketAppReviewEnabled: true,
+      ticketAppReviewEnabled: false,
       appReviewEnabled: false,
       finalCodeReviewEnabled: false,
       pullRequestCreationEnabled: false,
       pullRequestBabysittingEnabled: false,
     });
     expect(implementationDefaultsForWorkflowPreset("fast-plan")).toEqual({
-      ticketAppReviewEnabled: true,
+      ticketAppReviewEnabled: false,
       appReviewEnabled: true,
       finalCodeReviewEnabled: true,
       pullRequestCreationEnabled: true,
@@ -53,6 +53,13 @@ describe("workflow presets", () => {
     expect(implementationDefaultsForWorkflowPreset("fast-engineering")).toEqual({
       ticketAppReviewEnabled: false,
       appReviewEnabled: false,
+      finalCodeReviewEnabled: true,
+      pullRequestCreationEnabled: true,
+      pullRequestBabysittingEnabled: true,
+    });
+    expect(implementationDefaultsForWorkflowPreset("planning")).toEqual({
+      ticketAppReviewEnabled: false,
+      appReviewEnabled: true,
       finalCodeReviewEnabled: true,
       pullRequestCreationEnabled: true,
       pullRequestBabysittingEnabled: true,
