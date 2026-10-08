@@ -1,4 +1,9 @@
-import type { AppStack, AppStackAutoCreateResult, AppStackPod } from "@t3tools/contracts";
+import type {
+  AppStack,
+  AppStackAutoCreateResult,
+  AppStackBundlePlan,
+  AppStackPod,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -7,11 +12,15 @@ import {
   appStackBundleApps,
   appStackBundleMemberDescription,
   appStackOwnershipLabel,
+  appStackPlatformMembers,
   appStackProtectionAction,
   appStackSelectionState,
+  appStackStartShape,
   appStackWorkflowConflictSummary,
   autoCreateNotice,
+  defaultAppStackBundleSelection,
   isProtectedAppStack,
+  missingAppStackBundleMembers,
   normalizePreviewHref,
   orderAppStacksForPanel,
   previewForPod,
@@ -355,5 +364,64 @@ describe("appStackBundleMemberDescription", () => {
     expect(describeMember({})).toBe(
       "New worktree /repos/cortex.worktrees/feature-x from origin/feature/x, else origin/dev",
     );
+  });
+});
+
+describe("starting from a platform worktree", () => {
+  const member = (app: string, found: boolean) => ({
+    app,
+    repository: app,
+    worktreePath: `/repos/features/feature-x/${app}`,
+    found,
+    baseBranch: "dev",
+    services: ["backend", "frontend"],
+  });
+  const platformPlan: AppStackBundlePlan = {
+    app: null,
+    branch: "feature/x",
+    platform: true,
+    members: [member("rudi", true), member("chat", false), member("cortex", false)],
+  };
+  const appPlan: AppStackBundlePlan = {
+    app: "rudi",
+    branch: "feature/x",
+    members: [member("rudi", true), member("chat", false)],
+  };
+
+  it("checks every app of a platform plan and only the own app of an app plan", () => {
+    expect([...defaultAppStackBundleSelection(platformPlan)]).toEqual(["rudi", "chat", "cortex"]);
+    expect([...defaultAppStackBundleSelection(appPlan)]).toEqual([]);
+  });
+
+  it("starts the checked apps and leaves out services only of apps that run", () => {
+    expect(
+      appStackStartShape(platformPlan, new Set(["rudi", "chat"]), {
+        rudi: ["frontend"],
+        cortex: ["backend"],
+        chat: [],
+      }),
+    ).toEqual({ bundle: ["rudi", "chat"], omitServices: { rudi: ["frontend"] } });
+    expect(appStackStartShape(appPlan, new Set(), { rudi: ["frontend"] })).toEqual({
+      bundle: [],
+      omitServices: { rudi: ["frontend"] },
+    });
+  });
+
+  it("refuses a platform start with no app checked", () => {
+    expect(appStackStartShape(platformPlan, new Set(), {})).toBe(null);
+  });
+
+  it("names the checked apps whose worktrees a start would create", () => {
+    expect(
+      missingAppStackBundleMembers(platformPlan, new Set(["rudi", "chat"])).map((m) => m.app),
+    ).toEqual(["chat"]);
+  });
+
+  it("lists the stacks a platform record started", () => {
+    const record = makeStack({ id: "infra", platform: true, bundleId: "infra", app: null });
+    const rudi = makeStack({ id: "rudi", app: "rudi", bundleId: "infra" });
+    const other = makeStack({ id: "chat", app: "chat", bundleId: "chat" });
+    expect(appStackPlatformMembers(record, [record, rudi, other])).toEqual([rudi]);
+    expect(appStackPlatformMembers(rudi, [record, rudi, other])).toEqual([]);
   });
 });

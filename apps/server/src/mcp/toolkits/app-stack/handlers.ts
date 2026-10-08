@@ -10,6 +10,8 @@ import { ProjectionSnapshotQuery } from "../../../orchestration/Services/Project
 import { McpInvocationContext } from "../../McpInvocationContext.ts";
 import {
   AppStackToolkit,
+  type CreateWorktreesInput,
+  type MemberInput,
   type PodLogsInput,
   type StartInput,
   type WorkspaceInput,
@@ -132,6 +134,39 @@ const requireStack = Effect.fn("AppStackToolkit.requireStack")(function* (
   return { manager, stack: result.stack };
 });
 
+/** Every stack of the stack's bundle, this one included, or null when it runs alone. */
+const bundleStacks = Effect.fn("AppStackToolkit.bundleStacks")(function* (stack: AppStack | null) {
+  if (!stack?.bundleId) return null;
+  const manager = yield* AppStackManager;
+  const listed = yield* manager.list({});
+  return listed.stacks.filter((member) => member.bundleId === stack.bundleId);
+});
+
+/**
+ * The stack whose pods a pod tool reads: the workspace's own, or the bundle
+ * member running `app`. A platform record runs no pods, so it needs an app.
+ */
+const requirePodStack = Effect.fn("AppStackToolkit.requirePodStack")(function* (
+  input: MemberInput,
+  operation: string,
+) {
+  const { manager, stack } = yield* requireStack(input, operation);
+  if (input.app === undefined ? stack.platform !== true : stack.app === input.app) {
+    return { manager, stack };
+  }
+  const members = (yield* bundleStacks(stack)) ?? [];
+  const member = members.find((candidate) => candidate.app != null && candidate.app === input.app);
+  if (member) return { manager, stack: member };
+  const apps = members.flatMap((candidate) => (candidate.app ? [candidate.app] : []));
+  return yield* new AppStackError({
+    operation,
+    message:
+      input.app === undefined
+        ? `This workspace's stack is a platform record and runs no pods. Pass app, one of: ${apps.join(", ") || "none running"}.`
+        : `This workspace's stack runs no ${input.app}. Its apps: ${apps.join(", ") || "none"}.`,
+  });
+});
+
 const deviceAccess = Effect.fn("AppStackToolkit.deviceAccess")(function* (
   stack: AppStack,
   platform: DeviceInput["platform"],
@@ -213,6 +248,11 @@ export const handlers = {
       : { stack: null, frontendUrl: null, frontendServiceName: null };
     return {
       ...result,
+      // The bundle only adds detail; a failed list must not hide the stack.
+      bundle: yield* bundleStacks(result.stack).pipe(
+        Effect.timeout("30 seconds"),
+        Effect.orElseSucceed(() => null),
+      ),
       worktreePath: workspace.worktreePath,
       variant,
       enabled: status.enabled,
@@ -267,6 +307,19 @@ export const handlers = {
       variant: input.variant ?? "dev",
     });
   }),
+  app_stack_create_worktrees: Effect.fn("AppStackToolkit.createWorktrees")(function* (
+    input: CreateWorktreesInput,
+  ) {
+    const operation = "app_stack_create_worktrees";
+    const workspace = yield* resolveWorkspace(operation);
+    const manager = yield* requireEnabled(operation);
+    return yield* manager.createBundleWorktrees({
+      worktreePath: workspace.worktreePath,
+      gitBranch: workspace.branch,
+      variant: input.variant ?? "dev",
+      ...(input.bundle === undefined ? {} : { bundle: input.bundle }),
+    });
+  }),
   app_stack_stop: Effect.fn("AppStackToolkit.stop")(function* (input: WorkspaceInput) {
     const { manager, stack } = yield* requireStack(input, "app_stack_stop");
     return yield* manager.stop({ stackId: stack.id });
@@ -279,12 +332,12 @@ export const handlers = {
     const { manager, stack } = yield* requireStack(input, "app_stack_delete");
     return yield* manager.delete({ stackId: stack.id });
   }),
-  app_stack_list_pods: Effect.fn("AppStackToolkit.listPods")(function* (input: WorkspaceInput) {
-    const { manager, stack } = yield* requireStack(input, "app_stack_list_pods");
+  app_stack_list_pods: Effect.fn("AppStackToolkit.listPods")(function* (input: MemberInput) {
+    const { manager, stack } = yield* requirePodStack(input, "app_stack_list_pods");
     return yield* manager.listPods({ stackId: stack.id });
   }),
   app_stack_logs: Effect.fn("AppStackToolkit.logs")(function* (input: PodLogsInput) {
-    const { manager, stack } = yield* requireStack(input, "app_stack_logs");
+    const { manager, stack } = yield* requirePodStack(input, "app_stack_logs");
     return yield* manager.getPodLogs({
       stackId: stack.id,
       podName: input.podName,
@@ -305,6 +358,7 @@ export const layer = McpToolAccess.toLayer(AppStackToolkit, {
   app_stack_list_pods: McpToolAccess.readsAsCaller(handlers.app_stack_list_pods),
   app_stack_logs: McpToolAccess.readsAsCaller(handlers.app_stack_logs),
   app_stack_bundle_plan: McpToolAccess.readsAsCaller(handlers.app_stack_bundle_plan),
+  app_stack_create_worktrees: McpToolAccess.actsAsCaller(handlers.app_stack_create_worktrees),
   app_stack_device_start: McpToolAccess.actsAsCaller(handlers.app_stack_device_start),
   app_stack_device_stop: McpToolAccess.actsAsCaller(handlers.app_stack_device_stop),
   app_stack_device_status: McpToolAccess.readsAsCaller(handlers.app_stack_device_status),

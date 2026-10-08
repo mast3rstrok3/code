@@ -116,6 +116,7 @@ function harness(
     reserved?: boolean;
     failMutation?: boolean;
     lookupWait?: Effect.Effect<void>;
+    listed?: ReadonlyArray<AppStack>;
   } = {},
 ) {
   const calls: Array<{ worktreePath: string; variant?: string | undefined }> = [];
@@ -233,6 +234,14 @@ function harness(
               services: ["backend", "codex-runner", "frontend"],
             },
           ],
+        });
+      },
+      list: () => Effect.succeed({ stacks: input.listed ?? [] }),
+      createBundleWorktrees: (request) => {
+        operations.push({ operation: "createBundleWorktrees", input: request });
+        return Effect.succeed({
+          plan: { app: null, branch: request.gitBranch ?? "dev", platform: true, members: [] },
+          createdWorktrees: [],
         });
       },
       listPods: (request) => {
@@ -361,6 +370,7 @@ it.effect("registers workspace tools, validates inputs, and returns results thro
       const listed = { tools: server.tools.map(({ tool }) => tool) };
       expect(listed.tools.map((tool) => tool.name).toSorted()).toEqual([
         "app_stack_bundle_plan",
+        "app_stack_create_worktrees",
         "app_stack_delete",
         "app_stack_device_start",
         "app_stack_device_status",
@@ -805,4 +815,103 @@ it.effect("reports queued Windows readiness and releases only the supplied devic
       Array.from({ length: 2 }, () => ({ worktreePath: "/repo/rudi", variant: "prod" })),
     );
   }).pipe(Effect.provide(test.layer));
+});
+
+const decodeStack = Schema.decodeUnknownSync(AppStack);
+const platformRecord = decodeStack({
+  ...stack,
+  id: "platform-1",
+  uuid: "platform-1",
+  worktreePath: "/repos/features/feature-x/healthcare-infra",
+  displayName: "healthcare-infra feature/x",
+  app: null,
+  bundleId: "platform-1",
+  platform: true,
+  omittedServices: [],
+  namespace: null,
+  services: null,
+});
+const platformMember = (app: string) =>
+  decodeStack({
+    ...stack,
+    id: `${app}-1`,
+    uuid: `${app}-1`,
+    worktreePath: `/repos/features/feature-x/${app}`,
+    app,
+    bundleId: "platform-1",
+    namespace: `dev-${app}-1`,
+    previewUrls: { frontend: `https://${app}.example.test` },
+  });
+
+describe("a platform workspace", () => {
+  const platformHarness = () =>
+    harness({
+      worktreePath: platformRecord.worktreePath,
+      stack: platformRecord,
+      listed: [platformRecord, platformMember("rudi"), platformMember("chat")],
+    });
+
+  it.effect("returns the apps of its bundle with their URLs", () => {
+    const test = platformHarness();
+    return Effect.gen(function* () {
+      const result = yield* handlers.app_stack_get({});
+      expect(result.stack?.platform).toBe(true);
+      expect(result.bundle?.map((member) => [member.app, member.previewUrls?.frontend])).toEqual([
+        [null, undefined],
+        ["rudi", "https://rudi.example.test"],
+        ["chat", "https://chat.example.test"],
+      ]);
+    }).pipe(Effect.provide(test.layer));
+  });
+
+  it.effect("reads pods and logs of the app it names, and asks for one otherwise", () => {
+    const test = platformHarness();
+    return Effect.gen(function* () {
+      const error = yield* handlers.app_stack_list_pods({}).pipe(Effect.flip);
+      expect(error.message).toContain("Pass app, one of: rudi, chat");
+      yield* handlers.app_stack_list_pods({ app: "chat" });
+      yield* handlers.app_stack_logs({ app: "rudi", podName: "backend-1" });
+      const missing = yield* handlers.app_stack_list_pods({ app: "cortex" }).pipe(Effect.flip);
+      expect(missing.message).toContain("runs no cortex");
+      expect(test.operations).toEqual([
+        { operation: "listPods", input: { stackId: "chat-1" } },
+        {
+          operation: "getPodLogs",
+          input: { stackId: "rudi-1", podName: "backend-1", tailLines: 200 },
+        },
+      ]);
+    }).pipe(Effect.provide(test.layer));
+  });
+
+  it.effect("stops, restarts and deletes the platform record", () => {
+    const test = platformHarness();
+    return Effect.gen(function* () {
+      yield* handlers.app_stack_stop({});
+      yield* handlers.app_stack_restart({});
+      yield* handlers.app_stack_delete({});
+      expect(test.operations.map(({ operation, input }) => [operation, input])).toEqual([
+        ["stop", { stackId: platformRecord.id }],
+        ["restart", { stackId: platformRecord.id }],
+        ["delete", { stackId: platformRecord.id }],
+      ]);
+    }).pipe(Effect.provide(test.layer));
+  });
+
+  it.effect("creates the chosen apps' worktrees on its branch without starting them", () => {
+    const test = platformHarness();
+    return Effect.gen(function* () {
+      yield* handlers.app_stack_create_worktrees({ bundle: ["rudi", "chat"] });
+      expect(test.operations).toEqual([
+        {
+          operation: "createBundleWorktrees",
+          input: {
+            worktreePath: platformRecord.worktreePath,
+            gitBranch: "dev",
+            variant: "dev",
+            bundle: ["rudi", "chat"],
+          },
+        },
+      ]);
+    }).pipe(Effect.provide(test.layer));
+  });
 });

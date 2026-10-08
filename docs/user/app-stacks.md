@@ -80,9 +80,22 @@ the same choice through the `bundle` argument of `app_stack_start`. A workflow w
 other repositories bundles those repositories into its shared stack by itself. Bundles need a Stacks
 controller and are not available in native mode.
 
+A repository that wires the apps together, such as healthcare-infra, can start them all. Its
+contract declares `x-stacks-app-dev.platform` and runs no services itself. From its worktree the
+**New Stack** form lists every platform app, all checked, with each app's services underneath.
+Uncheck the apps you don't need and the services to leave out. Start creates any missing worktrees
+where the form shows them, usually in the branch's feature folder, and then starts each checked app
+in its own namespace. **Create worktrees only** creates the missing worktrees without starting
+anything, so you or an agent can work across the repositories first. The platform worktree's own
+card runs no pods. It lists the apps it started with their URLs, and its stop, restart and delete
+act on all of them. Agents start it with `app_stack_start` from a thread in that repository, create
+the worktrees with `app_stack_create_worktrees`, and pass `app` to `app_stack_list_pods` and
+`app_stack_logs` to pick an app.
+
 A stack can also leave compose services out, per app, for example Rudi without `codex-runner` or
 the Medical Repository without `seaweedfs`. A left-out service does not start, and services that
-depend on it start without it, so leave out only what the stack does not need. Agents pass
+depend on it start without it, so leave out only what the stack does not need. In the **New
+Stack** form, uncheck the service under its app. Agents pass
 `omitServices` to `app_stack_start`, and `app_stack_bundle_plan` lists every app with its services.
 A start that bundles or leaves out differently replaces the worktree's running stack. Restarts keep
 the bundle and the left-out services.

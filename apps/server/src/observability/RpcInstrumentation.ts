@@ -52,6 +52,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.appStackGet]: "appStack",
   [WS_METHODS.appStackAutoCreate]: "appStack",
   [WS_METHODS.appStackBundlePlan]: "appStack",
+  [WS_METHODS.appStackCreateBundleWorktrees]: "appStack",
   [WS_METHODS.appStackStop]: "appStack",
   [WS_METHODS.appStackSetProtected]: "appStack",
   [WS_METHODS.appStackRestart]: "appStack",

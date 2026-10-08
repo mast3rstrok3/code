@@ -231,7 +231,9 @@ it.effect("sends the configured backend bearer token when starting a stack", () 
       workflowId: "workflow-123",
     });
 
-    const request = requests[1];
+    const request = requests.find((candidate) =>
+      new URL(candidate.url).pathname.endsWith("/auto-create"),
+    );
     if (request === undefined) {
       assert.fail("expected AppStackManager to send a backend request");
     }
@@ -390,6 +392,8 @@ it.effect("uses the configured controller backend before native kubectl mode", (
       requests.map((request) => [request.method, new URL(request.url).pathname]),
       [
         ["GET", "/api/app-dev-stacks/by-worktree"],
+        // Asks whether the worktree is a platform worktree; the 404 says no.
+        ["POST", "/api/app-dev-stacks/bundle-plan"],
         ["POST", "/api/app-dev-stacks/auto-create"],
       ],
     );
@@ -541,13 +545,13 @@ it.effect("mints and caches an OIDC service token when no static bearer token is
       gitBranch: "feature",
     });
 
-    assert.equal(requests.length, 5);
+    // One token, then by-worktree, bundle-plan and auto-create for each start.
+    assert.equal(requests.length, 7);
     assert.equal(requests[0]?.method, "POST");
     assert.equal(requests[0]?.url, tokenUrl.href);
-    assert.equal(requests[1]?.headers.authorization, "Bearer oidc-token");
-    assert.equal(requests[2]?.headers.authorization, "Bearer oidc-token");
-    assert.equal(requests[3]?.headers.authorization, "Bearer oidc-token");
-    assert.equal(requests[4]?.headers.authorization, "Bearer oidc-token");
+    for (const request of requests.slice(1)) {
+      assert.equal(request.headers.authorization, "Bearer oidc-token");
+    }
   }).pipe(Effect.provide(layer));
 });
 
@@ -1397,9 +1401,10 @@ it.effect("sends an exact shape past the active-stack shortcut and bundles every
       omitServices: { rudi: ["codex-runner"] },
     });
     assert.deepEqual(result.stack?.omittedServices, ["codex-runner"]);
+    // The plan only tells whether this is a platform worktree; it is not.
     assert.deepEqual(
       requests.map((request) => new URL(request.url).pathname),
-      ["/api/app-dev-stacks/auto-create"],
+      ["/api/app-dev-stacks/bundle-plan", "/api/app-dev-stacks/auto-create"],
     );
     assert.deepEqual(requestBody(requests, "/auto-create").omit_services, {
       rudi: ["codex-runner"],
@@ -1452,5 +1457,326 @@ it.effect("refuses omitted services when the controller predates them", () => {
       omitServices: {},
     });
     assert.equal(result.stack?.id, stackJson.id);
+  }).pipe(Effect.provide(layer));
+});
+
+const decodeRestartRequest = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      worktree_path: Schema.String,
+      bundle: Schema.Array(Schema.String),
+      omit_services: Schema.Record(Schema.String, Schema.Array(Schema.String)),
+    }),
+  ),
+);
+
+const platformRecord = {
+  ...stackJson,
+  id: "44444444-4444-4444-4444-444444444444",
+  uuid: "44444444-4444-4444-4444-444444444444",
+  worktreePath: "/repos/features/feature-platform/healthcare-infra",
+  composePath: "infra/compose/compose.app-dev.yml",
+  app: null,
+  bundleId: "44444444-4444-4444-4444-444444444444",
+  platform: true,
+  omittedServices: [],
+  namespace: null,
+  services: null,
+  serviceCount: 0,
+} as const;
+
+it.effect("decodes a platform plan and a platform record", () => {
+  const layer = makeLayer({
+    requests: [],
+    response: (request) =>
+      new URL(request.url).pathname === "/api/app-dev-stacks/bundle-plan"
+        ? Response.json({
+            app: null,
+            branch: "feature/platform",
+            platform: true,
+            members: [
+              {
+                app: "rudi",
+                repository: "rudi",
+                repositoryPath: "/repos/rudi",
+                worktreePath: "/repos/features/feature-platform/rudi",
+                found: false,
+                baseBranch: "dev",
+                services: ["backend", "codex-runner", "frontend"],
+              },
+            ],
+          })
+        : Response.json(platformRecord),
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppStackManager;
+    const plan = yield* manager.bundlePlan({ worktreePath: platformRecord.worktreePath });
+    assert.equal(plan.app, null);
+    assert.equal(plan.platform, true);
+    assert.deepEqual(plan.members[0]?.services, ["backend", "codex-runner", "frontend"]);
+    const record = yield* manager.get({ stackId: platformRecord.id });
+    assert.equal(record.platform, true);
+    assert.equal(record.app, null);
+    assert.equal(record.namespace, null);
+    assert.equal(record.bundleId, record.id);
+    assert.deepEqual(record.omittedServices, []);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect(
+  "starts a platform worktree with every app after creating the missing worktrees in the feature folder",
+  () => {
+    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-app-stack-platform-"));
+    const branch = "feature/platform";
+    const rudi = makeCheckout(root, "rudi", null);
+    const chat = makeCheckout(root, "chat", branch);
+    const infraWorktree = NodePath.join(root, "features", "feature-platform", "healthcare-infra");
+    const rudiWorktree = NodePath.join(root, "features", "feature-platform", "rudi");
+    const chatWorktree = NodePath.join(root, "chat.worktrees", "feature-platform");
+    git(
+      chat.checkout,
+      "worktree",
+      "add",
+      "--quiet",
+      "-b",
+      branch,
+      chatWorktree,
+      `origin/${branch}`,
+    );
+    const record = { ...platformRecord, worktreePath: infraWorktree };
+    const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+    const layer = makeLayer({
+      requests,
+      response: (request) => {
+        const url = new URL(request.url);
+        if (url.pathname === "/api/app-dev-stacks/by-worktree") {
+          return Response.json(noStackByWorktree);
+        }
+        if (url.pathname === "/api/app-dev-stacks/bundle-plan") {
+          return Response.json({
+            app: null,
+            branch,
+            platform: true,
+            members: [
+              {
+                app: "rudi",
+                repository: "rudi",
+                repositoryPath: rudi.checkout,
+                worktreePath: rudiWorktree,
+                found: false,
+                baseBranch: "dev",
+                services: ["backend", "codex-runner", "frontend"],
+              },
+              {
+                app: "chat",
+                repository: "chat",
+                repositoryPath: chat.checkout,
+                worktreePath: chatWorktree,
+                found: true,
+                baseBranch: "dev",
+                services: ["backend", "web"],
+              },
+            ],
+          });
+        }
+        if (url.pathname === "/api/app-dev-stacks/auto-create") {
+          return Response.json({
+            stack: record,
+            created: true,
+            frontendUrl: null,
+            frontendServiceName: null,
+            bundle: [
+              record,
+              {
+                ...stackJson,
+                worktreePath: rudiWorktree,
+                app: "rudi",
+                bundleId: record.id,
+                omittedServices: ["codex-runner"],
+              },
+            ],
+          });
+        }
+        return new Response(`unexpected request ${request.url}`, { status: 404 });
+      },
+    });
+
+    return Effect.gen(function* () {
+      const manager = yield* AppStackManager;
+      const result = yield* manager.autoCreate({
+        worktreePath: infraWorktree,
+        displayName: "healthcare-infra feature/platform",
+        gitBranch: branch,
+        omitServices: { rudi: ["codex-runner"] },
+      });
+
+      assert.deepEqual(
+        requests.map((request) => new URL(request.url).pathname),
+        ["/api/app-dev-stacks/bundle-plan", "/api/app-dev-stacks/auto-create"],
+      );
+      const createBody = requestBody(requests, "/auto-create");
+      assert.equal(createBody.bundle, "all");
+      assert.deepEqual(createBody.omit_services, { rudi: ["codex-runner"] });
+      assert.deepEqual(result.createdWorktrees, [
+        { repositoryPath: rudi.checkout, worktreePath: rudiWorktree },
+      ]);
+      assert.equal(result.stack?.platform, true);
+      // The new worktree sits in the feature folder, on the branch, from origin/dev.
+      assert.equal(git(rudiWorktree, "rev-parse", "--abbrev-ref", "HEAD"), branch);
+      assert.equal(git(rudiWorktree, "rev-parse", "HEAD"), rudi.devSha);
+    }).pipe(
+      Effect.provide(layer),
+      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(root, { recursive: true, force: true }))),
+    );
+  },
+);
+
+it.effect("creates the missing worktrees of a plan without starting anything", () => {
+  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-app-stack-fan-out-"));
+  const branch = "feature/fan-out";
+  const cortex = makeCheckout(root, "cortex", branch);
+  const cortexWorktree = NodePath.join(root, "features", "feature-fan-out", "cortex");
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const layer = makeLayer({
+    requests,
+    response: (request) =>
+      new URL(request.url).pathname === "/api/app-dev-stacks/bundle-plan"
+        ? Response.json({
+            app: null,
+            branch,
+            platform: true,
+            members: [
+              {
+                app: "cortex",
+                repository: "cortex",
+                repositoryPath: cortex.checkout,
+                worktreePath: cortexWorktree,
+                found: false,
+                baseBranch: "dev",
+                services: ["backend", "frontend"],
+              },
+            ],
+          })
+        : new Response(`unexpected request ${request.url}`, { status: 404 }),
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppStackManager;
+    const result = yield* manager.createBundleWorktrees({
+      worktreePath: platformRecord.worktreePath,
+      gitBranch: branch,
+      bundle: ["cortex"],
+    });
+    assert.deepEqual(
+      requests.map((request) => new URL(request.url).pathname),
+      ["/api/app-dev-stacks/bundle-plan"],
+    );
+    assert.deepEqual(requestBody(requests, "/bundle-plan").bundle, ["cortex"]);
+    assert.deepEqual(result.createdWorktrees, [
+      { repositoryPath: cortex.checkout, worktreePath: cortexWorktree },
+    ]);
+    assert.equal(git(cortexWorktree, "rev-parse", "HEAD"), cortex.branchSha);
+  }).pipe(
+    Effect.provide(layer),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(root, { recursive: true, force: true }))),
+  );
+});
+
+it.effect("restarts a platform bundle from its record when asked through an app member", () => {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const rudi = {
+    ...stackJson,
+    worktreePath: "/repos/features/feature-platform/rudi",
+    app: "rudi",
+    bundleId: platformRecord.id,
+    omittedServices: ["codex-runner"],
+  };
+  const chat = {
+    ...stackJson,
+    id: "55555555-5555-5555-5555-555555555555",
+    uuid: "55555555-5555-5555-5555-555555555555",
+    worktreePath: "/repos/features/feature-platform/chat",
+    app: "chat",
+    bundleId: platformRecord.id,
+    omittedServices: [],
+  };
+  const layer = makeLayer({
+    requests,
+    response: (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === `/api/app-dev-stacks/${rudi.id}`) return Response.json(rudi);
+      if (url.pathname === "/api/app-dev-stacks") {
+        return Response.json([platformRecord, rudi, chat]);
+      }
+      if (url.pathname === `/api/app-dev-stacks/${platformRecord.id}/stop`) {
+        return Response.json({ ...platformRecord, status: "stopped" });
+      }
+      if (url.pathname === "/api/app-dev-stacks/bundle-plan") {
+        return Response.json({
+          app: null,
+          branch: "feature/platform",
+          platform: true,
+          members: [
+            { app: "rudi", repository: "rudi", found: true, baseBranch: "dev" },
+            { app: "chat", repository: "chat", found: true, baseBranch: "dev" },
+          ],
+        });
+      }
+      if (url.pathname === "/api/app-dev-stacks/auto-create") {
+        return Response.json({
+          stack: platformRecord,
+          created: true,
+          frontendUrl: null,
+          frontendServiceName: null,
+          bundle: [platformRecord, rudi, chat],
+        });
+      }
+      return new Response(`unexpected request ${request.url}`, { status: 404 });
+    },
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppStackManager;
+    const restarted = yield* manager.restart({ stackId: rudi.id });
+
+    assert.equal(restarted.id, platformRecord.id);
+    assert.deepEqual(
+      requests.map((request) => [request.method, new URL(request.url).pathname] as const),
+      [
+        ["GET", `/api/app-dev-stacks/${rudi.id}`],
+        ["GET", "/api/app-dev-stacks"],
+        ["POST", `/api/app-dev-stacks/${platformRecord.id}/stop`],
+        ["POST", "/api/app-dev-stacks/bundle-plan"],
+        ["POST", "/api/app-dev-stacks/auto-create"],
+      ],
+    );
+    const createRequest = requests.find((request) =>
+      new URL(request.url).pathname.endsWith("/auto-create"),
+    );
+    if (createRequest?.body._tag !== "Uint8Array") {
+      return assert.fail("expected an auto-create JSON body");
+    }
+    const createBody = decodeRestartRequest(new TextDecoder().decode(createRequest.body.body));
+    assert.equal(createBody.worktree_path, platformRecord.worktreePath);
+    assert.deepEqual(createBody.bundle, ["rudi", "chat"]);
+    assert.deepEqual(createBody.omit_services, { rudi: ["codex-runner"] });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("skips platform records when reading every stack's logs", () => {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const layer = makeLayer({
+    requests,
+    response: (request) =>
+      new URL(request.url).pathname === "/api/app-dev-stacks"
+        ? Response.json([platformRecord])
+        : new Response(`unexpected request ${request.url}`, { status: 404 }),
+  });
+  return Effect.gen(function* () {
+    const manager = yield* AppStackManager;
+    const result = yield* manager.getAllStackPodLogs({});
+    assert.deepEqual(result.stacks, []);
+    assert.equal(requests.length, 1);
   }).pipe(Effect.provide(layer));
 });

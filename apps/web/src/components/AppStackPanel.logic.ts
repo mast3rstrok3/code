@@ -2,7 +2,9 @@ import type {
   AppStack,
   AppStackListResult,
   AppStackAutoCreateResult,
+  AppStackBundlePlan,
   AppStackBundlePlanMember,
+  AppStackOmittedServices,
   AppStackPod,
   AppStackService,
 } from "@t3tools/contracts";
@@ -363,4 +365,64 @@ export function appStackBundleMemberDescription(
   return member.worktreePath
     ? `New worktree ${member.worktreePath} from ${origin}`
     : `New worktree from ${origin}`;
+}
+
+/**
+ * The apps checked before the user touches the list: every app for a
+ * platform worktree, which starts only apps, and none besides its own for an
+ * app worktree.
+ */
+export function defaultAppStackBundleSelection(
+  plan: AppStackBundlePlan | null,
+): ReadonlySet<string> {
+  return new Set(plan?.platform === true ? plan.members.map((member) => member.app) : []);
+}
+
+/** The worktrees a start would create: checked apps with none on the branch. */
+export function missingAppStackBundleMembers(
+  plan: AppStackBundlePlan | null,
+  selected: ReadonlySet<string>,
+): ReadonlyArray<AppStackBundlePlanMember> {
+  return (plan?.members ?? []).filter(
+    (member) => !member.found && member.app !== plan?.app && selected.has(member.app),
+  );
+}
+
+/**
+ * What the New Stack form starts: the checked apps besides the worktree's own,
+ * and the services left out of every app that runs. Null when a platform
+ * worktree has no app checked, which the controller refuses.
+ */
+export function appStackStartShape(
+  plan: AppStackBundlePlan | null,
+  selected: ReadonlySet<string>,
+  omitted: AppStackOmittedServices,
+): {
+  readonly bundle: ReadonlyArray<string>;
+  readonly omitServices: AppStackOmittedServices | undefined;
+} | null {
+  if (plan === null) return { bundle: [], omitServices: undefined };
+  const bundle = plan.members.flatMap((member) =>
+    member.app !== plan.app && selected.has(member.app) ? [member.app] : [],
+  );
+  if (plan.platform === true && bundle.length === 0) return null;
+  const running = new Set(plan.app === null ? bundle : [plan.app, ...bundle]);
+  const omitServices = Object.fromEntries(
+    Object.entries(omitted).flatMap(([app, services]) =>
+      running.has(app) && services.length > 0 ? [[app, [...services].sort()] as const] : [],
+    ),
+  );
+  return {
+    bundle,
+    omitServices: Object.keys(omitServices).length === 0 ? undefined : omitServices,
+  };
+}
+
+/** The stacks a platform record started, in the order the controller lists them. */
+export function appStackPlatformMembers(
+  stack: AppStack,
+  stacks: ReadonlyArray<AppStack>,
+): ReadonlyArray<AppStack> {
+  if (stack.platform !== true) return [];
+  return stacks.filter((member) => member.bundleId === stack.id && member.id !== stack.id);
 }
