@@ -5,17 +5,14 @@ need a separate branch and working directory.
 
 ## Start a thread
 
-On web and desktop, add users and their GitHub tokens in **Settings > Users**. Choose
-**Acting as** from the user menu at the top right of the sidebar before starting a thread.
-New threads belong to that user. In the same menu, **Show threads** lets you view your own
-threads, another user's threads, or everyone without changing who you are acting as.
+On web and desktop, add users and their GitHub tokens in **Settings > Users**. Then pick a user
+at the top of the sidebar's project filter (the folder button next to search). The sidebar then
+shows only that user's projects and threads, and new threads and projects belong to them.
+**Everyone** shows all projects and threads and keeps the user you last picked for new work.
 The selection stays in that browser, so people on different devices can choose different users.
 
-Projects belong to a user too. A project you add while acting as someone belongs to them, and a
-filtered **Show threads** view lists only that user's projects. Choose **Everyone** to see all
-projects, and change a project's owner in **Settings > Projects**. The new thread picker and the
-sidebar's project search offer only the projects of the user you are acting as, even while you view
-everyone's threads.
+Change a project's owner in **Settings > Projects**. The new thread picker offers only your
+projects, even while the sidebar shows everyone's.
 
 Threads keep their owner when you switch users. Their agents and Git actions use the owner's
 GitHub account. You can change a thread's owner in its header. Workspace users share access

@@ -1,7 +1,8 @@
 import {
+  type ClientSettingsPatch,
   DEFAULT_WORKSPACE_USER_ID,
   type WorkspaceUser,
-  type WorkspaceUserId,
+  WorkspaceUserId,
 } from "@t3tools/contracts";
 
 export function resolveDefaultThreadOwnerUserId(input: {
@@ -26,4 +27,19 @@ export function isProjectGroupOwnedBy(
   return group.memberProjects.some(
     (project) => (project.ownerUserId ?? DEFAULT_WORKSPACE_USER_ID) === ownerUserId,
   );
+}
+
+/**
+ * The sidebar's user scope. Picking a person both shows and acts as them, so
+ * the new-thread project picker always has that person's projects loaded;
+ * "all" widens the view and keeps the acting user.
+ */
+export function workspaceUserScopePatch(
+  scopeKey: string,
+): Pick<ClientSettingsPatch, "activeWorkspaceUserId" | "activeWorkspaceUserView"> {
+  if (!scopeKey.startsWith("user:")) {
+    return { activeWorkspaceUserView: { kind: "all" } };
+  }
+  const userId = WorkspaceUserId.make(scopeKey.slice("user:".length));
+  return { activeWorkspaceUserId: userId, activeWorkspaceUserView: { kind: "user", userId } };
 }

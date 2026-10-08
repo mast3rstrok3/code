@@ -4,7 +4,11 @@ import {
   WorkspaceUserId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-import { isProjectGroupOwnedBy, resolveDefaultThreadOwnerUserId } from "./workspaceUsers";
+import {
+  isProjectGroupOwnedBy,
+  resolveDefaultThreadOwnerUserId,
+  workspaceUserScopePatch,
+} from "./workspaceUsers";
 
 describe("new thread ownership", () => {
   const ada = { ...DEFAULT_WORKSPACE_USER, id: WorkspaceUserId.make("ada"), displayName: "Ada" };
@@ -41,5 +45,17 @@ describe("project picker ownership", () => {
     expect(isProjectGroupOwnedBy({ memberProjects: [adasCheckout, nilsCheckout] }, nils)).toBe(
       true,
     );
+  });
+});
+
+describe("sidebar user scope", () => {
+  it("acts as the person it shows", () => {
+    expect(workspaceUserScopePatch("user:ada")).toEqual({
+      activeWorkspaceUserId: "ada",
+      activeWorkspaceUserView: { kind: "user", userId: "ada" },
+    });
+  });
+  it("widens to everyone without changing the acting user", () => {
+    expect(workspaceUserScopePatch("all")).toEqual({ activeWorkspaceUserView: { kind: "all" } });
   });
 });

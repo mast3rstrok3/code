@@ -273,6 +273,7 @@ import {
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
+import { useWorkspaceUserView, WorkspaceUserScopeToggle } from "./sidebar/WorkspaceUserScope";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { MiddleTruncate } from "./ui/middle-truncate";
@@ -2574,6 +2575,7 @@ export default function Sidebar() {
   // The selection lives in the persisted UI store next to the other sidebar
   // project preferences, so routes that unmount the sidebar (Settings) and
   // app restarts keep it.
+  const { user: scopedWorkspaceUser } = useWorkspaceUserView();
   const projectScopeKey = useUiStateStore((store) => store.sidebarProjectScopeKey);
   const setProjectScopeKey = useUiStateStore((store) => store.setSidebarProjectScopeKey);
   // {value, label} items let Base UI drive the combobox selection contract
@@ -4987,11 +4989,14 @@ export default function Sidebar() {
                   <ComboboxTrigger
                     render={
                       <SidebarHeaderIconButton
-                        label={
+                        label={[
                           scopedProjectGroup
                             ? `Filter threads by project: ${scopedProjectGroup.displayName}`
-                            : "Filter threads by project"
-                        }
+                            : "Filter threads by project",
+                          scopedWorkspaceUser ? `user: ${scopedWorkspaceUser.displayName}` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(", ")}
                       />
                     }
                   >
@@ -5004,6 +5009,14 @@ export default function Sidebar() {
                     ) : (
                       <FolderIcon className="size-4" />
                     )}
+                    {scopedWorkspaceUser ? (
+                      <span
+                        aria-hidden
+                        className="absolute -right-0.5 -bottom-0.5 flex size-3.5 items-center justify-center rounded-full bg-primary text-4xs font-semibold text-primary-foreground"
+                      >
+                        {scopedWorkspaceUser.displayName.slice(0, 1).toUpperCase()}
+                      </span>
+                    ) : null}
                   </ComboboxTrigger>
                   <ComboboxPopup
                     align="start"
@@ -5014,6 +5027,7 @@ export default function Sidebar() {
                     anchor={headerSearchRef}
                     className="max-w-[min(18rem,var(--available-width))] overflow-hidden"
                   >
+                    <WorkspaceUserScopeToggle />
                     <ComboboxSearchInput
                       aria-label="Search projects"
                       placeholder="Search projects..."
