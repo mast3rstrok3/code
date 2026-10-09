@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import * as NodeEvents from "node:events";
 import * as NodeStream from "node:stream";
 
@@ -237,11 +238,15 @@ const fakeChildProcess = () => {
 };
 
 const makeHarness = (options: { readonly recordingMode?: "auto" | "dom" | "video" } = {}) => {
+  const launchOptions: Array<
+    Parameters<ServerBrowserManagerAdapter["launchPersistentContext"]>[1]
+  > = [];
   const contexts: FakeContext[] = [];
   const childProcesses: ReturnType<typeof fakeChildProcess>[] = [];
   let configureContext: ((context: FakeContext) => void) | null = null;
   const adapter: ServerBrowserManagerAdapter = {
-    launchPersistentContext: async () => {
+    launchPersistentContext: async (_directory, options) => {
+      launchOptions.push(options);
       const context = new FakeContext();
       configureContext?.(context);
       contexts.push(context);
@@ -286,6 +291,7 @@ const makeHarness = (options: { readonly recordingMode?: "auto" | "dom" | "video
     Layer.provide(NodeServices.layer),
   );
   return {
+    launchOptions,
     contexts,
     childProcesses,
     layer,
@@ -303,6 +309,20 @@ afterEach(() => {
 });
 
 describe("ServerBrowserManager lifecycle", () => {
+  it.effect("uses the host GPU setting for server preview launches", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const browser = yield* ServerBrowserManager;
+      yield* browser.navigate({ ...tab("gpu-preview"), url: "https://example.test" });
+      expect(harness.launchOptions[0]?.args).toContain("--use-angle=gl-egl");
+      expect(harness.launchOptions[0]?.args).not.toContain("--disable-gpu");
+    }).pipe(
+      Effect.provide(harness.layer),
+      Effect.provideService(HostProcessEnvironment, { T3CODE_SERVER_BROWSER_GPU: "1" }),
+      Effect.scoped,
+    );
+  });
+
   it.effect(
     "allows cold development pages more than eight seconds to reach DOMContentLoaded",
     () => {

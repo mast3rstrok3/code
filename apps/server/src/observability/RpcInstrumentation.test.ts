@@ -102,7 +102,7 @@ const requestDuration = (snapshots: ReadonlyArray<Metric.Metric.Snapshot>, metho
   )?.state;
 
 describe("WS RPC instrumentation middleware", () => {
-  it.effect("records one span and request metric per call, including rejected calls", () =>
+  it.effect("instruments contract-group handlers, including rejected calls", () =>
     withTelemetry((ended) =>
       Effect.gen(function* () {
         const group = groupOf(
@@ -116,27 +116,27 @@ describe("WS RPC instrumentation middleware", () => {
         const client = yield* RpcTest.makeClient(group).pipe(
           Effect.provide(
             Layer.mergeAll(
-              group.toLayerHandler(WS_METHODS.serverProbe, () =>
+              WsRpcGroup.toLayerHandler(WS_METHODS.serverProbe, () =>
                 Effect.succeed({}).pipe(Effect.withSpan("serverProbe.child")),
               ),
-              group.toLayerHandler(WS_METHODS.scheduledTasksList, () =>
+              WsRpcGroup.toLayerHandler(WS_METHODS.scheduledTasksList, () =>
                 Effect.annotateCurrentSpan({ "scheduled_task.id": taskId }).pipe(
                   Effect.andThen(new ScheduledTaskError({ message: "List failed." })),
                 ),
               ),
-              group.toLayerHandler(WS_METHODS.serverRetryResourceTelemetry, () =>
+              WsRpcGroup.toLayerHandler(WS_METHODS.serverRetryResourceTelemetry, () =>
                 Effect.die("authorization let a rejected call through"),
               ),
-              group.toLayerHandler(WS_METHODS.pullRequestsSubscribeRefreshes, () =>
+              WsRpcGroup.toLayerHandler(WS_METHODS.pullRequestsSubscribeRefreshes, () =>
                 Stream.make(1, 2),
               ),
-              group.toLayerHandler(WS_METHODS.scheduledTasksSubscribe, () =>
+              WsRpcGroup.toLayerHandler(WS_METHODS.scheduledTasksSubscribe, () =>
                 Stream.concat(
                   Stream.make({ tasks: [] }),
                   Stream.fail(new ScheduledTaskError({ message: "Subscription failed." })),
                 ),
               ),
-              group.toLayerHandler(WS_METHODS.serverGetSettings, () => Effect.die("broken")),
+              WsRpcGroup.toLayerHandler(WS_METHODS.serverGetSettings, () => Effect.die("broken")),
               readOnlyConnection,
             ),
           ),

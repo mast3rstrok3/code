@@ -678,36 +678,36 @@ const layerCommandReadiness = HttpRouter.middleware(
 );
 
 const layerMakeRoutes = Layer.mergeAll(
-  Layer.mergeAll(
-    HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
-      Layer.provide(AuthHttp.layer),
-      Layer.provide(McpOAuthHttp.layer.pipe(Layer.provide(McpOAuth.layer))),
-      Layer.provide(CloudHttp.layer),
-      Layer.provide(OrchestrationHttp.layer),
-      Layer.provide(PullRequestHttp.layer),
-      Layer.provide(ProjectHttp.layer),
-      Layer.provide(ServerHttp.layerServerEnvironmentHttpApi),
-      Layer.provide(WebhookRoute.layer.pipe(Layer.provide(RelayDeliveryProof.layer))),
-      Layer.provide(AuthHttp.layerAuthenticatedAuth),
-    ),
-    ServerHttp.layerOtlpTracesProxyRoute,
-    ServerHttp.layerAssetRoute,
-    ServerHttp.layerAttachmentUploadRoute,
-    DeviceHubProxy.layer,
-    ServerBrowserStream.routeLayer,
-    ServerHttp.layerStaticAndDevRoute,
-    Ws.layer,
+  HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
+    Layer.provide(AuthHttp.layer),
+    Layer.provide(McpOAuthHttp.layer.pipe(Layer.provide(McpOAuth.layer))),
+    Layer.provide(CloudHttp.layer),
+    Layer.provide(OrchestrationHttp.layer),
+    Layer.provide(PullRequestHttp.layer),
+    Layer.provide(ProjectHttp.layer),
+    Layer.provide(ServerHttp.layerServerEnvironmentHttpApi),
+    Layer.provide(WebhookRoute.layer.pipe(Layer.provide(RelayDeliveryProof.layer))),
+    Layer.provide(AuthHttp.layerAuthenticatedAuth),
   ),
+  ServerHttp.layerOtlpTracesProxyRoute,
+  ServerHttp.layerAssetRoute,
+  ServerHttp.layerAttachmentUploadRoute,
+  DeviceHubProxy.layer,
+  ServerBrowserStream.routeLayer,
+  ServerHttp.layerStaticAndDevRoute,
+  Ws.layer,
+).pipe(
   // The MCP session registry is provided globally (shared with V2 provider
   // sessions) rather than inline here. The orchestrator toolkit resolves
   // delegation targets through the same live adapter facade the V2
   // orchestrator uses, so MCP capability reporting can never drift from
   // what dispatch can actually serve.
-  McpHttpServer.layer.pipe(
-    Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
-    Layer.provide(McpOAuth.layerMcpClientAuthenticator),
+  Layer.provideMerge(
+    McpHttpServer.layer.pipe(
+      Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+      Layer.provide(McpOAuth.layerMcpClientAuthenticator),
+    ),
   ),
-).pipe(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(layerPullRequestService),

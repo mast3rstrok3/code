@@ -28,6 +28,7 @@ import {
   extractChromiumNetError,
   sanitizePreviewNavigationFailureDescription,
 } from "@t3tools/shared/preview";
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import type { BrowserContext, CDPSession, Page } from "playwright";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -46,6 +47,7 @@ import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Metrics from "../observability/Metrics.ts";
 import * as BrowserExecutableResolver from "./BrowserExecutableResolver.ts";
+import { gpuArgs } from "./PreviewBrowserHost.ts";
 import * as DomRecorder from "./DomRecorder.ts";
 import { PreviewRecordingPolicy } from "./PreviewRecordingPolicy.ts";
 import * as PreviewManager from "./Manager.ts";
@@ -442,6 +444,7 @@ const defaultAdapter: ServerBrowserManagerAdapter = {
 };
 
 function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
+  const env = yield* HostProcessEnvironment;
   const config = yield* ServerConfig.ServerConfig;
   const previewManager = yield* PreviewManager.PreviewManager;
   const recordingPolicy = yield* PreviewRecordingPolicy;
@@ -702,6 +705,7 @@ function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
     const resolution = await runPromise(BrowserExecutableResolver.resolveBrowserExecutable(config));
     await NodeFSP.mkdir(userDataDir, { recursive: true });
     const args: string[] = [
+      ...gpuArgs(env),
       "--disable-dev-shm-usage",
       "--disable-background-timer-throttling",
       "--disable-backgrounding-occluded-windows",

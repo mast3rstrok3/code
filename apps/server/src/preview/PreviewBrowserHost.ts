@@ -24,6 +24,23 @@ export const NO_SANDBOX_SIGNATURE = "No usable sandbox";
 export const sandboxDisabled = (env: Readonly<Record<string, string | undefined>>) =>
   env.T3CODE_SERVER_BROWSER_SANDBOX === "0";
 
+/**
+ * Chrome's GPU flags. By default `--disable-gpu` keeps compositing in cheap
+ * software while WebGL still runs on SwiftShader. A host with a working EGL
+ * driver (such as NVIDIA's) opts in with `T3CODE_SERVER_BROWSER_GPU=1` to run
+ * both on its GPU. Disable the software rasterizer so a failed GPU does not
+ * silently move WebGL rendering onto the CPU.
+ */
+export const gpuArgs = (env: Readonly<Record<string, string | undefined>>) =>
+  env.T3CODE_SERVER_BROWSER_GPU === "1"
+    ? [
+        "--use-gl=angle",
+        "--use-angle=gl-egl",
+        "--ignore-gpu-blocklist",
+        "--disable-software-rasterizer",
+      ]
+    : ["--disable-gpu"];
+
 /** Set on Ubuntu 23.10+: unprivileged user namespaces need an AppArmor profile. */
 const USERNS_RESTRICTION = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns";
 export const APPARMOR_PROFILE_PATH = "/etc/apparmor.d/t3-chrome-headless-shell";
