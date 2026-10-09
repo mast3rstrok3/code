@@ -220,6 +220,12 @@ only reports what it would change.
 The browser always runs in Chrome's sandbox. Where you cannot change the host,
 set `T3CODE_SERVER_BROWSER_SANDBOX=0` for the environment to run without it.
 
+The browser renders in software by default. On a host with a GPU driver, such as
+NVIDIA's on Linux, set `T3CODE_SERVER_BROWSER_GPU=1` to run WebGL pages and
+3D previews, HTML captures, and server preview tabs on the GPU. This disables
+the software WebGL fallback; if the GPU cannot start, WebGL is unavailable
+until the host driver is fixed or this option is unset.
+
 ## Connect an outside agent
 
 Claude Code, Codex, ChatGPT and other agents T3 Code did not start can drive

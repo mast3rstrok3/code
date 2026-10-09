@@ -196,6 +196,23 @@ describe("ServerBrowserContexts", () => {
     await pool.close();
   });
 
+  it.each([
+    [{}, ["--disable-gpu"], "--use-angle=gl-egl"],
+    [
+      { T3CODE_SERVER_BROWSER_GPU: "1" },
+      ["--use-gl=angle", "--use-angle=gl-egl", "--disable-software-rasterizer"],
+      "--disable-gpu",
+    ],
+  ])("uses the host GPU only after an explicit opt-in (%o)", async (env, present, absent) => {
+    launches.launch.mockResolvedValue(makeBrowser() as unknown as Browser);
+    const pool = new ServerBrowserContexts({ ...options(), env });
+    await pool.contextFor(INCOGNITO_BROWSER_PROFILE_ID);
+    const args: Array<string> = launches.launch.mock.calls[0]?.[0]?.args ?? [];
+    expect(args).toEqual(expect.arrayContaining(present));
+    expect(args).not.toContain(absent);
+    await pool.close();
+  });
+
   it("retries a failed startup on a later request with sandboxing still enabled", async () => {
     const browser = makeBrowser();
     launches.launch

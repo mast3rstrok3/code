@@ -57,6 +57,37 @@ const layerTest = layerHtmlRender();
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 describe("HtmlRender", () => {
+  it.live(
+    "renders HTML with the host GPU when explicitly enabled",
+    (ctx) =>
+      Effect.gen(function* () {
+        const env = yield* HostProcessEnvironment;
+        const executable = env[TEST_BROWSER_ENV];
+        if (!executable || env.T3CODE_SERVER_BROWSER_GPU !== "1") {
+          return ctx.skip("Set the test browser and GPU environment options to run this test.");
+        }
+        yield* Effect.gen(function* () {
+          const htmlRender = yield* HtmlRender.HtmlRender;
+          const preview = yield* htmlRender.preview({
+            html: `<!doctype html><html><body><canvas></canvas><script>
+            const gl = document.querySelector('canvas').getContext('webgl');
+            if (!gl) throw new Error('WebGL unavailable');
+            const extension = gl.getExtension('WEBGL_debug_renderer_info');
+            console.log('renderer:' + gl.getParameter(extension.UNMASKED_RENDERER_WEBGL));
+          </script></body></html>`,
+            width: 400,
+            appearance: "dark",
+          });
+          const renderer = preview.consoleMessages.find((message) =>
+            message.text.startsWith("renderer:"),
+          );
+          expect(renderer?.text).toMatch(/^renderer:.+/);
+          expect(renderer?.text).not.toMatch(/SwiftShader|llvmpipe|softpipe|software/i);
+        }).pipe(Effect.provide(layerHtmlRender(executable)));
+      }),
+    30_000,
+  );
+
   it.effect("inlines local images by absolute path and leaves URLs and relative paths alone", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

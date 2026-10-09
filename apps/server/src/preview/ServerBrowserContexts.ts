@@ -6,7 +6,7 @@ import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 import type { Browser, BrowserContext } from "playwright-core";
 
-import { sandboxDisabled } from "./PreviewBrowserHost.ts";
+import { gpuArgs, sandboxDisabled } from "./PreviewBrowserHost.ts";
 
 // Playwright needs its files on disk. createRequire also resolves it from a Node SEA executable.
 const requirePlaywright = NodeModule.createRequire(import.meta.url);
@@ -42,7 +42,7 @@ export class ServerBrowserContexts {
     return {
       executablePath,
       env,
-      args: ["--disable-gpu", "--force-device-scale-factor=2"],
+      args: [...gpuArgs(env), "--force-device-scale-factor=2"],
       headless: true,
       // Only an explicit operator opt-out disables sandboxing. Launch errors never do.
       chromiumSandbox: !sandboxDisabled(env),
