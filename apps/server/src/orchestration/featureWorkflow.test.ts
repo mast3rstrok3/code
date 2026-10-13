@@ -187,7 +187,7 @@ describe("nextFeatureWorkflowActions", () => {
     const reviews = [{ runStatus: "completed" as const, finalText: review("clean") }];
     expect(nextFeatureWorkflowActions(state({ runs, reviews }))).toEqual([]);
     expect(nextFeatureWorkflowActions(state({ runs, reviews, pullRequestLinked: true }))).toEqual([
-      { type: "complete", planId },
+      { type: "complete", planId, reason: "pull-request-linked" },
     ]);
     expect(
       nextFeatureWorkflowActions(

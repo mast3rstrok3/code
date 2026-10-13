@@ -19,6 +19,7 @@ import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
 import { layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
 import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
 import {
+  featureFixMessageId,
   featureImplementMessageId,
   featurePullRequestMessageId,
   featureReviewThreadId,
@@ -54,6 +55,9 @@ interface FakeWorld {
   /** Final reviewer message by reviewer thread id; present threads have a completed run. */
   reviews?: Record<string, string>;
   withoutWorkflowContext?: boolean;
+  /** Commits the Feature branch has that its base lacks; two unless a test says otherwise. */
+  commitsAhead?: number;
+  dirty?: boolean;
 }
 
 const featureThread = (world: FakeWorld) => ({
@@ -174,6 +178,16 @@ function makeSystem(world: FakeWorld) {
     Layer.provide(
       Layer.mock(GitVcsDriver)({
         readConfigValue: () => Effect.succeed("dev"),
+        statusDetailsLocal: () =>
+          Effect.succeed({ isRepo: true, hasWorkingTreeChanges: world.dirty === true } as never),
+        execute: ({ args }) =>
+          Effect.succeed({
+            exitCode: 0,
+            stdout: args[0] === "rev-list" ? `${world.commitsAhead ?? 2}\n` : "abc123\n",
+            stderr: "",
+            stdoutTruncated: false,
+            stderrTruncated: false,
+          } as never),
         listLocalBranchNames: () => Effect.succeed(["dev"]),
         remoteBranchExists: () => Effect.succeed(true),
         resolveDefaultBranchName: () => Effect.succeed("main"),
@@ -278,6 +292,98 @@ describe("FeatureWorkflowReactor", () => {
       assert.match(message.text, /Base branch: dev/);
       assert.match(message.text, /Add the fast checkout/);
       assert.match(message.text, /feature-code-review-result/);
+    }).pipe(Effect.provide(system.layer));
+  });
+
+  it.effect(
+    "finishes without review or pull request when the implement turn changed nothing",
+    () => {
+      const world: FakeWorld = {
+        interactionMode: "default",
+        runs: [planningRun, implementRun],
+        pullRequests: [],
+        completedActivities: [],
+        commitsAhead: 0,
+      };
+      const system = makeSystem(world);
+      return Effect.gen(function* () {
+        yield* system.evaluate;
+        assert.deepStrictEqual(
+          system.nativeCommands.map((command) => command.type),
+          ["thread.settle"],
+        );
+        assert.deepStrictEqual(system.teardowns, [`workflow-${threadId}`]);
+        const marker = system.workflowCommands[0];
+        assert.ok(marker?.type === "thread.activity.append");
+        if (marker?.type !== "thread.activity.append") return;
+        assert.strictEqual(marker.activity.kind, FEATURE_WORKFLOW_COMPLETED_ACTIVITY_KIND);
+        assert.strictEqual((marker.activity.payload as { reason: string }).reason, "no-changes");
+        assert.match(marker.activity.summary, /^Finished without changes/);
+
+        // A finished Feature stays finished, even after later commits in its thread.
+        world.completedActivities = [marker.activity];
+        world.commitsAhead = 1;
+        yield* system.evaluate;
+        assert.strictEqual(system.nativeCommands.length, 1);
+      }).pipe(Effect.provide(system.layer));
+    },
+  );
+
+  it.effect("finishes without changes when a fix turn leaves nothing to review", () => {
+    const world: FakeWorld = {
+      interactionMode: "default",
+      runs: [
+        planningRun,
+        implementRun,
+        {
+          id: "run-fix",
+          ordinal: 3,
+          status: "completed",
+          userMessageId: featureFixMessageId(threadId, planId, 1),
+        },
+      ],
+      pullRequests: [],
+      completedActivities: [],
+      commitsAhead: 0,
+      reviews: {
+        [featureReviewThreadId(threadId, planId, 1)]: [
+          "```json",
+          '{"type":"feature-code-review-result","status":"findings","reportMarkdown":"Revert it."}',
+          "```",
+        ].join("\n"),
+      },
+    };
+    const system = makeSystem(world);
+    return Effect.gen(function* () {
+      yield* system.evaluate;
+      assert.deepStrictEqual(
+        system.nativeCommands.map((command) => command.type),
+        ["thread.settle"],
+      );
+      const marker = system.workflowCommands[0];
+      assert.ok(marker?.type === "thread.activity.append");
+      if (marker?.type !== "thread.activity.append") return;
+      assert.strictEqual((marker.activity.payload as { reason: string }).reason, "no-changes");
+    }).pipe(Effect.provide(system.layer));
+  });
+
+  it.effect("reviews uncommitted work even when nothing is committed yet", () => {
+    const world: FakeWorld = {
+      interactionMode: "default",
+      runs: [planningRun, implementRun],
+      pullRequests: [],
+      completedActivities: [],
+      commitsAhead: 0,
+      dirty: true,
+    };
+    const system = makeSystem(world);
+    return Effect.gen(function* () {
+      yield* system.evaluate;
+      assert.deepStrictEqual(
+        system.nativeCommands.map((command) => command.type),
+        ["thread.create", "message.dispatch"],
+      );
+      assert.deepStrictEqual(system.teardowns, []);
     }).pipe(Effect.provide(system.layer));
   });
 

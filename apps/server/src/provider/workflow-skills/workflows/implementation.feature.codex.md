@@ -6,6 +6,10 @@ The proposed plan in this thread is accepted. Implement it now in this thread an
 
 Make the planned changes in the order the plan lists them, with focused tests for the behavior you change. Keep the work in this worktree and on its current branch. Do not create another worktree or branch, and do not start T3 workflow children.
 
+## When nothing should change
+
+If your investigation shows that no change belongs in this repository, for example the problem does not reproduce, the behavior is intended, or the fix belongs to another repository, make no commit and leave the worktree clean. Explain in the final summary what you checked and why nothing changed. The workflow then ends without a Code Review or pull request.
+
 ## Running app
 
 Start an App Stack with `app_stack_start` only when a check cannot pass without a running app, such as a browser flow the plan names. Code-only changes need no stack. Do not start a competing development server. Stop the stack with `app_stack_stop` when you no longer need it.

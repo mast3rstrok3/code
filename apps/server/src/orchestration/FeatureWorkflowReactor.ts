@@ -163,6 +163,57 @@ export const make = Effect.gen(function* () {
     return development?.branch ?? null;
   });
 
+  const isCompleted = Effect.fn("FeatureWorkflowReactor.isCompleted")(function* (
+    threadId: ThreadId,
+    planId: PlanId,
+  ) {
+    const completed = yield* snapshots
+      .listActivitiesByKind(FEATURE_WORKFLOW_COMPLETED_ACTIVITY_KIND)
+      .pipe(Effect.orElseSucceed(() => []));
+    return completed.some((activity) => {
+      const payload = activity.payload as { threadId?: unknown; planId?: unknown } | null;
+      return payload?.threadId === threadId && payload.planId === planId;
+    });
+  });
+
+  /**
+   * Whether the Feature's branch holds work to review and publish: uncommitted changes, or
+   * commits that neither its base nor origin's copy of it has. Anything git cannot answer
+   * counts as work, so a git failure never ends a Feature quietly.
+   */
+  const featureHasChanges = Effect.fn("FeatureWorkflowReactor.featureHasChanges")(function* (
+    thread: Pick<OrchestrationV2AppThread, "projectId" | "branch" | "worktreePath">,
+    settings: ServerSettings | null,
+  ) {
+    const cwd = thread.worktreePath;
+    if (cwd === null) return true;
+    const status = yield* git.statusDetailsLocal(cwd).pipe(Effect.option);
+    if (Option.isNone(status) || !status.value.isRepo || status.value.hasWorkingTreeChanges) {
+      return true;
+    }
+    const base = yield* resolveBaseBranch(thread, settings);
+    if (base === null) return true;
+    const runGit = (args: ReadonlyArray<string>) =>
+      git
+        .execute({
+          operation: "FeatureWorkflowReactor.changesAheadOfBase",
+          cwd,
+          args,
+          allowNonZeroExit: true,
+        })
+        .pipe(Effect.option);
+    const baseRefs: string[] = [];
+    for (const ref of [`origin/${base}`, base]) {
+      const verified = yield* runGit(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
+      if (Option.isSome(verified) && verified.value.exitCode === 0) baseRefs.push(ref);
+    }
+    if (baseRefs.length === 0) return true;
+    const ahead = yield* runGit(["rev-list", "--count", "HEAD", "--not", ...baseRefs]);
+    if (Option.isNone(ahead) || ahead.value.exitCode !== 0) return true;
+    const count = Number.parseInt(ahead.value.stdout.trim(), 10);
+    return !Number.isFinite(count) || count > 0;
+  });
+
   const runAction = Effect.fn("FeatureWorkflowReactor.runAction")(function* (input: {
     readonly action: FeatureWorkflowAction;
     readonly thread: OrchestrationV2AppThread;
@@ -311,17 +362,7 @@ export const make = Effect.gen(function* () {
           ),
         );
       case "complete": {
-        const completed = yield* snapshots
-          .listActivitiesByKind(FEATURE_WORKFLOW_COMPLETED_ACTIVITY_KIND)
-          .pipe(Effect.orElseSucceed(() => []));
-        if (
-          completed.some((activity) => {
-            const payload = activity.payload as { threadId?: unknown; planId?: unknown } | null;
-            return payload?.threadId === thread.id && payload.planId === action.planId;
-          })
-        ) {
-          return;
-        }
+        if (yield* isCompleted(thread.id, action.planId)) return;
         const workflowId =
           Option.getOrUndefined(input.workflowShell)?.workflowContext?.workflowId ??
           thread.workflowContext?.workflowId ??
@@ -361,13 +402,18 @@ export const make = Effect.gen(function* () {
               id: EventId.make(`feature-completed:${thread.id}:${action.planId}`),
               tone: "info",
               kind: FEATURE_WORKFLOW_COMPLETED_ACTIVITY_KIND,
-              summary:
-                teardown === null || teardown.stoppedStackIds.length === 0
-                  ? "Feature finished: pull request linked"
-                  : `Feature finished: pull request linked, ${teardown.stoppedStackIds.length} App Stack(s) stopped`,
+              summary: [
+                action.reason === "no-changes"
+                  ? "Finished without changes"
+                  : "Feature finished: pull request linked",
+                ...(teardown === null || teardown.stoppedStackIds.length === 0
+                  ? []
+                  : [`${teardown.stoppedStackIds.length} App Stack(s) stopped`]),
+              ].join(", "),
               payload: {
                 threadId: thread.id,
                 planId: action.planId,
+                reason: action.reason,
                 workflowId,
                 stoppedStackIds: teardown?.stoppedStackIds ?? [],
                 skippedProtectedStackIds: teardown?.skippedProtectedStackIds ?? [],
@@ -439,7 +485,15 @@ export const make = Effect.gen(function* () {
       const plan = records.plans.find((candidate) => candidate.id === id);
       return plan?.kind === "proposed_plan" && plan.markdown.trim() ? plan.markdown : null;
     };
-    for (const action of actions) {
+    // A finished Feature stays finished, even when someone keeps working in its thread.
+    if (planId !== null && actions.length > 0 && (yield* isCompleted(threadId, planId))) return;
+    for (const due of actions) {
+      // A review needs something to review. When the implement or a fix turn left the branch
+      // where it started, the plan needed no change: finish without a review or pull request.
+      const action: FeatureWorkflowAction =
+        due.type === "review" && !(yield* featureHasChanges(records.thread, settings))
+          ? { type: "complete", planId: due.planId, reason: "no-changes" }
+          : due;
       yield* runAction({
         action,
         thread: records.thread,

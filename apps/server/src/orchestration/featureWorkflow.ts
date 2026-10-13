@@ -168,7 +168,14 @@ export type FeatureWorkflowAction =
       readonly planId: PlanId;
       readonly unresolvedFindingsMarkdown: string | null;
     }
-  | { readonly type: "complete"; readonly planId: PlanId };
+  | {
+      readonly type: "complete";
+      readonly planId: PlanId;
+      /** Why the workflow ended: its pull request is linked, or the plan needed no change. */
+      readonly reason: FeatureCompletionReason;
+    };
+
+export type FeatureCompletionReason = "pull-request-linked" | "no-changes";
 
 /** The run with the highest ordinal, which is the latest one. */
 export function latestRun<Run extends { readonly ordinal: number }>(
@@ -248,7 +255,7 @@ export function nextFeatureWorkflowActions(
     return [{ type: "open-pull-request", planId, unresolvedFindingsMarkdown: unresolvedFindings }];
   }
   return state.pullRequestLinked && TERMINAL_RUN_STATUSES.has(pullRequestRun.status)
-    ? [{ type: "complete", planId }]
+    ? [{ type: "complete", planId, reason: "pull-request-linked" }]
     : [];
 }
 
