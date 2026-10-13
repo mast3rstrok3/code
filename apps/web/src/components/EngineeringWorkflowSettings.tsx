@@ -9,6 +9,7 @@ import {
   resolveLayeredAppReviewStepParts,
   type AppReviewParts,
 } from "@t3tools/shared/appReviewParts";
+import { FEATURE_APP_REVIEW_CYCLE_KEY } from "@t3tools/shared/workflowStepCycles";
 import { ChevronDownIcon, ChevronRightIcon, PlusIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -396,6 +397,33 @@ function EngineeringWorkflowStepControls(
             showHeading={false}
           />
         </div>
+      </div>
+    );
+  }
+
+  if (props.preset === "fast-plan" && props.workflowPromptId === APP_REVIEW_KEY.workflowPromptId) {
+    // Feature's App Review is one recorded browser reviewer, not Engineering's three phases.
+    return (
+      <div className="space-y-3">
+        <StepModelControl
+          label={props.target.label}
+          note={props.target.note}
+          pinKey={APP_REVIEW_KEY}
+          pinFor={props.pinFor}
+          inheritedSelection={inheritedSelection(props, APP_REVIEW_KEY, props.rootModelSelection)}
+          inheritedLabel={rootLabel}
+          choices={props.choices}
+          onSetStepModel={props.onSetStepModel}
+        />
+        <WorkflowStepCyclePins
+          workflowPromptId={FEATURE_APP_REVIEW_CYCLE_KEY.stepWorkflowPromptId}
+          subStepWorkflowPromptIds={[FEATURE_APP_REVIEW_CYCLE_KEY.workflowPromptId]}
+          overrides={props.stepCycles}
+          defaults={props.defaultStepCycles}
+          inheritedLabel="Runs the built-in number of cycles"
+          onSetStepCycles={props.onSetStepCycles}
+          className="space-y-2 border-t border-border/60 pt-3"
+        />
       </div>
     );
   }

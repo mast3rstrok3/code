@@ -231,10 +231,13 @@ describe("WorkflowPromptRegistry", () => {
     );
     NodeAssert.deepEqual(featurePullRequest?.workflowIds, ["fast-plan"]);
     NodeAssert.match(featurePullRequest?.promptText ?? "", /link_pull_request/);
-    NodeAssert.match(featurePullRequest?.promptText ?? "", /unresolved Code Review findings/);
     NodeAssert.match(
       featurePullRequest?.promptText ?? "",
-      /Do not run an App Review or babysit the pull request/,
+      /unresolved Code Review or App Review findings/,
+    );
+    NodeAssert.match(
+      featurePullRequest?.promptText ?? "",
+      /Do not run another App Review or babysit the pull request/,
     );
     NodeAssert.ok(
       catalog.skills
@@ -276,10 +279,13 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(resolvingMergeConflictsDoc?.content ?? "", /never [`]--abort[`]/);
     for (const workflow of catalog.workflows) {
       for (const step of workflow.steps) {
-        NodeAssert.notEqual(
-          step.workflowPromptId,
-          WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
-        );
+        // Only Feature reviews in the browser; Engineering's App Review runs the E2E suites.
+        if (workflow.id !== "fast-plan") {
+          NodeAssert.notEqual(
+            step.workflowPromptId,
+            WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+          );
+        }
         if (step.skillId !== undefined) {
           NodeAssert.ok(catalog.skills.some((skill) => skill.id === step.skillId));
         }

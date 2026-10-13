@@ -1,4 +1,6 @@
 import {
+  AppReviewId,
+  type AppReviewStatus,
   MessageId,
   ThreadId,
   type OrchestrationV2Run,
@@ -11,7 +13,9 @@ import { extractJsonFenceBlocks } from "./workflowDirectives.ts";
 /**
  * The Feature workflow (`fast-plan`) runs in one thread and one worktree:
  * native Plan mode, an implement turn, Code Review cycles in reviewer child
- * threads whose findings the Feature thread fixes, then a pull-request turn.
+ * threads whose findings the Feature thread fixes, App Review cycles in which
+ * a reviewer drives the App Stack in the preview browser and records it, then
+ * a pull-request turn.
  * Every step is a message or thread with an ID derived from the plan, so the
  * state below is read back from the thread itself and each step starts once.
  */
@@ -19,6 +23,7 @@ import { extractJsonFenceBlocks } from "./workflowDirectives.ts";
 export const FEATURE_CODE_REVIEW_RESULT_TYPE = "feature-code-review-result";
 
 const REVIEW_THREAD_SEPARATOR = "::feature-review::";
+const APP_REVIEW_THREAD_SEPARATOR = "::feature-app-review::";
 
 export function featureImplementMessageId(threadId: ThreadId, planId: PlanId): MessageId {
   return MessageId.make(`feature-implement:${threadId}:${planId}`);
@@ -40,10 +45,37 @@ export function featureReviewMessageId(reviewThreadId: ThreadId): MessageId {
   return MessageId.make(`feature-review:${reviewThreadId}`);
 }
 
-/** The Feature thread a reviewer thread belongs to, or null for any other thread. */
+export function featureAppReviewThreadId(
+  threadId: ThreadId,
+  planId: PlanId,
+  cycle: number,
+): ThreadId {
+  return ThreadId.make(`${threadId}${APP_REVIEW_THREAD_SEPARATOR}${planId}::${cycle}`);
+}
+
+export function featureAppReviewId(threadId: ThreadId, planId: PlanId, cycle: number): AppReviewId {
+  return AppReviewId.make(`feature-app-review:${threadId}:${planId}:${cycle}`);
+}
+
+export function featureAppReviewMessageId(appReviewThreadId: ThreadId): MessageId {
+  return MessageId.make(`feature-app-review:${appReviewThreadId}`);
+}
+
+export function featureAppReviewFixMessageId(
+  threadId: ThreadId,
+  planId: PlanId,
+  cycle: number,
+): MessageId {
+  return MessageId.make(`feature-app-review-fix:${threadId}:${planId}:${cycle}`);
+}
+
+/** The Feature thread a Code Review or App Review thread belongs to, or null for any other thread. */
 export function featureRootOfReviewThread(threadId: ThreadId): ThreadId | null {
-  const index = threadId.indexOf(REVIEW_THREAD_SEPARATOR);
-  return index <= 0 ? null : ThreadId.make(threadId.slice(0, index));
+  for (const separator of [REVIEW_THREAD_SEPARATOR, APP_REVIEW_THREAD_SEPARATOR]) {
+    const index = threadId.indexOf(separator);
+    if (index > 0) return ThreadId.make(threadId.slice(0, index));
+  }
+  return null;
 }
 
 export interface FeatureReviewResult {
@@ -125,6 +157,21 @@ export interface FeatureReviewState {
   readonly finalText: string | null;
 }
 
+export interface FeatureAppReviewState {
+  /** Null while the reviewer thread has no run yet. */
+  readonly runStatus: OrchestrationV2Run["status"] | null;
+  /** The App Review record's status, which the reviewer sets with its verdict. */
+  readonly recordStatus: AppReviewStatus | null;
+  /** The reviewer's summary and findings, handed to the Feature thread when it failed. */
+  readonly reportMarkdown: string;
+}
+
+/** How App Review ended, which the pull request reports. */
+export type FeatureAppReviewOutcome =
+  | { readonly status: "passed"; readonly cycle: number }
+  | { readonly status: "unresolved"; readonly reportMarkdown: string }
+  | { readonly status: "skipped"; readonly cycle: number; readonly reason: string };
+
 export interface FeatureWorkflowState {
   readonly threadId: ThreadId;
   readonly interactionMode: string;
@@ -144,6 +191,11 @@ export interface FeatureWorkflowState {
   /** Reviews of the plan being implemented, cycle 1 first, up to the first one not started. */
   readonly reviews: ReadonlyArray<FeatureReviewState>;
   readonly cycleBudget: number;
+  /** App Reviews of the plan being implemented, cycle 1 first, up to the first one not started. */
+  readonly appReviews: ReadonlyArray<FeatureAppReviewState>;
+  readonly appReviewCycleBudget: number;
+  /** Why the next App Review cycle cannot run, once its launch found out. */
+  readonly appReviewSkippedReason: string | null;
   readonly pullRequestLinked: boolean;
   /** Whether this plan's workflow already finished (stacks stopped, thread settled). */
   readonly completed: boolean;
@@ -163,10 +215,18 @@ export type FeatureWorkflowAction =
       readonly cycle: number;
       readonly reportMarkdown: string;
     }
+  | { readonly type: "app-review"; readonly planId: PlanId; readonly cycle: number }
+  | {
+      readonly type: "app-review-fix";
+      readonly planId: PlanId;
+      readonly cycle: number;
+      readonly reportMarkdown: string;
+    }
   | {
       readonly type: "open-pull-request";
       readonly planId: PlanId;
       readonly unresolvedFindingsMarkdown: string | null;
+      readonly appReview: FeatureAppReviewOutcome;
     }
   | {
       readonly type: "complete";
@@ -250,17 +310,52 @@ export function nextFeatureWorkflowActions(
     if (fixRun.status !== "completed") return [];
   }
 
+  // A pull-request turn already started (also on Features from before App Review existed) ends
+  // the reviews: only the link it is waiting for is left.
   const pullRequestRun = runOf(featurePullRequestMessageId(state.threadId, planId));
-  if (pullRequestRun === null) {
-    return [{ type: "open-pull-request", planId, unresolvedFindingsMarkdown: unresolvedFindings }];
+  if (pullRequestRun !== null) {
+    return state.pullRequestLinked && TERMINAL_RUN_STATUSES.has(pullRequestRun.status)
+      ? [{ type: "complete", planId, reason: "pull-request-linked" }]
+      : [];
   }
-  return state.pullRequestLinked && TERMINAL_RUN_STATUSES.has(pullRequestRun.status)
-    ? [{ type: "complete", planId, reason: "pull-request-linked" }]
-    : [];
+
+  let appReview: FeatureAppReviewOutcome | null = null;
+  for (let cycle = 1; appReview === null; cycle += 1) {
+    const review = state.appReviews[cycle - 1];
+    if (review === undefined || review.runStatus === null) {
+      if (state.appReviewSkippedReason === null) return [{ type: "app-review", planId, cycle }];
+      appReview = { status: "skipped", cycle, reason: state.appReviewSkippedReason };
+      break;
+    }
+    if (review.runStatus !== "completed") return [];
+    // A reviewer that ended without a verdict failed: it never showed the change working.
+    if (review.recordStatus === "passed") {
+      appReview = { status: "passed", cycle };
+      break;
+    }
+    if (cycle >= state.appReviewCycleBudget) {
+      appReview = { status: "unresolved", reportMarkdown: review.reportMarkdown };
+      break;
+    }
+    const fixRun = runOf(featureAppReviewFixMessageId(state.threadId, planId, cycle));
+    if (fixRun === null) {
+      return [{ type: "app-review-fix", planId, cycle, reportMarkdown: review.reportMarkdown }];
+    }
+    if (fixRun.status !== "completed") return [];
+  }
+
+  return [
+    {
+      type: "open-pull-request",
+      planId,
+      unresolvedFindingsMarkdown: unresolvedFindings,
+      appReview,
+    },
+  ];
 }
 
 export function buildFeatureImplementMessage(): string {
-  return "The proposed plan is accepted. Implement it now in this thread, run the checks, and commit. Do not open the pull request yet: a Code Review runs first.";
+  return "The proposed plan is accepted. Implement it now in this thread, run the checks, and commit. Do not open the pull request yet: Code Review and App Review run first.";
 }
 
 export function buildFeatureReviewMessage(input: {
@@ -317,9 +412,122 @@ export function buildFeatureFixMessage(input: {
   ].join("\n");
 }
 
+export function buildFeatureAppReviewMessage(input: {
+  readonly cycle: number;
+  readonly cycleBudget: number;
+  readonly frontendUrl: string;
+  readonly stackId: string | null;
+  readonly worktreePath: string | null;
+  readonly branch: string | null;
+  readonly baseBranch: string | null;
+  readonly planMarkdown: string | null;
+  readonly previousReportMarkdown: string | null;
+}): string {
+  return [
+    `Run the App Review of this Feature in the running app. App Review cycle ${input.cycle} of ${input.cycleBudget}.`,
+    "",
+    "This review is unattended: do not ask the user questions. A human watches its recording and screenshots in the App Review panel before testing the change themselves, so show the planned behavior working from the user's point of view, step by step.",
+    "",
+    `Feature URL: ${input.frontendUrl}`,
+    "The Feature URL is the App Stack of this Feature's worktree. Do not substitute a deployment URL from repository documentation, earlier messages, or browser history.",
+    input.stackId === null
+      ? "The stack may still be starting. If the Feature URL does not load yet, wait and retry for up to 20 minutes before you fail the review on it."
+      : `App Stack: ${input.stackId}. It may still be starting: call \`app_stack_get\` and wait until it runs (up to 20 minutes) before you fail the review on it.`,
+    `Worktree: ${input.worktreePath ?? "the thread's workspace"}`,
+    `Branch: ${input.branch ?? "the checked-out branch"}`,
+    input.baseBranch === null
+      ? "Read the commits this branch adds to see what changed."
+      : `Read \`git diff $(git merge-base HEAD ${input.baseBranch})...HEAD\` to see what changed.`,
+    "",
+    "Test only. Do not edit files, commit, or push: the Feature thread fixes what you report, then another App Review cycle runs.",
+    "",
+    "Sign in with the test user the repository's AGENTS.md names, when the app needs one. Exercise every user-facing behavior the plan names, and the main flow the change touches. Treat a change with no user-facing behavior as passed once you showed the affected screens still work.",
+    "",
+    "## Plan",
+    input.planMarkdown?.trim() || "The plan is not available; review the change on its own merits.",
+    ...(input.previousReportMarkdown === null
+      ? []
+      : [
+          "",
+          `## Findings of App Review cycle ${input.cycle - 1}`,
+          "The Feature thread fixed these since. Check each one again first.",
+          "",
+          input.previousReportMarkdown.trim(),
+        ]),
+  ].join("\n");
+}
+
+export function buildFeatureAppReviewFixMessage(input: {
+  readonly cycle: number;
+  readonly cycleBudget: number;
+  readonly reportMarkdown: string;
+}): string {
+  return [
+    `App Review cycle ${input.cycle} of ${input.cycleBudget} failed in the running app.`,
+    "",
+    input.reportMarkdown.trim(),
+    "",
+    "Fix each finding in this worktree with focused tests where behavior changes, re-run the checks the repository requires for the files you touched, and commit. A finding about the App Stack or the review tooling rather than the change needs no code change; say so in your summary. Do not push or open the pull request: another App Review cycle follows.",
+  ].join("\n");
+}
+
+/** The App Review record as the Feature thread and the pull request read it. */
+export function featureAppReviewReportMarkdown(
+  record: {
+    readonly status: AppReviewStatus;
+    readonly document: {
+      readonly summary: string;
+      readonly findings: ReadonlyArray<{
+        readonly severity: string;
+        readonly title: string;
+        readonly details: string;
+        readonly reproduction: string;
+      }>;
+    };
+  } | null,
+): string {
+  if (record === null) return "The App Review has no record.";
+  const summary =
+    record.document.summary.trim() ||
+    (record.status === "passed" || record.status === "failed"
+      ? "The reviewer wrote no summary."
+      : "The reviewer finished without a verdict, so the change was not shown working.");
+  const findings = record.document.findings.map((finding, index) =>
+    [
+      `${index + 1}. **${finding.title}** (${finding.severity})`,
+      ...(finding.details.trim() ? [`   ${finding.details.trim()}`] : []),
+      ...(finding.reproduction.trim() ? [`   Reproduction: ${finding.reproduction.trim()}`] : []),
+    ].join("\n"),
+  );
+  return [summary, ...(findings.length === 0 ? [] : ["", ...findings])].join("\n");
+}
+
+function appReviewPullRequestLines(appReview: FeatureAppReviewOutcome): ReadonlyArray<string> {
+  switch (appReview.status) {
+    case "passed":
+      return [
+        "",
+        `App Review passed in cycle ${appReview.cycle}. Say so in the pull-request body; its recording and screenshots are in the Feature's App Review panel in T3 Code.`,
+      ];
+    case "unresolved":
+      return [
+        "",
+        "App Review used every cycle and the change still fails in the running app. List its last findings in the pull-request body under an Unresolved App Review findings heading, unchanged:",
+        "",
+        appReview.reportMarkdown.trim(),
+      ];
+    case "skipped":
+      return [
+        "",
+        `App Review cycle ${appReview.cycle} could not run: ${appReview.reason} Say in the pull-request body that the change was not reviewed in the running app${appReview.cycle > 1 ? " after the last App Review fixes" : ""}.`,
+      ];
+  }
+}
+
 export function buildFeaturePullRequestMessage(input: {
   readonly baseBranch: string | null;
   readonly unresolvedFindingsMarkdown: string | null;
+  readonly appReview: FeatureAppReviewOutcome;
 }): string {
   return [
     input.baseBranch === null
@@ -333,5 +541,6 @@ export function buildFeaturePullRequestMessage(input: {
           "",
           input.unresolvedFindingsMarkdown.trim(),
         ]),
+    ...appReviewPullRequestLines(input.appReview),
   ].join("\n");
 }

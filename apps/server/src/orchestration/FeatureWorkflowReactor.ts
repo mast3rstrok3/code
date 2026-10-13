@@ -11,8 +11,12 @@ import {
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
-import { resolveWorkflowStepCycleBudget } from "@t3tools/shared/workflowStepCycles";
+import {
+  FEATURE_APP_REVIEW_CYCLE_KEY,
+  resolveWorkflowStepCycleBudget,
+} from "@t3tools/shared/workflowStepCycles";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -34,11 +38,19 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import { resolveProjectDevelopmentBranch } from "../vcs/developmentBranch.ts";
 import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
 import {
+  buildFeatureAppReviewFixMessage,
+  buildFeatureAppReviewMessage,
   buildFeatureFixMessage,
   buildFeatureImplementMessage,
   buildFeaturePullRequestMessage,
   buildFeatureReviewMessage,
   currentFeaturePlanId,
+  featureAppReviewFixMessageId,
+  featureAppReviewId,
+  featureAppReviewMessageId,
+  featureAppReviewReportMarkdown,
+  featureAppReviewThreadId,
+  type FeatureAppReviewState,
   featureFixMessageId,
   featureImplementMessageId,
   featurePullRequestMessageId,
@@ -55,8 +67,10 @@ import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { resolveWorkflowStepModelSelection } from "./workflowSubagents.ts";
 
 export const FEATURE_WORKFLOW_COMPLETED_ACTIVITY_KIND = "feature-workflow.completed";
+export const FEATURE_APP_REVIEW_SKIPPED_ACTIVITY_KIND = "feature-app-review.skipped";
 
 const CODE_REVIEW_PROMPT_ID = WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex;
+const APP_REVIEW_PROMPT_ID = WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex;
 
 /** Native events that can move a Feature to its next step. */
 const TRIGGER_EVENT_TYPES = new Set<OrchestrationV2DomainEvent["type"]>([
@@ -69,7 +83,8 @@ const TRIGGER_EVENT_TYPES = new Set<OrchestrationV2DomainEvent["type"]>([
 /**
  * Drives the Feature workflow on the native runtime: answers its planning
  * questions, starts the implement turn on the proposed plan, runs Code Review
- * cycles, hands their findings back to the Feature thread, opens the pull
+ * cycles and then recorded browser App Review cycles on the worktree's App
+ * Stack, hands their findings back to the Feature thread, opens the pull
  * request, and stops the workflow's App Stacks once the pull request is
  * linked. The steps themselves are decided by `nextFeatureWorkflowActions`.
  */
@@ -140,6 +155,48 @@ export const make = Effect.gen(function* () {
     }
     return reviews;
   });
+
+  /** App Reviews read back from their records, which the reviewer gives its verdict. */
+  const readAppReviews = Effect.fn("FeatureWorkflowReactor.readAppReviews")(function* (
+    threadId: ThreadId,
+    planId: PlanId,
+    cycleBudget: number,
+  ) {
+    const reviews: FeatureAppReviewState[] = [];
+    for (let cycle = 1; cycle <= cycleBudget; cycle += 1) {
+      const reviewThreadId = featureAppReviewThreadId(threadId, planId, cycle);
+      const detail = yield* snapshots
+        .getThreadDetailById(reviewThreadId, { activityKinds: [] })
+        .pipe(Effect.orElseSucceed(() => Option.none()));
+      if (Option.isNone(detail)) break;
+      const records = yield* native.getThreadRecords(reviewThreadId, ["runs"]).pipe(Effect.option);
+      const run = Option.isNone(records) ? undefined : latestRun(records.value.runs);
+      const reviewId = featureAppReviewId(threadId, planId, cycle);
+      const record = detail.value.appReviews.find((candidate) => candidate.id === reviewId) ?? null;
+      reviews.push({
+        runStatus: run?.status ?? null,
+        recordStatus: record?.status ?? null,
+        reportMarkdown: featureAppReviewReportMarkdown(record),
+      });
+      if (run?.status !== "completed" || record?.status === "passed") break;
+    }
+    return reviews;
+  });
+
+  const readAppReviewSkippedReason = Effect.fn("FeatureWorkflowReactor.readAppReviewSkippedReason")(
+    function* (threadId: ThreadId, planId: PlanId) {
+      const skipped = yield* snapshots
+        .listActivitiesByKind(FEATURE_APP_REVIEW_SKIPPED_ACTIVITY_KIND)
+        .pipe(Effect.orElseSucceed(() => []));
+      const payload = skipped
+        .map(
+          (activity) =>
+            activity.payload as { threadId?: unknown; planId?: unknown; reason?: unknown } | null,
+        )
+        .findLast((candidate) => candidate?.threadId === threadId && candidate.planId === planId);
+      return typeof payload?.reason === "string" ? payload.reason : null;
+    },
+  );
 
   const resolveBaseBranch = Effect.fn("FeatureWorkflowReactor.resolveBaseBranch")(function* (
     thread: Pick<OrchestrationV2AppThread, "projectId" | "branch" | "worktreePath">,
@@ -214,11 +271,129 @@ export const make = Effect.gen(function* () {
     return !Number.isFinite(count) || count > 0;
   });
 
+  /**
+   * Starts one App Review cycle: the worktree's App Stack, then a reviewer that drives it in
+   * the preview browser and records it. Returns true when the cycle cannot run, which it
+   * records so the Feature moves on to its pull request.
+   */
+  const launchAppReview = Effect.fn("FeatureWorkflowReactor.launchAppReview")(function* (input: {
+    readonly planId: PlanId;
+    readonly cycle: number;
+    readonly cycleBudget: number;
+    readonly thread: OrchestrationV2AppThread;
+    readonly settings: ServerSettings | null;
+    readonly workflowShell: Option.Option<OrchestrationThreadShell>;
+    readonly previousReportMarkdown: string | null;
+    readonly planMarkdown: string | null;
+  }) {
+    const { thread, settings } = input;
+    const reviewThreadId = featureAppReviewThreadId(thread.id, input.planId, input.cycle);
+    const launched = yield* snapshots
+      .getThreadShellById(reviewThreadId)
+      .pipe(Effect.orElseSucceed(() => Option.none()));
+    if (Option.isSome(launched)) return false;
+    if (
+      (yield* native.getThreadShell(reviewThreadId).pipe(Effect.orElseSucceed(() => null))) !== null
+    )
+      return false;
+
+    const skip = Effect.fn("FeatureWorkflowReactor.skipAppReview")(function* (reason: string) {
+      const createdAt = DateTime.formatIso(yield* DateTime.now);
+      yield* workflowEngine.dispatch({
+        type: "thread.activity.append",
+        commandId: commandId("app-review-skipped", thread.id, input.planId, input.cycle),
+        threadId: thread.id,
+        activity: {
+          id: EventId.make(
+            `feature-app-review-skipped:${thread.id}:${input.planId}:${input.cycle}`,
+          ),
+          tone: "error",
+          kind: FEATURE_APP_REVIEW_SKIPPED_ACTIVITY_KIND,
+          summary: `App Review cycle ${input.cycle} could not run`,
+          payload: { threadId: thread.id, planId: input.planId, cycle: input.cycle, reason },
+          turnId: null,
+          createdAt,
+        },
+        createdAt,
+      });
+      return true;
+    });
+
+    if (
+      settings !== null &&
+      !resolveProjectSettings(settings, thread.projectId).settings.enableAgentBrowserAccess
+    ) {
+      return yield* skip(
+        "agent browser access is off for this project, so no reviewer can open the app.",
+      );
+    }
+    if (thread.worktreePath === null) {
+      return yield* skip("the Feature has no worktree to start an App Stack from.");
+    }
+    const workflowId =
+      Option.getOrUndefined(input.workflowShell)?.workflowContext?.workflowId ??
+      thread.workflowContext?.workflowId ??
+      null;
+    const stack = yield* appStacks
+      .autoCreate({
+        worktreePath: thread.worktreePath,
+        displayName: `Feature ${thread.title}`.slice(0, 80).trim(),
+        gitBranch: thread.branch,
+        workflowId,
+      })
+      .pipe(Effect.result);
+    if (stack._tag === "Failure") {
+      return yield* skip(`its App Stack did not start (${stack.failure.message}).`);
+    }
+    const frontendUrl = stack.success.frontendUrl;
+    if (frontendUrl === null) return yield* skip("its App Stack has no frontend to open.");
+
+    const model = resolveWorkflowStepModelSelection({
+      workflowPromptId: APP_REVIEW_PROMPT_ID,
+      definition: undefined,
+      stepModels: Option.getOrUndefined(input.workflowShell)?.workflowStepModels,
+      parentModelSelection: thread.modelSelection,
+      settings: settings ?? undefined,
+    });
+    const createdAt = DateTime.formatIso(yield* DateTime.now);
+    yield* workflowEngine.dispatch({
+      type: "thread.app-review.launch",
+      commandId: commandId("app-review", reviewThreadId),
+      sourceThreadId: thread.id,
+      reviewThreadId,
+      reviewId: featureAppReviewId(thread.id, input.planId, input.cycle),
+      appReviewScope: "browser",
+      message: {
+        messageId: featureAppReviewMessageId(reviewThreadId),
+        role: "user",
+        text: buildFeatureAppReviewMessage({
+          cycle: input.cycle,
+          cycleBudget: input.cycleBudget,
+          frontendUrl,
+          stackId: stack.success.stack?.id ?? null,
+          worktreePath: thread.worktreePath,
+          branch: thread.branch,
+          baseBranch: yield* resolveBaseBranch(thread, settings),
+          planMarkdown: input.planMarkdown,
+          previousReportMarkdown: input.previousReportMarkdown,
+        }),
+        attachments: [],
+      },
+      modelSelection: model.modelSelection,
+      runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+      workflowPromptId: APP_REVIEW_PROMPT_ID,
+      createdAt,
+    });
+    return false;
+  });
+
   const runAction = Effect.fn("FeatureWorkflowReactor.runAction")(function* (input: {
     readonly action: FeatureWorkflowAction;
     readonly thread: OrchestrationV2AppThread;
     readonly settings: ServerSettings | null;
     readonly cycleBudget: number;
+    readonly appReviewCycleBudget: number;
+    readonly appReviews: ReadonlyArray<FeatureAppReviewState>;
     /** The workflow engine's copy of the thread, which carries the run-local step settings. */
     readonly workflowShell: Option.Option<OrchestrationThreadShell>;
     readonly planMarkdown: (planId: PlanId) => string | null;
@@ -350,6 +525,27 @@ export const make = Effect.gen(function* () {
             reportMarkdown: action.reportMarkdown,
           }),
         );
+      case "app-review":
+        return yield* launchAppReview({
+          planId: action.planId,
+          cycle: action.cycle,
+          cycleBudget: input.appReviewCycleBudget,
+          thread,
+          settings,
+          workflowShell: input.workflowShell,
+          previousReportMarkdown:
+            action.cycle > 1 ? (input.appReviews[action.cycle - 2]?.reportMarkdown ?? null) : null,
+          planMarkdown: input.planMarkdown(action.planId),
+        });
+      case "app-review-fix":
+        return yield* send(
+          featureAppReviewFixMessageId(thread.id, action.planId, action.cycle),
+          buildFeatureAppReviewFixMessage({
+            cycle: action.cycle,
+            cycleBudget: input.appReviewCycleBudget,
+            reportMarkdown: action.reportMarkdown,
+          }),
+        );
       case "open-pull-request":
         return yield* send(
           featurePullRequestMessageId(thread.id, action.planId),
@@ -357,6 +553,7 @@ export const make = Effect.gen(function* () {
             buildFeaturePullRequestMessage({
               baseBranch: yield* resolveBaseBranch(thread, settings),
               unresolvedFindingsMarkdown: action.unresolvedFindingsMarkdown,
+              appReview: action.appReview,
             }),
             WORKFLOW_PROMPT_IDS.implementationFeaturePullRequestCodex,
           ),
@@ -429,11 +626,12 @@ export const make = Effect.gen(function* () {
     }
   });
 
-  const evaluateUnsafe = Effect.fn("FeatureWorkflowReactor.evaluate")(function* (
+  /** Starts the steps due now. True when a skipped App Review means another step is due. */
+  const evaluateOnce = Effect.fn("FeatureWorkflowReactor.evaluateOnce")(function* (
     threadId: ThreadId,
   ) {
     const shell = yield* native.getThreadShell(threadId);
-    if (shell === null || shell.deletedAt !== null || !isFeatureRoot(shell)) return;
+    if (shell === null || shell.deletedAt !== null || !isFeatureRoot(shell)) return false;
     const records = yield* native.getThreadRecords(
       threadId,
       ["runs", "plans", "runtimeRequests", "turnItems"],
@@ -445,6 +643,11 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.orElseSucceed(() => Option.none()));
     const cycleBudget = resolveWorkflowStepCycleBudget({
       key: { workflowPromptId: CODE_REVIEW_PROMPT_ID },
+      threadOverrides: Option.getOrUndefined(workflowShell)?.workflowStepCycles,
+      settingsOverrides: settings?.workflowStepCycles,
+    });
+    const appReviewCycleBudget = resolveWorkflowStepCycleBudget({
+      key: FEATURE_APP_REVIEW_CYCLE_KEY,
       threadOverrides: Option.getOrUndefined(workflowShell)?.workflowStepCycles,
       settingsOverrides: settings?.workflowStepCycles,
     });
@@ -461,6 +664,8 @@ export const make = Effect.gen(function* () {
           ? [{ requestId: request.id, questions: item.questions }]
           : [];
       });
+    const appReviews =
+      planId === null ? [] : yield* readAppReviews(threadId, planId, appReviewCycleBudget);
     const actions = nextFeatureWorkflowActions({
       threadId,
       interactionMode: records.thread.interactionMode,
@@ -474,6 +679,10 @@ export const make = Effect.gen(function* () {
       pendingQuestions,
       reviews: planId === null ? [] : yield* readReviews(threadId, planId, cycleBudget),
       cycleBudget,
+      appReviews,
+      appReviewCycleBudget,
+      appReviewSkippedReason:
+        planId === null ? null : yield* readAppReviewSkippedReason(threadId, planId),
       pullRequestLinked: visibleThreadPullRequests(records.thread.pullRequests ?? []).length > 0,
       completed: false,
     });
@@ -486,7 +695,9 @@ export const make = Effect.gen(function* () {
       return plan?.kind === "proposed_plan" && plan.markdown.trim() ? plan.markdown : null;
     };
     // A finished Feature stays finished, even when someone keeps working in its thread.
-    if (planId !== null && actions.length > 0 && (yield* isCompleted(threadId, planId))) return;
+    if (planId !== null && actions.length > 0 && (yield* isCompleted(threadId, planId)))
+      return false;
+    let appReviewSkipped = false;
     for (const due of actions) {
       // A review needs something to review. When the implement or a fix turn left the branch
       // where it started, the plan needed no change: finish without a review or pull request.
@@ -494,15 +705,26 @@ export const make = Effect.gen(function* () {
         due.type === "review" && !(yield* featureHasChanges(records.thread, settings))
           ? { type: "complete", planId: due.planId, reason: "no-changes" }
           : due;
-      yield* runAction({
+      const skipped = yield* runAction({
         action,
         thread: records.thread,
         settings,
         cycleBudget,
+        appReviewCycleBudget,
+        appReviews,
         workflowShell,
         planMarkdown,
       });
+      if (skipped === true) appReviewSkipped = true;
     }
+    return appReviewSkipped;
+  });
+
+  const evaluateUnsafe = Effect.fn("FeatureWorkflowReactor.evaluate")(function* (
+    threadId: ThreadId,
+  ) {
+    // A skipped App Review produces no native event, so the next step is decided right away.
+    if (yield* evaluateOnce(threadId)) yield* evaluateOnce(threadId);
   });
 
   const evaluate = (threadId: ThreadId) =>

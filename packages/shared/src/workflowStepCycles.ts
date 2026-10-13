@@ -9,6 +9,12 @@ export interface WorkflowStepCycleKey {
 /** The configuration key shared by standalone, final, and ticket App Review steps. */
 export const APP_REVIEW_WORKFLOW_PROMPT_ID = "implementation.browser-app-review.codex";
 
+/** The Feature workflow's App Review, a sub-step of its implement step. */
+export const FEATURE_APP_REVIEW_CYCLE_KEY = {
+  workflowPromptId: APP_REVIEW_WORKFLOW_PROMPT_ID,
+  stepWorkflowPromptId: "implementation.feature.codex",
+} as const satisfies WorkflowStepCycleKey;
+
 /** One configurable cycle target and its accepted bounds. */
 export interface WorkflowStepCycleTarget {
   readonly key: WorkflowStepCycleKey;
@@ -45,6 +51,14 @@ export const WORKFLOW_STEP_CYCLE_TARGETS: ReadonlyArray<WorkflowStepCycleTarget>
     description:
       "The same three phases, for the App Review a single ticket runs before its Code Review.",
     defaultCycles: 10,
+    maxCycles: 10,
+  },
+  {
+    key: FEATURE_APP_REVIEW_CYCLE_KEY,
+    label: "Feature App Review cycles",
+    description:
+      "One recorded browser review of the running Feature plus the fix it asks for. The pull request lists the last findings when the budget runs out.",
+    defaultCycles: 3,
     maxCycles: 10,
   },
   {
