@@ -182,10 +182,7 @@ export function WorkflowSettingsBody(props: {
   }
 
   if (
-    (props.preset === "quick-plan" ||
-      props.preset === "fast-plan" ||
-      props.preset === "planning" ||
-      props.preset === "fast-engineering") &&
+    (props.preset === "fast-plan" || props.preset === "planning") &&
     props.onSetStepCycles !== undefined &&
     props.onSetStepReviewParts !== undefined
   ) {
@@ -344,11 +341,7 @@ export function WorkflowSettingsMenu(props: {
         side="bottom"
         align="end"
         padding="none"
-        className={
-          props.preset === "planning" || props.preset === "fast-engineering"
-            ? "w-[min(42rem,calc(100vw-2rem))]"
-            : "w-80"
-        }
+        className={props.preset === "planning" ? "w-[min(42rem,calc(100vw-2rem))]" : "w-80"}
       >
         <div className="border-b border-border/70 px-3 py-2">
           <div className="text-3xs font-medium uppercase tracking-wider text-muted-foreground">

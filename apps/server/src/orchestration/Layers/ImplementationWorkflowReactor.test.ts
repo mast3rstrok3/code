@@ -2391,7 +2391,7 @@ function dispatchFastFeatureLaunch(
   system: ImplementationSystem,
   options?: {
     readonly reusePreparedWorkspace?: boolean;
-    readonly workflowPreset?: "fast-feature" | "quick-plan" | "fast-plan";
+    readonly workflowPreset?: "fast-feature" | "fast-plan";
   },
 ) {
   return Effect.gen(function* () {
@@ -4326,95 +4326,17 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect(
-    "completes Quick Feature after Build without launching later stages, even on recovery",
-    () =>
-      withSystem((system) =>
-        Effect.gen(function* () {
-          yield* dispatchFastFeatureLaunch(system, { workflowPreset: "quick-plan" });
-          yield* system.reactor.drain;
-          const run = (yield* system.query.getSnapshot()).implementationRuns[0];
-          if (!run) throw new Error("Quick Feature run missing.");
-          const buildThread = (yield* system.query.getSnapshot()).threads.find(
-            (thread) => thread.id === run.orchestratorThreadId,
-          );
-          expect(buildThread?.messages.at(-1)?.text).toContain("Quick Feature ends after Build.");
-          // Old clients may submit enabled review settings. Quick Feature still ends at Build.
-          yield* system.engine.dispatch({
-            type: "thread.implementation-run.update",
-            commandId: commandId("quick-build-stale-settings"),
-            threadId: sourceThreadId,
-            run: { ...run, skips: [] },
-            createdAt: now,
-          });
-          yield* system.engine.dispatch({
-            type: "thread.activity.append",
-            commandId: commandId("quick-build-result"),
-            threadId: run.orchestratorThreadId,
-            activity: {
-              id: eventId("quick-build-result"),
-              tone: "info",
-              kind: "implementation-fast-build-result",
-              summary: "Build succeeded",
-              payload: {
-                type: "implementation-fast-build-result",
-                runId: run.id,
-                status: "succeeded",
-                commitSha: "def456",
-                validations: requiredValidations(),
-                notesMarkdown: "Implemented and committed.",
-              },
-              turnId: null,
-              createdAt: "2026-01-01T00:00:02.000Z",
-            },
-            createdAt: "2026-01-01T00:00:02.000Z",
-          });
-          yield* system.reactor.drain;
-          yield* system.reactor.recoverIncompleteStages();
-          yield* system.reactor.drain;
-
-          const snapshot = yield* system.query.getSnapshot();
-          expect(snapshot.implementationRuns[0]?.status).toBe("completed");
-          expect(snapshot.implementationRuns[0]?.automationHalt).toBeNull();
-          expect(snapshot.implementationRuns[0]?.appReviewWorkflowRunIds).toEqual([]);
-          expect(snapshot.implementationRuns[0]?.finalValidation).toBeNull();
-          expect(snapshot.implementationRuns[0]?.validatedHeadSha).toBeNull();
-          expect(
-            snapshot.threads
-              .filter((thread) => thread.parentThreadId === run.orchestratorThreadId)
-              .map((thread) => thread.workflowRole),
-          ).toEqual([]);
-          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
-          expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
-        }),
-      ),
-  );
-
-  describe.each(
-    [...(["quick-plan", "fast-plan"] as const)].map((scenarioCase) => [scenarioCase] as const),
-  )("scenario %s", (workflowPreset) => {
-    it.effect(
-      `${workflowPreset} keeps reported Build failures blocking, or enters its next stage`,
-      () =>
+  describe.each([...(["fast-plan"] as const)].map((scenarioCase) => [scenarioCase] as const))(
+    "scenario %s",
+    (workflowPreset) => {
+      it.effect(`${workflowPreset} enters its next stage after a passing Build`, () =>
         withSystem((system) =>
           Effect.gen(function* () {
             yield* dispatchFastFeatureLaunch(system, { workflowPreset });
             yield* system.reactor.drain;
             const run = (yield* system.query.getSnapshot()).implementationRuns[0];
             if (!run) throw new Error("Feature run missing.");
-            const validations = [
-              ...requiredValidations(),
-              ...(workflowPreset === "quick-plan"
-                ? [
-                    {
-                      command: "vp check",
-                      status: "failed" as const,
-                      outputMarkdown: "An unrelated project test failed.",
-                      completedAt: now,
-                    },
-                  ]
-                : []),
-            ];
+            const validations = requiredValidations();
             yield* system.engine.dispatch({
               type: "thread.activity.append",
               commandId: commandId("preset-build-result"),
@@ -4440,26 +4362,18 @@ describe("ImplementationWorkflowReactor", () => {
             yield* system.reactor.drain;
             const snapshot = yield* system.query.getSnapshot();
             const current = snapshot.implementationRuns[0];
-            if (workflowPreset === "quick-plan") {
-              expect(current?.status).toBe("needs-human-attention");
-              expect(current?.retryableFailure?.stage).toBe("build");
-              expect(current?.retryableFailure?.detail).toContain("Fix every reported failure");
-              expect(current?.finalValidation).toBeNull();
-            } else {
-              expect(current?.status).toBe("qa-reviewing");
-              expect(current?.appReviewWorkflowRunIds).toHaveLength(1);
-              expect(current?.skips).toEqual([]);
-            }
+            expect(current?.status).toBe("qa-reviewing");
+            expect(current?.appReviewWorkflowRunIds).toHaveLength(1);
+            expect(current?.skips).toEqual([]);
             expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
           }),
         ),
-    );
-  });
+      );
+    },
+  );
 
   describe.each(
-    [...(["quick-plan", "fast-plan", "fast-feature"] as const)].map(
-      (scenarioCase) => [scenarioCase] as const,
-    ),
+    [...(["fast-plan", "fast-feature"] as const)].map((scenarioCase) => [scenarioCase] as const),
   )("scenario %s", (workflowPreset) => {
     describe.each(
       [...(["starting", "running", "ready"] as const)].map(

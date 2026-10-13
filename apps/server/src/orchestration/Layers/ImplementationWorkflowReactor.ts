@@ -2004,10 +2004,7 @@ function fastFeatureExampleDirective(run: OrchestrationImplementationRun) {
   } as const;
 }
 
-function fastFeatureExecutionContract(
-  run: OrchestrationImplementationRun,
-  completesAfterBuild = false,
-): ReadonlyArray<string> {
+function fastFeatureExecutionContract(run: OrchestrationImplementationRun): ReadonlyArray<string> {
   return [
     WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
     "## Execution identity",
@@ -2020,14 +2017,8 @@ function fastFeatureExecutionContract(
     "",
     "## Build validation",
     "Run focused tests and affected-file checks. A documented sub-minute fast command such as `pnpm check` is allowed.",
-    ...(completesAfterBuild
-      ? [
-          "Quick Feature ends after Build. There is no later validation, review, or pull-request stage. Run the planned focused checks and affected-file checks before reporting success. Fix every failure you encounter, including failures outside the change. Do not defer failures to a later stage.",
-        ]
-      : [
-          "Do not run the launch-level complete validation commands in Build; the final gate runs them after the enabled review steps, or directly after Build when reviews are disabled:",
-          ...run.launchSummary.validationCommands.map((command) => `- ${command}`),
-        ]),
+    "Do not run the launch-level complete validation commands in Build; the final gate runs them after the enabled review steps, or directly after Build when reviews are disabled:",
+    ...run.launchSummary.validationCommands.map((command) => `- ${command}`),
     "",
     "Report the exact focused or fast commands actually run in `validations`.",
     "",
@@ -2108,7 +2099,7 @@ function buildFastFeaturePrompt(input: {
     "",
     fastFeatureArtifactMarkdown(input),
     "",
-    ...fastFeatureExecutionContract(input.run, input.sourceThread.workflowPreset === "quick-plan"),
+    ...fastFeatureExecutionContract(input.run),
   ].join("\n");
 }
 
@@ -8901,8 +8892,6 @@ const make = Effect.gen(function* () {
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) return;
       yield* stopUnusedAppStack({ run, worktreePath: run.orchestratorWorktreePath });
-      const completesAfterBuild =
-        findThread(readModel, sourceThreadId)?.workflowPreset === "quick-plan";
       const updatedAt = input.updatedAt;
       const buildResult = {
         runId: run.id,
@@ -8925,10 +8914,6 @@ const make = Effect.gen(function* () {
         return;
       }
       if (
-        (completesAfterBuild &&
-          currentWorkflowValidations(directive.validations).some(
-            (validation) => validation.status !== "passed",
-          )) ||
         !focusedRepairValidationsPassed({
           finalCommands: [
             ...run.launchSummary.validationCommands,
@@ -8941,9 +8926,8 @@ const make = Effect.gen(function* () {
           sourceThreadId,
           run: { ...run, fastBuildResult: buildResult, updatedAt },
           retryableStage: "build",
-          reasonMarkdown: completesAfterBuild
-            ? "Quick Feature must finish Build with passing focused checks and no failed or blocked checks. Fix every reported failure before reporting success."
-            : "Build must report passing focused or documented sub-minute fast validation. Leave launch-level complete commands to the final validation gate.",
+          reasonMarkdown:
+            "Build must report passing focused or documented sub-minute fast validation. Leave launch-level complete commands to the final validation gate.",
           updatedAt,
         });
         return;
@@ -9001,16 +8985,6 @@ const make = Effect.gen(function* () {
         automationHalt: null,
         updatedAt,
       };
-      if (completesAfterBuild) {
-        yield* completeWithoutChangeRequestStage({
-          sourceThreadId,
-          run: succeededRun,
-          skippedStage: "change-request",
-          summary: "Quick Feature completed after Build and its checks",
-          createdAt: updatedAt,
-        });
-        return;
-      }
       yield* updateRun({ sourceThreadId, run: succeededRun, createdAt: updatedAt });
       yield* startBrowserReview({ sourceThreadId, run: succeededRun, createdAt: updatedAt });
     },

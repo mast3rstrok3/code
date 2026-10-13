@@ -26,14 +26,14 @@ describe("ComposerModePicker state", () => {
         workflowPreset: null,
         lastWorkflowPreset: "fix",
       }),
-    ).toBe("quick-plan");
+    ).toBe("fast-plan");
     expect(
       resolveWorkflowPresetForPicker({
         interactionMode: "default",
         workflowPreset: null,
         lastWorkflowPreset: "fast-feature",
       }),
-    ).toBe("quick-plan");
+    ).toBe("fast-plan");
     // Existing historical threads still render their original identity.
     expect(
       resolveWorkflowPresetForPicker({
@@ -48,7 +48,7 @@ describe("ComposerModePicker state", () => {
         workflowPreset: null,
         lastWorkflowPreset: null,
       }),
-    ).toBe("quick-plan");
+    ).toBe("fast-plan");
   });
 
   it("sorts Build skills alphabetically with stable ID tie-breaking", () => {

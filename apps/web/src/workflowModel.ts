@@ -606,7 +606,7 @@ export function resolveGroupImplementationRun<
         candidate.rows.some((row) => row.thread.id === run.orchestratorThreadId),
     ),
   );
-  if (group.preset !== "planning" && group.preset !== "fast-engineering") {
+  if (group.preset !== "planning") {
     return newestImplementationRun(directlyLinked);
   }
   const scopedRuns = runs.filter(

@@ -84,7 +84,7 @@ export function ComposerModeCatalogDialog(props: {
   ) => void;
   readonly onSelectSkill: (skillId: string) => void;
 }) {
-  const [configuringPreset, setConfiguringPreset] = useState<WorkflowPreset>("quick-plan");
+  const [configuringPreset, setConfiguringPreset] = useState<WorkflowPreset>("fast-plan");
   const [stepModels, setStepModels] = useState(props.workflowDefaults.stepModels);
   const [stepCycles, setStepCycles] = useState(props.workflowDefaults.stepCycles);
   const [stepReviewParts, setStepReviewParts] = useState(props.workflowDefaults.stepReviewParts);
@@ -102,7 +102,7 @@ export function ComposerModeCatalogDialog(props: {
         WORKFLOW_PRESET_DEFINITIONS.find(
           (definition) =>
             definition.id === props.activePreset && definition.availability !== "under-development",
-        )?.id ?? "quick-plan";
+        )?.id ?? "fast-plan";
       setConfiguringPreset(preset);
       setImplementationSettings({
         ...props.workflowDefaults.implementationSettings,

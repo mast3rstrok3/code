@@ -34,7 +34,7 @@ it("lists the eleven Engineering steps in phase order", () => {
     "implementation",
   ]);
   expect(targets.map((target) => target.label)).toEqual([
-    "Prepare shared worktree and App Stack",
+    "Prepare shared worktree",
     "Grill with Docs",
     "Spec authoring",
     "Ticket authoring",
@@ -48,32 +48,16 @@ it("lists the eleven Engineering steps in phase order", () => {
   ]);
 });
 
-it("limits Quick Feature to Planning and Build", () => {
-  const targets = engineeringWorkflowDefaultSteps("quick-plan");
-
-  expect(targets.map((target) => target.phase)).toEqual(["planning", "implementation"]);
-  expect(targets.map((target) => target.label)).toEqual(["Planning", "Build"]);
-});
-
-it("keeps the review and pull-request steps in Feature", () => {
+it("runs Feature as Plan, Implement, then Checks & PR in one thread", () => {
   const targets = engineeringWorkflowDefaultSteps("fast-plan");
 
   expect(targets.map((target) => target.phase)).toEqual([
     "planning",
     "implementation",
     "implementation",
-    "implementation",
-    "implementation",
-    "implementation",
   ]);
-  expect(targets.map((target) => target.label)).toEqual([
-    "Planning",
-    "Build",
-    "App Review",
-    "Final Code Review",
-    "Create pull request",
-    "Babysit pull request",
-  ]);
+  expect(targets.map((target) => target.label)).toEqual(["Plan", "Implement", "Checks & PR"]);
+  expect(targets.some((target) => target.modelMode === "configurable")).toBe(false);
 });
 
 it("drops the phase prefix a guided workflow adds to its step labels", () => {

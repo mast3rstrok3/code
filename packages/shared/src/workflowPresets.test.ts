@@ -12,23 +12,17 @@ import {
 describe("workflow presets", () => {
   it("exposes the Plan and Engineering preset groups", () => {
     expect(WORKFLOW_PRESET_DEFINITIONS.map((definition) => definition.id)).toEqual([
-      "quick-plan",
       "fast-plan",
-      "fast-engineering",
       "planning",
       "wayfinder",
     ]);
     expect(WORKFLOW_PRESET_DEFINITIONS.map((definition) => definition.group)).toEqual([
       "plan",
-      "plan",
-      "engineering",
       "engineering",
       "engineering",
     ]);
     expect(WORKFLOW_PRESET_DEFINITIONS.map((definition) => definition.label)).toEqual([
-      "Quick Feature",
       "Feature",
-      "Quick Engineering",
       "Engineering",
       "Wayfinder",
     ]);
@@ -36,27 +30,8 @@ describe("workflow presets", () => {
   });
 
   it("sets optional stages from each preset without changing global defaults", () => {
-    expect(implementationDefaultsForWorkflowPreset("quick-plan")).toEqual({
-      ticketAppReviewEnabled: false,
-      appReviewEnabled: false,
-      finalCodeReviewEnabled: false,
-      pullRequestCreationEnabled: false,
-      pullRequestBabysittingEnabled: false,
-    });
-    expect(implementationDefaultsForWorkflowPreset("fast-plan")).toEqual({
-      ticketAppReviewEnabled: false,
-      appReviewEnabled: true,
-      finalCodeReviewEnabled: true,
-      pullRequestCreationEnabled: true,
-      pullRequestBabysittingEnabled: true,
-    });
-    expect(implementationDefaultsForWorkflowPreset("fast-engineering")).toEqual({
-      ticketAppReviewEnabled: false,
-      appReviewEnabled: false,
-      finalCodeReviewEnabled: true,
-      pullRequestCreationEnabled: true,
-      pullRequestBabysittingEnabled: true,
-    });
+    // Feature implements in its own thread, so it has no Implementation stages to toggle.
+    expect(implementationDefaultsForWorkflowPreset("fast-plan")).toBeNull();
     expect(implementationDefaultsForWorkflowPreset("planning")).toEqual({
       ticketAppReviewEnabled: false,
       appReviewEnabled: true,
@@ -98,10 +73,17 @@ describe("workflow presets", () => {
     ).toContain("up to five cycles");
   });
 
+  it("plans, implements, and publishes Feature in one thread", () => {
+    const steps = WORKFLOW_PRESET_DEFINITION_BY_ID["fast-plan"].helpSteps;
+    expect(steps.map((step) => step.label)).toEqual(["Plan", "Implement", "Checks & PR"]);
+    expect(steps.every((step) => step.threadBoundary !== "new child thread")).toBe(true);
+    expect(steps.every((step) => step.threadBoundary !== "new review thread")).toBe(true);
+  });
+
   it("shows the eleven Engineering Workflow phases in order", () => {
     const steps = WORKFLOW_PRESET_DEFINITION_BY_ID.planning.helpSteps;
     expect(steps.map((step) => step.label)).toEqual([
-      "Prepare shared worktree and App Stack",
+      "Prepare shared worktree",
       "Grill with Docs",
       "Spec authoring",
       "Ticket authoring",
@@ -129,7 +111,6 @@ describe("workflow presets", () => {
 
   it("maps presets to provider modes and intent kinds", () => {
     expect(interactionModeForWorkflowPreset("fast-feature")).toBe("plan");
-    expect(interactionModeForWorkflowPreset("quick-plan")).toBe("plan");
     expect(interactionModeForWorkflowPreset("fast-plan")).toBe("plan");
     expect(interactionModeForWorkflowPreset("product-planning")).toBe("product-workflow");
     expect(interactionModeForWorkflowPreset("implementation")).toBe("implementation-workflow");

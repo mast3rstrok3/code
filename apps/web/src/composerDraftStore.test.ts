@@ -2778,6 +2778,43 @@ describe("composerDraftStore model seed migration", () => {
     }
   });
 
+  it("reopens Quick Feature and Quick Engineering drafts on their successors", async () => {
+    vi.useFakeTimers();
+    try {
+      const storage = useComposerDraftStore.persist.getOptions().storage;
+      expect(storage).toBeDefined();
+      storage?.setItem(COMPOSER_DRAFT_STORAGE_KEY, {
+        version: 9,
+        state: {
+          draftsByThreadKey: {
+            [typedDraftId]: {
+              prompt: "add a fast checkout",
+              attachments: [],
+              interactionMode: "plan",
+              workflowPreset: "quick-plan",
+              lastWorkflowPreset: "fast-engineering",
+            },
+          },
+          draftThreadsByThreadKey: { [typedDraftId]: draftThread(typedThreadId) },
+          logicalProjectDraftThreadKeyByLogicalProjectKey: {},
+          stickyModelSelectionByProvider: {},
+          stickyActiveProvider: null,
+        },
+      } as never);
+      await vi.advanceTimersByTimeAsync(300);
+
+      await useComposerDraftStore.persist.rehydrate();
+
+      expect(draftByKey(typedDraftId)).toMatchObject({
+        prompt: "add a fast checkout",
+        workflowPreset: "fast-plan",
+        lastWorkflowPreset: "planning",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps v8 file-only draft sessions and their seeded models", async () => {
     vi.useFakeTimers();
     try {
@@ -2934,11 +2971,11 @@ describe("composerDraftStore runtime and interaction settings", () => {
       pullRequestBabysittingEnabled: false,
     };
 
-    store.setComposerMode(threadRef, "plan", "quick-plan", settings);
+    store.setComposerMode(threadRef, "planning-workflow", "planning", settings);
 
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toMatchObject({
-      interactionMode: "plan",
-      workflowPreset: "quick-plan",
+      interactionMode: "planning-workflow",
+      workflowPreset: "planning",
       workflowImplementationSettings: settings,
     });
   });

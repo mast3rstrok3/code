@@ -3967,7 +3967,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const sourceThread = yield* requireThread({ readModel, command, threadId: command.threadId });
       if (
         sourceThread.workflowPreset !== "fast-feature" &&
-        sourceThread.workflowPreset !== "quick-plan" &&
         sourceThread.workflowPreset !== "fast-plan"
       ) {
         return yield* new OrchestrationCommandInvariantError({

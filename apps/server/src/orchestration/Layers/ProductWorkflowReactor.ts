@@ -79,9 +79,9 @@ const PRODUCT_CONTEXT_RECOVERY_PROMPT_PREFIX =
 
 const isProductWorkflowThread = isProductWorkflowRoot;
 const isPlanWorkflowPreset = (preset: OrchestrationThread["workflowPreset"]) =>
-  preset === "quick-plan" || preset === "fast-plan" || preset === "fast-feature";
+  preset === "fast-plan" || preset === "fast-feature";
 const isEngineeringWorkflowPreset = (preset: OrchestrationThread["workflowPreset"]) =>
-  preset === "planning" || preset === "fast-engineering";
+  preset === "planning";
 
 export function resolvePlanQuestionAnswers(payload: unknown): Readonly<Record<string, string>> {
   if (payload === null || typeof payload !== "object") return {};
@@ -515,10 +515,7 @@ const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => undefined),
     );
     const runSettings =
-      context.productRootThread.workflowImplementationSettings ??
-      (context.productRootThread.workflowPreset === "fast-engineering"
-        ? implementationDefaultsForWorkflowPreset("fast-engineering")
-        : settings?.implementation);
+      context.productRootThread.workflowImplementationSettings ?? settings?.implementation;
 
     yield* orchestrationEngine.dispatch({
       type: "thread.implementation-run.launch",
@@ -1268,7 +1265,7 @@ const make = Effect.gen(function* () {
       if (
         thread === undefined ||
         thread.workflowRole !== null ||
-        (thread.workflowPreset !== "quick-plan" && thread.workflowPreset !== "fast-plan") ||
+        thread.workflowPreset !== "fast-plan" ||
         thread.interactionMode !== "plan"
       ) {
         return;
@@ -1296,10 +1293,7 @@ const make = Effect.gen(function* () {
     function* () {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       for (const candidate of readModel.threads) {
-        if (
-          candidate.workflowRole !== null ||
-          (candidate.workflowPreset !== "quick-plan" && candidate.workflowPreset !== "fast-plan")
-        ) {
+        if (candidate.workflowRole !== null || candidate.workflowPreset !== "fast-plan") {
           continue;
         }
         const thread = yield* resolveThread(candidate.id);

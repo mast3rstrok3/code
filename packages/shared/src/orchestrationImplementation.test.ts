@@ -8,11 +8,9 @@ import {
 describe("workflow workspace identity", () => {
   it("starts Plan and Engineering workflows in dedicated workspaces", () => {
     expect(workflowPresetStartsInDedicatedWorkspace("planning")).toBe(true);
-    expect(workflowPresetStartsInDedicatedWorkspace("fast-engineering")).toBe(true);
     expect(workflowPresetStartsInDedicatedWorkspace("product-planning")).toBe(true);
     expect(workflowPresetStartsInDedicatedWorkspace("full-feature")).toBe(true);
     expect(workflowPresetStartsInDedicatedWorkspace("fast-feature")).toBe(true);
-    expect(workflowPresetStartsInDedicatedWorkspace("quick-plan")).toBe(true);
     expect(workflowPresetStartsInDedicatedWorkspace("fast-plan")).toBe(true);
     expect(workflowPresetStartsInDedicatedWorkspace("implementation")).toBe(false);
     expect(workflowPresetStartsInDedicatedWorkspace("wayfinder")).toBe(false);

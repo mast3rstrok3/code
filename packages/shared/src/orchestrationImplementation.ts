@@ -14,11 +14,9 @@ export function workflowPresetStartsInDedicatedWorkspace(
 ): boolean {
   return (
     preset === "planning" ||
-    preset === "fast-engineering" ||
     preset === "product-planning" ||
     preset === "full-feature" ||
     preset === "fast-feature" ||
-    preset === "quick-plan" ||
     preset === "fast-plan"
   );
 }

@@ -6,8 +6,26 @@
     "role": "planning-thread",
     "stage": "planning",
     "title": "Planning",
-    "description": "Plans ordered Build workstreams and App Review lanes for one stage thread.",
+    "description": "Plans a Feature that the same thread implements, checks, and publishes.",
     "file": "workflows/planning.fast-feature.codex.md",
+    "associatedDocs": [
+      {
+        "id": "app-dev-stack",
+        "title": "AppStack",
+        "path": "app-dev-stack.md",
+        "file": "documents/app-dev-stack.md"
+      }
+    ]
+  },
+  {
+    "id": "implementation.feature.codex",
+    "order": 2,
+    "workflow": "implementation",
+    "role": "implementation-worker",
+    "stage": "feature-implementation",
+    "title": "Feature Implementation",
+    "description": "Implements the accepted plan in the planning thread, runs the repository gate, and opens the pull request.",
+    "file": "workflows/implementation.feature.codex.md",
     "associatedDocs": [
       {
         "id": "app-dev-stack",

@@ -2052,7 +2052,6 @@ const make = Effect.gen(function* () {
     );
     const productWorkflowOwnsBrowserReview =
       (input.thread.workflowPreset === "fast-feature" ||
-        input.thread.workflowPreset === "quick-plan" ||
         input.thread.workflowPreset === "fast-plan" ||
         input.thread.workflowPreset === "full-feature") &&
       (productWorkflowRuns.length === 0 ||
@@ -2126,7 +2125,7 @@ const make = Effect.gen(function* () {
             productWorkflowOwnsBrowserReview
           ) {
             yield* reject(
-              `The selected ${input.thread.workflowPreset === "quick-plan" ? "Quick Feature" : input.thread.workflowPreset === "fast-plan" ? "Feature" : input.thread.workflowPreset === "fast-feature" ? "Fast Feature" : "Full Feature"} workflow owns its planning, build, review, and publication sequence. Continue or recover that workflow instead of launching an ad hoc Browser App Review child.`,
+              `The selected ${input.thread.workflowPreset === "fast-plan" ? "Feature" : input.thread.workflowPreset === "fast-feature" ? "Fast Feature" : "Full Feature"} workflow owns its planning, build, review, and publication sequence. Continue or recover that workflow instead of launching an ad hoc Browser App Review child.`,
             );
             return;
           }
