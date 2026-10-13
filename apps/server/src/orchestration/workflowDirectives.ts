@@ -230,7 +230,7 @@ export type WorkflowDirectiveParseResult =
  * one at a time. An opener with no closing fence is ignored, matching the lazy-regex behavior
  * this replaces.
  */
-function extractJsonFenceBlocks(markdown: string): ReadonlyArray<string> {
+export function extractJsonFenceBlocks(markdown: string): ReadonlyArray<string> {
   const blocks: string[] = [];
   const opener = /```json\s*/gi;
   for (let open = opener.exec(markdown); open !== null; open = opener.exec(markdown)) {

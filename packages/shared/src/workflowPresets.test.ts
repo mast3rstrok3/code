@@ -6,6 +6,7 @@ import {
   interactionModeForWorkflowPreset,
   WORKFLOW_PRESET_DEFINITIONS,
   WORKFLOW_PRESET_DEFINITION_BY_ID,
+  workflowPresetStepCanPinModel,
   workflowPromptIdForPreset,
 } from "./workflowPresets.js";
 
@@ -73,11 +74,27 @@ describe("workflow presets", () => {
     ).toContain("up to five cycles");
   });
 
-  it("plans, implements, and publishes Feature in one thread", () => {
+  it("plans, implements, reviews, and publishes Feature from one thread", () => {
     const steps = WORKFLOW_PRESET_DEFINITION_BY_ID["fast-plan"].helpSteps;
-    expect(steps.map((step) => step.label)).toEqual(["Plan", "Implement", "Checks & PR"]);
-    expect(steps.every((step) => step.threadBoundary !== "new child thread")).toBe(true);
-    expect(steps.every((step) => step.threadBoundary !== "new review thread")).toBe(true);
+    expect(steps.map((step) => step.label)).toEqual([
+      "Plan",
+      "Implement",
+      "Code Review",
+      "Create PR",
+    ]);
+    expect(steps.map((step) => step.threadBoundary)).toEqual([
+      "same thread",
+      "same thread",
+      "new review thread",
+      "same thread",
+    ]);
+    // Only the reviewer runs in a thread of its own, so only it takes a model pin.
+    expect(steps.map((step) => workflowPresetStepCanPinModel("fast-plan", step))).toEqual([
+      false,
+      false,
+      true,
+      false,
+    ]);
   });
 
   it("shows the eleven Engineering Workflow phases in order", () => {

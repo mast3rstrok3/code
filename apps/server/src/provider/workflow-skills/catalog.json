@@ -24,7 +24,7 @@
     "role": "implementation-worker",
     "stage": "feature-implementation",
     "title": "Feature Implementation",
-    "description": "Implements the accepted plan in the planning thread, runs the repository gate, and opens the pull request.",
+    "description": "Implements the accepted plan in the planning thread, runs the repository's checks, and commits.",
     "file": "workflows/implementation.feature.codex.md",
     "associatedDocs": [
       {
@@ -34,6 +34,16 @@
         "file": "documents/app-dev-stack.md"
       }
     ]
+  },
+  {
+    "id": "implementation.feature-pull-request.codex",
+    "order": 3,
+    "workflow": "implementation",
+    "role": "implementation-worker",
+    "stage": "feature-pull-request",
+    "title": "Feature Pull Request",
+    "description": "Opens the Feature's pull request after Code Review and links it to the thread.",
+    "file": "workflows/implementation.feature-pull-request.codex.md"
   },
   {
     "id": "matt-pocock.ask-matt",

@@ -14,5 +14,5 @@ List the changes in the order this thread will make them. For each step include 
 
 Name the gate the repository's `AGENTS.md` (or `CLAUDE.md`) requires before a pull request, and any flow that needs a running app. A running app means starting the App Stack for this worktree; plan it only for a check that cannot pass without one. Do not plan a competing dev server or a second stack.
 
-Once the plan is proposed, this same thread implements it, runs the checks, and opens the pull request without stopping. Do not ask for implementation approval in the final response; finish with the native CLI Plan-mode proposed plan handoff.
+Once the plan is proposed, this same thread implements it and runs the checks, Code Review cycles check the result, and this thread opens the pull request, all without stopping. Do not ask for implementation approval in the final response; finish with the native CLI Plan-mode proposed plan handoff.
 </collaboration_mode>

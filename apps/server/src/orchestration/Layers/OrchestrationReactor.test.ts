@@ -8,6 +8,7 @@ import { ImplementationWorkflowReactor } from "../Services/ImplementationWorkflo
 import { AppReviewWorkflowReactor } from "../Services/AppReviewWorkflowReactor.ts";
 import { PreviewLifecycleReactor } from "../Services/PreviewLifecycleReactor.ts";
 import { AppStackLifecycleReactor } from "../AppStackLifecycleReactor.ts";
+import { FeatureWorkflowReactor } from "../FeatureWorkflowReactor.ts";
 
 it.effect(
   "starts the native bridge before workflow recovery and drains workflow effects before shutdown",
@@ -47,6 +48,11 @@ it.effect(
           start: () => record("app-stack:start"),
           drain: record("app-stack:drain"),
         }),
+        Layer.succeed(FeatureWorkflowReactor, {
+          start: () => record("feature:start"),
+          evaluate: () => Effect.void,
+          drain: record("feature:drain"),
+        }),
       );
       yield* Effect.gen(function* () {
         const reactor = yield* makeOrchestrationReactor;
@@ -61,6 +67,7 @@ it.effect(
         "app-review:start",
         "preview:start",
         "app-stack:start",
+        "feature:start",
         "app-review:recover",
         "app-review:flush",
         "implementation:recover",
@@ -73,6 +80,7 @@ it.effect(
         "product:flush",
         "native:drain",
         "app-stack:drain",
+        "feature:drain",
       ]);
     }),
 );

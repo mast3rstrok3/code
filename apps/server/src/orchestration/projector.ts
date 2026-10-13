@@ -1052,6 +1052,9 @@ export function projectEvent(
               ...(payload.workflowImplementationSettings == null
                 ? {}
                 : { workflowImplementationSettings: payload.workflowImplementationSettings }),
+              ...(payload.workflowContext !== undefined && thread.workflowContext == null
+                ? { workflowContext: payload.workflowContext }
+                : {}),
               updatedAt: payload.updatedAt,
             };
           }),

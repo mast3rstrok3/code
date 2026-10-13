@@ -147,6 +147,33 @@ describe("workflow commands on the native runtime", () => {
     expect(workflowControlCommands(event, projection, "Implement TICKET-1")).toEqual(commands);
   });
 
+  it("carries a Feature root's workflow identity to the native thread", () => {
+    const event = decodeLegacy({
+      ...legacyBase,
+      type: "thread.composer-mode-set",
+      payload: {
+        threadId: "thread",
+        interactionMode: "plan",
+        workflowPreset: "fast-plan",
+        workflowContext: {
+          workflowId: "workflow-thread",
+          parentWorkflowId: null,
+          rootThreadId: "thread",
+          ticketScope: [],
+        },
+        updatedAt: at,
+      },
+    });
+    expect(workflowControlCommands(event, projection)).toMatchObject([
+      { type: "thread.interaction-mode.set", interactionMode: "plan" },
+      {
+        type: "thread.metadata.update",
+        workflowPreset: "fast-plan",
+        workflowContext: { workflowId: "workflow-thread", rootThreadId: "thread" },
+      },
+    ]);
+  });
+
   it("does not echo observed native commands back into the runtime", () => {
     const event = decodeLegacy({
       ...legacyBase,

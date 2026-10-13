@@ -222,10 +222,24 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.deepEqual(featureImplementation?.workflowIds, ["fast-plan"]);
     NodeAssert.match(featureImplementation?.promptText ?? "", /app_stack_start/);
     NodeAssert.match(featureImplementation?.promptText ?? "", /AGENTS\.md/);
-    NodeAssert.match(featureImplementation?.promptText ?? "", /link_pull_request/);
     NodeAssert.match(
       featureImplementation?.promptText ?? "",
-      /Do not run an App Review, a separate code-review pass, or pull-request babysitting/,
+      /Do not push and do not open a pull request/,
+    );
+    const featurePullRequest = catalog.skills.find(
+      (skill) => skill.id === WORKFLOW_PROMPT_IDS.implementationFeaturePullRequestCodex,
+    );
+    NodeAssert.deepEqual(featurePullRequest?.workflowIds, ["fast-plan"]);
+    NodeAssert.match(featurePullRequest?.promptText ?? "", /link_pull_request/);
+    NodeAssert.match(featurePullRequest?.promptText ?? "", /unresolved Code Review findings/);
+    NodeAssert.match(
+      featurePullRequest?.promptText ?? "",
+      /Do not run an App Review or babysit the pull request/,
+    );
+    NodeAssert.ok(
+      catalog.skills
+        .find((skill) => skill.id === "matt-pocock.code-review")
+        ?.workflowIds.includes("fast-plan"),
     );
     const engineeringWorkflow = catalog.workflows.find((workflow) => workflow.id === "planning");
     NodeAssert.equal(engineeringWorkflow?.title, "Engineering");

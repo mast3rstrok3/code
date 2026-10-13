@@ -2918,8 +2918,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.composer-mode.set": {
-      yield* requireThread({ readModel, command, threadId: command.threadId });
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
       const occurredAt = yield* nowIso;
+      // A Feature root owns the App Stacks its turns start; the workflow id is what tags
+      // them for teardown once its pull request is linked.
+      const workflowContext =
+        command.workflowPreset === "fast-plan" &&
+        thread.workflowRole === null &&
+        thread.workflowContext == null
+          ? {
+              workflowId: WorkflowId.make(`workflow-${thread.id}`),
+              parentWorkflowId: null,
+              rootThreadId: thread.id,
+              ticketScope: [],
+            }
+          : undefined;
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -2935,6 +2948,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.workflowImplementationSettings !== undefined
             ? { workflowImplementationSettings: command.workflowImplementationSettings }
             : {}),
+          ...(workflowContext === undefined ? {} : { workflowContext }),
           updatedAt: occurredAt,
         },
       };

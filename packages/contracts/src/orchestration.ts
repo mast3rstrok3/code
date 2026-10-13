@@ -3845,6 +3845,8 @@ export const ThreadComposerModeSetPayload = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   workflowPreset: Schema.NullOr(WorkflowPreset),
   workflowImplementationSettings: Schema.optionalKey(Schema.NullOr(ImplementationWorkflowSettings)),
+  /** Stamps a workflow identity on a thread that becomes a Feature root, so its App Stacks are tagged. */
+  workflowContext: Schema.optional(ThreadWorkflowContext),
   updatedAt: IsoDateTime,
 });
 

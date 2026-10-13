@@ -10,6 +10,7 @@ import { ProductWorkflowReactor } from "../Services/ProductWorkflowReactor.ts";
 import { PreviewLifecycleReactor } from "../Services/PreviewLifecycleReactor.ts";
 import { WorkflowRuntimeBridge } from "../WorkflowRuntimeBridge.ts";
 import { AppStackLifecycleReactor } from "../AppStackLifecycleReactor.ts";
+import { FeatureWorkflowReactor } from "../FeatureWorkflowReactor.ts";
 
 export const makeOrchestrationReactor = Effect.gen(function* () {
   const bridge = yield* WorkflowRuntimeBridge;
@@ -18,6 +19,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const appReview = yield* AppReviewWorkflowReactor;
   const preview = yield* PreviewLifecycleReactor;
   const appStacks = yield* AppStackLifecycleReactor;
+  const feature = yield* FeatureWorkflowReactor;
   const reconcilePendingProviderCommands = Effect.gen(function* () {
     yield* appReview.reconcile();
     yield* appReview.flush ?? appReview.drain;
@@ -36,6 +38,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
         yield* appReview.start();
         yield* preview.start();
         yield* appStacks.start();
+        yield* feature.start();
       }),
     drainPendingProviderCommands: bridge.drain,
     reconcilePendingProviderCommands,
@@ -45,6 +48,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
       yield* product.flush ?? product.drain;
       yield* bridge.drain;
       yield* appStacks.drain;
+      yield* feature.drain;
     }),
   } satisfies OrchestrationReactorShape;
 });

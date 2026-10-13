@@ -88,11 +88,19 @@ const FEATURE_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
     label: "Implement",
     skillId: "implementation.feature.codex",
     threadBoundary: "same thread",
-    note: "starts an App Stack only when verification needs a running app",
+    note: "runs the repository's checks and commits; starts an App Stack only when a check needs a running app",
   },
   {
-    label: "Checks & PR",
-    note: "runs the repository's gate, then opens the pull request into the base branch",
+    label: "Code Review",
+    skillId: "implementation.code-review.codex",
+    threadBoundary: "new review thread",
+    note: "one reviewer thread per cycle; the Feature thread fixes its findings; stops clean or after five cycles by default",
+  },
+  {
+    label: "Create PR",
+    skillId: "implementation.feature-pull-request.codex",
+    threadBoundary: "same thread",
+    note: "opens the pull request into the base branch and lists findings Code Review left unresolved",
   },
 ];
 
@@ -160,7 +168,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     id: "fast-plan",
     label: "Feature",
     description:
-      "Plan with the provider CLI, then implement, check, and open a pull request in the same thread.",
+      "Plan with the provider CLI, implement and review the change, then open a pull request from the same thread.",
     route: "product",
     interactionMode: "plan",
     workflowPromptId: "planning.fast-feature.codex",

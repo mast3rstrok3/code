@@ -41,6 +41,7 @@ export const WORKFLOW_PROMPT_IDS = {
   planningResearchCodex: "planning.research.codex",
   planningFastFeatureCodex: "planning.fast-feature.codex",
   implementationFeatureCodex: "implementation.feature.codex",
+  implementationFeaturePullRequestCodex: "implementation.feature-pull-request.codex",
 } as const;
 
 const CATALOG_SKILL_ID_BY_PROMPT_ID: Readonly<Record<string, string>> = {
@@ -98,6 +99,7 @@ const VISIBLE_T3_SKILL_IDS = new Set<string>([
   WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex,
   WORKFLOW_PROMPT_IDS.planningFastFeatureCodex,
   WORKFLOW_PROMPT_IDS.implementationFeatureCodex,
+  WORKFLOW_PROMPT_IDS.implementationFeaturePullRequestCodex,
   WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
   WORKFLOW_PROMPT_IDS.productPlanningCodex,
   WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,

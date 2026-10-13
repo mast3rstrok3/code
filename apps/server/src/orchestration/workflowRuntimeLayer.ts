@@ -7,6 +7,7 @@ import { AppReviewWorkflowReactorLive } from "./Layers/AppReviewWorkflowReactor.
 import { ProductWorkflowReactorLive } from "./Layers/ProductWorkflowReactor.ts";
 import { PreviewLifecycleReactorLive } from "./Layers/PreviewLifecycleReactor.ts";
 import * as AppStackLifecycleReactor from "./AppStackLifecycleReactor.ts";
+import * as FeatureWorkflowReactor from "./FeatureWorkflowReactor.ts";
 import * as WorkflowRuntimeBridge from "./WorkflowRuntimeBridge.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -26,6 +27,7 @@ export const layer = OrchestrationReactorLive.pipe(
       ProductWorkflowReactorLive,
       PreviewLifecycleReactorLive,
       AppStackLifecycleReactor.layer,
+      FeatureWorkflowReactor.layer,
     ),
   ),
   Layer.provideMerge(OrchestrationLayerLive),

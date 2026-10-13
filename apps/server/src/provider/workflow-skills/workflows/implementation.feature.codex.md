@@ -10,12 +10,8 @@ Make the planned changes in the order the plan lists them, with focused tests fo
 
 Start an App Stack with `app_stack_start` only when a check cannot pass without a running app, such as a browser flow the plan names. Code-only changes need no stack. Do not start a competing development server. Stop the stack with `app_stack_stop` when you no longer need it.
 
-## Checks
+## Checks and commit
 
-Run the gate the repository's `AGENTS.md` (or `CLAUDE.md`) names for a pull request into the base branch, plus the focused tests for the change. Fix every failure the gate reports, including failures outside the change, and run it again until it passes. If the gate cannot pass for a reason you cannot fix, stop and explain why in the final summary instead of opening the pull request.
+Run the checks the repository's `AGENTS.md` (or `CLAUDE.md`) requires before a pull request, plus the focused tests for the change. Fix every failure they report, including failures outside the change, and run them again until they pass. Commit the work with a conventional title and leave the worktree clean.
 
-## Pull request
-
-Commit the work with a conventional title. Push the branch and open a pull request into the branch this worktree started from, following the repository's pull-request rules (title format, body, linked issues, and any skill or template its `AGENTS.md` names). Then call `link_pull_request` with the full pull-request URL so T3 Code records it on this thread. Linking the pull request ends the workflow: T3 Code stops this workflow's App Stacks and settles the thread.
-
-Do not run an App Review, a separate code-review pass, or pull-request babysitting. Finish with a short summary of what changed, the checks that passed, and the pull-request URL.
+Do not push and do not open a pull request. Code Review cycles run next in their own threads; this thread fixes what they find, then opens the pull request. Finish with a short summary of what changed and the checks that passed.
