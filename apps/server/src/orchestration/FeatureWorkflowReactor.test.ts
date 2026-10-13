@@ -53,6 +53,7 @@ interface FakeWorld {
   completedActivities: ReadonlyArray<unknown>;
   /** Final reviewer message by reviewer thread id; present threads have a completed run. */
   reviews?: Record<string, string>;
+  withoutWorkflowContext?: boolean;
 }
 
 const featureThread = (world: FakeWorld) => ({
@@ -66,12 +67,14 @@ const featureThread = (world: FakeWorld) => ({
   worktreePath: "/repo.worktrees/fast-checkout",
   workflowPreset: "fast-plan",
   workflowRole: null,
-  workflowContext: {
-    workflowId: `workflow-${threadId}`,
-    parentWorkflowId: null,
-    rootThreadId: threadId,
-    ticketScope: [],
-  },
+  workflowContext: world.withoutWorkflowContext
+    ? null
+    : {
+        workflowId: `workflow-${threadId}`,
+        parentWorkflowId: null,
+        rootThreadId: threadId,
+        ticketScope: [],
+      },
   pullRequests: world.pullRequests,
   archivedAt: null,
   deletedAt: null,
@@ -234,6 +237,21 @@ describe("FeatureWorkflowReactor", () => {
       world.runs = [planningRun, { ...implementRun, status: "running" }];
       yield* system.evaluate;
       assert.strictEqual(system.nativeCommands.length, 3);
+    }).pipe(Effect.provide(system.layer));
+  });
+
+  it.effect("leaves Feature threads from before the workflow id alone", () => {
+    const world: FakeWorld = {
+      interactionMode: "plan",
+      runs: [planningRun],
+      pullRequests: [],
+      completedActivities: [],
+      withoutWorkflowContext: true,
+    };
+    const system = makeSystem(world);
+    return Effect.gen(function* () {
+      yield* system.evaluate;
+      assert.deepStrictEqual(system.nativeCommands, []);
     }).pipe(Effect.provide(system.layer));
   });
 

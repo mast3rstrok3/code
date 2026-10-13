@@ -102,13 +102,20 @@ export const make = Effect.gen(function* () {
   const dispatch = (command: OrchestrationV2ServerCommand) =>
     native.dispatch(command).pipe(Effect.asVoid);
 
+  /**
+   * A Feature root this reactor drives. The workflow id is stamped when the preset is chosen,
+   * so Feature threads from before this reactor existed, which have none, are left alone
+   * instead of suddenly implementing or publishing an old plan.
+   */
   const isFeatureRoot = (thread: {
     readonly workflowPreset?: string | null | undefined;
     readonly workflowRole?: string | null | undefined;
+    readonly workflowContext?: unknown;
     readonly archivedAt: unknown;
   }) =>
     thread.workflowPreset === "fast-plan" &&
     (thread.workflowRole ?? null) === null &&
+    thread.workflowContext != null &&
     thread.archivedAt === null;
 
   const readReviews = Effect.fn("FeatureWorkflowReactor.readReviews")(function* (
