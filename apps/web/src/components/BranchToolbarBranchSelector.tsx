@@ -16,6 +16,8 @@ import {
   type VcsRef,
   type ThreadId,
 } from "@t3tools/contracts";
+import { findDevelopmentBranchRef, resolveWorktreeBaseBranch } from "@t3tools/shared/git";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { ChevronDownIcon, GitBranchIcon } from "lucide-react";
 import {
   useCallback,
@@ -31,6 +33,7 @@ import {
 } from "react";
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
+import { useEnvironmentSettings } from "../hooks/useSettings";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { readLocalApi } from "../localApi";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
@@ -531,15 +534,28 @@ export function BranchToolbarBranchSelector({
     });
   };
 
-  // Default the worktree base to the repo default branch (origin/HEAD), only
-  // falling back to the checked-out branch when no default is known.
-  const defaultBranchName = useMemo(
-    () => refs.find((refName) => refName.isDefault)?.name ?? null,
-    [refs],
+  // Default the worktree base to the project's development branch: its
+  // configured branch, else dev, else the repo default (origin/HEAD). Only
+  // fall back to the checked-out branch when none of them is known.
+  const environmentSettings = useEnvironmentSettings(environmentId);
+  const configuredWorktreeBaseBranch = useMemo(
+    () =>
+      resolveProjectSettings(environmentSettings, activeProject?.id ?? null, activeProject).settings
+        .worktreeBaseBranch,
+    [activeProject, environmentSettings],
+  );
+  const developmentBranchName = useMemo(
+    () =>
+      resolveWorktreeBaseBranch({
+        configured: configuredWorktreeBaseBranch,
+        developmentBranch: findDevelopmentBranchRef(refs),
+        defaultBranch: refs.find((refName) => refName.isDefault)?.name ?? null,
+      }),
+    [configuredWorktreeBaseBranch, refs],
   );
   const worktreeBaseBranchCandidate = isInitialBranchesLoadPending
     ? null
-    : (defaultBranchName ?? currentGitBranch);
+    : (developmentBranchName ?? currentGitBranch);
 
   useEffect(() => {
     if (

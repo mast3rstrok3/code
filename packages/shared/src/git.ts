@@ -116,6 +116,40 @@ export function deriveLocalBranchNameFromRemoteRef(branchName: string): string {
   return branchName.slice(firstSeparatorIndex + 1);
 }
 
+/** The branch new worktrees start from when a repository has one and the project names none. */
+export const DEVELOPMENT_BRANCH_NAME = "dev";
+
+/**
+ * The branch a new worktree starts from when the user or caller picks none:
+ * the project's `worktreeBaseBranch`, else the repository's development
+ * branch, else its default branch (origin/HEAD). Null when none is known.
+ */
+export function resolveWorktreeBaseBranch(input: {
+  readonly configured: string | null | undefined;
+  /** How the caller names the development branch it found (`dev` or `origin/dev`). */
+  readonly developmentBranch: string | null;
+  readonly defaultBranch: string | null;
+}): string | null {
+  const configured = input.configured?.trim();
+  if (configured) return configured;
+  return input.developmentBranch ?? input.defaultBranch;
+}
+
+/** The development branch among listed refs: the local branch first, else origin's. */
+export function findDevelopmentBranchRef(
+  refs: ReadonlyArray<Pick<VcsRef, "name" | "isRemote" | "remoteName">>,
+): string | null {
+  const local = refs.find((ref) => !ref.isRemote && ref.name === DEVELOPMENT_BRANCH_NAME);
+  if (local) return local.name;
+  const remote = refs.find(
+    (ref) =>
+      ref.isRemote === true &&
+      ref.remoteName === "origin" &&
+      ref.name === `origin/${DEVELOPMENT_BRANCH_NAME}`,
+  );
+  return remote?.name ?? null;
+}
+
 export function buildTemporaryWorktreeBranchName(
   randomHex: (byteLength: number) => string,
 ): string {

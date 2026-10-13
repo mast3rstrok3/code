@@ -23,6 +23,7 @@ import { describe } from "vite-plus/test";
 
 import { ServerConfig } from "../../config.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { GitVcsDriver } from "../../vcs/GitVcsDriver.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -210,6 +211,13 @@ function makeTestLayer(
         Layer.mock(GitWorkflowService)({
           resolveCommit: () => Effect.succeed({ commitSha: "abc123" }),
           remoteExists: () => Effect.succeed(false),
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(GitVcsDriver)({
+          listLocalBranchNames: () => Effect.succeed(["main", "dev"]),
+          remoteBranchExists: () => Effect.succeed(false),
+          resolveDefaultBranchName: () => Effect.succeed("main"),
         }),
       ),
       Layer.provide(serverSettingsLayerTest(serverSettings)),
@@ -781,6 +789,43 @@ describe("ProductWorkflowReactor", () => {
 
         const snapshot = yield* system.query.getSnapshot();
         expect(snapshot.implementationRuns.some((run) => run.specId === spec.id)).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("builds a branchless Engineering root on the project's development branch", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        // The checkout is detached, so the root has no branch; the git mock lists a local dev.
+        yield* seedProjectAndThread(system, {
+          interactionMode: "planning-workflow",
+          workflowPreset: "planning",
+          branch: null,
+        });
+        const spec = yield* seedProductSpecAndTickets(system, productThreadId);
+        const activeReview = (yield* system.query.getSnapshot()).threads.find(
+          (thread) => thread.id === productThreadId,
+        )?.planningWorkflow?.activeReview;
+        if (activeReview == null) throw new Error("Review was not active.");
+        yield* system.engine.dispatch({
+          type: "thread.planning-reviewer-verdict.apply",
+          commandId: commandId("branchless-planning-pass"),
+          threadId: productThreadId,
+          reviewerThreadId: activeReview.reviewerThreadId,
+          reviewerMessageId: messageId("branchless-planning-reviewer"),
+          cycleNumber: activeReview.cycleNumber,
+          mode: activeReview.mode,
+          targetPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
+          verdictMarkdown: "passed",
+          passed: true,
+          createdAt: "2026-01-01T00:00:10.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const run = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (candidate) => candidate.specId === spec.id,
+        );
+        expect(run?.baseBranch).toBe("dev");
       }),
     ),
   );

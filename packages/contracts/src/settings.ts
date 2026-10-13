@@ -1183,6 +1183,7 @@ export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
   "defaultRuntimeMode",
   "defaultThreadEnvMode",
   "newWorktreesStartFromOrigin",
+  "worktreeBaseBranch",
   "worktreeSubmodules",
   "defaultAutoPull",
   "defaultProjectScripts",
@@ -1214,6 +1215,7 @@ export const ProjectSettingsOverrides = Schema.Struct({
   defaultRuntimeMode: Schema.optionalKey(RuntimeMode),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
+  worktreeBaseBranch: Schema.optionalKey(TrimmedNonEmptyString),
   worktreeSubmodules: ForwardCompatibleOptional(WorktreeSubmodules),
   defaultAutoPull: Schema.optionalKey(Schema.Boolean),
   defaultProjectScripts: Schema.optionalKey(Schema.Array(ProjectScript)),
@@ -1408,6 +1410,12 @@ export const ServerSettings = Schema.Struct({
   newWorktreesStartFromOrigin: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
+  /**
+   * The branch new worktrees start from when nobody picks one. Null means the
+   * repository's `dev` branch when it has one, else its default branch.
+   * Null stays off the wire so older clients keep decoding.
+   */
+  worktreeBaseBranch: OmittedWhenNull(TrimmedNonEmptyString),
   /**
    * Null defers to the repository's t3.json, then to recursive. A value
    * picked on a newer server decodes as null here rather than failing the
@@ -1794,6 +1802,7 @@ export const ServerSettingsPatch = Schema.Struct({
   environmentIcon: Schema.optionalKey(Schema.NullOr(EnvironmentMachineKind)),
   defaultThreadEnvMode: Schema.optionalKey(Schema.NullOr(ThreadEnvMode)),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
+  worktreeBaseBranch: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   worktreeSubmodules: Schema.optionalKey(Schema.NullOr(WorktreeSubmodules)),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),

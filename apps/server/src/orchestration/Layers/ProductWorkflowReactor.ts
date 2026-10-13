@@ -41,6 +41,8 @@ import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 
 import { ServerConfig } from "../../config.ts";
+import { resolveProjectDevelopmentBranch } from "../../vcs/developmentBranch.ts";
+import { GitVcsDriver } from "../../vcs/GitVcsDriver.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import {
   repositoryValidationCommands,
@@ -246,6 +248,7 @@ const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService;
   const projectFileLoader = yield* T3ProjectFileLoader;
   const serverSettingsService = yield* ServerSettingsService;
+  const gitVcsDriver = yield* GitVcsDriver;
   const serverConfig = yield* ServerConfig;
   const path = yield* Path.Path;
 
@@ -457,7 +460,19 @@ const make = Effect.gen(function* () {
         ? resolveImplementationBranchIdentity({
             specId: spec.id,
             specTitle: spec.title,
-            baseBranch: context.productRootThread.branch ?? "main",
+            // A root on a detached checkout has no branch to build on: start from the
+            // project's development branch, and assume main only when it has none.
+            baseBranch:
+              context.productRootThread.branch ??
+              (yield* resolveProjectDevelopmentBranch({
+                git: gitVcsDriver,
+                settings: yield* serverSettingsService.getSettings.pipe(
+                  Effect.orElseSucceed(() => null),
+                ),
+                cwd: sourceCwd,
+                projectId: context.productRootThread.projectId,
+              }))?.branch ??
+              "main",
             workspaceRoot: sourceCwd,
             implementationRuns: (yield* projectionSnapshotQuery.getCommandReadModel())
               .implementationRuns,

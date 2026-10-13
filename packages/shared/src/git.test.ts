@@ -3,6 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   applyGitStatusStreamEvent,
+  findDevelopmentBranchRef,
+  resolveWorktreeBaseBranch,
   formatGeneratedBranchName,
   buildTemporaryWorktreeBranchName,
   flattenTemporaryWorktreeBranchName,
@@ -349,5 +351,40 @@ describe("formatGeneratedBranchName", () => {
         instructions: "",
       }),
     ).toBe(branch);
+  });
+});
+
+describe("resolveWorktreeBaseBranch", () => {
+  it("prefers the project's branch, then the development branch, then the default", () => {
+    expect(
+      resolveWorktreeBaseBranch({
+        configured: " release ",
+        developmentBranch: "dev",
+        defaultBranch: "main",
+      }),
+    ).toBe("release");
+    expect(
+      resolveWorktreeBaseBranch({
+        configured: null,
+        developmentBranch: "dev",
+        defaultBranch: "main",
+      }),
+    ).toBe("dev");
+    expect(
+      resolveWorktreeBaseBranch({ configured: "", developmentBranch: null, defaultBranch: "main" }),
+    ).toBe("main");
+    expect(
+      resolveWorktreeBaseBranch({ configured: null, developmentBranch: null, defaultBranch: null }),
+    ).toBeNull();
+  });
+
+  it("finds a local dev before origin's, and ignores other remotes and look-alikes", () => {
+    const ref = (name: string, remoteName?: string) =>
+      remoteName === undefined ? { name } : { name, isRemote: true, remoteName };
+    expect(findDevelopmentBranchRef([ref("origin/dev", "origin"), ref("dev")])).toBe("dev");
+    expect(findDevelopmentBranchRef([ref("main"), ref("origin/dev", "origin")])).toBe("origin/dev");
+    expect(
+      findDevelopmentBranchRef([ref("upstream/dev", "upstream"), ref("dev-tools"), ref("devel")]),
+    ).toBeNull();
   });
 });
