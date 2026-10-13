@@ -128,9 +128,10 @@ After integration confirms that the ticket commit is in the combined branch, T3 
 worktree if Git reports the expected branch, accepted commit, and no working tree changes. A dirty,
 divergent, or unmerged worktree stays on disk for manual inspection.
 
-When the workflow succeeds, it protects and keeps the main shared App Stack running, then tiers
-down every other stack the workflow created. The run reports what it stopped in its activity log.
-Stacks you started yourself are untouched, since no workflow owns them.
+When an Engineering run completes, or a Feature links its pull request, T3 Code stops every
+unprotected stack the workflow started and lists what it stopped in the thread's activity log.
+Protected stacks keep running. Stacks you started yourself are untouched, since no workflow owns
+them.
 
 Expand a stack card and choose **Protect** to keep it out of general workflow teardown. A protected
 stack shows a **Protected** badge and is the last one the environment stops when the host runs low

@@ -329,6 +329,13 @@ its own under the environment's Scratch project. For stacked PRs, use the parent
 interaction modes than the caller. Launch has no retry key, so inspect existing threads after a failed or lost response before
 launching again. `create_threads` remains the batch option for a shared checkout.
 
+`workflowPreset: "feature"` or `"engineering"` starts the thread as that
+workflow's root, in its planning mode and with its planning prompt, the same way
+the composer starts it. It needs `message` and ignores `interactionMode`. A
+workflow later switches itself to the default mode and full access, so the
+caller's limits must allow both. Without `workspaceStrategy` the thread gets a
+new worktree from the project's development branch.
+
 ### `t3_thread_list`
 
 Lists durable thread shells in one project, newest first: `projectId` when

@@ -50,7 +50,7 @@ Workflows are the server-orchestrated automation paths that chain planning and i
 
 #### Workflow (preset)
 
-One Engineering workflow configuration defined in [workflowPresets.ts][25]. Quick Feature and Feature use native CLI planning followed by Build. Quick Engineering and Engineering use the Spec-and-tickets planning flow followed by Implementation. Wayfinder is visible but disabled while its alternate planning phase is under development. A variant supplies run-local defaults that the user can change before launch. Earlier preset identities remain decodable for historical runs; App Review is launched as a nested or panel-owned run.
+One Engineering workflow configuration defined in [workflowPresets.ts][25]. Feature plans with native CLI planning, then implements, runs Code Review cycles and opens a pull request in the same thread. Engineering uses the Spec-and-tickets planning flow followed by Implementation. Wayfinder is visible but disabled while its alternate planning phase is under development. A variant supplies run-local defaults that the user can change before launch. Earlier preset identities remain decodable for historical runs; App Review is launched as a nested or panel-owned run.
 
 #### Workflow ID
 

@@ -52,6 +52,14 @@ to override its environment defaults. Worktree directories keep their original n
 If generation fails, or a custom name is invalid or already taken, the temporary
 branch name remains.
 
+## Development branch
+
+New worktrees start from the project's development branch unless you pick another base in the
+branch picker. Set it in **Settings → General → Projects & threads → Development branch**, usually
+for one project. Left empty, it is `dev` when the repository has a `dev` branch locally or on
+origin, and the repository's default branch otherwise. Feature workflows and agent-launched
+workflows start from the same branch.
+
 ## Scheduled tasks on mobile
 
 Open **Settings → Scheduled tasks** to create recurring tasks or manage existing
