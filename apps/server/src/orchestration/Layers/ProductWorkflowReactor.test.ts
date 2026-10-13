@@ -23,6 +23,7 @@ import { describe } from "vite-plus/test";
 
 import { ServerConfig } from "../../config.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { GitVcsDriver } from "../../vcs/GitVcsDriver.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -32,10 +33,7 @@ import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
-import {
-  ProductWorkflowReactorLive,
-  resolvePlanQuestionAnswers,
-} from "./ProductWorkflowReactor.ts";
+import { ProductWorkflowReactorLive } from "./ProductWorkflowReactor.ts";
 import { layerTest as serverSettingsLayerTest } from "../../serverSettings.ts";
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
@@ -56,47 +54,6 @@ const now = "2026-01-01T00:00:00.000Z";
 const projectId = ProjectId.make("project-product-reactor");
 const productThreadId = ThreadId.make("thread-product-reactor");
 const planningThreadId = ThreadId.make("thread-planning-reactor");
-
-describe("resolvePlanQuestionAnswers", () => {
-  it("uses a valid recommendation, then the first option, then the free-form fallback", () => {
-    expect(
-      resolvePlanQuestionAnswers({
-        questions: [
-          {
-            id: "approach",
-            options: [{ label: "Small" }, { label: "Complete" }],
-            recommendation: { optionLabel: "Complete" },
-          },
-          {
-            id: "tests",
-            options: [{ label: "Focused" }, { label: "Broad" }],
-          },
-          { id: "unknown", options: [] },
-        ],
-      }),
-    ).toEqual({
-      approach: "Complete",
-      tests: "Focused",
-      unknown: "Use your best judgment and continue.",
-    });
-  });
-
-  it("ignores malformed questions and invalid recommendations", () => {
-    expect(
-      resolvePlanQuestionAnswers({
-        questions: [
-          null,
-          { options: [{ label: "Missing id" }] },
-          {
-            id: "approach",
-            options: [{ label: "Safe" }],
-            recommendation: { optionLabel: "Unavailable" },
-          },
-        ],
-      }),
-    ).toEqual({ approach: "Safe" });
-  });
-});
 
 interface ProductSystem {
   readonly engine: OrchestrationEngineShape;
@@ -210,6 +167,13 @@ function makeTestLayer(
         Layer.mock(GitWorkflowService)({
           resolveCommit: () => Effect.succeed({ commitSha: "abc123" }),
           remoteExists: () => Effect.succeed(false),
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(GitVcsDriver)({
+          listLocalBranchNames: () => Effect.succeed(["main", "dev"]),
+          remoteBranchExists: () => Effect.succeed(false),
+          resolveDefaultBranchName: () => Effect.succeed("main"),
         }),
       ),
       Layer.provide(serverSettingsLayerTest(serverSettings)),
@@ -781,6 +745,43 @@ describe("ProductWorkflowReactor", () => {
 
         const snapshot = yield* system.query.getSnapshot();
         expect(snapshot.implementationRuns.some((run) => run.specId === spec.id)).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("builds a branchless Engineering root on the project's development branch", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        // The checkout is detached, so the root has no branch; the git mock lists a local dev.
+        yield* seedProjectAndThread(system, {
+          interactionMode: "planning-workflow",
+          workflowPreset: "planning",
+          branch: null,
+        });
+        const spec = yield* seedProductSpecAndTickets(system, productThreadId);
+        const activeReview = (yield* system.query.getSnapshot()).threads.find(
+          (thread) => thread.id === productThreadId,
+        )?.planningWorkflow?.activeReview;
+        if (activeReview == null) throw new Error("Review was not active.");
+        yield* system.engine.dispatch({
+          type: "thread.planning-reviewer-verdict.apply",
+          commandId: commandId("branchless-planning-pass"),
+          threadId: productThreadId,
+          reviewerThreadId: activeReview.reviewerThreadId,
+          reviewerMessageId: messageId("branchless-planning-reviewer"),
+          cycleNumber: activeReview.cycleNumber,
+          mode: activeReview.mode,
+          targetPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
+          verdictMarkdown: "passed",
+          passed: true,
+          createdAt: "2026-01-01T00:00:10.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const run = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (candidate) => candidate.specId === spec.id,
+        );
+        expect(run?.baseBranch).toBe("dev");
       }),
     ),
   );
@@ -1865,113 +1866,6 @@ describe("ProductWorkflowReactor", () => {
           expect(implementers[0]?.messages.at(-1)?.text).toContain("# Fix checkout");
         }),
       { startReactor: false },
-    ),
-  );
-
-  it.effect("launches Fast Build on the renamed shared workflow branch", () =>
-    withSystem(
-      (system) =>
-        Effect.gen(function* () {
-          yield* seedProjectAndThread(system, {
-            workflowPreset: "fast-feature",
-            branch: "t3code/fast-feature",
-            worktreePath: "/tmp/product-reactor.worktrees/fast-feature",
-          });
-          yield* prepareWorkflowWorkspace(system, {
-            baseBranch: "main",
-            branch: "t3code/1234abcd",
-            worktreePath: "/tmp/product-reactor.worktrees/fast-feature",
-          });
-          yield* system.engine.dispatch({
-            type: "thread.activity.append",
-            commandId: commandId("fast-intent-locked"),
-            threadId: productThreadId,
-            activity: {
-              id: eventId("fast-intent-locked"),
-              tone: "info",
-              kind: "product-intent-locked",
-              summary: "Fast checkout",
-              payload: {
-                title: "Fast checkout",
-                summaryMarkdown: "Locked Fast feature.",
-                intentKind: "feature",
-              },
-              turnId: null,
-              createdAt: now,
-            },
-            createdAt: now,
-          });
-          yield* system.reactor.drain;
-          yield* upsertProposedPlan(system, { planId: "plan-fast" });
-          yield* system.reactor.drain;
-          yield* upsertProposedPlan(system, { planId: "plan-fast", suffix: "-again" });
-          yield* system.reactor.drain;
-
-          const snapshot = yield* system.query.getSnapshot();
-          const root = snapshot.threads.find((thread) => thread.id === productThreadId);
-          const runs = snapshot.implementationRuns.filter(
-            (run) => run.artifactSource === "proposed-plan",
-          );
-          expect(root?.interactionMode).toBe("plan");
-          expect(root?.workflowPreset).toBe("fast-feature");
-          expect(runs).toHaveLength(1);
-          expect(runs[0]?.launchSummary.validationCommands).toEqual(["pnpm check:full"]);
-          expect(runs[0]).toMatchObject({
-            specId: null,
-            pinnedCommit: "abc123",
-            baseBranch: "main",
-            sourceProposedPlan: { threadId: productThreadId, planId: "plan-fast" },
-          });
-          expect(runs[0]?.orchestratorBranch).toBe("t3code/fast-feature");
-          expect(runs[0]?.orchestratorWorktreePath).toBe(
-            "/tmp/product-reactor.worktrees/fast-feature",
-          );
-          const implementers = snapshot.threads.filter(
-            (thread) => thread.workflowRole === "fast-feature-implementer",
-          );
-          expect(implementers).toHaveLength(1);
-          expect(implementers[0]?.parentThreadId).toBe(productThreadId);
-          expect(implementers[0]?.interactionMode).toBe("default");
-          expect(implementers[0]?.workflowPreset).toBe("fast-feature");
-        }),
-      { validationCommands: ["pnpm check:full"] },
-    ),
-  );
-
-  it.effect("holds Fast Build until the workflow branch rename is authoritative", () =>
-    withSystem(
-      (system) =>
-        Effect.gen(function* () {
-          yield* seedProjectAndThread(system, {
-            workflowPreset: "fast-feature",
-            branch: "t3code/1234abcd",
-            worktreePath: "/tmp/product-reactor.worktrees/fast-feature",
-          });
-          yield* prepareWorkflowWorkspace(system, {
-            baseBranch: "main",
-            branch: "t3code/1234abcd",
-            worktreePath: "/tmp/product-reactor.worktrees/fast-feature",
-          });
-          yield* upsertProposedPlan(system, { planId: "plan-fast-rename" });
-          yield* system.reactor.drain;
-          expect((yield* system.query.getSnapshot()).implementationRuns).toHaveLength(0);
-
-          yield* system.engine.dispatch({
-            type: "thread.meta.update",
-            commandId: commandId("fast-workspace-renamed"),
-            threadId: productThreadId,
-            branch: "t3code/fast-feature",
-          });
-          yield* system.reactor.drain;
-
-          const runs = (yield* system.query.getSnapshot()).implementationRuns;
-          expect(runs).toHaveLength(1);
-          expect(runs[0]?.orchestratorBranch).toBe("t3code/fast-feature");
-          expect(runs[0]?.orchestratorWorktreePath).toBe(
-            "/tmp/product-reactor.worktrees/fast-feature",
-          );
-        }),
-      { validationCommands: ["pnpm check:full"] },
     ),
   );
 

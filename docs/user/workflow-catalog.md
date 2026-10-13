@@ -14,9 +14,7 @@ Built-in skills run as workflow steps. Read their instructions in Settings → S
 
 On web and desktop, open a thread and select **Workflows** in its header. Choose Implementation, Fast feature, Full feature, or an Engineering workflow variant, enter a brief, then select **Start workflow**. The run uses the thread's selected provider and model. Use **Settings → Workflows** for standing defaults and the running workflow's Settings menu for changes to that run. **Review models** at the top of the Engineering Workflow defaults picks the App Review and Code Review models for every new run, whatever model starts the workflow. Select **App Review** in the Workflows panel to launch a standalone review.
 
-- **Quick Feature** uses the provider CLI's Plan mode, answers its questions automatically, builds and validates the change, then stops.
-- **Feature** adds Final App Review, Final Code Review, pull-request creation, and pull-request babysitting to Quick Feature.
-- **Quick Engineering** runs the full engineering sequence with Final App Review off by default.
+- **Feature** plans with the provider CLI's Plan mode, then implements, runs Code Review cycles, and opens a pull request, all in one thread and one worktree.
 - **Engineering** begins with Grill with Docs, then proceeds through Planning and the full Implementation workflow. Each ticket is implemented and code-reviewed in its own worktree; the Final App Review and Final Code Review test the merged branch.
 - **Wayfinder** will replace Grill with Docs with a Wayfinder planning phase. It is under development.
 
@@ -32,13 +30,15 @@ After a workflow starts, its Planning steps appear in the Workflows side panel e
 
 ## Phase details
 
-**Quick Feature and Feature** create a shared worktree and start the provider's native CLI Plan mode. T3 Code answers structured planning questions without pausing the run: it chooses a valid explicit recommendation, otherwise the first option, otherwise asks the agent to use its best judgment. The proposed plan launches Build in the same worktree. Quick Feature ends when Build commits the change and passes its focused checks. Any failures Build encounters must be fixed before it can finish. Choose Feature for Final App Review, Final Code Review, complete validation, pull-request creation, and pull-request babysitting.
+**Feature** starts in a new worktree from the project's development branch, unless you pick another base, and runs the provider's native CLI Plan mode. T3 Code answers its planning questions without pausing: it picks the first option, or asks the agent to use its best judgment. Once the plan is proposed, the same thread implements it, runs the checks the repository's `AGENTS.md` asks for, and commits. It starts an App Stack only when a check needs a running app. When the investigation shows nothing should change here, for example the problem does not reproduce or the fix belongs to another repository, the agent commits nothing and explains why. The workflow then finishes without changes: no Code Review, no pull request, and the thread is settled.
 
-**Quick Engineering** follows the same Planning and Implementation sequence as Engineering. It skips each ticket's App Review and Final App Review by default. Code Reviews, pull-request creation, and pull-request babysitting remain enabled.
+Code Review then runs in a reviewer thread of its own, on the model and cycle budget set for Code Review in the workflow's settings. Five cycles is the default. The reviewer only reports. The Feature thread fixes what it finds and commits, and the next cycle reviews the result. A clean review, or the last cycle, moves on to the pull request. When the cycles run out, the pull request lists the findings that are still open. The Feature thread then pushes, opens the pull request into its base branch following the repository's rules, and links it. Linking the pull request stops the workflow's App Stacks and settles the thread. Feature runs no App Review and does not babysit the pull request.
+
+Quick Feature and Quick Engineering are gone. Threads started with them continue as Feature and Engineering.
 
 **Engineering** creates a prepared workspace and starts Grill with Docs against the submitted prompt. It continues through Spec authoring, durable tickets, ticket review, ticket implementation, ticket App Reviews and Code Reviews, merge, Final App Review, Final Code Review, pull-request creation, and pull-request babysitting.
 
-Its eleven phases are: prepare the shared worktree and App Stack; Grill with Docs; author the Spec; author tickets; review and revise tickets; execute dependency-ready ticket waves; merge ticket branches; run Final App Review; run Final Code Review; create the pull request; and babysit the pull request.
+Its eleven phases are: prepare the shared worktree; Grill with Docs; author the Spec; author tickets; review and revise tickets; execute dependency-ready ticket waves; merge ticket branches; run Final App Review; run Final Code Review; create the pull request; and babysit the pull request.
 
 The following sections describe Fast Feature, Full Feature, Planning, and Implementation. Standalone App Review is available from the Workflows panel and as a nested workflow stage.
 

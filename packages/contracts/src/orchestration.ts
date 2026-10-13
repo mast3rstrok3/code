@@ -2669,20 +2669,6 @@ const ThreadImplementationChangeRequestRetryCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
-const ThreadFastFeatureRunLaunchCommand = Schema.Struct({
-  type: Schema.Literal("thread.fast-feature-run.launch"),
-  commandId: CommandId,
-  threadId: ThreadId,
-  proposedPlanId: OrchestrationProposedPlanId,
-  baseBranch: Schema.optional(TrimmedNonEmptyString),
-  pinnedCommit: Schema.optional(TrimmedNonEmptyString),
-  orchestratorBranch: Schema.optional(TrimmedNonEmptyString),
-  orchestratorWorktreePath: Schema.optional(TrimmedNonEmptyString),
-  validationCommands: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
-  skips: Schema.optional(Schema.Array(OrchestrationImplementationSkipTarget)),
-  createdAt: IsoDateTime,
-});
-
 const ThreadImplementationRunRetryCommand = Schema.Struct({
   type: Schema.Literal("thread.implementation-run.retry"),
   commandId: CommandId,
@@ -3191,7 +3177,6 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadPlanningTicketReviewRequestCommand,
   ThreadPlanningSpecBundleLoadCommand,
   ThreadImplementationRunLaunchCommand,
-  ThreadFastFeatureRunLaunchCommand,
   ThreadImplementationRunRetryCommand,
   ThreadImplementationRunRerunCommand,
   ThreadImplementationRunResetCommand,
@@ -3249,7 +3234,6 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadPlanningTicketReviewRequestCommand,
   ThreadPlanningSpecBundleLoadCommand,
   ThreadImplementationRunLaunchCommand,
-  ThreadFastFeatureRunLaunchCommand,
   ThreadImplementationRunRetryCommand,
   ThreadImplementationRunRerunCommand,
   ThreadImplementationRunResetCommand,
@@ -3845,6 +3829,8 @@ export const ThreadComposerModeSetPayload = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   workflowPreset: Schema.NullOr(WorkflowPreset),
   workflowImplementationSettings: Schema.optionalKey(Schema.NullOr(ImplementationWorkflowSettings)),
+  /** Stamps a workflow identity on a thread that becomes a Feature root, so its App Stacks are tagged. */
+  workflowContext: Schema.optional(ThreadWorkflowContext),
   updatedAt: IsoDateTime,
 });
 

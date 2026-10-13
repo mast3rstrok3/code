@@ -98,7 +98,8 @@ describe("orchestration projector", () => {
           },
           runtimeMode: "full-access",
           interactionMode: "default",
-          workflowPreset: "quick-plan",
+          // Quick Feature merged into Feature; replay decodes its retired ID.
+          workflowPreset: "fast-plan",
           workflowImplementationSettings: {
             ticketAppReviewEnabled: true,
             appReviewEnabled: false,

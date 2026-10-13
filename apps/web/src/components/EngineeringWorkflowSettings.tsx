@@ -109,7 +109,7 @@ const APP_REVIEW_PHASES = [
 ] as const satisfies ReadonlyArray<AppReviewPhaseControl>;
 
 export interface EngineeringWorkflowSettingsProps {
-  readonly preset: "quick-plan" | "fast-plan" | "planning" | "fast-engineering";
+  readonly preset: "fast-plan" | "planning";
   readonly pinFor: (key: WorkflowModelPinKey) => ModelSelection | null;
   readonly defaultPinFor?: ((key: WorkflowModelPinKey) => ModelSelection | null) | undefined;
   readonly rootModelSelection: ModelSelection;

@@ -14,11 +14,9 @@ export function workflowPresetStartsInDedicatedWorkspace(
 ): boolean {
   return (
     preset === "planning" ||
-    preset === "fast-engineering" ||
     preset === "product-planning" ||
     preset === "full-feature" ||
     preset === "fast-feature" ||
-    preset === "quick-plan" ||
     preset === "fast-plan"
   );
 }
@@ -61,7 +59,8 @@ function slugifyBranchSegment(value: string): string {
 export function resolveImplementationBranchIdentity(input: {
   readonly specTitle: string;
   readonly specId: string;
-  readonly baseBranch: string | null;
+  /** Callers resolve a missing branch with the project's development branch. */
+  readonly baseBranch: string;
   readonly workspaceRoot: string | undefined;
   readonly implementationRuns: ReadonlyArray<{
     readonly orchestratorBranch: string;
@@ -73,8 +72,7 @@ export function resolveImplementationBranchIdentity(input: {
   readonly orchestratorBranch: string;
   readonly orchestratorWorktreePath: string;
 } {
-  const baseBranch =
-    input.baseBranch && input.baseBranch.trim().length > 0 ? input.baseBranch : "main";
+  const baseBranch = input.baseBranch;
   const slug = slugifyBranchSegment(input.specTitle || input.specId);
   const usedBranches = new Set(input.implementationRuns.map((run) => run.orchestratorBranch));
   const usedWorktrees = new Set(

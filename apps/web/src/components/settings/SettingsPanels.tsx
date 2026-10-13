@@ -2247,6 +2247,7 @@ export function GeneralSettingsPanel() {
   const backgroundActivityProfileOption = resolveBackgroundActivityProfileOption(settings);
   const mixedBackgroundActivity = useScopedSettingsMixed(["backgroundActivity"]);
   const mixedAddProjectBaseDirectory = useScopedSettingsMixed(["addProjectBaseDirectory"]);
+  const mixedWorktreeBaseBranch = useScopedSettingsMixed(["worktreeBaseBranch"]);
   const mixedTextGenerationModel = useScopedSettingsMixed(["textGenerationModelSelection"]);
   const backgroundActivityDescription =
     backgroundActivityProfileOption === "advanced"
@@ -3070,6 +3071,35 @@ export function GeneralSettingsPanel() {
                 updateSettings({ newWorktreesStartFromOrigin: Boolean(checked) })
               }
               aria-label="Start new worktrees from origin by default"
+            />
+          }
+        />
+        <SettingsRow
+          serverScoped
+          settingKeys={["worktreeBaseBranch"]}
+          {...searchableSetting("worktree-base-branch")}
+          description="New worktrees and Feature workflows start from this branch unless you pick another. Leave empty to use dev when the repository has it, else its default branch."
+          resetAction={
+            mixedWorktreeBaseBranch || settings.worktreeBaseBranch !== null ? (
+              <SettingResetButton
+                label="development branch"
+                onClick={() => updateSettings({ worktreeBaseBranch: null })}
+              />
+            ) : null
+          }
+          control={
+            <DraftInput
+              size="sm"
+              className="w-full sm:w-48"
+              value={mixedWorktreeBaseBranch ? "" : (settings.worktreeBaseBranch ?? "")}
+              onCommit={(next) => {
+                const branch = next.trim();
+                updateSettings({ worktreeBaseBranch: branch === "" ? null : branch });
+              }}
+              placeholder={mixedWorktreeBaseBranch ? "Mixed" : "dev, else default"}
+              autoCapitalize="none"
+              spellCheck={false}
+              aria-label="Development branch"
             />
           }
         />

@@ -2052,7 +2052,6 @@ const make = Effect.gen(function* () {
     );
     const productWorkflowOwnsBrowserReview =
       (input.thread.workflowPreset === "fast-feature" ||
-        input.thread.workflowPreset === "quick-plan" ||
         input.thread.workflowPreset === "fast-plan" ||
         input.thread.workflowPreset === "full-feature") &&
       (productWorkflowRuns.length === 0 ||
@@ -2126,7 +2125,7 @@ const make = Effect.gen(function* () {
             productWorkflowOwnsBrowserReview
           ) {
             yield* reject(
-              `The selected ${input.thread.workflowPreset === "quick-plan" ? "Quick Feature" : input.thread.workflowPreset === "fast-plan" ? "Feature" : input.thread.workflowPreset === "fast-feature" ? "Fast Feature" : "Full Feature"} workflow owns its planning, build, review, and publication sequence. Continue or recover that workflow instead of launching an ad hoc Browser App Review child.`,
+              `The selected ${input.thread.workflowPreset === "fast-plan" ? "Feature" : input.thread.workflowPreset === "fast-feature" ? "Fast Feature" : "Full Feature"} workflow owns its planning, build, review, and publication sequence. Continue or recover that workflow instead of launching an ad hoc Browser App Review child.`,
             );
             return;
           }
@@ -2858,31 +2857,9 @@ const make = Effect.gen(function* () {
           return;
         }
 
-        case "implementation-fast-build-result": {
-          if (thread.workflowRole !== "fast-feature-implementer") {
-            yield* Effect.logWarning(
-              "provider workflow fast build result ignored for non-fast-feature thread",
-              { threadId: thread.id, workflowRole: thread.workflowRole },
-            );
-            return;
-          }
-          yield* orchestrationEngine.dispatch({
-            type: "thread.activity.append",
-            commandId: yield* providerCommandId(input.event, "workflow-fast-build-result"),
-            threadId: thread.id,
-            activity: {
-              id: EventId.make(yield* crypto.randomUUIDv4),
-              tone: input.directive.status === "succeeded" ? "info" : "error",
-              kind: "implementation-fast-build-result",
-              summary: `Fast feature build ${input.directive.status}`,
-              payload: input.directive,
-              turnId: null,
-              createdAt: input.createdAt,
-            },
-            createdAt: input.createdAt,
-          });
+        case "implementation-fast-build-result":
+          // Feature implements in its own thread now; no Build thread reports a result.
           return;
-        }
 
         case "implementation-code-review-result": {
           if (thread.workflowRole !== "implementation-code-reviewer") {
@@ -3130,58 +3107,6 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const consumeFastFeatureBuildFailure = Effect.fn(
-    "ProviderRuntimeIngestion.consumeFastFeatureBuildFailure",
-  )(function* (input: {
-    readonly event: ProviderRuntimeEvent;
-    readonly threadId: ThreadId;
-    readonly messageId: MessageId;
-    readonly detail: string;
-    readonly createdAt: string;
-    /**
-     * Dedupe scope for the synthesized failure. A missing directive is a property of the whole
-     * turn, so callers pass the turn id: keying by message id would report the same stalled turn
-     * once per assistant segment.
-     */
-    readonly dedupeScope?: string;
-  }) {
-    const thread = yield* resolveThreadDetail(input.threadId);
-    if (thread?.workflowRole !== "fast-feature-implementer") return;
-    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-    const run = readModel.implementationRuns.find(
-      (candidate) =>
-        candidate.artifactSource === "proposed-plan" &&
-        candidate.orchestratorThreadId === thread.id &&
-        candidate.status !== "canceled",
-    );
-    if (!run || run.fastBuildResult?.status === "succeeded") return;
-    const failureKey = `${input.threadId}:${input.dedupeScope ?? input.messageId}:fast-feature-build-failure`;
-    const existing = yield* Cache.getOption(processedWorkflowDirectiveKeys, failureKey);
-    if (Option.getOrElse(existing, () => false)) return;
-    yield* Cache.set(processedWorkflowDirectiveKeys, failureKey, true);
-    yield* orchestrationEngine.dispatch({
-      type: "thread.activity.append",
-      commandId: yield* providerCommandId(input.event, "workflow-fast-build-failure"),
-      threadId: thread.id,
-      activity: {
-        id: EventId.make(yield* crypto.randomUUIDv4),
-        tone: "error",
-        kind: "implementation-fast-build-result",
-        summary: "Fast feature Build result was missing or malformed",
-        payload: {
-          type: "implementation-fast-build-result",
-          runId: run.id,
-          status: "blocked",
-          validations: [],
-          notesMarkdown: input.detail,
-        },
-        turnId: null,
-        createdAt: input.createdAt,
-      },
-      createdAt: input.createdAt,
-    });
-  });
-
   const consumeImplementationFixerFailure = Effect.fn(
     "ProviderRuntimeIngestion.consumeImplementationFixerFailure",
   )(function* (input: {
@@ -3318,11 +3243,6 @@ const make = Effect.gen(function* () {
             ...failureInput,
             detail: "Reviewer completed without the required planning-reviewer-verdict directive.",
           });
-          yield* consumeFastFeatureBuildFailure({
-            ...failureInput,
-            detail:
-              "Fast feature Build completed without the required implementation-fast-build-result directive.",
-          });
           yield* consumeImplementationFixerFailure({
             ...failureInput,
             detail: "QA fixer completed without the required implementation-fix-result directive.",
@@ -3350,10 +3270,6 @@ const make = Effect.gen(function* () {
             ...failureInput,
             detail: `Reviewer directive was rejected: ${parseResult.message}`,
           });
-          yield* consumeFastFeatureBuildFailure({
-            ...failureInput,
-            detail: `Fast feature Build directive was rejected: ${parseResult.message}`,
-          });
           yield* consumeImplementationFixerFailure({
             ...failureInput,
             detail: `QA fixer directive was rejected: ${parseResult.message}`,
@@ -3364,30 +3280,6 @@ const make = Effect.gen(function* () {
           });
         }
         return;
-      }
-
-      if (thread.workflowRole === "fast-feature-implementer") {
-        const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-        const run = readModel.implementationRuns.find(
-          (candidate) =>
-            candidate.artifactSource === "proposed-plan" &&
-            candidate.orchestratorThreadId === thread.id &&
-            candidate.status !== "canceled",
-        );
-        if (
-          parseResult.directive.type !== "implementation-fast-build-result" ||
-          run === undefined ||
-          parseResult.directive.runId !== run.id
-        ) {
-          if (synthesizeFailure) {
-            yield* consumeFastFeatureBuildFailure({
-              ...failureInput,
-              detail:
-                "Fast feature Build completed with a directive for the wrong workflow stage or run.",
-            });
-          }
-          return;
-        }
       }
 
       if (thread.workflowRole === "implementation-fixer") {
@@ -3551,15 +3443,13 @@ const make = Effect.gen(function* () {
       return;
     const thread = yield* resolveThreadDetail(input.threadId);
     const expectedDirectiveType =
-      thread?.workflowRole === "fast-feature-implementer"
-        ? "implementation-fast-build-result"
-        : thread?.workflowRole === "planning-reviewer"
-          ? "planning-reviewer-verdict"
-          : thread?.workflowRole === "implementation-fixer"
-            ? "implementation-fix-result"
-            : thread?.workflowRole === "app-review-fixer"
-              ? "app-review-fix-result"
-              : null;
+      thread?.workflowRole === "planning-reviewer"
+        ? "planning-reviewer-verdict"
+        : thread?.workflowRole === "implementation-fixer"
+          ? "implementation-fix-result"
+          : thread?.workflowRole === "app-review-fixer"
+            ? "app-review-fix-result"
+            : null;
     if (thread === undefined) return;
 
     if (expectedDirectiveType === null) {

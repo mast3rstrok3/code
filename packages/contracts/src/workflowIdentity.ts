@@ -1,12 +1,11 @@
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Effect from "effect/Effect";
 import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
-export const WorkflowPreset = Schema.Literals([
+const CurrentWorkflowPreset = Schema.Literals([
   "fix",
   "fast-feature",
-  "quick-plan",
   "fast-plan",
-  "fast-engineering",
   "full-feature",
   "product-planning",
   "wayfinder",
@@ -14,6 +13,22 @@ export const WorkflowPreset = Schema.Literals([
   "planning",
   "app-review",
 ]);
+/**
+ * Quick Feature (`quick-plan`) became Feature and Quick Engineering
+ * (`fast-engineering`) became Engineering. Older servers, clients and drafts
+ * still send the retired IDs, so they decode to their successors; nothing
+ * encodes them again.
+ */
+const RetiredWorkflowPreset = Schema.Literals(["quick-plan", "fast-engineering"]).pipe(
+  Schema.decodeTo(
+    Schema.Literals(["fast-plan", "planning"]),
+    SchemaTransformation.transform({
+      decode: (preset) => (preset === "quick-plan" ? "fast-plan" : "planning"),
+      encode: (preset) => (preset === "fast-plan" ? "quick-plan" : "fast-engineering"),
+    }),
+  ),
+);
+export const WorkflowPreset = Schema.Union([CurrentWorkflowPreset, RetiredWorkflowPreset]);
 export type WorkflowPreset = typeof WorkflowPreset.Type;
 export const WorkflowId = TrimmedNonEmptyString.pipe(Schema.brand("WorkflowId"));
 export type WorkflowId = typeof WorkflowId.Type;

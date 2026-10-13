@@ -124,6 +124,9 @@ export function workflowControlCommands(
           commandId: commandIdFor(event, ":preset"),
           threadId: event.payload.threadId,
           workflowPreset: event.payload.workflowPreset,
+          ...(event.payload.workflowContext === undefined
+            ? {}
+            : { workflowContext: event.payload.workflowContext }),
         },
       ];
     case "thread.planning-stage-started":

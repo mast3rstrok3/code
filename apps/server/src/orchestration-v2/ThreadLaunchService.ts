@@ -18,6 +18,8 @@ import {
   type RuntimeMode,
   type ScheduledTaskId,
   ThreadId,
+  WorkflowId,
+  type WorkflowPreset,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -83,6 +85,8 @@ export interface ThreadLaunchInput {
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
   readonly workspaceStrategy: ThreadLaunchWorkspaceStrategy;
+  /** Makes the thread the root of this workflow, as the composer does when it picks one. */
+  readonly workflowPreset?: WorkflowPreset;
   readonly initialMessage?: ThreadLaunchInitialMessage;
   readonly importedNativeThread?: {
     readonly ref: {
@@ -786,6 +790,22 @@ const make = Effect.gen(function* () {
                 ...(input.importedNativeThread === undefined
                   ? {}
                   : { importedNativeThread: input.importedNativeThread }),
+                ...(input.workflowPreset === undefined
+                  ? {}
+                  : {
+                      workflowPreset: input.workflowPreset,
+                      // A Feature root tags its App Stacks with this id for teardown.
+                      ...(input.workflowPreset === "fast-plan"
+                        ? {
+                            workflowContext: {
+                              workflowId: WorkflowId.make(`workflow-${candidateThreadId}`),
+                              parentWorkflowId: null,
+                              rootThreadId: candidateThreadId,
+                              ticketScope: [],
+                            },
+                          }
+                        : {}),
+                    }),
                 createdBy: input.createdBy,
                 creationSource: input.creationSource,
               });

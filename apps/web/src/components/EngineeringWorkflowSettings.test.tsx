@@ -30,7 +30,7 @@ const implementationSettings: ImplementationWorkflowSettings = {
 
 function render(
   settings: ImplementationWorkflowSettings = implementationSettings,
-  preset: "quick-plan" | "planning" = "planning",
+  preset: "fast-plan" | "planning" = "planning",
 ): string {
   return renderToStaticMarkup(
     <EngineeringWorkflowSettings
@@ -73,12 +73,13 @@ describe("EngineeringWorkflowSettings", () => {
     expect(markup).toContain("4 of 6 steps added");
   });
 
-  it("uses the same phase editor for Quick Feature", () => {
-    const markup = render(implementationSettings, "quick-plan");
+  it("uses the same phase editor for Feature, without stages to remove", () => {
+    const markup = render(implementationSettings, "fast-plan");
 
     expect(markup).toContain("Planning phase");
     expect(markup).toContain("1 step");
     expect(markup).toContain("Implementation phase");
-    expect(markup).not.toContain("5 steps");
+    expect(markup).toContain("3 steps");
+    expect(markup).not.toContain("steps added");
   });
 });

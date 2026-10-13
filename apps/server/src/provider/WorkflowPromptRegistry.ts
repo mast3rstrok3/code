@@ -40,6 +40,8 @@ export const WORKFLOW_PROMPT_IDS = {
   planningWayfinderCodex: "planning.wayfinder.codex",
   planningResearchCodex: "planning.research.codex",
   planningFastFeatureCodex: "planning.fast-feature.codex",
+  implementationFeatureCodex: "implementation.feature.codex",
+  implementationFeaturePullRequestCodex: "implementation.feature-pull-request.codex",
 } as const;
 
 const CATALOG_SKILL_ID_BY_PROMPT_ID: Readonly<Record<string, string>> = {
@@ -96,6 +98,8 @@ export function listWorkflowPromptContracts(): WorkflowPromptContract[] {
 const VISIBLE_T3_SKILL_IDS = new Set<string>([
   WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex,
   WORKFLOW_PROMPT_IDS.planningFastFeatureCodex,
+  WORKFLOW_PROMPT_IDS.implementationFeatureCodex,
+  WORKFLOW_PROMPT_IDS.implementationFeaturePullRequestCodex,
   WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
   WORKFLOW_PROMPT_IDS.productPlanningCodex,
   WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
@@ -138,9 +142,7 @@ function buildWorkflowCatalog(): WorkflowCatalog {
   const promptContracts: ReadonlyArray<WorkflowPromptContract> = WORKFLOW_PROMPT_REGISTRY;
   const promptContractById = new Map(promptContracts.map((contract) => [contract.id, contract]));
   const workflowOrder = [
-    "quick-plan",
     "fast-plan",
-    "fast-engineering",
     "planning",
     "wayfinder",
     "fast-feature",
@@ -189,36 +191,17 @@ function buildWorkflowCatalog(): WorkflowCatalog {
     }
   }
   const implicitWorkflowIdsBySkill: Readonly<Record<string, readonly string[]>> = {
-    "matt-pocock.grill-with-docs": ["fast-engineering", "planning"],
-    "matt-pocock.domain-modeling": [
-      "full-feature",
-      "product-planning",
-      "wayfinder",
-      "fast-engineering",
-      "planning",
-    ],
+    "matt-pocock.grill-with-docs": ["planning"],
+    "matt-pocock.domain-modeling": ["full-feature", "product-planning", "wayfinder", "planning"],
     "matt-pocock.implement": [
-      "quick-plan",
-      "fast-plan",
-      "fast-engineering",
       "planning",
       "wayfinder",
       "full-feature",
       "implementation",
       "app-review",
     ],
-    "matt-pocock.to-tickets": [
-      "quick-plan",
-      "fast-plan",
-      "fast-engineering",
-      "planning",
-      "wayfinder",
-      "app-review",
-    ],
+    "matt-pocock.to-tickets": ["planning", "wayfinder", "app-review"],
     [WORKFLOW_PROMPT_IDS.implementationFixCodex]: [
-      "quick-plan",
-      "fast-plan",
-      "fast-engineering",
       "planning",
       "wayfinder",
       "fast-feature",

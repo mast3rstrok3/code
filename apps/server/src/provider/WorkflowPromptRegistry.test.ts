@@ -100,7 +100,7 @@ describe("WorkflowPromptRegistry", () => {
     );
     NodeAssert.deepEqual(
       catalog.workflows.map((workflow) => workflow.id),
-      ["quick-plan", "fast-plan", "fast-engineering", "planning", "wayfinder"],
+      ["fast-plan", "planning", "wayfinder"],
     );
     NodeAssert.equal(
       catalog.skills.filter((skill) => skill.id.startsWith("matt-pocock.")).length,
@@ -139,7 +139,7 @@ describe("WorkflowPromptRegistry", () => {
       (skill) => skill.id === "matt-pocock.grill-with-docs",
     );
     NodeAssert.equal(grillWithDocs?.title, "Grill with Docs");
-    NodeAssert.deepEqual(grillWithDocs?.workflowIds, ["fast-engineering", "planning", "wayfinder"]);
+    NodeAssert.deepEqual(grillWithDocs?.workflowIds, ["planning", "wayfinder"]);
     const directGrillWithDocs = resolveWorkflowPromptText("matt-pocock.grill-with-docs");
     NodeAssert.match(directGrillWithDocs, /# Grill with Docs/);
     NodeAssert.doesNotMatch(directGrillWithDocs, /Call the Skill tool|provider-local Skill tool/);
@@ -149,7 +149,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(directGrillWithDocs, /workflow_doc_get\(\{ "docId": "glossary-format" \}\)/);
     NodeAssert.deepEqual(
       catalog.skills.find((skill) => skill.id === "matt-pocock.domain-modeling")?.workflowIds,
-      ["fast-engineering", "planning", "wayfinder"],
+      ["planning", "wayfinder"],
     );
     NodeAssert.match(resolveWorkflowPromptText("matt-pocock.tdd"), /supporting-skill-docs/);
     NodeAssert.match(resolveWorkflowPromptText("matt-pocock.tdd"), /# When to Mock/);
@@ -207,16 +207,40 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.deepEqual(
       catalog.skills.find((skill) => skill.id === WORKFLOW_PROMPT_IDS.implementationFixCodex)
         ?.workflowIds,
-      ["quick-plan", "fast-plan", "fast-engineering", "planning", "wayfinder"],
+      ["planning", "wayfinder"],
     );
     const fastFeaturePlanning = catalog.skills.find(
       (skill) => skill.id === WORKFLOW_PROMPT_IDS.planningFastFeatureCodex,
     );
-    NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /## Build topology/);
-    NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /## App Review topology/);
-    NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /lanes in the order/);
-    NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /one Build thread/);
+    NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /## Implementation steps/);
+    NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /## Checks/);
     NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /planning turn is unattended/i);
+    NodeAssert.doesNotMatch(fastFeaturePlanning?.promptText ?? "", /App Review/);
+    const featureImplementation = catalog.skills.find(
+      (skill) => skill.id === WORKFLOW_PROMPT_IDS.implementationFeatureCodex,
+    );
+    NodeAssert.deepEqual(featureImplementation?.workflowIds, ["fast-plan"]);
+    NodeAssert.match(featureImplementation?.promptText ?? "", /app_stack_start/);
+    NodeAssert.match(featureImplementation?.promptText ?? "", /AGENTS\.md/);
+    NodeAssert.match(
+      featureImplementation?.promptText ?? "",
+      /Do not push and do not open a pull request/,
+    );
+    const featurePullRequest = catalog.skills.find(
+      (skill) => skill.id === WORKFLOW_PROMPT_IDS.implementationFeaturePullRequestCodex,
+    );
+    NodeAssert.deepEqual(featurePullRequest?.workflowIds, ["fast-plan"]);
+    NodeAssert.match(featurePullRequest?.promptText ?? "", /link_pull_request/);
+    NodeAssert.match(featurePullRequest?.promptText ?? "", /unresolved Code Review findings/);
+    NodeAssert.match(
+      featurePullRequest?.promptText ?? "",
+      /Do not run an App Review or babysit the pull request/,
+    );
+    NodeAssert.ok(
+      catalog.skills
+        .find((skill) => skill.id === "matt-pocock.code-review")
+        ?.workflowIds.includes("fast-plan"),
+    );
     const engineeringWorkflow = catalog.workflows.find((workflow) => workflow.id === "planning");
     NodeAssert.equal(engineeringWorkflow?.title, "Engineering");
     NodeAssert.ok(

@@ -201,7 +201,6 @@ const IMPLEMENTATION_WORKFLOW_ACTIVITY_KINDS = new Set<string>([
   "implementation-merge-gate-result",
   "implementation-fix-result",
   "implementation-code-review-result",
-  "implementation-fast-build-result",
   "implementation-change-request-babysit-result",
 ]);
 
@@ -313,15 +312,6 @@ type CodeReviewDirective = {
   readonly validationImpactMarkdown?: string;
 };
 
-type FastBuildDirective = {
-  readonly type: "implementation-fast-build-result";
-  readonly runId: string;
-  readonly status: "succeeded" | "failed" | "blocked";
-  readonly commitSha?: string;
-  readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
-  readonly notesMarkdown: string;
-};
-
 type ChangeRequestBabysitDirective = {
   readonly type: "implementation-change-request-babysit-result";
   readonly runId: string;
@@ -388,11 +378,6 @@ const asCodeReviewDirective = (value: unknown): CodeReviewDirective | null =>
   isRecord(value) && value["type"] === "implementation-code-review-result"
     ? // Activities recorded before Code Review became a review-and-fix pass carry no validations.
       { ...(value as CodeReviewDirective), validations: asValidationResults(value["validations"]) }
-    : null;
-
-const asFastBuildDirective = (value: unknown): FastBuildDirective | null =>
-  isRecord(value) && value["type"] === "implementation-fast-build-result"
-    ? (value as FastBuildDirective)
     : null;
 
 const asChangeRequestBabysitDirective = (value: unknown): ChangeRequestBabysitDirective | null =>
@@ -1948,10 +1933,7 @@ function fastFeatureArtifactMarkdown(input: {
   );
 }
 
-/**
- * Required when the change touches native mobile files. Shared by the Build contract and the gate
- * in `applyFastBuildResult` so the command the agent is told to run is the command that is checked.
- */
+/** Required when the change touches native mobile files. */
 const NATIVE_MOBILE_VALIDATION_COMMAND = "vp run lint:mobile";
 
 function completeValidationCommandsForFiles(
@@ -1983,133 +1965,6 @@ function appStackReadiness(result: AppStackAutoCreateResult): "ready" | "ensurin
 
 function isAppStackInfrastructureFailure(detail: string): boolean {
   return detail.toLowerCase().includes("not visible to the app stack controller");
-}
-
-function fastFeatureExampleDirective(run: OrchestrationImplementationRun) {
-  return {
-    type: "implementation-fast-build-result",
-    runId: run.id,
-    status: "succeeded",
-    commitSha: "HEAD commit SHA",
-    validations: [
-      {
-        command: "<focused test or documented sub-minute fast check actually run>",
-        purpose: "verification",
-        status: "passed",
-        outputMarkdown: "summary",
-        completedAt: "ISO timestamp",
-      },
-    ],
-    notesMarkdown: "Implementation notes",
-  } as const;
-}
-
-function fastFeatureExecutionContract(
-  run: OrchestrationImplementationRun,
-  completesAfterBuild = false,
-): ReadonlyArray<string> {
-  return [
-    WORKFLOW_VALIDATION_EVIDENCE_INSTRUCTION,
-    "## Execution identity",
-    `- branch: ${run.orchestratorBranch}`,
-    `- worktree: ${run.orchestratorWorktreePath}`,
-    `- fixed source commit: ${run.pinnedCommit}`,
-    "- App Stack: starts on demand for App Review or checks that need running services",
-    "",
-    "Use the repository dependencies prepared during workflow workspace bootstrap. Keep the App Stack stopped during code-only work. If a check needs services, use app_stack_start for this worktree and app_stack_stop when it finishes. Do not start a competing development server or replace prepared dependency paths.",
-    "",
-    "## Build validation",
-    "Run focused tests and affected-file checks. A documented sub-minute fast command such as `pnpm check` is allowed.",
-    ...(completesAfterBuild
-      ? [
-          "Quick Feature ends after Build. There is no later validation, review, or pull-request stage. Run the planned focused checks and affected-file checks before reporting success. Fix every failure you encounter, including failures outside the change. Do not defer failures to a later stage.",
-        ]
-      : [
-          "Do not run the launch-level complete validation commands in Build; the final gate runs them after the enabled review steps, or directly after Build when reviews are disabled:",
-          ...run.launchSummary.validationCommands.map((command) => `- ${command}`),
-        ]),
-    "",
-    "Report the exact focused or fast commands actually run in `validations`.",
-    "",
-    "Finish with exactly one fenced JSON directive:",
-    "```json",
-    JSON.stringify(fastFeatureExampleDirective(run), null, 2),
-    "```",
-  ];
-}
-
-/**
- * Programmatic guard that the Build prompt and the Build gate cannot drift apart. The example
- * directive the prompt tells Build to copy has to satisfy the very check `applyFastBuildResult`
- * runs. Returns the problems so a focused test can assert there are none; a prompt edit that breaks
- * the round trip fails there rather than silently rejecting a finished build in production.
- */
-export function fastFeatureBuildContractProblems(
-  run: OrchestrationImplementationRun,
-): ReadonlyArray<string> {
-  const contract = fastFeatureExecutionContract(run).join("\n");
-  const problems: string[] = [];
-
-  const fences = [...contract.matchAll(/```json\s*([\s\S]*?)```/g)];
-  if (fences.length !== 1) {
-    problems.push(`Contract must embed exactly one JSON directive, found ${fences.length}.`);
-    return problems;
-  }
-  let example: unknown;
-  try {
-    example = JSON.parse(fences[0]?.[1] ?? "");
-  } catch {
-    problems.push("Embedded directive is not valid JSON.");
-    return problems;
-  }
-  const directive = asFastBuildDirective(example);
-  if (directive === null) {
-    problems.push("Embedded directive is not an implementation-fast-build-result.");
-    return problems;
-  }
-  if (directive.runId !== run.id) {
-    problems.push("Embedded directive names a different run.");
-  }
-  if (
-    !focusedRepairValidationsPassed({
-      finalCommands: [...run.launchSummary.validationCommands, NATIVE_MOBILE_VALIDATION_COMMAND],
-      validations: directive.validations,
-    })
-  ) {
-    problems.push(
-      "Embedded directive would be rejected by the focused pre-review validation gate.",
-    );
-  }
-  return problems;
-}
-
-/**
- * `rejectionMarkdown` is set when Build is being re-prompted after its last result was rejected.
- * Without it a retry re-sends the original handover, and Build reproduces the same rejection.
- */
-function buildFastFeaturePrompt(input: {
-  readonly run: OrchestrationImplementationRun;
-  readonly sourceThread: OrchestrationThread;
-  readonly rejectionMarkdown?: string;
-}): string {
-  return [
-    `Implement Fast feature run ${input.run.id}.`,
-    "",
-    "Do not ask the user questions. Implement the canonical plan in the exact branch and worktree below, validate it, and commit all completed changes. Treat its `## Build topology` as the execution contract. Execute every workstream in the listed order in this Build thread, preserve the stated ownership boundaries, wait for dependencies before starting downstream work, resolve overlap, run the listed focused checks, and commit. Do not start provider-native agents or T3 workflow children for Build workstreams.",
-    ...(input.rejectionMarkdown === undefined
-      ? []
-      : [
-          "",
-          "## Your last result was rejected",
-          input.rejectionMarkdown,
-          "",
-          "Work already committed on this branch stands. Fix only what is called out above — re-running validations and re-reporting is often all that is needed — then finish with the directive below.",
-        ]),
-    "",
-    fastFeatureArtifactMarkdown(input),
-    "",
-    ...fastFeatureExecutionContract(input.run, input.sourceThread.workflowPreset === "quick-plan"),
-  ].join("\n");
 }
 
 /**
@@ -8172,202 +8027,23 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const ensureFastFeatureRun = Effect.fn("ImplementationWorkflowReactor.ensureFastFeatureRun")(
-    function* (input: {
-      readonly sourceThreadId: ThreadId;
-      readonly run: OrchestrationImplementationRun;
-      readonly createdAt: string;
-    }) {
-      if (input.run.automationHalt !== null) return;
-      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-      const sourceThread = findThread(readModel, input.sourceThreadId);
-      const implementerThread = findThread(readModel, input.run.orchestratorThreadId);
-      if (sourceThread === null || implementerThread === null) return;
-      const project = yield* projectionSnapshotQuery
-        .getProjectShellById(sourceThread.projectId)
-        .pipe(Effect.map(Option.getOrUndefined));
-      if (!project) return;
-      const sourceCwd = sourceThread.worktreePath ?? project.workspaceRoot;
-      const sourceStatus = yield* gitWorkflow.localStatus({ cwd: sourceCwd });
-      const reusesSourceWorkspace = sourceCwd === input.run.orchestratorWorktreePath;
-      const expectedSourceBranch = reusesSourceWorkspace
-        ? input.run.orchestratorBranch
-        : input.run.baseBranch;
-      if (!sourceStatus.isRepo || sourceStatus.refName !== expectedSourceBranch) {
-        yield* blockRun({
-          sourceThreadId: input.sourceThreadId,
-          run: input.run,
-          retryableStage: "source-dirty",
-          humanBlocked: true,
-          reasonMarkdown: `The source worktree must be on the captured branch '${expectedSourceBranch}', but Git reports '${sourceStatus.refName ?? "detached HEAD"}'. Switch back to the captured branch, then retry.`,
-          updatedAt: input.createdAt,
-        });
-        return;
-      }
-      let setupRun =
-        input.run.retryableFailure?.stage === "source-dirty"
-          ? yield* gitWorkflow.resolveCommit({ cwd: sourceCwd, ref: "HEAD" }).pipe(
-              Effect.map(({ commitSha }) => ({
-                ...input.run,
-                pinnedCommit: commitSha,
-                launchSummary: { ...input.run.launchSummary, pinnedCommit: commitSha },
-              })),
-            )
-          : input.run;
-
-      if (sourceStatus.hasWorkingTreeChanges) {
-        yield* blockRun({
-          sourceThreadId: input.sourceThreadId,
-          run: setupRun,
-          retryableStage: "source-dirty",
-          humanBlocked: true,
-          reasonMarkdown: `Implementation requires a clean source worktree on '${expectedSourceBranch}'. Commit or preserve the current changes before starting this stage.`,
-          updatedAt: input.createdAt,
-        });
-        return;
-      }
-
-      const existingWorktreeHead = yield* gitWorkflow
-        .resolveCommit({ cwd: setupRun.orchestratorWorktreePath, ref: "HEAD" })
-        .pipe(Effect.option);
-      if (Option.isSome(existingWorktreeHead)) {
-        const worktreeStatus = yield* gitWorkflow.localStatus({
-          cwd: setupRun.orchestratorWorktreePath,
-        });
-        if (!worktreeStatus.isRepo || worktreeStatus.refName !== setupRun.orchestratorBranch) {
-          yield* blockRun({
-            sourceThreadId: input.sourceThreadId,
-            run: setupRun,
-            retryableStage: "worktree-setup",
-            humanBlocked: true,
-            reasonMarkdown: `The existing Fast feature worktree is not on the expected branch '${setupRun.orchestratorBranch}'. Resolve or remove the conflicting worktree, then retry.`,
-            updatedAt: input.createdAt,
-          });
-          return;
-        }
-        if (worktreeStatus.hasWorkingTreeChanges) {
-          yield* blockRun({
-            sourceThreadId: input.sourceThreadId,
-            run: setupRun,
-            retryableStage: "worktree-setup",
-            humanBlocked: true,
-            reasonMarkdown: `The existing Fast feature worktree on '${setupRun.orchestratorBranch}' is dirty before Build launch. Preserve or commit its changes before starting this stage.`,
-            updatedAt: input.createdAt,
-          });
-          return;
-        }
-      } else {
-        yield* gitWorkflow.createWorktree({
-          cwd: sourceCwd,
-          refName: setupRun.pinnedCommit,
-          newRefName: setupRun.orchestratorBranch,
-          baseRefName: setupRun.baseBranch,
-          path: setupRun.orchestratorWorktreePath,
-        });
-      }
-
-      yield* orchestrationEngine.dispatch({
-        type: "thread.meta.update",
-        commandId: yield* serverCommandId("fast-feature-implementer-meta"),
-        threadId: setupRun.orchestratorThreadId,
-        branch: setupRun.orchestratorBranch,
-        worktreePath: setupRun.orchestratorWorktreePath,
-      });
-
-      const refreshed = yield* projectionSnapshotQuery.getCommandReadModel();
-      // A miss in the refreshed model must not read as "already started" — that silently drops
-      // the handover and leaves an empty Build thread.
-      const currentImplementer =
-        findThread(refreshed, setupRun.orchestratorThreadId) ?? implementerThread;
-      // Threads in the command read model carry no messages, so ask for the detail: the seeded
-      // user message is the only thing that proves the handover already went out. `latestTurn`
-      // will not do — it appears only once a provider session exists.
-      const alreadyHandedOver = yield* projectionSnapshotQuery
-        .getThreadDetailById(setupRun.orchestratorThreadId)
-        .pipe(
-          Effect.map(
-            Option.match({
-              onNone: () => false,
-              onSome: (thread) => thread.messages.some((message) => message.role === "user"),
-            }),
-          ),
-        );
-      // A run blocked at Build has to go back to Build, whatever the last directive claimed. Build
-      // can report `succeeded` and still be rejected — mismatched validation commands, a dirty
-      // worktree, a HEAD that does not match the reported commit — and keying the re-prompt off
-      // the reported status alone left those runs with no way forward: Retry started no turn and
-      // silently marked the run `running`.
-      const blockedAtBuild = setupRun.retryableFailure?.stage === "build";
-      const shouldStart =
-        currentImplementer.latestTurn?.state !== "running" &&
-        (!alreadyHandedOver ||
-          blockedAtBuild ||
-          setupRun.fastBuildResult?.status === "failed" ||
-          setupRun.fastBuildResult?.status === "blocked");
-      if (shouldStart) {
-        // A run that cannot resolve its plan has nothing to hand over. Block loudly rather than
-        // starting Build against a prompt that reads "Proposed plan unavailable."
-        if (findRunProposedPlan({ run: setupRun, sourceThread }) === undefined) {
-          yield* blockRun({
-            sourceThreadId: input.sourceThreadId,
-            run: setupRun,
-            retryableStage: "build",
-            humanBlocked: true,
-            reasonMarkdown:
-              "The proposed plan behind this Fast feature run is no longer available on the source thread, so there is nothing to hand over to Build. Re-run planning, then relaunch.",
-            updatedAt: input.createdAt,
-          });
-          return;
-        }
-        yield* orchestrationEngine.dispatch({
-          type: "thread.turn.start",
-          commandId: yield* serverCommandId("fast-feature-build-turn"),
-          threadId: setupRun.orchestratorThreadId,
-          message: {
-            messageId: yield* serverMessageId("fast-feature-build"),
-            role: "user",
-            text: buildFastFeaturePrompt({
-              run: setupRun,
-              sourceThread,
-              ...(blockedAtBuild && setupRun.retryableFailure !== null
-                ? { rejectionMarkdown: setupRun.retryableFailure.detail }
-                : {}),
-            }),
-            attachments: [],
-          },
-          titleSeed: implementerThread.title,
-          runtimeMode: implementerThread.runtimeMode,
-          interactionMode: "default",
-          ...(setupRun.sourceProposedPlan === null
-            ? {}
-            : { sourceProposedPlan: setupRun.sourceProposedPlan }),
-          createdAt: input.createdAt,
-        });
-      }
-
-      // Leaving `launch-pending` is the record that the handover went out. The command read model
-      // carries no thread messages and only exposes `latestTurn` once a provider session exists,
-      // so the run status is the one durable marker the recovery sweep can trust.
-      //
-      // Keep `retryableFailure` while the stage re-runs. Clearing it here would
-      // reset `blockRun`'s attempt counter on every resume, so a stage that
-      // keeps failing would never exhaust `maxAttempts` and the 30s sweep in
-      // `recoverRetryableRuns` would relaunch it forever. Success paths
-      // (e.g. `handleFastBuildResult`) clear it once the stage actually passes.
-      const resumedRun: OrchestrationImplementationRun = {
-        ...setupRun,
-        status: "running",
-        updatedAt: input.createdAt,
-      };
-      yield* updateRun({
-        sourceThreadId: input.sourceThreadId,
-        run: resumedRun,
-        createdAt: input.createdAt,
-      });
-
-      // App Review starts the worktree stack after Build reports a clean committed HEAD.
-    },
-  );
+  /**
+   * Feature used to build a proposed plan in a separate Build thread and worktree. It now
+   * implements in its own thread, so a run left at Build by an older version cannot resume.
+   */
+  const blockRetiredFastFeatureBuild = (input: {
+    readonly sourceThreadId: ThreadId;
+    readonly run: OrchestrationImplementationRun;
+    readonly createdAt: string;
+  }) =>
+    blockRun({
+      sourceThreadId: input.sourceThreadId,
+      run: input.run,
+      humanBlocked: true,
+      reasonMarkdown:
+        "This run's Build stage belongs to an earlier Feature workflow that no longer runs. Feature now implements its plan in its own thread: start a new Feature, or implement the plan from its thread.",
+      updatedAt: input.createdAt,
+    }).pipe(Effect.asVoid);
 
   const handlePromptTicketsCreated = Effect.fn(
     "ImplementationWorkflowReactor.handlePromptTicketsCreated",
@@ -8438,26 +8114,8 @@ const make = Effect.gen(function* () {
   const handleRunLaunched = Effect.fn("ImplementationWorkflowReactor.handleRunLaunched")(function* (
     event: Extract<ImplementationWorkflowEvent, { type: "thread.implementation-run-launched" }>,
   ) {
-    if (event.payload.run.artifactSource === "proposed-plan") {
-      yield* ensureFastFeatureRun({
-        sourceThreadId: event.payload.sourceThreadId,
-        run: event.payload.run,
-        createdAt: event.occurredAt,
-      }).pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.failCause(cause)
-            : blockRun({
-                sourceThreadId: event.payload.sourceThreadId,
-                run: event.payload.run,
-                retryableStage: "worktree-setup",
-                reasonMarkdown: `Fast feature worktree setup failed.\n\n\`\`\`\n${Cause.pretty(cause)}\n\`\`\``,
-                updatedAt: event.occurredAt,
-              }),
-        ),
-      );
-      return;
-    }
+    // Feature builds in its own thread now; only runs launched before that are proposed-plan.
+    if (event.payload.run.artifactSource === "proposed-plan") return;
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const sourceThread = findThread(readModel, event.payload.sourceThreadId);
     const orchestratorThread = findThread(readModel, event.payload.run.orchestratorThreadId);
@@ -8870,161 +8528,6 @@ const make = Effect.gen(function* () {
       }
     },
   );
-
-  const applyFastBuildResult = Effect.fn("ImplementationWorkflowReactor.applyFastBuildResult")(
-    function* (input: {
-      readonly threadId: ThreadId;
-      readonly directive: FastBuildDirective;
-      readonly updatedAt: string;
-    }) {
-      const { directive } = input;
-      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-      const run = findRunById(readModel, directive.runId);
-      if (
-        run === null ||
-        run.artifactSource !== "proposed-plan" ||
-        run.orchestratorThreadId !== input.threadId
-      ) {
-        return;
-      }
-      // Build owns app-review fixes too, so a run legitimately reports several successful builds.
-      // Only ignore a repeat result once the branch has moved past Build into review or publication.
-      // A blocked Build has not moved past Build — it is stuck at it — so a real result that lands
-      // after the retry budget was spent must still be accepted, or the run is stranded for good.
-      if (
-        run.status !== "running" &&
-        run.status !== "launch-pending" &&
-        run.status !== "needs-human-attention"
-      ) {
-        return;
-      }
-      const sourceThreadId = findRunSourceThreadId({ readModel, run });
-      if (sourceThreadId === null) return;
-      yield* stopUnusedAppStack({ run, worktreePath: run.orchestratorWorktreePath });
-      const completesAfterBuild =
-        findThread(readModel, sourceThreadId)?.workflowPreset === "quick-plan";
-      const updatedAt = input.updatedAt;
-      const buildResult = {
-        runId: run.id,
-        status: directive.status,
-        ...(directive.commitSha === undefined
-          ? { commitSha: null }
-          : { commitSha: directive.commitSha }),
-        validations: [...directive.validations],
-        notesMarkdown: directive.notesMarkdown,
-      } as OrchestrationImplementationRun["fastBuildResult"];
-      if (directive.status !== "succeeded" || directive.commitSha === undefined) {
-        yield* blockRun({
-          sourceThreadId,
-          run: { ...run, fastBuildResult: buildResult, updatedAt },
-          retryableStage: "build",
-          reasonMarkdown:
-            directive.notesMarkdown || `Fast feature Build reported ${directive.status}.`,
-          updatedAt,
-        });
-        return;
-      }
-      if (
-        (completesAfterBuild &&
-          currentWorkflowValidations(directive.validations).some(
-            (validation) => validation.status !== "passed",
-          )) ||
-        !focusedRepairValidationsPassed({
-          finalCommands: [
-            ...run.launchSummary.validationCommands,
-            NATIVE_MOBILE_VALIDATION_COMMAND,
-          ],
-          validations: directive.validations,
-        })
-      ) {
-        yield* blockRun({
-          sourceThreadId,
-          run: { ...run, fastBuildResult: buildResult, updatedAt },
-          retryableStage: "build",
-          reasonMarkdown: completesAfterBuild
-            ? "Quick Feature must finish Build with passing focused checks and no failed or blocked checks. Fix every reported failure before reporting success."
-            : "Build must report passing focused or documented sub-minute fast validation. Leave launch-level complete commands to the final validation gate.",
-          updatedAt,
-        });
-        return;
-      }
-      const [head, reportedHead] = yield* Effect.all([
-        gitWorkflow.resolveCommit({
-          cwd: run.orchestratorWorktreePath,
-          ref: "HEAD",
-        }),
-        gitWorkflow.resolveCommit({
-          cwd: run.orchestratorWorktreePath,
-          ref: directive.commitSha,
-        }),
-      ]);
-      const buildWorktreeStatus = yield* gitWorkflow.localStatus({
-        cwd: run.orchestratorWorktreePath,
-      });
-      if (
-        !buildWorktreeStatus.isRepo ||
-        buildWorktreeStatus.refName !== run.orchestratorBranch ||
-        buildWorktreeStatus.hasWorkingTreeChanges
-      ) {
-        yield* blockRun({
-          sourceThreadId,
-          run: { ...run, fastBuildResult: buildResult, updatedAt },
-          retryableStage: "build",
-          reasonMarkdown: `Fast feature Build must finish with a clean worktree on branch '${run.orchestratorBranch}'. Commit all completed changes on that branch, then retry.`,
-          updatedAt,
-        });
-        return;
-      }
-      if (head.commitSha !== reportedHead.commitSha) {
-        yield* blockRun({
-          sourceThreadId,
-          run: { ...run, fastBuildResult: buildResult, updatedAt },
-          retryableStage: "build",
-          reasonMarkdown: `Fast feature Build reported commit '${reportedHead.commitSha}', but the worktree branch HEAD is '${head.commitSha}'.`,
-          updatedAt,
-        });
-        return;
-      }
-      const succeededRun: OrchestrationImplementationRun = {
-        ...run,
-        status: "qa-reviewing",
-        fastBuildResult: {
-          runId: run.id,
-          status: "succeeded",
-          commitSha: reportedHead.commitSha,
-          validations: [...directive.validations],
-          notesMarkdown: directive.notesMarkdown,
-        },
-        integrationHeadSha: head.commitSha,
-        validatedHeadSha: null,
-        retryableFailure: null,
-        automationHalt: null,
-        updatedAt,
-      };
-      if (completesAfterBuild) {
-        yield* completeWithoutChangeRequestStage({
-          sourceThreadId,
-          run: succeededRun,
-          skippedStage: "change-request",
-          summary: "Quick Feature completed after Build and its checks",
-          createdAt: updatedAt,
-        });
-        return;
-      }
-      yield* updateRun({ sourceThreadId, run: succeededRun, createdAt: updatedAt });
-      yield* startBrowserReview({ sourceThreadId, run: succeededRun, createdAt: updatedAt });
-    },
-  );
-
-  const handleFastBuildResult = (
-    event: Extract<ImplementationWorkflowEvent, { type: "thread.activity-appended" }>,
-    directive: FastBuildDirective,
-  ) =>
-    applyFastBuildResult({
-      threadId: event.payload.threadId,
-      directive,
-      updatedAt: event.payload.activity.createdAt,
-    });
 
   const handleMergeGateResult = Effect.fn("ImplementationWorkflowReactor.handleMergeGateResult")(
     function* (
@@ -11044,11 +10547,7 @@ const make = Effect.gen(function* () {
       }
       if (failure.stage === "worktree-setup") {
         if (input.run.artifactSource === "proposed-plan") {
-          yield* ensureFastFeatureRun({
-            sourceThreadId: input.sourceThreadId,
-            run: input.run,
-            createdAt: input.createdAt,
-          });
+          yield* blockRetiredFastFeatureBuild(input);
         } else {
           yield* integrateCompletedRun({
             sourceThreadId: input.sourceThreadId,
@@ -11274,11 +10773,7 @@ const make = Effect.gen(function* () {
         return;
       }
       if (input.run.artifactSource === "proposed-plan") {
-        yield* ensureFastFeatureRun({
-          sourceThreadId: input.sourceThreadId,
-          run: input.run,
-          createdAt: input.createdAt,
-        });
+        yield* blockRetiredFastFeatureBuild(input);
       }
     },
   );
@@ -12686,11 +12181,6 @@ const make = Effect.gen(function* () {
           );
         return;
       }
-      case "implementation-fast-build-result": {
-        const directive = asFastBuildDirective(event.payload.activity.payload);
-        if (directive !== null) yield* handleFastBuildResult(event, directive);
-        return;
-      }
       case "implementation-change-request-babysit-result": {
         const directive = asChangeRequestBabysitDirective(event.payload.activity.payload);
         if (directive !== null) yield* handleChangeRequestBabysitResult(event, directive);
@@ -13807,72 +13297,6 @@ const make = Effect.gen(function* () {
         // holds, spawn one dead thread per sweep.
         return matches.some((thread) => !stageThreadFinished(thread));
       };
-
-      // A Fast feature Build thread is created by the decider but seeded by `ensureFastFeatureRun`,
-      // so a restart or an early return between the two strands it with nothing to work on.
-      // Nothing else re-drives it: `recoverRetryableRuns` only looks at runs with a
-      // `retryableFailure`. `ensureFastFeatureRun` leaves `launch-pending` once the handover has
-      // gone out, so a run still sitting there never reached Build.
-      if (run.artifactSource === "proposed-plan" && run.status === "launch-pending") {
-        const implementer = findThread(readModel, run.orchestratorThreadId);
-        // Not stageThreadIsFinished: this branch is about a thread the decider
-        // created and nobody ever handed work to, which is the one shape that
-        // rule deliberately waits on. Here silence means the handover was lost,
-        // and this sweep is the only thing that closes it.
-        if (
-          implementer !== null &&
-          implementer.deletedAt === null &&
-          implementer.session?.status !== "starting" &&
-          implementer.session?.status !== "running" &&
-          !awaitingNudge(implementer)
-        ) {
-          yield* recoverRunStage(
-            run.id,
-            "fast-feature-handover",
-            ensureFastFeatureRun({ sourceThreadId, run, createdAt }),
-          );
-          continue;
-        }
-      }
-
-      // Build can report success after the run was already blocked — a spurious failure, an
-      // exhausted retry budget, a restart mid-dispatch. The result is durable on the thread, so
-      // re-drive it here rather than leaving a finished branch with nobody to review it.
-      // `createdAt > updatedAt` is what terminates this: applying the result advances the run past
-      // the activity, so the next sweep no longer matches.
-      if (
-        run.artifactSource === "proposed-plan" &&
-        run.status === "needs-human-attention" &&
-        run.fastBuildResult?.status !== "succeeded"
-      ) {
-        const orchestratorThread = yield* projectionSnapshotQuery
-          .getThreadDetailById(run.orchestratorThreadId)
-          .pipe(Effect.map(Option.getOrUndefined));
-        // Threads in the command read model carry no activities, so the detail is the only place
-        // the reported result can be read back.
-        const reported = [...(orchestratorThread?.activities ?? [])]
-          .filter((activity) => activity.kind === "implementation-fast-build-result")
-          .sort((left, right) => (left.createdAt < right.createdAt ? 1 : -1))[0];
-        const directive = reported ? asFastBuildDirective(reported.payload) : null;
-        if (
-          reported !== undefined &&
-          directive !== null &&
-          directive.status === "succeeded" &&
-          directive.runId === run.id &&
-          reported.createdAt > run.updatedAt
-        ) {
-          yield* recoverRunStage(
-            run.id,
-            "fast-feature-build-result",
-            applyFastBuildResult({
-              threadId: run.orchestratorThreadId,
-              directive,
-              updatedAt: reported.createdAt,
-            }),
-          );
-          continue;
-        }
-      }
 
       if (
         run.status === "needs-human-attention" &&

@@ -34,7 +34,7 @@ it("lists the eleven Engineering steps in phase order", () => {
     "implementation",
   ]);
   expect(targets.map((target) => target.label)).toEqual([
-    "Prepare shared worktree and App Stack",
+    "Prepare shared worktree",
     "Grill with Docs",
     "Spec authoring",
     "Ticket authoring",
@@ -48,14 +48,7 @@ it("lists the eleven Engineering steps in phase order", () => {
   ]);
 });
 
-it("limits Quick Feature to Planning and Build", () => {
-  const targets = engineeringWorkflowDefaultSteps("quick-plan");
-
-  expect(targets.map((target) => target.phase)).toEqual(["planning", "implementation"]);
-  expect(targets.map((target) => target.label)).toEqual(["Planning", "Build"]);
-});
-
-it("keeps the review and pull-request steps in Feature", () => {
+it("runs Feature as Plan, Implement, Code Review, then Create PR", () => {
   const targets = engineeringWorkflowDefaultSteps("fast-plan");
 
   expect(targets.map((target) => target.phase)).toEqual([
@@ -63,17 +56,21 @@ it("keeps the review and pull-request steps in Feature", () => {
     "implementation",
     "implementation",
     "implementation",
-    "implementation",
-    "implementation",
   ]);
   expect(targets.map((target) => target.label)).toEqual([
-    "Planning",
-    "Build",
-    "App Review",
-    "Final Code Review",
-    "Create pull request",
-    "Babysit pull request",
+    "Plan",
+    "Implement",
+    "Code Review",
+    "Create PR",
   ]);
+  // Only the reviewer runs in its own thread, so only it takes a model of its own.
+  expect(targets.map((target) => target.modelMode)).toEqual([
+    "workflow",
+    "workflow",
+    "configurable",
+    "workflow",
+  ]);
+  expect(targets[2]?.workflowPromptId).toBe("implementation.code-review.codex");
 });
 
 it("drops the phase prefix a guided workflow adds to its step labels", () => {

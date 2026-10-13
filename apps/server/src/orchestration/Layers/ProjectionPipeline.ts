@@ -1196,6 +1196,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...(event.payload.workflowImplementationSettings === undefined
               ? {}
               : { workflowImplementationSettings: event.payload.workflowImplementationSettings }),
+            ...(event.payload.workflowContext !== undefined &&
+            existingRow.value.workflowContext === null
+              ? { workflowContext: event.payload.workflowContext }
+              : {}),
             updatedAt: event.payload.updatedAt,
           });
           return;

@@ -143,6 +143,17 @@ const isElementContextDetails = Schema.is(ElementContextDetails);
 const isWorkspaceUserId = Schema.is(WorkspaceUserId);
 const isProviderInteractionMode = Schema.is(ProviderInteractionMode);
 const isNullableWorkflowPreset = Schema.is(Schema.NullOr(WorkflowPreset));
+// Quick Feature merged into Feature and Quick Engineering into Engineering.
+const RETIRED_WORKFLOW_PRESETS: Readonly<Record<string, WorkflowPreset>> = {
+  "quick-plan": "fast-plan",
+  "fast-engineering": "planning",
+};
+
+/** A stored preset the composer still offers, or undefined when the draft has none. */
+function normalizePersistedWorkflowPreset(value: unknown): WorkflowPreset | null | undefined {
+  const preset = typeof value === "string" ? (RETIRED_WORKFLOW_PRESETS[value] ?? value) : value;
+  return isNullableWorkflowPreset(preset) ? preset : undefined;
+}
 const isNullableImplementationWorkflowSettings = Schema.is(
   Schema.NullOr(ImplementationWorkflowSettings),
 );
@@ -2128,6 +2139,8 @@ function normalizePersistedDraftsByThreadId(
                 ? normalizeLegacyComposerStorageKey(threadKeyOrId, { environmentId })
                 : threadKeyOrId;
             })();
+    const workflowPreset = normalizePersistedWorkflowPreset(draftCandidate.workflowPreset);
+    const lastWorkflowPreset = normalizePersistedWorkflowPreset(draftCandidate.lastWorkflowPreset);
     nextDraftsByThreadKey[normalizedThreadKey] = {
       prompt,
       attachments,
@@ -2145,12 +2158,8 @@ function normalizePersistedDraftsByThreadId(
         : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
       ...(interactionMode ? { interactionMode } : {}),
-      ...(isNullableWorkflowPreset(draftCandidate.workflowPreset)
-        ? { workflowPreset: draftCandidate.workflowPreset }
-        : {}),
-      ...(isNullableWorkflowPreset(draftCandidate.lastWorkflowPreset)
-        ? { lastWorkflowPreset: draftCandidate.lastWorkflowPreset }
-        : {}),
+      ...(workflowPreset === undefined ? {} : { workflowPreset }),
+      ...(lastWorkflowPreset === undefined ? {} : { lastWorkflowPreset }),
       ...(isNullableImplementationWorkflowSettings(draftCandidate.workflowImplementationSettings)
         ? { workflowImplementationSettings: draftCandidate.workflowImplementationSettings }
         : {}),

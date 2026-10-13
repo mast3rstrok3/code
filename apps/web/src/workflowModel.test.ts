@@ -575,7 +575,7 @@ describe("buildWorkflowViewModel", () => {
             .slice(0, 5)
         : [],
     ).toEqual([
-      "Prepare shared worktree and App Stack",
+      "Prepare shared worktree",
       "Grill with Docs",
       "Spec authoring",
       "Ticket authoring",
@@ -1098,7 +1098,7 @@ describe("buildWorkflowViewModel", () => {
       : [];
 
     expect(steps.map((step) => step.label)).toEqual([
-      "Prepare shared worktree and App Stack",
+      "Prepare shared worktree",
       "Grill with Docs",
       "Spec authoring",
       "Ticket authoring",
@@ -1235,7 +1235,7 @@ describe("buildWorkflowViewModel", () => {
       }) satisfies WorkflowTimelineStep<ReturnType<typeof thread>>;
 
     const guidedSteps = [
-      "Planning phase · Prepare shared worktree and App Stack",
+      "Planning phase · Prepare shared worktree",
       "Implementation phase · Execute ticket waves",
       "Implementation phase · Merge ticket branches",
       "Implementation phase · App Review",
@@ -1249,9 +1249,7 @@ describe("buildWorkflowViewModel", () => {
       guidedSteps.find((candidate) => workflowStepMatchesImplementationFailure(candidate, stage))
         ?.label;
 
-    expect(matched("worktree-setup")).toBe(
-      "Planning phase · Prepare shared worktree and App Stack",
-    );
+    expect(matched("worktree-setup")).toBe("Planning phase · Prepare shared worktree");
     expect(matched("worker-execution")).toBe("Implementation phase · Execute ticket waves");
     expect(matched("merge-gate")).toBe("Implementation phase · Merge ticket branches");
     expect(

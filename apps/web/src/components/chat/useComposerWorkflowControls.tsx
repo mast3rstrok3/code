@@ -58,7 +58,7 @@ export function useComposerWorkflowControls(input: {
     stepReviewParts: settings.workflowStepReviewParts,
     implementationSettings:
       implementationSettings ??
-      implementationDefaultsForWorkflowPreset(workflowPreset ?? "quick-plan") ??
+      implementationDefaultsForWorkflowPreset(workflowPreset ?? "fast-plan") ??
       settings.implementation,
     onChange: (defaults: Parameters<ComposerModeControls["workflowDefaults"]["onChange"]>[0]) =>
       updateSettings({

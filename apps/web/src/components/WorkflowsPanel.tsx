@@ -3101,9 +3101,7 @@ function WorkflowGroupCard(props: {
                           const stepDisclosureId = workflowStepDisclosureId(group.id, step.id);
                           const stepOpen = disclosures.expanded[stepDisclosureId] ?? false;
                           const isTicketExecutionStep =
-                            (group.preset === "planning" ||
-                              group.preset === "fast-engineering" ||
-                              group.preset === "implementation") &&
+                            (group.preset === "planning" || group.preset === "implementation") &&
                             workflowStepLabel(step).toLowerCase().includes("execute ticket waves");
                           const isCombinedAppReviewStep =
                             workflowStepLabel(step).toLowerCase().includes("app review") &&

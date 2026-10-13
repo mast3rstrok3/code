@@ -77,41 +77,30 @@ const APP_REVIEW_SUB_STEPS: ReadonlyArray<WorkflowPresetSubStep> = [
   },
 ];
 
-const QUICK_PLAN_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
+const FEATURE_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
   {
-    label: "Planning",
+    label: "Plan",
     skillId: "planning.fast-feature.codex",
     threadBoundary: "same thread",
     note: "uses native CLI Plan mode and answers planning questions automatically",
   },
   {
-    label: "Build",
-    skillId: "implementation.tdd.codex",
-    threadBoundary: "new child thread",
-    note: "runs every planned workstream in order in one Build thread",
-  },
-];
-
-const PLAN_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
-  ...QUICK_PLAN_HELP_STEPS,
-  {
-    label: "App Review",
-    skillId: "implementation.browser-app-review.codex",
-    threadBoundary: "new review thread",
-    note: "runs acceptance lanes in order in the durable reviewer thread",
-    subSteps: APP_REVIEW_SUB_STEPS,
+    label: "Implement",
+    skillId: "implementation.feature.codex",
+    threadBoundary: "same thread",
+    note: "runs the repository's checks and commits; starts an App Stack only when a check needs a running app",
   },
   {
-    label: "Final Code Review",
+    label: "Code Review",
     skillId: "implementation.code-review.codex",
     threadBoundary: "new review thread",
-    note: "one review-and-fix thread per cycle; stops clean or repeats up to five cycles",
+    note: "one reviewer thread per cycle; the Feature thread fixes its findings; stops clean or after five cycles by default",
   },
-  { label: "Create pull request", note: "publishes the reviewed branch" },
   {
-    label: "Babysit pull request",
-    skillId: "implementation.change-request-babysitter.codex",
-    threadBoundary: "new review thread",
+    label: "Create PR",
+    skillId: "implementation.feature-pull-request.codex",
+    threadBoundary: "same thread",
+    note: "opens the pull request into the base branch and lists findings Code Review left unresolved",
   },
 ];
 
@@ -176,34 +165,16 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     ],
   },
   {
-    id: "quick-plan",
-    label: "Quick Feature",
-    description: "Plan with the provider CLI, build and validate the change, then stop.",
-    route: "product",
-    interactionMode: "plan",
-    workflowPromptId: "planning.fast-feature.codex",
-    helpSteps: QUICK_PLAN_HELP_STEPS,
-    group: "plan",
-    availability: "available",
-    implementationDefaults: {
-      ...FULL_IMPLEMENTATION_DEFAULTS,
-      appReviewEnabled: false,
-      finalCodeReviewEnabled: false,
-      pullRequestCreationEnabled: false,
-      pullRequestBabysittingEnabled: false,
-    },
-  },
-  {
     id: "fast-plan",
     label: "Feature",
-    description: "Plan and build with the provider CLI, then review and publish the change.",
+    description:
+      "Plan with the provider CLI, implement and review the change, then open a pull request from the same thread.",
     route: "product",
     interactionMode: "plan",
     workflowPromptId: "planning.fast-feature.codex",
-    helpSteps: PLAN_HELP_STEPS,
+    helpSteps: FEATURE_HELP_STEPS,
     group: "plan",
     availability: "available",
-    implementationDefaults: FULL_IMPLEMENTATION_DEFAULTS,
   },
   {
     id: "full-feature",
@@ -420,7 +391,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     availability: "available",
     implementationDefaults: FULL_IMPLEMENTATION_DEFAULTS,
     helpSteps: [
-      { label: "Prepare shared worktree and App Stack", note: "automatic" },
+      { label: "Prepare shared worktree", note: "automatic" },
       {
         label: "Grill with Docs",
         skillId: "planning.grill-stage.codex",
@@ -497,39 +468,16 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
   },
 ];
 
-const ENGINEERING_WORKFLOW_DEFINITION = GUIDED_WORKFLOW_PRESET_DEFINITIONS.find(
-  (definition) => definition.id === "planning",
-)!;
-
-const FAST_ENGINEERING_WORKFLOW_DEFINITION: WorkflowPresetDefinition = {
-  ...ENGINEERING_WORKFLOW_DEFINITION,
-  id: "fast-engineering",
-  label: "Quick Engineering",
-  description: "Run the full engineering sequence with the Final App Review skipped by default.",
-  implementationDefaults: {
-    ...FULL_IMPLEMENTATION_DEFAULTS,
-    appReviewEnabled: false,
-  },
-};
-
-const ALL_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition> = [
-  ...GUIDED_WORKFLOW_PRESET_DEFINITIONS,
-  FAST_ENGINEERING_WORKFLOW_DEFINITION,
-];
-
 export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition> = [
-  "quick-plan",
   "fast-plan",
-  "fast-engineering",
   "planning",
   "wayfinder",
-].map((id) => ALL_WORKFLOW_PRESET_DEFINITIONS.find((definition) => definition.id === id)!);
+].map((id) => GUIDED_WORKFLOW_PRESET_DEFINITIONS.find((definition) => definition.id === id)!);
 
 export const WORKFLOW_PRESET_DEFINITION_BY_ID = Object.fromEntries(
-  [...LEGACY_WORKFLOW_PRESET_DEFINITIONS, ...ALL_WORKFLOW_PRESET_DEFINITIONS].map((definition) => [
-    definition.id,
-    definition,
-  ]),
+  [...LEGACY_WORKFLOW_PRESET_DEFINITIONS, ...GUIDED_WORKFLOW_PRESET_DEFINITIONS].map(
+    (definition) => [definition.id, definition],
+  ),
 ) as Readonly<Record<WorkflowPreset, WorkflowPresetDefinition>>;
 
 export function normalizeImplementationWorkflowSettings(
@@ -595,17 +543,10 @@ export function inferDisplayedWorkflowPreset(input: {
 
 export function isProductWorkflowPreset(
   preset: WorkflowPreset | null | undefined,
-): preset is
-  | "fix"
-  | "fast-feature"
-  | "quick-plan"
-  | "fast-plan"
-  | "full-feature"
-  | "product-planning" {
+): preset is "fix" | "fast-feature" | "fast-plan" | "full-feature" | "product-planning" {
   return (
     preset === "fix" ||
     preset === "fast-feature" ||
-    preset === "quick-plan" ||
     preset === "fast-plan" ||
     preset === "full-feature" ||
     preset === "product-planning"
@@ -618,7 +559,6 @@ export function expectedIntentKindForWorkflowPreset(
   if (preset === "fix") return "fix";
   if (
     preset === "fast-feature" ||
-    preset === "quick-plan" ||
     preset === "fast-plan" ||
     preset === "full-feature" ||
     preset === "product-planning"

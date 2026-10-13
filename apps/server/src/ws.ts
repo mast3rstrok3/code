@@ -2110,6 +2110,9 @@ const layerWsRpc = (
                     runtimeMode: input.runtimeMode,
                     interactionMode: input.interactionMode,
                     workspaceStrategy: input.workspaceStrategy,
+                    ...(input.workflowPreset === undefined
+                      ? {}
+                      : { workflowPreset: input.workflowPreset }),
                     ...(input.initialMessage === undefined
                       ? {}
                       : {

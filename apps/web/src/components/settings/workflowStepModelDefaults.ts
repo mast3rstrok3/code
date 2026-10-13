@@ -55,10 +55,10 @@ function withoutPhasePrefix(label: string): string {
 }
 
 export function engineeringWorkflowDefaultSteps(
-  preset: "quick-plan" | "fast-plan" | "planning" | "fast-engineering" = "planning",
+  preset: "fast-plan" | "planning" = "planning",
 ): ReadonlyArray<EngineeringWorkflowDefaultStep> {
   const definition = WORKFLOW_PRESET_DEFINITION_BY_ID[preset];
-  const planningStepCount = preset === "quick-plan" || preset === "fast-plan" ? 1 : 5;
+  const planningStepCount = preset === "fast-plan" ? 1 : 5;
   return definition.helpSteps.map((step, index) => {
     const label = withoutPhasePrefix(step.label);
     const phase = index < planningStepCount ? "planning" : "implementation";

@@ -126,7 +126,7 @@ export function resolveWorkflowPresetForPicker(input: {
   )
     ? input.lastWorkflowPreset
     : null;
-  return rememberedPreset ?? ("quick-plan" as const);
+  return rememberedPreset ?? ("fast-plan" as const);
 }
 
 function focusRelativeOption(container: HTMLElement, direction: 1 | -1) {

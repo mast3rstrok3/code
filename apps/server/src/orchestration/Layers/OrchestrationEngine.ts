@@ -258,7 +258,6 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           const command = envelope.command;
           switch (command.type) {
             case "thread.implementation-run.launch":
-            case "thread.fast-feature-run.launch":
             case "thread.implementation-run.rerun":
             case "thread.app-review-workflow.launch":
             case "thread.app-review-workflow.rerun":
