@@ -1,4 +1,14 @@
-import { MessageId, ThreadId, OrchestratorMcpFailure, ProjectId } from "@t3tools/contracts";
+import {
+  MessageId,
+  ThreadId,
+  OrchestratorMcpFailure,
+  ProjectId,
+  WORKFLOW_AUTOMATION_RUNTIME_MODE,
+  type ProviderInteractionMode,
+  type WorkflowPreset,
+} from "@t3tools/contracts";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { workflowPromptIdForPreset } from "@t3tools/shared/workflowPresets";
 import { formatThreadLink } from "@t3tools/shared/threadLinks";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -9,6 +19,12 @@ import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
+import { resolveProjectDevelopmentBranch } from "../../../vcs/developmentBranch.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
+import {
+  appendWorkflowSkillCommandSection,
+  appendWorkflowStepInstructions,
+} from "../../../provider/WorkflowPromptRegistry.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { newCommandId, readCaller, resolveProjectId, unavailable } from "../../threadAccess.ts";
 import { ProjectToolkit } from "./tools.ts";
@@ -48,13 +64,27 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
     });
 });
 
+/** The workflows an agent can start, keyed by the names the tool accepts. */
+const LAUNCHABLE_WORKFLOWS = {
+  feature: { preset: "fast-plan", interactionMode: "plan" },
+  engineering: { preset: "planning", interactionMode: "planning-workflow" },
+} as const satisfies Record<
+  string,
+  { readonly preset: WorkflowPreset; readonly interactionMode: ProviderInteractionMode }
+>;
+
 const access = Effect.gen(function* () {
   yield* readCaller();
   return yield* Project.ProjectService;
 });
 export const layer = McpToolAccess.toLayer(ProjectToolkit, {
   t3_thread_launch: McpToolAccess.startsThreads(
-    (input) => input,
+    // A workflow runs unattended: it switches itself to the default interaction mode and
+    // full access later, so the caller has to allow both now.
+    (input) =>
+      input.workflowPreset === undefined
+        ? input
+        : { runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE, interactionMode: "default" as const },
     (input, { runtimeMode, interactionMode }) =>
       Effect.gen(function* () {
         const context = yield* readCaller();
@@ -115,6 +145,65 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             message:
               "Pass modelSelection: the project has no default model. orchestrator_capabilities lists providers and models.",
           });
+        const workflow =
+          input.workflowPreset === undefined
+            ? undefined
+            : LAUNCHABLE_WORKFLOWS[input.workflowPreset];
+        if (workflow !== undefined && (input.message === undefined || input.scratch === true))
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message:
+              "A workflow launch needs a project and a task: pass message, and omit scratch.",
+          });
+        const settings =
+          workflow === undefined
+            ? null
+            : yield* ServerSettings.ServerSettingsService.pipe(
+                Effect.flatMap((service) => service.getSettings),
+                Effect.orElseSucceed(() => null),
+              );
+        const workspaceStrategy =
+          input.workspaceStrategy ??
+          (workflow === undefined
+            ? ({ type: "root" } as const)
+            : yield* Effect.gen(function* () {
+                const project = yield* readProject;
+                const development =
+                  project === undefined
+                    ? null
+                    : yield* resolveProjectDevelopmentBranch({
+                        git: yield* GitVcsDriver.GitVcsDriver,
+                        settings,
+                        cwd: project.workspaceRoot,
+                        projectId,
+                      });
+                if (development === null)
+                  return yield* new OrchestratorMcpFailure({
+                    code: "invalid_request",
+                    message:
+                      "The project names no development or default branch. Pass workspaceStrategy with the baseRef to start from.",
+                  });
+                const startFromOrigin =
+                  settings === null
+                    ? true
+                    : resolveProjectSettings(settings, projectId).settings
+                        .newWorktreesStartFromOrigin;
+                return {
+                  type: "worktree" as const,
+                  baseRef: development.branch,
+                  startFromOrigin: startFromOrigin || !development.existsLocally,
+                };
+              }));
+        const workflowPromptId =
+          workflow === undefined ? undefined : workflowPromptIdForPreset(workflow.preset);
+        const text =
+          workflowPromptId === undefined
+            ? (input.message ?? "")
+            : appendWorkflowStepInstructions(
+                appendWorkflowSkillCommandSection(input.message ?? "", workflowPromptId),
+                workflowPromptId,
+                settings?.workflowStepInstructions ?? {},
+              );
         const result = yield* ThreadMessageIntake.launchThread({
           commandId,
           threadId,
@@ -122,15 +211,16 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           title: input.title,
           modelSelection,
           runtimeMode,
-          interactionMode,
-          workspaceStrategy: input.workspaceStrategy ?? { type: "root" },
+          interactionMode: workflow?.interactionMode ?? interactionMode,
+          workspaceStrategy,
+          ...(workflow === undefined ? {} : { workflowPreset: workflow.preset }),
           ...(input.message === undefined && attachments.length === 0
             ? {}
             : {
                 initialMessage: {
                   messageId,
                   ...(caller === undefined ? {} : { senderThreadId: caller.id }),
-                  text: input.message ?? "",
+                  text,
                   attachments,
                 },
               }),

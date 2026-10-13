@@ -22,6 +22,7 @@ import * as ServerConfig from "../../../config.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import * as VcsProcess from "../../../vcs/VcsProcess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -80,6 +81,7 @@ it.effect("attributes a launched thread's first message to the calling thread", 
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
       Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       NodeServices.layer,
+      ServerSettings.layerTest(),
       ServerConfig.layerTest(process.cwd(), { prefix: "t3-source-link-" }).pipe(
         Layer.provide(NodeServices.layer),
       ),
@@ -163,6 +165,7 @@ it.effect("launches a scratch thread into the Scratch project", () =>
       }),
       Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       NodeServices.layer,
+      ServerSettings.layerTest(),
       ServerConfig.layerTest(process.cwd(), { prefix: "t3-scratch-launch-" }).pipe(
         Layer.provide(NodeServices.layer),
       ),
@@ -266,6 +269,7 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
       }),
       Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       NodeServices.layer,
+      ServerSettings.layerTest(),
       ServerConfig.layerTest(process.cwd(), { prefix: "t3-named-project-" }).pipe(
         Layer.provide(NodeServices.layer),
       ),
@@ -360,6 +364,7 @@ const clientLaunchHarness = (input: {
     }),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
     NodeServices.layer,
+    ServerSettings.layerTest(),
   ).pipe(
     Layer.provideMerge(GitVcsDriver.layer),
     Layer.provideMerge(VcsProcess.layer),
@@ -463,4 +468,106 @@ it.effect("a launch binds only an existing checkout that is one of the project's
       code: "invalid_request",
     });
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "starts a Feature in a new worktree from the development branch, within the caller's modes",
+  () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-launch-feature-" });
+      const repo = path.join(root, "repo");
+      yield* fileSystem.makeDirectory(repo);
+
+      const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+      const { projectId, dependencies } = clientLaunchHarness({
+        runtimeModeCeiling: "full-access",
+        launched,
+        workspaceRoot: repo,
+      });
+      const git = yield* GitVcsDriver.GitVcsDriver.pipe(Effect.provide(dependencies));
+      for (const args of [
+        ["init", "-b", "main"],
+        ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init"],
+        ["branch", "dev"],
+      ]) {
+        yield* git.execute({ operation: "test.setupRepo", cwd: repo, args });
+      }
+      const toolkit = yield* ProjectToolkit.pipe(
+        Effect.provide(
+          McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(
+            Layer.provide(dependencies),
+          ),
+        ),
+      );
+      const handle = (params: Parameters<typeof toolkit.handle<"t3_thread_launch">>[1]) =>
+        toolkit
+          .handle("t3_thread_launch", params)
+          .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+
+      const missingTask = yield* handle({
+        title: "Checkout",
+        projectId,
+        workflowPreset: "feature",
+      });
+      expect(missingTask.at(-1)?.result).toMatchObject({ code: "invalid_request" });
+
+      const result = yield* handle({
+        title: "Checkout",
+        projectId,
+        workflowPreset: "feature",
+        interactionMode: "default",
+        message: "Add a fast checkout",
+      });
+      expect(result.at(-1)?.result).toMatchObject({ projectId });
+      expect(launched).toHaveLength(1);
+      expect(launched[0]).toMatchObject({
+        workflowPreset: "fast-plan",
+        interactionMode: "plan",
+        runtimeMode: "full-access",
+        workspaceStrategy: { type: "worktree", baseRef: "dev", startFromOrigin: true },
+      });
+      expect(launched[0]?.initialMessage?.text).toMatch(/^Add a fast checkout/);
+      expect(launched[0]?.initialMessage?.text).toContain("planning.fast-feature.codex");
+
+      // An explicit workspace wins over the development branch.
+      yield* handle({
+        title: "Engineering",
+        projectId,
+        workflowPreset: "engineering",
+        message: "Plan the billing rewrite",
+        workspaceStrategy: { type: "worktree", baseRef: "main" },
+      });
+      expect(launched[1]).toMatchObject({
+        workflowPreset: "planning",
+        interactionMode: "planning-workflow",
+        workspaceStrategy: { type: "worktree", baseRef: "main" },
+      });
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("refuses a workflow launch to a caller that may not run unattended in full access", () =>
+  Effect.gen(function* () {
+    const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+    const { projectId, dependencies } = clientLaunchHarness({
+      runtimeModeCeiling: "auto",
+      launched,
+    });
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(dependencies)),
+      ),
+    );
+    const result = yield* toolkit
+      .handle("t3_thread_launch", {
+        title: "Checkout",
+        projectId,
+        workflowPreset: "feature",
+        message: "Add a fast checkout",
+      })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+    expect(result.at(-1)?.result).toMatchObject({ code: "runtime_mode_escalation_denied" });
+    expect(launched).toHaveLength(0);
+  }),
 );

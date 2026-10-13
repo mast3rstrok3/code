@@ -2269,3 +2269,28 @@ it.effect.each([0, 1])("releases an async setup before its completion with exit 
     }).pipe(Effect.provide(harness.layer));
   }),
 );
+
+it.effect("launches a Feature root with its workflow identity", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness();
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const result = yield* launches.launch({
+        ...launchInput({
+          command: "command:launch:feature",
+          thread: "thread:launch:feature",
+          message: "Add a fast checkout",
+        }),
+        interactionMode: "plan",
+        workflowPreset: "fast-plan",
+      });
+      assert.equal(result.projection.thread.workflowPreset, "fast-plan");
+      assert.deepEqual({ ...result.projection.thread.workflowContext }, {
+        workflowId: "workflow-thread:launch:feature",
+        parentWorkflowId: null,
+        rootThreadId: "thread:launch:feature",
+        ticketScope: [],
+      } as Record<string, unknown>);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
