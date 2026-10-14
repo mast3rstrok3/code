@@ -151,6 +151,22 @@ describe("editing scheduled task branch settings", () => {
   });
 });
 
+describe("scheduled task workflows", () => {
+  it("edits a task that an older server sent without a workflow as a plain thread", () => {
+    expect(taskToDraft(legacyTask).workflow).toBeNull();
+  });
+
+  it("keeps a Feature task's workflow and leaves an unset base for the development branch", () => {
+    const draft = taskToDraft({
+      ...legacyTask,
+      workflow: "feature",
+      workspaceStrategy: { type: "root" },
+    });
+    expect(draft.workflow).toBe("feature");
+    expect(draft.baseRef).toBe("");
+  });
+});
+
 describe("webhook scheduled tasks", () => {
   const signature = { header: "x-signature", encoding: "base64", prefix: "" } as const;
   const webhookTask: ScheduledTask = {

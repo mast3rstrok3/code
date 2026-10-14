@@ -8,6 +8,7 @@ import {
   OrchestratorMcpTarget,
   type OrchestrationV2ThreadShell,
   type ScheduledTask,
+  type ScheduledTaskUpsertInput,
   ScheduledTaskId,
   ProjectId,
   ProviderDriverKind,
@@ -2042,6 +2043,85 @@ describe("OrchestratorMcpService provider resolution", () => {
         assert.equal(error.code, "runtime_mode_escalation_denied");
         assert.equal(yield* Ref.get(upserted), 0);
       }),
+    );
+
+    it.effect("lets only a full-access caller turn a task into a workflow", () =>
+      Effect.gen(function* () {
+        const upserted = yield* Ref.make(0);
+        const mcp = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
+          Effect.provide(service([task({})], null, upserted)),
+        );
+        const error = yield* mcp
+          .updateScheduledTask(supervisedClient, {
+            scheduledTaskId: task({}).id,
+            workflow: "feature",
+          })
+          .pipe(Effect.flip);
+        assert.equal(error.code, "runtime_mode_escalation_denied");
+        assert.equal(yield* Ref.get(upserted), 0);
+      }),
+    );
+
+    it.effect(
+      "unbinds a task that becomes a workflow and starts it on the development branch",
+      () =>
+        Effect.gen(function* () {
+          const saved = yield* Ref.make<ReadonlyArray<ScheduledTaskUpsertInput>>([]);
+          const bound = task({ threadId: boundThreadId, runtimeMode: "full-access" });
+          const fullAccessClient: McpInvocationScope = {
+            ...supervisedClient,
+            client: { sessionId: "scheduled", label: "Claude Code", access: "full-access" },
+          };
+          const mcp = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
+            Effect.provide(
+              layerOrchestratorService.pipe(
+                Layer.provide(
+                  Layer.mergeAll(
+                    NodeServices.layer,
+                    ServerSettings.layerTest(),
+                    Layer.mock(ThreadManagementService.ThreadManagementService)({
+                      getThreadShell: (threadId) =>
+                        Effect.succeed(liveThreadShell(threadId, { runtimeMode: "full-access" })),
+                    }),
+                    Layer.mock(ProviderRegistry.ProviderRegistry)({
+                      getProviders: Effect.succeed([]),
+                    }),
+                    Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+                      list: () => Effect.succeed([]),
+                    }),
+                    Layer.mock(ProjectService.ProjectService)({}),
+                    Layer.mock(SecretRequests.SecretRequests)({}),
+                    Layer.mock(ScheduledTaskService.ScheduledTaskService)({
+                      list: () => Effect.succeed({ tasks: [bound] }),
+                      upsert: (input) =>
+                        Ref.update(saved, (inputs) => [...inputs, input]).pipe(
+                          Effect.as({ task: { ...bound, threadId: null, workflow: "feature" } }),
+                        ),
+                    }),
+                  ),
+                ),
+              ),
+            ),
+          );
+          const updated = yield* mcp.updateScheduledTask(
+            fullAccessClient,
+            { scheduledTaskId: bound.id, workflow: "feature" },
+            {
+              developmentWorktree: () =>
+                Effect.succeed({ type: "worktree", baseRef: "dev", startFromOrigin: true }),
+            },
+          );
+          const [input] = yield* Ref.get(saved);
+          assert.equal(input?.workflow, "feature");
+          assert.equal(input?.threadId, null);
+          assert.deepEqual(input?.workspaceStrategy, {
+            type: "worktree",
+            baseRef: "dev",
+            startFromOrigin: true,
+          });
+          assert.equal(updated.workflow, "feature");
+          assert.equal(updated.boundThreadId, null);
+        }),
     );
 
     it.effect("reports a saved task even when its bound thread cannot be read", () =>

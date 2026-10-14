@@ -113,6 +113,7 @@ import Migration0113 from "./Migrations/065_CodexUsageNativeTurnIndex.ts";
 import Migration0114 from "./Migrations/066_RepairClientSettlementTimestamps.ts";
 
 import Migration0115 from "./Migrations/067_WebhookDedupe.ts";
+import Migration0116 from "./Migrations/116_ScheduledTaskWorkflow.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -246,6 +247,7 @@ export const migrationEntries = [
   [113, "CodexUsageNativeTurnIndex", Migration0113],
   [114, "RepairClientSettlementTimestamps", Migration0114],
   [115, "WebhookDedupe", Migration0115],
+  [116, "ScheduledTaskWorkflow", Migration0116],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

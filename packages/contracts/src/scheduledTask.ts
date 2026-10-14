@@ -231,6 +231,14 @@ export const ScheduledTaskWebhookEndpoint = Schema.Struct({
 });
 export type ScheduledTaskWebhookEndpoint = typeof ScheduledTaskWebhookEndpoint.Type;
 
+/**
+ * The workflow each run's fresh thread starts as, by the names
+ * `t3_thread_launch` accepts: `feature` plans, implements, reviews and opens a
+ * pull request on its own; `engineering` runs the Engineering workflow.
+ */
+export const ScheduledTaskWorkflow = Schema.Literals(["feature", "engineering"]);
+export type ScheduledTaskWorkflow = typeof ScheduledTaskWorkflow.Type;
+
 export const ScheduledTask = Schema.Struct({
   id: ScheduledTaskId,
   title: TrimmedNonEmptyString,
@@ -243,6 +251,8 @@ export const ScheduledTask = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  /** Null (or absent from an older server) starts each run as a plain thread. */
+  workflow: Schema.optional(Schema.NullOr(ScheduledTaskWorkflow)),
   createdBy: OrchestrationV2Actor,
   creationSource: OrchestrationV2CreationSource,
   createdAt: IsoDateTime,
@@ -282,6 +292,10 @@ export const ScheduledTaskUpsertInput = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  workflow: Schema.optional(Schema.NullOr(ScheduledTaskWorkflow)).annotate({
+    description:
+      "Start each run's fresh thread as this workflow; null starts a plain thread. Omit to keep the task's current choice. A workflow task cannot be bound to a thread.",
+  }),
   createdBy: Schema.optional(OrchestrationV2Actor),
   creationSource: Schema.optional(OrchestrationV2CreationSource),
 });

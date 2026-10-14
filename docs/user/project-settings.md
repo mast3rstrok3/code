@@ -140,6 +140,14 @@ Additional deliveries are accepted without a log entry, and coalesced deliveries
 always replace the persisted payload. Coalesced updates count toward a separate
 60-per-minute validation limit; exceeding it receives HTTP 429.
 
+To have every request start its own Feature workflow, set **Start as** to
+**Feature workflow** on desktop or web. Each run then plans, implements, runs
+Code Review and opens a pull request in a new worktree from the base branch,
+which defaults to the project's development branch. **Engineering workflow**
+starts the Engineering workflow instead. Workflow runs work unattended in full
+access. The task's name may use the prompt's placeholders, so
+`Fix {{body.summary}}` titles each thread after its request.
+
 On desktop and web, pick **Deliveries** from a task's menu to see recent
 requests and the prompt each one produced.
 
