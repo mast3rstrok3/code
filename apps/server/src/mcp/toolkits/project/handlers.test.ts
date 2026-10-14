@@ -314,6 +314,9 @@ const clientLaunchHarness = (input: {
   readonly runtimeModeCeiling: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
   readonly launched: Array<ThreadLaunch.ThreadLaunchInput>;
   readonly workspaceRoot?: string;
+  readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
+  /** The project record's own default; the settings may resolve another. */
+  readonly projectDefault?: null;
 }) => {
   const projectId = ProjectId.make("project:client-target");
   const modelSelection = { instanceId: ProviderInstanceId.make("claude"), model: "claude-opus" };
@@ -357,14 +360,15 @@ const clientLaunchHarness = (input: {
             ? Option.some({
                 id,
                 workspaceRoot: input.workspaceRoot ?? "/projects/client-target",
-                defaultModelSelection: modelSelection,
+                defaultModelSelection:
+                  input.projectDefault === undefined ? modelSelection : input.projectDefault,
               } as unknown as ProjectRecord)
             : Option.none(),
         ),
     }),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
     NodeServices.layer,
-    ServerSettings.layerTest(),
+    ServerSettings.layerTest(input.settings),
   ).pipe(
     Layer.provideMerge(GitVcsDriver.layer),
     Layer.provideMerge(VcsProcess.layer),
@@ -481,10 +485,12 @@ it.effect(
       yield* fileSystem.makeDirectory(repo);
 
       const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
-      const { projectId, dependencies } = clientLaunchHarness({
+      const featureModel = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.5" };
+      const { projectId, modelSelection, dependencies } = clientLaunchHarness({
         runtimeModeCeiling: "full-access",
         launched,
         workspaceRoot: repo,
+        settings: { workflowModelSelections: { feature: featureModel } },
       });
       const git = yield* GitVcsDriver.GitVcsDriver.pipe(Effect.provide(dependencies));
       for (const args of [
@@ -527,6 +533,8 @@ it.effect(
         interactionMode: "plan",
         runtimeMode: "full-access",
         workspaceStrategy: { type: "worktree", baseRef: "dev", startFromOrigin: true },
+        // No model named: the Feature workflow's default.
+        modelSelection: featureModel,
       });
       expect(launched[0]?.initialMessage?.text).toMatch(/^Add a fast checkout/);
       expect(launched[0]?.initialMessage?.text).toContain("planning.fast-feature.codex");
@@ -543,6 +551,8 @@ it.effect(
         workflowPreset: "planning",
         interactionMode: "planning-workflow",
         workspaceStrategy: { type: "worktree", baseRef: "main" },
+        // Engineering has no default of its own and follows the project's model.
+        modelSelection,
       });
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
@@ -569,5 +579,28 @@ it.effect("refuses a workflow launch to a caller that may not run unattended in 
       .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
     expect(result.at(-1)?.result).toMatchObject({ code: "runtime_mode_escalation_denied" });
     expect(launched).toHaveLength(0);
+  }),
+);
+
+it.effect("a launch uses the environment's default model when the project names none", () =>
+  Effect.gen(function* () {
+    const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+    const environmentDefault = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" };
+    const { projectId, dependencies } = clientLaunchHarness({
+      runtimeModeCeiling: "auto",
+      launched,
+      projectDefault: null,
+      settings: { defaultModelSelection: environmentDefault },
+    });
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(dependencies)),
+      ),
+    );
+    const result = yield* toolkit
+      .handle("t3_thread_launch", { title: "Fix", projectId, message: "Fix the bug" })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+    expect(result.at(-1)?.result).toMatchObject({ projectId, modelSelection: environmentDefault });
+    expect(launched[0]?.modelSelection).toEqual(environmentDefault);
   }),
 );

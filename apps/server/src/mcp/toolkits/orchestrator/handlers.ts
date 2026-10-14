@@ -1,10 +1,69 @@
 import { OrchestratorToolkit } from "./tools.ts";
+import {
+  WORKFLOW_AUTOMATION_RUNTIME_MODE,
+  type ProjectId,
+  type ScheduledTaskWorkflow,
+} from "@t3tools/contracts";
+import {
+  resolveProjectSettings,
+  resolveWorkflowModelSelection,
+} from "@t3tools/shared/projectSettings";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+
+import { developmentWorktreeStrategy } from "../../../orchestration-v2/WorkflowLaunch.ts";
+import * as Project from "../../../project/ProjectService.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
+import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
+
+/**
+ * Resolves where an unbound task's runs start, a new worktree from the
+ * project's development branch, and the default models from settings.
+ * Without git, projects or settings it resolves nothing, and the task falls
+ * back to its old default.
+ */
+const scheduledTaskDefaults = Effect.gen(function* () {
+  const git = yield* Effect.serviceOption(GitVcsDriver.GitVcsDriver);
+  const projects = yield* Effect.serviceOption(Project.ProjectService);
+  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService).pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.succeed(null),
+        onSome: (service) => service.getSettings.pipe(Effect.orElseSucceed(() => null)),
+      }),
+    ),
+  );
+  return {
+    defaultModelSelection: (projectId: ProjectId) =>
+      settings === null
+        ? null
+        : resolveProjectSettings(settings, projectId).settings.defaultModelSelection,
+    workflowModelSelection: (projectId: ProjectId, workflow: ScheduledTaskWorkflow) =>
+      settings === null ? null : resolveWorkflowModelSelection(settings, projectId, workflow),
+    developmentWorktree: (projectId: ProjectId) =>
+      Option.isNone(git) || Option.isNone(projects)
+        ? Effect.succeed(null)
+        : projects.value.getById(projectId).pipe(
+            Effect.map(Option.getOrUndefined),
+            Effect.orElseSucceed(() => undefined),
+            Effect.flatMap((project) =>
+              project === undefined
+                ? Effect.succeed(null)
+                : developmentWorktreeStrategy({
+                    git: git.value,
+                    settings,
+                    workspaceRoot: project.workspaceRoot,
+                    projectId,
+                  }),
+            ),
+          ),
+  } satisfies OrchestratorMcpService.ScheduledTaskDefaults;
+});
 
 const handlers = {
   orchestrator_capabilities: McpToolAccess.reads(() =>
@@ -36,13 +95,17 @@ const handlers = {
     }),
   ),
   schedule_task: McpToolAccess.startsThreads(
-    // A scheduled task runs with the caller's own modes.
-    () => ({}),
+    // A scheduled task runs with the caller's own modes; a workflow task's
+    // runs start unattended, so the caller has to allow full access.
+    (input) =>
+      input.workflow === undefined
+        ? {}
+        : { runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE, interactionMode: "default" as const },
     (input) =>
       Effect.gen(function* () {
         const scope = yield* McpInvocationContext.McpInvocationContext;
         const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-        return yield* service.scheduleTask(scope, input);
+        return yield* service.scheduleTask(scope, input, yield* scheduledTaskDefaults);
       }),
   ),
   list_scheduled_tasks: McpToolAccess.reads((input) =>
@@ -56,7 +119,7 @@ const handlers = {
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-      return yield* service.updateScheduledTask(scope, input);
+      return yield* service.updateScheduledTask(scope, input, yield* scheduledTaskDefaults);
     }),
   ),
   delete_scheduled_task: McpToolAccess.writes((input) =>

@@ -7,6 +7,7 @@ import {
   ScheduledTaskId,
   ThreadId,
   ScheduledTaskWebhookDeliveryId,
+  WORKFLOW_AUTOMATION_RUNTIME_MODE,
   type ScheduledTaskDeleteInput,
   type ScheduledTaskDeleteResult,
   type ScheduledTaskGetWebhookDeliveryInput,
@@ -22,6 +23,7 @@ import {
   type ScheduledTaskSetEnabledInput,
   type ScheduledTaskUpsertInput,
 } from "@t3tools/contracts";
+import { resolveWorkflowModelSelection } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -41,6 +43,8 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
+import { LAUNCHABLE_WORKFLOWS, workflowLaunchText } from "../orchestration-v2/WorkflowLaunch.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as Metrics from "../observability/Metrics.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -186,6 +190,8 @@ interface ScheduledTaskRow {
   readonly model_selection_json: string;
   readonly runtime_mode: string;
   readonly interaction_mode: string;
+  readonly workflow: string | null;
+  readonly use_workflow_default_model: number;
   readonly created_by: string;
   readonly creation_source: string;
   readonly created_at: string;
@@ -291,6 +297,19 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
+/** Longest title a webhook can give its run's thread. */
+const WEBHOOK_RUN_TITLE_LIMIT = 120;
+
+/**
+ * The run's thread title: the task title with the request's placeholders
+ * filled in, on one line. Falls back to the task title when nothing is left.
+ */
+export function webhookRunTitle(template: string, request: WebhookRequest): string {
+  if (!template.includes("{{")) return template;
+  const title = renderWebhookPrompt(template, request).prompt.replace(/\s+/g, " ").trim();
+  return title.length === 0 ? template : title.slice(0, WEBHOOK_RUN_TITLE_LIMIT);
+}
+
 function webhookPath(taskId: string, token: string): string {
   return `${WEBHOOK_ROUTE_PREFIX}/${encodeURIComponent(taskId)}/${token}`;
 }
@@ -328,6 +347,8 @@ const decodeRow = (row: ScheduledTaskRow, origin: WebhookOrigin | null = null) =
       modelSelection,
       runtimeMode: row.runtime_mode,
       interactionMode: row.interaction_mode,
+      workflow: row.workflow,
+      useWorkflowDefaultModel: row.use_workflow_default_model === 1,
       createdBy: row.created_by,
       creationSource: row.creation_source,
       createdAt: row.created_at,
@@ -397,6 +418,13 @@ export const layer = Layer.effect(
     const secretRequests = yield* SecretRequests.SecretRequests;
     const scheduler = yield* Scheduler.Scheduler;
     const readWebhookOrigin = yield* ScheduledTaskWebhookOrigin;
+    // Only workflow runs read settings, for the workflow's step instructions
+    // and default model.
+    const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+    const readServerSettings = Option.match(serverSettings, {
+      onNone: () => Effect.succeed(null),
+      onSome: (service) => service.getSettings.pipe(Effect.orElseSucceed(() => null)),
+    });
     // Webhook deliveries for one task dispatch in arrival order rather than
     // being dropped while an earlier delivery is still dispatching.
     const webhookPermits = yield* Ref.make<ReadonlyMap<ScheduledTaskId, Semaphore.Semaphore>>(
@@ -426,6 +454,8 @@ export const layer = Layer.effect(
         model_selection_json,
         runtime_mode,
         interaction_mode,
+        workflow,
+        use_workflow_default_model,
         created_by,
         creation_source,
         created_at,
@@ -461,6 +491,8 @@ export const layer = Layer.effect(
         model_selection_json,
         runtime_mode,
         interaction_mode,
+        workflow,
+        use_workflow_default_model,
         created_by,
         creation_source,
         created_at,
@@ -541,6 +573,8 @@ export const layer = Layer.effect(
           model_selection_json,
           runtime_mode,
           interaction_mode,
+          workflow,
+          use_workflow_default_model,
           created_by,
           creation_source,
           created_at,
@@ -565,6 +599,8 @@ export const layer = Layer.effect(
           ${JSON.stringify(task.modelSelection)},
           ${task.runtimeMode},
           ${task.interactionMode},
+          ${task.workflow ?? null},
+          ${task.useWorkflowDefaultModel === true ? 1 : 0},
           ${task.createdBy},
           ${task.creationSource},
           ${task.createdAt},
@@ -590,6 +626,8 @@ export const layer = Layer.effect(
           model_selection_json = excluded.model_selection_json,
           runtime_mode = excluded.runtime_mode,
           interaction_mode = excluded.interaction_mode,
+          workflow = excluded.workflow,
+          use_workflow_default_model = excluded.use_workflow_default_model,
           creation_source = excluded.creation_source,
           updated_at = excluded.updated_at,
           next_run_at = excluded.next_run_at,
@@ -710,7 +748,12 @@ export const layer = Layer.effect(
     const runTask = Effect.fn("ScheduledTaskService.runTask")(function* (
       task: ScheduledTask,
       trigger: "scheduled" | "manual" | "webhook",
-      webhook?: { readonly deliveryId: string; readonly prompt: string },
+      webhook?: {
+        readonly deliveryId: string;
+        readonly prompt: string;
+        /** The task title with the request's placeholders filled in. */
+        readonly title: string;
+      },
     ) {
       const reserved = yield* Ref.modify(activeRuns, (active) => {
         if (active.has(task.id)) return [false, active] as const;
@@ -788,6 +831,18 @@ export const layer = Layer.effect(
         // after the poll read are honoured. A webhook prompt was rendered
         // from the row when the request arrived.
         const prompt = webhook?.prompt ?? active.prompt;
+        const workflow = active.workflow == null ? null : LAUNCHABLE_WORKFLOWS[active.workflow];
+        const settings =
+          workflow === null || active.threadId !== null ? null : yield* readServerSettings;
+        const launchText =
+          workflow === null || active.threadId !== null
+            ? prompt
+            : workflowLaunchText(prompt, workflow.preset, settings);
+        // Resolved per run, so a settings change reaches the task without an edit.
+        const launchModelSelection =
+          (active.workflow != null && active.useWorkflowDefaultModel === true && settings !== null
+            ? resolveWorkflowModelSelection(settings, active.projectId, active.workflow)
+            : null) ?? active.modelSelection;
 
         // Effect.exit (not Effect.result) so defects and interruptions in the
         // dispatch are also captured and recorded as a failed run instead of
@@ -798,15 +853,18 @@ export const layer = Layer.effect(
                 threadLaunch.launch({
                   commandId,
                   projectId: active.projectId,
-                  title: active.title,
-                  modelSelection: active.modelSelection,
-                  runtimeMode: active.runtimeMode,
-                  interactionMode: active.interactionMode,
+                  title: webhook?.title ?? active.title,
+                  modelSelection: launchModelSelection,
+                  // A workflow runs unattended and switches its own modes as it goes.
+                  runtimeMode:
+                    workflow === null ? active.runtimeMode : WORKFLOW_AUTOMATION_RUNTIME_MODE,
+                  interactionMode: workflow?.interactionMode ?? active.interactionMode,
                   workspaceStrategy: active.workspaceStrategy,
+                  ...(workflow === null ? {} : { workflowPreset: workflow.preset }),
                   initialMessage: {
                     messageId,
                     scheduledTaskId: active.id,
-                    text: prompt,
+                    text: launchText,
                     attachments: [],
                   },
                   createdBy: active.createdBy,
@@ -1074,6 +1132,15 @@ export const layer = Layer.effect(
                 return { token, secret, secretChanged };
               })
             : { token: null, secret: null, secretChanged: true };
+        const workflow =
+          input.workflow === undefined ? (existingTask?.workflow ?? null) : input.workflow;
+        const threadId = input.threadId ?? null;
+        if (workflow !== null && threadId !== null) {
+          return yield* taskError(
+            "A workflow task starts a fresh thread on every run, so it cannot be bound to a thread.",
+            { taskId: id },
+          );
+        }
         const scheduleUnchanged =
           existingTask !== null &&
           existingTask.enabled === input.enabled &&
@@ -1085,11 +1152,16 @@ export const layer = Layer.effect(
           enabled: input.enabled,
           schedule,
           projectId: input.projectId,
-          threadId: input.threadId ?? null,
+          threadId,
           workspaceStrategy: input.workspaceStrategy,
           modelSelection: input.modelSelection,
-          runtimeMode: input.runtimeMode,
-          interactionMode: input.interactionMode,
+          // Its runs start unattended in full access, which the stored modes say.
+          runtimeMode: workflow === null ? input.runtimeMode : WORKFLOW_AUTOMATION_RUNTIME_MODE,
+          interactionMode: workflow === null ? input.interactionMode : "default",
+          workflow,
+          useWorkflowDefaultModel:
+            workflow !== null &&
+            (input.useWorkflowDefaultModel ?? existingTask?.useWorkflowDefaultModel ?? false),
           createdBy: existingTask?.createdBy ?? input.createdBy ?? "user",
           creationSource: input.creationSource ?? "web",
           createdAt: existingTask?.createdAt ?? iso(now),
@@ -1620,7 +1692,11 @@ export const layer = Layer.effect(
                 Effect.annotateCurrentSpan({ "scheduled_task.webhook.run_outcome": outcome }),
                 Metrics.increment(Metrics.webhookRunsTotal, { outcome }),
               ]);
-            yield* runTask(task, "webhook", { deliveryId, prompt: rendered.prompt }).pipe(
+            yield* runTask(task, "webhook", {
+              deliveryId,
+              prompt: rendered.prompt,
+              title: webhookRunTitle(task.title, request),
+            }).pipe(
               Effect.flatMap((completed) =>
                 completed.lastRunStatus === "failed"
                   ? runOutcome("failed").pipe(

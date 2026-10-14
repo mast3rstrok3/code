@@ -19,6 +19,7 @@ import {
 } from "./baseSchemas.ts";
 import {
   ScheduledTaskRunStatus,
+  ScheduledTaskWorkflow,
   ScheduledTaskSchedule,
   ScheduledTaskUpsertSchedule,
 } from "./scheduledTask.ts";
@@ -538,6 +539,12 @@ export const OrchestratorMcpScheduleTaskInput = Schema.Struct({
         "True (default) posts each run into this thread; false creates a fresh top-level thread per run.",
     }),
   ),
+  workflow: Schema.optional(
+    ScheduledTaskWorkflow.annotate({
+      description:
+        "Start each run as a fresh thread running this workflow, in a new worktree from the project's development branch: feature (Plan, Implement, Code Review, pull request) or engineering. Implies bindToCurrentThread=false, and the caller must allow full access.",
+    }),
+  ),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
 });
 export type OrchestratorMcpScheduleTaskInput = typeof OrchestratorMcpScheduleTaskInput.Type;
@@ -550,6 +557,11 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   enabled: Schema.Boolean,
   projectId: ProjectId,
   boundThreadId: Schema.NullOr(ThreadId),
+  workflow: Schema.NullOr(ScheduledTaskWorkflow),
+  useWorkflowDefaultModel: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "True when each run starts on the workflow's default model from settings, resolved when the run starts.",
+  }),
   schedule: ScheduledTaskSchedule,
   nextRunAt: Schema.NullOr(IsoDateTime),
   lastRunStatus: ScheduledTaskRunStatus,
@@ -591,6 +603,12 @@ export const OrchestratorMcpUpdateScheduledTaskInput = Schema.Struct({
   schedule: Schema.optional(OrchestratorMcpSchedule),
   enabled: Schema.optional(Schema.Boolean),
   bindToCurrentThread: Schema.optional(Schema.Boolean),
+  workflow: Schema.optional(
+    Schema.NullOr(ScheduledTaskWorkflow).annotate({
+      description:
+        "Start each run as a fresh thread running this workflow (feature or engineering), or null for a plain thread. Setting one unbinds the task from its thread.",
+    }),
+  ),
 });
 export type OrchestratorMcpUpdateScheduledTaskInput =
   typeof OrchestratorMcpUpdateScheduledTaskInput.Type;

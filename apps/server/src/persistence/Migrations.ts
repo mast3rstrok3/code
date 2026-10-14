@@ -18,6 +18,8 @@ import Migration0104 from "./Migrations/057_ScheduledTaskWebhooks.ts";
 import Migration0107 from "./Migrations/059_McpAppModelContext.ts";
 import Migration0106 from "./Migrations/106_WorkflowEventHistory.ts";
 import Migration0108 from "./Migrations/108_RetireQuickWorkflowPresets.ts";
+import Migration0109 from "./Migrations/109_ScheduledTaskWorkflow.ts";
+import Migration0110 from "./Migrations/110_ScheduledTaskWorkflowDefaultModel.ts";
 import Migration0105 from "./Migrations/058_WebhookRelayDeliveries.ts";
 
 // Import all migrations statically
@@ -245,6 +247,8 @@ export const migrationEntries = [
   // Upstream ID 59 is already in the fork ledger.
   [107, "McpAppModelContext", Migration0107],
   [108, "RetireQuickWorkflowPresets", Migration0108],
+  [109, "ScheduledTaskWorkflow", Migration0109],
+  [110, "ScheduledTaskWorkflowDefaultModel", Migration0110],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

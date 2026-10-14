@@ -4,11 +4,11 @@ import {
   OrchestratorMcpFailure,
   ProjectId,
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
-  type ProviderInteractionMode,
-  type WorkflowPreset,
 } from "@t3tools/contracts";
-import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import { workflowPromptIdForPreset } from "@t3tools/shared/workflowPresets";
+import {
+  resolveProjectSettings,
+  resolveWorkflowModelSelection,
+} from "@t3tools/shared/projectSettings";
 import { formatThreadLink } from "@t3tools/shared/threadLinks";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -19,12 +19,12 @@ import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
-import { resolveProjectDevelopmentBranch } from "../../../vcs/developmentBranch.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import {
-  appendWorkflowSkillCommandSection,
-  appendWorkflowStepInstructions,
-} from "../../../provider/WorkflowPromptRegistry.ts";
+  LAUNCHABLE_WORKFLOWS,
+  developmentWorktreeStrategy,
+  workflowLaunchText,
+} from "../../../orchestration-v2/WorkflowLaunch.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { newCommandId, readCaller, resolveProjectId, unavailable } from "../../threadAccess.ts";
 import { ProjectToolkit } from "./tools.ts";
@@ -63,15 +63,6 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
         "worktreePath must be one of the project's git worktrees. t3_worktree_list shows them.",
     });
 });
-
-/** The workflows an agent can start, keyed by the names the tool accepts. */
-const LAUNCHABLE_WORKFLOWS = {
-  feature: { preset: "fast-plan", interactionMode: "plan" },
-  engineering: { preset: "planning", interactionMode: "planning-workflow" },
-} as const satisfies Record<
-  string,
-  { readonly preset: WorkflowPreset; readonly interactionMode: ProviderInteractionMode }
->;
 
 const access = Effect.gen(function* () {
   yield* readCaller();
@@ -134,9 +125,26 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             });
           yield* assertProjectWorktree(project.workspaceRoot, input.workspaceStrategy.worktreePath);
         }
+        const workflow =
+          input.workflowPreset === undefined
+            ? undefined
+            : LAUNCHABLE_WORKFLOWS[input.workflowPreset];
+        const settings = yield* ServerSettings.ServerSettingsService.pipe(
+          Effect.flatMap((service) => service.getSettings),
+          Effect.orElseSucceed(() => null),
+        );
+        // A workflow starts on its own default model unless the caller names
+        // one. The project's default is the resolved setting, so one set only
+        // for the environment counts too; the project record is the last resort.
         const modelSelection =
           input.modelSelection ??
+          (input.workflowPreset === undefined || settings === null
+            ? null
+            : resolveWorkflowModelSelection(settings, projectId, input.workflowPreset)) ??
           caller?.modelSelection ??
+          (settings === null
+            ? null
+            : resolveProjectSettings(settings, projectId).settings.defaultModelSelection) ??
           (yield* readProject)?.defaultModelSelection ??
           undefined;
         if (modelSelection === undefined)
@@ -145,65 +153,39 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             message:
               "Pass modelSelection: the project has no default model. orchestrator_capabilities lists providers and models.",
           });
-        const workflow =
-          input.workflowPreset === undefined
-            ? undefined
-            : LAUNCHABLE_WORKFLOWS[input.workflowPreset];
         if (workflow !== undefined && (input.message === undefined || input.scratch === true))
           return yield* new OrchestratorMcpFailure({
             code: "invalid_request",
             message:
               "A workflow launch needs a project and a task: pass message, and omit scratch.",
           });
-        const settings =
-          workflow === undefined
-            ? null
-            : yield* ServerSettings.ServerSettingsService.pipe(
-                Effect.flatMap((service) => service.getSettings),
-                Effect.orElseSucceed(() => null),
-              );
         const workspaceStrategy =
           input.workspaceStrategy ??
           (workflow === undefined
             ? ({ type: "root" } as const)
             : yield* Effect.gen(function* () {
                 const project = yield* readProject;
-                const development =
+                const strategy =
                   project === undefined
                     ? null
-                    : yield* resolveProjectDevelopmentBranch({
+                    : yield* developmentWorktreeStrategy({
                         git: yield* GitVcsDriver.GitVcsDriver,
                         settings,
-                        cwd: project.workspaceRoot,
+                        workspaceRoot: project.workspaceRoot,
                         projectId,
                       });
-                if (development === null)
+                if (strategy === null)
                   return yield* new OrchestratorMcpFailure({
                     code: "invalid_request",
                     message:
                       "The project names no development or default branch. Pass workspaceStrategy with the baseRef to start from.",
                   });
-                const startFromOrigin =
-                  settings === null
-                    ? true
-                    : resolveProjectSettings(settings, projectId).settings
-                        .newWorktreesStartFromOrigin;
-                return {
-                  type: "worktree" as const,
-                  baseRef: development.branch,
-                  startFromOrigin: startFromOrigin || !development.existsLocally,
-                };
+                return strategy;
               }));
-        const workflowPromptId =
-          workflow === undefined ? undefined : workflowPromptIdForPreset(workflow.preset);
         const text =
-          workflowPromptId === undefined
+          workflow === undefined
             ? (input.message ?? "")
-            : appendWorkflowStepInstructions(
-                appendWorkflowSkillCommandSection(input.message ?? "", workflowPromptId),
-                workflowPromptId,
-                settings?.workflowStepInstructions ?? {},
-              );
+            : workflowLaunchText(input.message ?? "", workflow.preset, settings);
         const result = yield* ThreadMessageIntake.launchThread({
           commandId,
           threadId,
