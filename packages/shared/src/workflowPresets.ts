@@ -97,10 +97,16 @@ const FEATURE_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
     note: "one reviewer thread per cycle; the Feature thread fixes its findings; stops clean or after five cycles by default",
   },
   {
+    label: "App Review",
+    skillId: "implementation.browser-app-review.codex",
+    threadBoundary: "new review thread",
+    note: "starts the worktree's App Stack; a reviewer tests the change in the preview browser and records it for the App Review panel; the Feature thread fixes failures; three cycles by default",
+  },
+  {
     label: "Create PR",
     skillId: "implementation.feature-pull-request.codex",
     threadBoundary: "same thread",
-    note: "opens the pull request into the base branch and lists findings Code Review left unresolved",
+    note: "opens the pull request into the base branch and lists findings Code Review or App Review left unresolved",
   },
 ];
 
@@ -168,7 +174,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     id: "fast-plan",
     label: "Feature",
     description:
-      "Plan with the provider CLI, implement and review the change, then open a pull request from the same thread.",
+      "Plan with the provider CLI, implement and review the change, test it in the running app with a recorded App Review, then open a pull request from the same thread.",
     route: "product",
     interactionMode: "plan",
     workflowPromptId: "planning.fast-feature.codex",

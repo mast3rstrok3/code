@@ -19,12 +19,16 @@ import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
 import { layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
 import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
 import {
+  featureAppReviewFixMessageId,
+  featureAppReviewId,
+  featureAppReviewThreadId,
   featureFixMessageId,
   featureImplementMessageId,
   featurePullRequestMessageId,
   featureReviewThreadId,
 } from "./featureWorkflow.ts";
 import {
+  FEATURE_APP_REVIEW_SKIPPED_ACTIVITY_KIND,
   FEATURE_WORKFLOW_COMPLETED_ACTIVITY_KIND,
   FeatureWorkflowReactor,
   layer as featureWorkflowLayer,
@@ -54,6 +58,10 @@ interface FakeWorld {
   completedActivities: ReadonlyArray<unknown>;
   /** Final reviewer message by reviewer thread id; present threads have a completed run. */
   reviews?: Record<string, string>;
+  /** App Review records by reviewer thread id; present threads have a completed run. */
+  appReviews?: Record<string, { status: string; summary: string }>;
+  /** The worktree's App Stack: its frontend, or why it did not start. */
+  appStack?: { frontendUrl: string } | { failure: string };
   withoutWorkflowContext?: boolean;
   /** Commits the Feature branch has that its base lacks; two unless a test says otherwise. */
   commitsAhead?: number;
@@ -88,8 +96,14 @@ function makeSystem(world: FakeWorld) {
   const nativeCommands: OrchestrationV2ServerCommand[] = [];
   const workflowCommands: OrchestrationCommand[] = [];
   const teardowns: string[] = [];
+  const stackRequests: Array<{ worktreePath: string; workflowId?: string | null | undefined }> = [];
+  const appendedActivities = () =>
+    workflowCommands.flatMap((command) =>
+      command.type === "thread.activity.append" ? [command.activity] : [],
+    );
   const reviewerExists = (id: ThreadId) =>
     world.reviews?.[id] !== undefined ||
+    world.appReviews?.[id] !== undefined ||
     nativeCommands.some((command) => command.type === "thread.create" && command.threadId === id);
   const layer = featureWorkflowLayer.pipe(
     Layer.provide(
@@ -121,21 +135,26 @@ function makeSystem(world: FakeWorld) {
                 runtimeRequests: [],
                 turnItems: [],
               } as never)
-            : world.reviews?.[id] !== undefined
+            : world.appReviews?.[id] !== undefined
               ? Effect.succeed({
                   thread: { id },
-                  runs: [{ id: "run-review", ordinal: 1, status: "completed" }],
-                  messages: [
-                    {
-                      id: "review-answer",
-                      runId: "run-review",
-                      role: "assistant",
-                      streaming: false,
-                      text: world.reviews[id],
-                    },
-                  ],
+                  runs: [{ id: "run-app-review", ordinal: 1, status: "completed" }],
                 } as never)
-              : Effect.fail(new Error("missing thread") as never)) as never,
+              : world.reviews?.[id] !== undefined
+                ? Effect.succeed({
+                    thread: { id },
+                    runs: [{ id: "run-review", ordinal: 1, status: "completed" }],
+                    messages: [
+                      {
+                        id: "review-answer",
+                        runId: "run-review",
+                        role: "assistant",
+                        streaming: false,
+                        text: world.reviews[id],
+                      },
+                    ],
+                  } as never)
+                : Effect.fail(new Error("missing thread") as never)) as never,
         getShellSnapshot: () => Effect.succeed({ threads: [] } as never),
         streamDomainEvents: Stream.empty,
       }),
@@ -152,7 +171,30 @@ function makeSystem(world: FakeWorld) {
     Layer.provide(
       Layer.mock(ProjectionSnapshotQuery)({
         getThreadShellById: () => Effect.succeed(Option.none()),
-        listActivitiesByKind: () => Effect.succeed(world.completedActivities as never),
+        getThreadDetailById: (id) => {
+          const record = world.appReviews?.[id];
+          return Effect.succeed(
+            record === undefined
+              ? Option.none()
+              : (Option.some({
+                  id,
+                  appReviews: [
+                    {
+                      id: featureAppReviewId(threadId, planId, Number(id.split("::").at(-1))),
+                      status: record.status,
+                      document: { summary: record.summary, findings: [] },
+                    },
+                  ],
+                }) as never),
+          );
+        },
+        listActivitiesByKind: (kind) =>
+          Effect.succeed(
+            [
+              ...(world.completedActivities as Array<{ kind?: string }>),
+              ...appendedActivities(),
+            ].filter((activity) => activity.kind === kind) as never,
+          ),
       }),
     ),
     Layer.provide(
@@ -164,6 +206,19 @@ function makeSystem(world: FakeWorld) {
     ),
     Layer.provide(
       Layer.mock(AppStackManager)({
+        autoCreate: (input) =>
+          Effect.suspend(() => {
+            stackRequests.push(input);
+            const stack = world.appStack ?? { frontendUrl: "https://feature.stack.example" };
+            return "failure" in stack
+              ? Effect.fail({ message: stack.failure } as never)
+              : Effect.succeed({
+                  stack: { id: "stack-feature", status: "starting" },
+                  created: true,
+                  frontendUrl: stack.frontendUrl,
+                  frontendServiceName: "frontend",
+                } as never);
+          }),
         workflowTeardown: ({ workflowId }) =>
           Effect.sync(() => {
             teardowns.push(workflowId);
@@ -199,7 +254,7 @@ function makeSystem(world: FakeWorld) {
     yield* reactor.evaluate(threadId);
     yield* reactor.drain;
   });
-  return { layer, evaluate, nativeCommands, workflowCommands, teardowns };
+  return { layer, evaluate, nativeCommands, workflowCommands, teardowns, stackRequests };
 }
 
 const planningRun: FakeRun = {
@@ -443,6 +498,124 @@ describe("FeatureWorkflowReactor", () => {
       world.completedActivities = [marker.activity];
       yield* system.evaluate;
       assert.deepStrictEqual(system.teardowns, [`workflow-${threadId}`]);
+    }).pipe(Effect.provide(system.layer));
+  });
+  const cleanReviews = {
+    [featureReviewThreadId(threadId, planId, 1)]: [
+      "```json",
+      '{"type":"feature-code-review-result","status":"clean","reportMarkdown":"Looks right."}',
+      "```",
+    ].join("\n"),
+  };
+
+  it.effect("tests the change in the running app once Code Review is clean", () => {
+    const world: FakeWorld = {
+      interactionMode: "default",
+      runs: [planningRun, implementRun],
+      pullRequests: [],
+      completedActivities: [],
+      reviews: cleanReviews,
+    };
+    const system = makeSystem(world);
+    return Effect.gen(function* () {
+      yield* system.evaluate;
+      assert.deepStrictEqual(
+        system.stackRequests.map((request) => request.workflowId),
+        [`workflow-${threadId}`],
+      );
+      const launch = system.workflowCommands[0];
+      assert.ok(launch?.type === "thread.app-review.launch");
+      if (launch?.type !== "thread.app-review.launch") return;
+      assert.strictEqual(launch.sourceThreadId, threadId);
+      assert.strictEqual(launch.reviewThreadId, featureAppReviewThreadId(threadId, planId, 1));
+      assert.strictEqual(launch.reviewId, featureAppReviewId(threadId, planId, 1));
+      assert.strictEqual(launch.appReviewScope, "browser");
+      assert.strictEqual(launch.workflowPromptId, "implementation.browser-app-review.codex");
+      assert.match(launch.message.text, /App Review cycle 1 of 3/);
+      assert.match(launch.message.text, /Feature URL: https:\/\/feature\.stack\.example/);
+      assert.match(launch.message.text, /App Stack: stack-feature/);
+      assert.match(launch.message.text, /Add the fast checkout/);
+      // No pull request yet: it waits for the App Review verdict.
+      assert.deepStrictEqual(system.nativeCommands, []);
+    }).pipe(Effect.provide(system.layer));
+  });
+
+  it.effect("has the Feature thread fix what a failed App Review found", () => {
+    const world: FakeWorld = {
+      interactionMode: "default",
+      runs: [planningRun, implementRun],
+      pullRequests: [],
+      completedActivities: [],
+      reviews: cleanReviews,
+      appReviews: {
+        [featureAppReviewThreadId(threadId, planId, 1)]: {
+          status: "failed",
+          summary: "Checkout never finishes.",
+        },
+      },
+    };
+    const system = makeSystem(world);
+    return Effect.gen(function* () {
+      yield* system.evaluate;
+      const [fix] = system.nativeCommands;
+      assert.ok(fix?.type === "message.dispatch");
+      if (fix?.type !== "message.dispatch") return;
+      assert.strictEqual(fix.threadId, threadId);
+      assert.strictEqual(fix.messageId, featureAppReviewFixMessageId(threadId, planId, 1));
+      assert.match(fix.text, /App Review cycle 1 of 3 failed/);
+      assert.match(fix.text, /Checkout never finishes\./);
+    }).pipe(Effect.provide(system.layer));
+  });
+
+  it.effect("opens the pull request when App Review passed", () => {
+    const world: FakeWorld = {
+      interactionMode: "default",
+      runs: [planningRun, implementRun],
+      pullRequests: [],
+      completedActivities: [],
+      reviews: cleanReviews,
+      appReviews: {
+        [featureAppReviewThreadId(threadId, planId, 1)]: { status: "passed", summary: "Works." },
+      },
+    };
+    const system = makeSystem(world);
+    return Effect.gen(function* () {
+      yield* system.evaluate;
+      const [pullRequest] = system.nativeCommands;
+      assert.ok(pullRequest?.type === "message.dispatch");
+      if (pullRequest?.type !== "message.dispatch") return;
+      assert.strictEqual(pullRequest.messageId, featurePullRequestMessageId(threadId, planId));
+      assert.match(pullRequest.text, /App Review passed in cycle 1/);
+    }).pipe(Effect.provide(system.layer));
+  });
+
+  it.effect("opens the pull request without App Review when the App Stack does not start", () => {
+    const world: FakeWorld = {
+      interactionMode: "default",
+      runs: [planningRun, implementRun],
+      pullRequests: [],
+      completedActivities: [],
+      reviews: cleanReviews,
+      appStack: { failure: "This project has no App Stack" },
+    };
+    const system = makeSystem(world);
+    return Effect.gen(function* () {
+      yield* system.evaluate;
+      const skipped = system.workflowCommands[0];
+      assert.ok(skipped?.type === "thread.activity.append");
+      if (skipped?.type !== "thread.activity.append") return;
+      assert.strictEqual(skipped.activity.kind, FEATURE_APP_REVIEW_SKIPPED_ACTIVITY_KIND);
+      assert.ok(
+        !system.workflowCommands.some((command) => command.type === "thread.app-review.launch"),
+      );
+      const [pullRequest] = system.nativeCommands;
+      assert.ok(pullRequest?.type === "message.dispatch");
+      if (pullRequest?.type !== "message.dispatch") return;
+      assert.strictEqual(pullRequest.messageId, featurePullRequestMessageId(threadId, planId));
+      assert.match(
+        pullRequest.text,
+        /App Review cycle 1 could not run: its App Stack did not start \(This project has no App Stack\)\./,
+      );
     }).pipe(Effect.provide(system.layer));
   });
 });

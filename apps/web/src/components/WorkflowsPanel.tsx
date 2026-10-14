@@ -2693,9 +2693,12 @@ function WorkflowGroupCard(props: {
           workflowStepMatchesImplementationFailure(step, resumeStage, linkedValidationKind),
         ) ?? null);
   const timeRange = resolveWorkflowGroupTimeRange(group, props.groups);
+  // Feature's browser App Reviews are reviewer threads of the root, not App Review runs.
   const showsAppReviews =
     group.preset === "app-review" ||
-    (group.parentGroupId === null && props.appReviewWorkflowRuns.length > 0);
+    (group.parentGroupId === null &&
+      (props.appReviewWorkflowRuns.length > 0 ||
+        group.rows.some((row) => row.thread.workflowRole === "implementation-qa-reviewer")));
   const workflowThreads = [
     props.workflowRoot,
     ...props.groups.flatMap((candidate) => candidate.rows.map((row) => row.thread)),

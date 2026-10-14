@@ -74,24 +74,27 @@ describe("workflow presets", () => {
     ).toContain("up to five cycles");
   });
 
-  it("plans, implements, reviews, and publishes Feature from one thread", () => {
+  it("plans, implements, reviews, tests, and publishes Feature from one thread", () => {
     const steps = WORKFLOW_PRESET_DEFINITION_BY_ID["fast-plan"].helpSteps;
     expect(steps.map((step) => step.label)).toEqual([
       "Plan",
       "Implement",
       "Code Review",
+      "App Review",
       "Create PR",
     ]);
     expect(steps.map((step) => step.threadBoundary)).toEqual([
       "same thread",
       "same thread",
       "new review thread",
+      "new review thread",
       "same thread",
     ]);
-    // Only the reviewer runs in a thread of its own, so only it takes a model pin.
+    // Only the reviewers run in threads of their own, so only they take a model pin.
     expect(steps.map((step) => workflowPresetStepCanPinModel("fast-plan", step))).toEqual([
       false,
       false,
+      true,
       true,
       false,
     ]);

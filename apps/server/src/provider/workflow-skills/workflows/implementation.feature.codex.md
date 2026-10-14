@@ -12,10 +12,10 @@ If your investigation shows that no change belongs in this repository, for examp
 
 ## Running app
 
-Start an App Stack with `app_stack_start` only when a check cannot pass without a running app, such as a browser flow the plan names. Code-only changes need no stack. Do not start a competing development server. Stop the stack with `app_stack_stop` when you no longer need it.
+Start an App Stack with `app_stack_start` only when a check cannot pass without a running app, such as a browser flow the plan names. Code-only changes need no stack. App Review starts the worktree's stack on its own later. Do not start a competing development server. Stop the stack with `app_stack_stop` when you no longer need it.
 
 ## Checks and commit
 
 Run the checks the repository's `AGENTS.md` (or `CLAUDE.md`) requires before a pull request, plus the focused tests for the change. Fix every failure they report, including failures outside the change, and run them again until they pass. Commit the work with a conventional title and leave the worktree clean.
 
-Do not push and do not open a pull request. Code Review cycles run next in their own threads; this thread fixes what they find, then opens the pull request. Finish with a short summary of what changed and the checks that passed.
+Do not push and do not open a pull request. Code Review cycles run next in their own threads, then App Review cycles test the change in the running app and record it; this thread fixes what they find, then opens the pull request. Finish with a short summary of what changed and the checks that passed.

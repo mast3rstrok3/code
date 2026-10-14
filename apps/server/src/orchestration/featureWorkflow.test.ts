@@ -2,6 +2,10 @@ import { MessageId, PlanId, RunId, RuntimeRequestId, ThreadId } from "@t3tools/c
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  buildFeaturePullRequestMessage,
+  featureAppReviewFixMessageId,
+  featureAppReviewReportMarkdown,
+  featureAppReviewThreadId,
   type FeatureWorkflowState,
   featureFixMessageId,
   featureImplementMessageId,
@@ -87,6 +91,19 @@ const implementRun = (status: Run["status"] = "completed") =>
 const fixRun = (cycle: number, status: Run["status"] = "completed") =>
   run(featureFixMessageId(threadId, planId, cycle), status);
 
+const passedAppReview = {
+  runStatus: "completed" as const,
+  recordStatus: "passed" as const,
+  reportMarkdown: "It works.",
+};
+const failedAppReview = (report: string) => ({
+  runStatus: "completed" as const,
+  recordStatus: "failed" as const,
+  reportMarkdown: report,
+});
+const appReviewFixRun = (cycle: number, status: Run["status"] = "completed") =>
+  run(featureAppReviewFixMessageId(threadId, planId, cycle), status);
+
 const state = (overrides: Partial<FeatureWorkflowState>): FeatureWorkflowState => ({
   threadId,
   interactionMode: "default",
@@ -95,6 +112,9 @@ const state = (overrides: Partial<FeatureWorkflowState>): FeatureWorkflowState =
   pendingQuestions: [],
   reviews: [],
   cycleBudget: 5,
+  appReviews: [passedAppReview],
+  appReviewCycleBudget: 3,
+  appReviewSkippedReason: null,
   pullRequestLinked: false,
   completed: false,
   ...overrides,
@@ -131,16 +151,132 @@ describe("nextFeatureWorkflowActions", () => {
     ).toEqual([]);
   });
 
-  it("opens the pull request after a clean first review", () => {
+  it("runs App Review after a clean first review, then opens the pull request", () => {
     const runs = [planningRun(), implementRun()];
-    expect(nextFeatureWorkflowActions(state({ runs }))).toEqual([
+    const reviews = [{ runStatus: "completed" as const, finalText: review("clean") }];
+    expect(nextFeatureWorkflowActions(state({ runs, appReviews: [] }))).toEqual([
       { type: "review", planId, cycle: 1 },
+    ]);
+    expect(nextFeatureWorkflowActions(state({ runs, reviews, appReviews: [] }))).toEqual([
+      { type: "app-review", planId, cycle: 1 },
+    ]);
+    // Launched but not started yet, then running: the same cycle, then nothing to do.
+    expect(
+      nextFeatureWorkflowActions(
+        state({
+          runs,
+          reviews,
+          appReviews: [{ runStatus: null, recordStatus: "running", reportMarkdown: "" }],
+        }),
+      ),
+    ).toEqual([{ type: "app-review", planId, cycle: 1 }]);
+    expect(
+      nextFeatureWorkflowActions(
+        state({
+          runs,
+          reviews,
+          appReviews: [{ runStatus: "running", recordStatus: "running", reportMarkdown: "" }],
+        }),
+      ),
+    ).toEqual([]);
+    expect(nextFeatureWorkflowActions(state({ runs, reviews }))).toEqual([
+      {
+        type: "open-pull-request",
+        planId,
+        unresolvedFindingsMarkdown: null,
+        appReview: { status: "passed", cycle: 1 },
+      },
+    ]);
+  });
+
+  it("has the Feature thread fix App Review failures, then reviews the running app again", () => {
+    const base = [planningRun(), implementRun()];
+    const reviews = [{ runStatus: "completed" as const, finalText: review("clean") }];
+    const failed = failedAppReview("1. **Save does nothing** (blocker)");
+    expect(
+      nextFeatureWorkflowActions(state({ runs: base, reviews, appReviews: [failed] })),
+    ).toEqual([
+      { type: "app-review-fix", planId, cycle: 1, reportMarkdown: failed.reportMarkdown },
     ]);
     expect(
       nextFeatureWorkflowActions(
-        state({ runs, reviews: [{ runStatus: "completed", finalText: review("clean") }] }),
+        state({ runs: [...base, appReviewFixRun(1, "running")], reviews, appReviews: [failed] }),
       ),
-    ).toEqual([{ type: "open-pull-request", planId, unresolvedFindingsMarkdown: null }]);
+    ).toEqual([]);
+    expect(
+      nextFeatureWorkflowActions(
+        state({ runs: [...base, appReviewFixRun(1)], reviews, appReviews: [failed] }),
+      ),
+    ).toEqual([{ type: "app-review", planId, cycle: 2 }]);
+    expect(
+      nextFeatureWorkflowActions(
+        state({
+          runs: [...base, appReviewFixRun(1)],
+          reviews,
+          appReviews: [failed, passedAppReview],
+        }),
+      ),
+    ).toEqual([
+      {
+        type: "open-pull-request",
+        planId,
+        unresolvedFindingsMarkdown: null,
+        appReview: { status: "passed", cycle: 2 },
+      },
+    ]);
+  });
+
+  it("treats a reviewer that ended without a verdict as a failed App Review", () => {
+    const runs = [planningRun(), implementRun()];
+    const reviews = [{ runStatus: "completed" as const, finalText: review("clean") }];
+    const noVerdict = {
+      runStatus: "completed" as const,
+      recordStatus: "running" as const,
+      reportMarkdown: "no verdict",
+    };
+    expect(nextFeatureWorkflowActions(state({ runs, reviews, appReviews: [noVerdict] }))).toEqual([
+      { type: "app-review-fix", planId, cycle: 1, reportMarkdown: "no verdict" },
+    ]);
+  });
+
+  it("opens the pull request with the last App Review findings once every cycle is used", () => {
+    const runs = [planningRun(), implementRun(), appReviewFixRun(1), appReviewFixRun(2)];
+    const reviews = [{ runStatus: "completed" as const, finalText: review("clean") }];
+    const appReviews = [1, 2, 3].map((cycle) => failedAppReview(`App Review cycle ${cycle}`));
+    expect(nextFeatureWorkflowActions(state({ runs, reviews, appReviews }))).toEqual([
+      {
+        type: "open-pull-request",
+        planId,
+        unresolvedFindingsMarkdown: null,
+        appReview: { status: "unresolved", reportMarkdown: "App Review cycle 3" },
+      },
+    ]);
+  });
+
+  it("opens the pull request without App Review when its cycle cannot run", () => {
+    const runs = [planningRun(), implementRun()];
+    const reviews = [{ runStatus: "completed" as const, finalText: review("clean") }];
+    expect(
+      nextFeatureWorkflowActions(
+        state({
+          runs,
+          reviews,
+          appReviews: [],
+          appReviewSkippedReason: "its App Stack did not start (no stack).",
+        }),
+      ),
+    ).toEqual([
+      {
+        type: "open-pull-request",
+        planId,
+        unresolvedFindingsMarkdown: null,
+        appReview: {
+          status: "skipped",
+          cycle: 1,
+          reason: "its App Stack did not start (no stack).",
+        },
+      },
+    ]);
   });
 
   it("has the Feature thread fix findings, then reviews again until clean", () => {
@@ -164,7 +300,14 @@ describe("nextFeatureWorkflowActions", () => {
           reviews: [findings, { runStatus: "completed", finalText: review("clean") }],
         }),
       ),
-    ).toEqual([{ type: "open-pull-request", planId, unresolvedFindingsMarkdown: null }]);
+    ).toEqual([
+      {
+        type: "open-pull-request",
+        planId,
+        unresolvedFindingsMarkdown: null,
+        appReview: { status: "passed", cycle: 1 },
+      },
+    ]);
   });
 
   it("opens the pull request with the last findings once every cycle is used", () => {
@@ -174,7 +317,12 @@ describe("nextFeatureWorkflowActions", () => {
       finalText: review("findings", `finding from cycle ${cycle}`),
     }));
     expect(nextFeatureWorkflowActions(state({ runs, reviews }))).toEqual([
-      { type: "open-pull-request", planId, unresolvedFindingsMarkdown: "finding from cycle 5" },
+      {
+        type: "open-pull-request",
+        planId,
+        unresolvedFindingsMarkdown: "finding from cycle 5",
+        appReview: { status: "passed", cycle: 1 },
+      },
     ]);
   });
 
@@ -189,6 +337,10 @@ describe("nextFeatureWorkflowActions", () => {
     expect(nextFeatureWorkflowActions(state({ runs, reviews, pullRequestLinked: true }))).toEqual([
       { type: "complete", planId, reason: "pull-request-linked" },
     ]);
+    // A Feature that opened its pull request before App Review existed does not start one now.
+    expect(
+      nextFeatureWorkflowActions(state({ runs, reviews, appReviews: [], pullRequestLinked: true })),
+    ).toEqual([{ type: "complete", planId, reason: "pull-request-linked" }]);
     expect(
       nextFeatureWorkflowActions(
         state({ runs, reviews, pullRequestLinked: true, completed: true }),
@@ -219,6 +371,55 @@ describe("Feature review results and ids", () => {
 
   it("finds the Feature thread behind a reviewer thread", () => {
     expect(featureRootOfReviewThread(featureReviewThreadId(threadId, planId, 3))).toBe(threadId);
+    expect(featureRootOfReviewThread(featureAppReviewThreadId(threadId, planId, 2))).toBe(threadId);
     expect(featureRootOfReviewThread(threadId)).toBeNull();
+  });
+
+  it("hands the App Review record and its outcome on as text", () => {
+    expect(
+      featureAppReviewReportMarkdown({
+        status: "failed",
+        document: {
+          summary: "Saving fails.",
+          findings: [
+            {
+              severity: "blocker",
+              title: "Save does nothing",
+              details: "The button stays disabled.",
+              reproduction: "Open the form and click Save.",
+            },
+          ],
+        },
+      }),
+    ).toBe(
+      [
+        "Saving fails.",
+        "",
+        "1. **Save does nothing** (blocker)",
+        "   The button stays disabled.",
+        "   Reproduction: Open the form and click Save.",
+      ].join("\n"),
+    );
+    expect(
+      featureAppReviewReportMarkdown({
+        status: "running",
+        document: { summary: "", findings: [] },
+      }),
+    ).toContain("without a verdict");
+    const skipped = buildFeaturePullRequestMessage({
+      baseBranch: "dev",
+      unresolvedFindingsMarkdown: null,
+      appReview: { status: "skipped", cycle: 1, reason: "its App Stack did not start (down)." },
+    });
+    expect(skipped).toContain(
+      "App Review cycle 1 could not run: its App Stack did not start (down).",
+    );
+    expect(
+      buildFeaturePullRequestMessage({
+        baseBranch: "dev",
+        unresolvedFindingsMarkdown: null,
+        appReview: { status: "unresolved", reportMarkdown: "1. still broken" },
+      }),
+    ).toContain("Unresolved App Review findings heading, unchanged:\n\n1. still broken");
   });
 });
