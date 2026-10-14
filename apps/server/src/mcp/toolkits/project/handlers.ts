@@ -4,11 +4,7 @@ import {
   OrchestratorMcpFailure,
   ProjectId,
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
-  type ProviderInteractionMode,
-  type WorkflowPreset,
 } from "@t3tools/contracts";
-import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import { workflowPromptIdForPreset } from "@t3tools/shared/workflowPresets";
 import { formatThreadLink } from "@t3tools/shared/threadLinks";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -19,12 +15,12 @@ import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
-import { resolveProjectDevelopmentBranch } from "../../../vcs/developmentBranch.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import {
-  appendWorkflowSkillCommandSection,
-  appendWorkflowStepInstructions,
-} from "../../../provider/WorkflowPromptRegistry.ts";
+  LAUNCHABLE_WORKFLOWS,
+  developmentWorktreeStrategy,
+  workflowLaunchText,
+} from "../../../orchestration-v2/WorkflowLaunch.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { newCommandId, readCaller, resolveProjectId, unavailable } from "../../threadAccess.ts";
 import { ProjectToolkit } from "./tools.ts";
@@ -63,15 +59,6 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
         "worktreePath must be one of the project's git worktrees. t3_worktree_list shows them.",
     });
 });
-
-/** The workflows an agent can start, keyed by the names the tool accepts. */
-const LAUNCHABLE_WORKFLOWS = {
-  feature: { preset: "fast-plan", interactionMode: "plan" },
-  engineering: { preset: "planning", interactionMode: "planning-workflow" },
-} as const satisfies Record<
-  string,
-  { readonly preset: WorkflowPreset; readonly interactionMode: ProviderInteractionMode }
->;
 
 const access = Effect.gen(function* () {
   yield* readCaller();
@@ -168,42 +155,27 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             ? ({ type: "root" } as const)
             : yield* Effect.gen(function* () {
                 const project = yield* readProject;
-                const development =
+                const strategy =
                   project === undefined
                     ? null
-                    : yield* resolveProjectDevelopmentBranch({
+                    : yield* developmentWorktreeStrategy({
                         git: yield* GitVcsDriver.GitVcsDriver,
                         settings,
-                        cwd: project.workspaceRoot,
+                        workspaceRoot: project.workspaceRoot,
                         projectId,
                       });
-                if (development === null)
+                if (strategy === null)
                   return yield* new OrchestratorMcpFailure({
                     code: "invalid_request",
                     message:
                       "The project names no development or default branch. Pass workspaceStrategy with the baseRef to start from.",
                   });
-                const startFromOrigin =
-                  settings === null
-                    ? true
-                    : resolveProjectSettings(settings, projectId).settings
-                        .newWorktreesStartFromOrigin;
-                return {
-                  type: "worktree" as const,
-                  baseRef: development.branch,
-                  startFromOrigin: startFromOrigin || !development.existsLocally,
-                };
+                return strategy;
               }));
-        const workflowPromptId =
-          workflow === undefined ? undefined : workflowPromptIdForPreset(workflow.preset);
         const text =
-          workflowPromptId === undefined
+          workflow === undefined
             ? (input.message ?? "")
-            : appendWorkflowStepInstructions(
-                appendWorkflowSkillCommandSection(input.message ?? "", workflowPromptId),
-                workflowPromptId,
-                settings?.workflowStepInstructions ?? {},
-              );
+            : workflowLaunchText(input.message ?? "", workflow.preset, settings);
         const result = yield* ThreadMessageIntake.launchThread({
           commandId,
           threadId,

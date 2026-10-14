@@ -142,6 +142,73 @@ it.effect("dispatches exactly the rendered prompt and logs the delivery", () =>
   ),
 );
 
+it.effect("starts each delivery as a Feature workflow thread titled from the request", () =>
+  withService(({ service, launches }) =>
+    Effect.gen(function* () {
+      const { task } = yield* service.upsert(
+        yield* webhookTaskInput({
+          title: "Fix {{body.pull_request.url}}",
+          workflow: "feature",
+          workspaceStrategy: { type: "worktree", baseRef: "dev", startFromOrigin: true },
+          runtimeMode: "approval-required",
+        }),
+      );
+      assert.equal(task.workflow, "feature");
+      // The stored modes say what the unattended runs do.
+      assert.equal(task.runtimeMode, "full-access");
+
+      yield* service.triggerWebhook(requestFor(task));
+      const launched = yield* Queue.take(launches);
+      assert.equal(launched.workflowPreset, "fast-plan");
+      assert.equal(launched.interactionMode, "plan");
+      assert.equal(launched.runtimeMode, "full-access");
+      assert.deepEqual(launched.workspaceStrategy, {
+        type: "worktree",
+        baseRef: "dev",
+        startFromOrigin: true,
+      });
+      assert.equal(launched.title, "Fix https://github.com/org/repo/pull/45");
+      assert.isTrue(
+        launched.initialMessage?.text.startsWith(
+          "Review this PR: https://github.com/org/repo/pull/45\n\n",
+        ),
+      );
+
+      // An edit that does not name the workflow keeps it.
+      const { task: edited } = yield* service.upsert(
+        yield* webhookTaskInput({ prompt: "Other {{body}}" }),
+      );
+      assert.equal(edited.workflow, "feature");
+      const { task: plain } = yield* service.upsert(yield* webhookTaskInput({ workflow: null }));
+      assert.equal(plain.workflow, null);
+    }),
+  ),
+);
+
+it.effect("refuses a workflow task bound to a thread", () =>
+  withService(({ service }) =>
+    Effect.gen(function* () {
+      const error = yield* service
+        .upsert(yield* webhookTaskInput({ workflow: "feature", threadId: "thread-bound" }))
+        .pipe(Effect.flip);
+      assert.include(error.message, "cannot be bound to a thread");
+    }),
+  ),
+);
+
+it("keeps a title without placeholders and never leaves a run untitled", () => {
+  const request = requestFor({ id: "scheduled-task:hook" });
+  assert.equal(ScheduledTaskService.webhookRunTitle("Review PRs", request), "Review PRs");
+  assert.equal(
+    ScheduledTaskService.webhookRunTitle("{{body.missing}}", request),
+    "{{body.missing}}",
+  );
+  assert.equal(
+    ScheduledTaskService.webhookRunTitle("PR\n{{body.pull_request.url}}", request),
+    "PR https://github.com/org/repo/pull/45",
+  );
+});
+
 it("builds the relay hook URL from the managed tunnel's key, never the environment id", () => {
   const relayUrl = "https://relay.example.com/";
   assert.equal(

@@ -4,6 +4,7 @@ import {
   ScheduledTaskId,
   type ScheduledTask,
   type ScheduledTaskUpsertSchedule,
+  type ScheduledTaskWorkflow,
   type ModelSelection,
   type RuntimeMode,
   type ProviderInteractionMode,
@@ -48,6 +49,13 @@ export function validateScheduledTasksSearch(raw: Record<string, unknown>) {
 export type ScheduleMode = "fixed" | "interval" | "webhook";
 export type WorkspaceMode = "root" | "worktree" | "existing_worktree";
 
+/** What each run starts as: a plain thread, or a fresh thread running a workflow. */
+export const WORKFLOW_LABELS: Record<"thread" | ScheduledTaskWorkflow, string> = {
+  thread: "A new thread",
+  feature: "Feature workflow",
+  engineering: "Engineering workflow",
+};
+
 export interface DraftState {
   readonly editingId: string | null;
   readonly title: string;
@@ -59,7 +67,9 @@ export interface DraftState {
   readonly weekdays: ReadonlySet<number>;
   readonly projectId: string;
   readonly threadId: string;
+  readonly workflow: ScheduledTaskWorkflow | null;
   readonly workspaceMode: WorkspaceMode;
+  /** Empty until the project's development branch is known. */
   readonly baseRef: string;
   readonly startFromOrigin: boolean;
   readonly existingWorktreePath: string;
@@ -140,8 +150,9 @@ export function taskToDraft(task: ScheduledTask): DraftState {
     weekdays,
     projectId: task.projectId,
     threadId: task.threadId ?? "",
+    workflow: task.workflow ?? null,
     workspaceMode: task.workspaceStrategy.type,
-    baseRef: task.workspaceStrategy.type === "worktree" ? task.workspaceStrategy.baseRef : "main",
+    baseRef: task.workspaceStrategy.type === "worktree" ? task.workspaceStrategy.baseRef : "",
     startFromOrigin:
       task.workspaceStrategy.type === "worktree"
         ? (task.workspaceStrategy.startFromOrigin ?? false)
