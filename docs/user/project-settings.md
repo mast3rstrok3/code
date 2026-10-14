@@ -146,7 +146,10 @@ Code Review and opens a pull request in a new worktree from the base branch,
 which defaults to the project's development branch. **Engineering workflow**
 starts the Engineering workflow instead. Workflow runs work unattended in full
 access. The task's name may use the prompt's placeholders, so
-`Fix {{body.summary}}` titles each thread after its request.
+`Fix {{body.summary}}` titles each thread after its request. **Model** starts
+as **Workflow default**: each run uses the workflow's model from
+**Settings → Workflows** as it is when the run starts, so changing it there
+moves every such task. Pick **A specific model** to keep one task on its own.
 
 On desktop and web, pick **Deliveries** from a task's menu to see recent
 requests and the prompt each one produced.

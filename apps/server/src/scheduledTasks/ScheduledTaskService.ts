@@ -24,6 +24,7 @@ import {
   type ScheduledTaskSetEnabledInput,
   type ScheduledTaskUpsertInput,
 } from "@t3tools/contracts";
+import { resolveWorkflowModelSelection } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -200,6 +201,7 @@ interface ScheduledTaskRow {
   readonly runtime_mode: string;
   readonly interaction_mode: string;
   readonly workflow: string | null;
+  readonly use_workflow_default_model: number;
   readonly created_by: string;
   readonly creation_source: string;
   readonly created_at: string;
@@ -360,6 +362,7 @@ const decodeRow = Effect.fnUntraced(
       runtimeMode: row.runtime_mode,
       interactionMode: row.interaction_mode,
       workflow: row.workflow,
+      useWorkflowDefaultModel: row.use_workflow_default_model === 1,
       createdBy: row.created_by,
       creationSource: row.creation_source,
       createdAt: row.created_at,
@@ -430,7 +433,8 @@ export const layer = Layer.effect(
     const secretRequests = yield* SecretRequests.SecretRequests;
     const scheduler = yield* Scheduler.Scheduler;
     const readWebhookOrigin = yield* ScheduledTaskWebhookOrigin;
-    // Only workflow runs read settings, for the workflow's step instructions.
+    // Only workflow runs read settings, for the workflow's step instructions
+    // and default model.
     const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
     const readServerSettings = Option.match(serverSettings, {
       onNone: () => Effect.succeed(null),
@@ -474,6 +478,7 @@ export const layer = Layer.effect(
         runtime_mode,
         interaction_mode,
         workflow,
+        use_workflow_default_model,
         created_by,
         creation_source,
         created_at,
@@ -509,6 +514,7 @@ export const layer = Layer.effect(
         runtime_mode,
         interaction_mode,
         workflow,
+        use_workflow_default_model,
         created_by,
         creation_source,
         created_at,
@@ -588,6 +594,7 @@ export const layer = Layer.effect(
           runtime_mode,
           interaction_mode,
           workflow,
+          use_workflow_default_model,
           created_by,
           creation_source,
           created_at,
@@ -613,6 +620,7 @@ export const layer = Layer.effect(
           ${task.runtimeMode},
           ${task.interactionMode},
           ${task.workflow ?? null},
+          ${task.useWorkflowDefaultModel === true ? 1 : 0},
           ${task.createdBy},
           ${task.creationSource},
           ${task.createdAt},
@@ -639,6 +647,7 @@ export const layer = Layer.effect(
           runtime_mode = excluded.runtime_mode,
           interaction_mode = excluded.interaction_mode,
           workflow = excluded.workflow,
+          use_workflow_default_model = excluded.use_workflow_default_model,
           creation_source = excluded.creation_source,
           updated_at = excluded.updated_at,
           next_run_at = excluded.next_run_at,
@@ -868,6 +877,11 @@ export const layer = Layer.effect(
           workflow === null
             ? undefined
             : workflowLaunchImplementationSettings(workflow.preset, settings, undefined);
+        // Resolved per run, so a settings change reaches the task without an edit.
+        const launchModelSelection =
+          (active.workflow != null && active.useWorkflowDefaultModel === true && settings !== null
+            ? resolveWorkflowModelSelection(settings, active.projectId, active.workflow)
+            : null) ?? active.modelSelection;
 
         // Effect.exit (not Effect.result) so defects and interruptions in the
         // dispatch are also captured and recorded as a failed run instead of
@@ -880,7 +894,7 @@ export const layer = Layer.effect(
                     commandId,
                     projectId: active.projectId,
                     title: webhook?.title ?? active.title,
-                    modelSelection: active.modelSelection,
+                    modelSelection: launchModelSelection,
                     // A workflow runs unattended and switches its own modes as it goes.
                     runtimeMode:
                       workflow === null ? active.runtimeMode : WORKFLOW_AUTOMATION_RUNTIME_MODE,
@@ -1230,6 +1244,9 @@ export const layer = Layer.effect(
         runtimeMode: workflow === null ? input.runtimeMode : WORKFLOW_AUTOMATION_RUNTIME_MODE,
         interactionMode: workflow === null ? input.interactionMode : "default",
         workflow,
+        useWorkflowDefaultModel:
+          workflow !== null &&
+          (input.useWorkflowDefaultModel ?? existingTask?.useWorkflowDefaultModel ?? false),
         createdBy: existingTask?.createdBy ?? input.createdBy ?? "user",
         creationSource: input.creationSource ?? "web",
         createdAt: existingTask?.createdAt ?? iso(now),

@@ -230,6 +230,18 @@ describe("webhook scheduled tasks", () => {
     });
   });
 
+  it("opens a task on the workflow default without a stored model to edit", () => {
+    const draft = taskToDraft({
+      ...webhookTask,
+      workflow: "feature",
+      useWorkflowDefaultModel: true,
+    });
+    expect(draft.useWorkflowDefaultModel).toBe(true);
+    expect(draft.modelKey).toBe("");
+    expect(draft.baseModelSelection).toBeNull();
+    expect(taskToDraft(webhookTask).useWorkflowDefaultModel).toBe(false);
+  });
+
   it("round-trips the max age, treats blank as no limit, and rejects an invalid limit", () => {
     const draft = taskToDraft({
       ...webhookTask,
@@ -333,6 +345,22 @@ describe("scheduled task model defaults", () => {
         },
       }),
     ).toEqual(environmentSelection);
+  });
+  it("puts a workflow's own default first, and only for that workflow", () => {
+    const featureSelection = { instanceId, model: "first-model" };
+    const settings = {
+      ...config.settings,
+      workflowModelSelections: { feature: featureSelection, engineering: null },
+    };
+    const entries = deriveProviderInstanceEntries(config.providers);
+    const project = { id: projectId, defaultModelSelection: projectSelection };
+    expect(scheduledTaskDefaultModel(settings, project, entries, "feature")).toEqual(
+      featureSelection,
+    );
+    expect(scheduledTaskDefaultModel(settings, project, entries, "engineering")).toEqual(
+      projectSelection,
+    );
+    expect(scheduledTaskDefaultModel(settings, project, entries)).toEqual(projectSelection);
   });
 });
 

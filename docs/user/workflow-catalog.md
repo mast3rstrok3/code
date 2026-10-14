@@ -172,7 +172,7 @@ A halted ticket does not stop independent siblings. A dependent ticket waits unt
 
 ### Choosing a model per step
 
-By default every step runs on the model the workflow was started with. A step can have its own model only when it starts a separate thread. **Settings → Workflows → Default models for isolated steps** sets the standing choice for those steps. Inside a run, **Settings** at the top of the Workflows panel lays out the isolated steps at once, and each isolated step's settings button tunes that step. Those two edit the same per-run pins, and a per-run pin wins over the default.
+By default every step runs on the model the workflow was started with. A workflow started without a model named, by a scheduled task on its workflow default or by an agent, starts on the Feature or Engineering **Model** in **Settings → Workflows**, which follows the default model for new threads until you set it. A step can have its own model only when it starts a separate thread. **Settings → Workflows → Default models for isolated steps** sets the standing choice for those steps. Inside a run, **Settings** at the top of the Workflows panel lays out the isolated steps at once, and each isolated step's settings button tunes that step. Those two edit the same per-run pins, and a per-run pin wins over the default.
 
 **Recovery backup** chooses one fallback provider and model for failed recovery turns across the whole workflow. Set the standing choice in **Settings → Workflows**, or override it from the running workflow's Settings menu. **Auto** on a running workflow follows the standing choice. The backup is used only after the first T3 retry fails, and successful recovery does not change the model for later steps.
 

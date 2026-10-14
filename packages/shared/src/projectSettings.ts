@@ -8,13 +8,17 @@ import {
   type ProjectSettingsOverrides,
   resolveProjectProviderInstanceEnabled,
   type ResolvedServerSettings,
+  type ScheduledTaskWorkflow,
   type ServerSettings,
   type T3ProjectFile,
   type ThreadEnvMode,
   type WorktreeCleanupRules,
 } from "@t3tools/contracts";
 import { normalizeProjectPathForComparison } from "./path.ts";
-import { fallbackTextGenerationModelSelection } from "./serverSettings.ts";
+import {
+  fallbackTextGenerationModelSelection,
+  isModelSelectionProviderEnabled,
+} from "./serverSettings.ts";
 
 export type ProjectSettingSource = "environment" | "project" | "t3.json";
 
@@ -210,6 +214,31 @@ export function resolveSendEnvMode(input: {
   readonly isGitRepo: boolean;
 }): ThreadEnvMode {
   return input.isGitRepo ? input.requestedEnvMode : "local";
+}
+
+/**
+ * The model a new workflow starts with when its starter names none: the
+ * workflow's own default, then the project's and the environment's default
+ * model for new threads. A selection on a disabled provider is skipped; null
+ * when nothing usable is set.
+ */
+export function resolveWorkflowModelSelection(
+  settings: ServerSettings,
+  projectId: ProjectId | null,
+  workflow: ScheduledTaskWorkflow,
+  project?: LegacyProjectSettingsFields | null,
+): ModelSelection | null {
+  const candidates = [
+    settings.workflowModelSelections[workflow],
+    resolveProjectSettings(settings, projectId, project).settings.defaultModelSelection,
+    settings.defaultModelSelection,
+  ];
+  return (
+    candidates.find(
+      (selection): selection is ModelSelection =>
+        selection != null && isModelSelectionProviderEnabled(settings, selection),
+    ) ?? null
+  );
 }
 
 export function clearProjectSettingsOverrides(

@@ -581,6 +581,10 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   projectId: ProjectId,
   boundThreadId: Schema.NullOr(ThreadId),
   workflow: Schema.NullOr(ScheduledTaskWorkflow),
+  useWorkflowDefaultModel: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "True when each run starts on the workflow's default model from settings, resolved when the run starts.",
+  }),
   schedule: ScheduledTaskSchedule,
   nextRunAt: Schema.NullOr(IsoDateTime),
   lastRunStatus: ScheduledTaskRunStatus,

@@ -13,6 +13,7 @@ import {
   WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN,
   type EnvironmentId,
   type ModelSelection,
+  type ScheduledTaskWorkflow,
   type ServerSettings,
   type WorkflowSkillContract,
 } from "@t3tools/contracts";
@@ -23,6 +24,7 @@ import { useEffect, useRef, useState } from "react";
 import { type WorkflowCatalogState, useWorkflowCatalog } from "../../workflowCatalogState";
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
 import { setWorkflowStepReviewPartsOverride } from "@t3tools/shared/appReviewParts";
+import { isModelSelectionProviderEnabled } from "@t3tools/shared/serverSettings";
 import { resolveDefaultAgentModelSelectionState } from "../../modelSelection";
 import { primaryServerProvidersAtom } from "../../state/server";
 import { usePrimaryEnvironmentId } from "../../state/environments";
@@ -33,6 +35,7 @@ import {
   useWorkflowModelChoices,
   WorkflowModelPinControls,
   type SetWorkflowStepModel,
+  type WorkflowModelChoices,
   type WorkflowModelPinKey,
 } from "../WorkflowModelPins";
 import type { SetWorkflowStepCycles } from "../WorkflowStepCycles";
@@ -122,56 +125,137 @@ function WorkflowStepModelDefaults() {
   const updateSettings = useUpdatePrimarySettings();
   const providers = useAtomValue(primaryServerProvidersAtom);
   if (environmentId === null) return null;
+  // What a new thread starts on, which a workflow without its own model follows.
+  const newThreadModel =
+    settings.defaultModelSelection !== null &&
+    isModelSelectionProviderEnabled(settings, settings.defaultModelSelection)
+      ? settings.defaultModelSelection
+      : resolveDefaultAgentModelSelectionState(settings, providers);
+  const onSetWorkflowModel = (workflow: ScheduledTaskWorkflow, selection: ModelSelection | null) =>
+    updateSettings({ workflowModelSelections: { [workflow]: selection } });
   return (
-    <WorkflowStepModelDefaultsBody
-      environmentId={environmentId}
-      defaults={settings.workflowStepModels}
-      seedSelection={resolveDefaultAgentModelSelectionState(settings, providers)}
-      cycleDefaults={settings.workflowStepCycles}
-      reviewPartsDefaults={settings.workflowStepReviewParts}
-      implementationSettings={settings.implementation}
-      onSetStepModel={(key, selection) => {
-        updateSettings({
-          workflowStepModels: [
-            ...setWorkflowStepModelDefault(settings.workflowStepModels, key, selection),
-          ],
-        });
-      }}
-      onSetStepModels={(keys, selection) => {
-        updateSettings({
-          workflowStepModels: [
-            ...setWorkflowStepModelDefaults(settings.workflowStepModels, keys, selection),
-          ],
-        });
-      }}
-      onSetStepCycles={(key, maxCycles) => {
-        updateSettings({
-          workflowStepCycles: [
-            ...setWorkflowStepCycleOverride(settings.workflowStepCycles, key, maxCycles),
-          ],
-        });
-      }}
-      onSetStepReviewParts={(key, parts) => {
-        updateSettings({
-          workflowStepReviewParts: [
-            ...setWorkflowStepReviewPartsOverride(settings.workflowStepReviewParts, key, parts),
-          ],
-        });
-      }}
-      onSetImplementationSettings={(implementation) => {
-        updateSettings({ implementation });
-      }}
-    />
+    <>
+      <FeatureWorkflowDefaults
+        environmentId={environmentId}
+        workflowModel={settings.workflowModelSelections.feature}
+        newThreadModel={newThreadModel}
+        onSetWorkflowModel={(selection) => onSetWorkflowModel("feature", selection)}
+      />
+      <WorkflowStepModelDefaultsBody
+        environmentId={environmentId}
+        defaults={settings.workflowStepModels}
+        workflowModel={settings.workflowModelSelections.engineering}
+        newThreadModel={newThreadModel}
+        onSetWorkflowModel={(selection) => onSetWorkflowModel("engineering", selection)}
+        cycleDefaults={settings.workflowStepCycles}
+        reviewPartsDefaults={settings.workflowStepReviewParts}
+        implementationSettings={settings.implementation}
+        onSetStepModel={(key, selection) => {
+          updateSettings({
+            workflowStepModels: [
+              ...setWorkflowStepModelDefault(settings.workflowStepModels, key, selection),
+            ],
+          });
+        }}
+        onSetStepModels={(keys, selection) => {
+          updateSettings({
+            workflowStepModels: [
+              ...setWorkflowStepModelDefaults(settings.workflowStepModels, keys, selection),
+            ],
+          });
+        }}
+        onSetStepCycles={(key, maxCycles) => {
+          updateSettings({
+            workflowStepCycles: [
+              ...setWorkflowStepCycleOverride(settings.workflowStepCycles, key, maxCycles),
+            ],
+          });
+        }}
+        onSetStepReviewParts={(key, parts) => {
+          updateSettings({
+            workflowStepReviewParts: [
+              ...setWorkflowStepReviewPartsOverride(settings.workflowStepReviewParts, key, parts),
+            ],
+          });
+        }}
+        onSetImplementationSettings={(implementation) => {
+          updateSettings({ implementation });
+        }}
+      />
+    </>
+  );
+}
+
+/**
+ * A workflow's own starting model. Unset, it follows the default model for
+ * new threads, which the inherited label names.
+ */
+function WorkflowModelControl(props: {
+  readonly workflow: ScheduledTaskWorkflow;
+  readonly workflowModel: ModelSelection | null;
+  readonly newThreadModel: ModelSelection;
+  readonly choices: WorkflowModelChoices;
+  readonly onSetWorkflowModel: (selection: ModelSelection | null) => void;
+}) {
+  return (
+    <div className="mt-1 max-w-md pb-3">
+      <WorkflowModelPinControls
+        pinKey={{ workflowPromptId: `workflow-model.${props.workflow}` }}
+        label="Starting model"
+        pinnedSelection={props.workflowModel}
+        inheritedSelection={props.newThreadModel}
+        inheritedLabel={`Same as the default model for new threads (${props.choices.describeSelection(props.newThreadModel)})`}
+        choices={props.choices}
+        onSetStepModel={(_key, selection) => props.onSetWorkflowModel(selection)}
+      />
+    </div>
+  );
+}
+
+function FeatureWorkflowDefaults(props: {
+  readonly environmentId: EnvironmentId;
+  readonly workflowModel: ModelSelection | null;
+  readonly newThreadModel: ModelSelection;
+  readonly onSetWorkflowModel: (selection: ModelSelection | null) => void;
+}) {
+  const choices = useWorkflowModelChoices(props.environmentId);
+  return (
+    <SettingsSection
+      title="Feature workflow defaults"
+      icon={<SlidersHorizontalIcon className="size-3.5" />}
+      headerAction={
+        props.workflowModel === null ? null : (
+          <Badge variant="secondary" size="sm">
+            1 set
+          </Badge>
+        )
+      }
+    >
+      <SettingsRow
+        title="Model"
+        description="What a Feature started by a scheduled task or an agent runs on when it names no model. Plan and Implement run on it; Code Review and App Review use the models set for those steps under Engineering Workflow defaults."
+      >
+        <WorkflowModelControl
+          workflow="feature"
+          workflowModel={props.workflowModel}
+          newThreadModel={props.newThreadModel}
+          choices={choices}
+          onSetWorkflowModel={props.onSetWorkflowModel}
+        />
+      </SettingsRow>
+    </SettingsSection>
   );
 }
 
 function WorkflowStepModelDefaultsBody(props: {
   readonly environmentId: EnvironmentId;
   readonly defaults: ServerSettings["workflowStepModels"];
+  readonly workflowModel: ModelSelection | null;
+  readonly newThreadModel: ModelSelection;
+  readonly onSetWorkflowModel: (selection: ModelSelection | null) => void;
   readonly cycleDefaults: ServerSettings["workflowStepCycles"];
   readonly reviewPartsDefaults: ServerSettings["workflowStepReviewParts"];
   readonly implementationSettings: ServerSettings["implementation"];
-  readonly seedSelection: ModelSelection;
   readonly onSetStepModel: SetWorkflowStepModel;
   readonly onSetStepModels: (
     keys: ReadonlyArray<WorkflowModelPinKey>,
@@ -182,7 +266,9 @@ function WorkflowStepModelDefaultsBody(props: {
   readonly onSetImplementationSettings: (settings: ServerSettings["implementation"]) => void;
 }) {
   const choices = useWorkflowModelChoices(props.environmentId);
+  const rootModel = props.workflowModel ?? props.newThreadModel;
   const configuredDefaultCount =
+    (props.workflowModel === null ? 0 : 1) +
     props.defaults.length +
     props.cycleDefaults.length +
     props.reviewPartsDefaults.length +
@@ -207,6 +293,18 @@ function WorkflowStepModelDefaultsBody(props: {
       }
     >
       <SettingsRow
+        title="Model"
+        description="What the Engineering Workflow runs on when whoever starts it, a scheduled task or an agent, names no model. Steps without their own model below follow it."
+      >
+        <WorkflowModelControl
+          workflow="engineering"
+          workflowModel={props.workflowModel}
+          newThreadModel={props.newThreadModel}
+          choices={choices}
+          onSetWorkflowModel={props.onSetWorkflowModel}
+        />
+      </SettingsRow>
+      <SettingsRow
         title="Recovery backup"
         description="After one retry on the selected model, retryable provider failures can continue on this backup for up to eight hours. Auto leaves failover disabled."
       >
@@ -216,7 +314,7 @@ function WorkflowStepModelDefaultsBody(props: {
             label="Backup provider and model"
             note="This choice applies only to recovery turns."
             pinnedSelection={recoveryBackup}
-            inheritedSelection={props.seedSelection}
+            inheritedSelection={rootModel}
             inheritedLabel="Auto has no backup. Recovery stays on the primary model."
             choices={choices}
             onSetStepModel={props.onSetStepModel}
@@ -252,8 +350,8 @@ function WorkflowStepModelDefaultsBody(props: {
           <EngineeringWorkflowSettings
             preset="planning"
             pinFor={pinFor}
-            rootModelSelection={props.seedSelection}
-            rootLabel="The model the Engineering Workflow runs on"
+            rootModelSelection={rootModel}
+            rootLabel={`Workflow model (${choices.describeSelection(rootModel)})`}
             choices={choices}
             onSetStepModel={props.onSetStepModel}
             onSetStepModels={props.onSetStepModels}
