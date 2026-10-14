@@ -2,6 +2,8 @@ import { AppStackToolkit } from "./toolkits/app-stack/tools.ts";
 import * as AppStackHandlers from "./toolkits/app-stack/handlers.ts";
 import { AppReviewToolkit } from "./toolkits/app-review/tools.ts";
 import * as AppReviewHandlers from "./toolkits/app-review/handlers.ts";
+import { BuildBatchToolkit } from "./toolkits/build-batch/tools.ts";
+import * as BuildBatchHandlers from "./toolkits/build-batch/handlers.ts";
 import { WorkflowArtifactsToolkit } from "./toolkits/workflow-artifacts/tools.ts";
 import * as WorkflowArtifactsHandlers from "./toolkits/workflow-artifacts/handlers.ts";
 import { WorkflowUserInputToolkit } from "./toolkits/workflow-user-input/tools.ts";
@@ -852,6 +854,11 @@ export const AppStackToolkitRegistrationLive = McpServer.toolkit(AppStackToolkit
   Layer.provide(AppStackHandlers.AppStackToolkitHandlersLive),
 );
 
+export const layerBuildBatchToolkit = toolkitRegistration(
+  BuildBatchToolkit,
+  BuildBatchHandlers.layer,
+);
+
 export const layerMcpTransport = McpServer.layerHttp({
   name: "T3 Code",
   version: packageJson.version,
@@ -862,6 +869,7 @@ export const layerMcpTransport = McpServer.layerHttp({
 export const layer = Layer.mergeAll(
   toolkitRegistration(AppStackToolkit, AppStackHandlers.layer),
   toolkitRegistration(AppReviewToolkit, AppReviewHandlers.layer),
+  layerBuildBatchToolkit,
   toolkitRegistration(WorkflowArtifactsToolkit, WorkflowArtifactsHandlers.layer),
   toolkitRegistration(WorkflowUserInputToolkit, WorkflowUserInputHandlers.layer),
   layerPreviewToolkit,
