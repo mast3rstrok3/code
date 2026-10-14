@@ -5,6 +5,10 @@ import {
   ProjectId,
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
 } from "@t3tools/contracts";
+import {
+  resolveProjectSettings,
+  resolveWorkflowModelSelection,
+} from "@t3tools/shared/projectSettings";
 import { formatThreadLink } from "@t3tools/shared/threadLinks";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -121,9 +125,26 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             });
           yield* assertProjectWorktree(project.workspaceRoot, input.workspaceStrategy.worktreePath);
         }
+        const workflow =
+          input.workflowPreset === undefined
+            ? undefined
+            : LAUNCHABLE_WORKFLOWS[input.workflowPreset];
+        const settings = yield* ServerSettings.ServerSettingsService.pipe(
+          Effect.flatMap((service) => service.getSettings),
+          Effect.orElseSucceed(() => null),
+        );
+        // A workflow starts on its own default model unless the caller names
+        // one. The project's default is the resolved setting, so one set only
+        // for the environment counts too; the project record is the last resort.
         const modelSelection =
           input.modelSelection ??
+          (input.workflowPreset === undefined || settings === null
+            ? null
+            : resolveWorkflowModelSelection(settings, projectId, input.workflowPreset)) ??
           caller?.modelSelection ??
+          (settings === null
+            ? null
+            : resolveProjectSettings(settings, projectId).settings.defaultModelSelection) ??
           (yield* readProject)?.defaultModelSelection ??
           undefined;
         if (modelSelection === undefined)
@@ -132,23 +153,12 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             message:
               "Pass modelSelection: the project has no default model. orchestrator_capabilities lists providers and models.",
           });
-        const workflow =
-          input.workflowPreset === undefined
-            ? undefined
-            : LAUNCHABLE_WORKFLOWS[input.workflowPreset];
         if (workflow !== undefined && (input.message === undefined || input.scratch === true))
           return yield* new OrchestratorMcpFailure({
             code: "invalid_request",
             message:
               "A workflow launch needs a project and a task: pass message, and omit scratch.",
           });
-        const settings =
-          workflow === undefined
-            ? null
-            : yield* ServerSettings.ServerSettingsService.pipe(
-                Effect.flatMap((service) => service.getSettings),
-                Effect.orElseSucceed(() => null),
-              );
         const workspaceStrategy =
           input.workspaceStrategy ??
           (workflow === undefined

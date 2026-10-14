@@ -3,7 +3,11 @@ import * as NodeCrypto from "node:crypto";
 
 import * as NodePlatformCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
-import { ScheduledTaskUpsertInput, SecretRequestError } from "@t3tools/contracts";
+import {
+  ProviderInstanceId,
+  ScheduledTaskUpsertInput,
+  SecretRequestError,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -19,10 +23,12 @@ import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 
 const decodeUpsertInput = Schema.decodeUnknownEffect(ScheduledTaskUpsertInput);
+const codexModel = (model: string) => ({ instanceId: ProviderInstanceId.make("codex"), model });
 
 type LaunchInput = ThreadLaunchService.ThreadLaunchInput;
 
@@ -70,13 +76,14 @@ const withService = <A, E>(
     readonly launches: Queue.Queue<LaunchInput>;
     /** Secrets the user entered for an agent, by ref; consuming one removes it. */
     readonly secretsByRef: Map<string, string>;
-  }) => Effect.Effect<A, E, never>,
+  }) => Effect.Effect<A, E, ServerSettings.ServerSettingsService>,
   options: { readonly gate?: Deferred.Deferred<void>; readonly relayHookBaseUrl?: string } = {},
 ) =>
   Effect.gen(function* () {
     const launches = yield* Queue.unbounded<LaunchInput>();
     const secretsByRef = new Map<string, string>();
     const layerDependencies = Layer.mergeAll(
+      ServerSettings.layerTest(),
       NodePlatformCrypto.layer,
       Scheduler.layer,
       Layer.mock(ThreadLaunchService.ThreadLaunchService)({
@@ -104,7 +111,14 @@ const withService = <A, E>(
     return yield* Effect.gen(function* () {
       const service = yield* ScheduledTaskService.ScheduledTaskService;
       return yield* body({ service, launches, secretsByRef });
-    }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))));
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies)),
+          layerDependencies,
+        ),
+      ),
+    );
   }).pipe(Effect.provide(SqlitePersistence.layerMemory));
 
 it.effect("dispatches exactly the rendered prompt and logs the delivery", () =>
@@ -181,6 +195,57 @@ it.effect("starts each delivery as a Feature workflow thread titled from the req
       assert.equal(edited.workflow, "feature");
       const { task: plain } = yield* service.upsert(yield* webhookTaskInput({ workflow: null }));
       assert.equal(plain.workflow, null);
+    }),
+  ),
+);
+
+it.effect("starts each workflow run on the workflow's default model as it is then", () =>
+  withService(({ service, launches }) =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const stored = codexModel("gpt-5.4");
+      yield* settings.updateSettings({
+        workflowModelSelections: { feature: codexModel("gpt-5.5") },
+      });
+      const { task } = yield* service.upsert(
+        yield* webhookTaskInput({ workflow: "feature", useWorkflowDefaultModel: true }),
+      );
+      assert.isTrue(task.useWorkflowDefaultModel);
+      yield* service.triggerWebhook(requestFor(task));
+      assert.equal((yield* Queue.take(launches)).modelSelection.model, "gpt-5.5");
+
+      // A settings change reaches the next run without editing the task.
+      yield* settings.updateSettings({
+        workflowModelSelections: { feature: codexModel("gpt-5.6") },
+      });
+      yield* service.triggerWebhook(requestFor(task));
+      assert.equal((yield* Queue.take(launches)).modelSelection.model, "gpt-5.6");
+
+      // Unset, the run follows the default model for new threads, then the task's own.
+      yield* settings.updateSettings({
+        workflowModelSelections: { feature: null },
+        defaultModelSelection: codexModel("gpt-5.3"),
+      });
+      yield* service.triggerWebhook(requestFor(task));
+      assert.equal((yield* Queue.take(launches)).modelSelection.model, "gpt-5.3");
+      yield* settings.updateSettings({ defaultModelSelection: null });
+      yield* service.triggerWebhook(requestFor(task));
+      assert.deepEqual((yield* Queue.take(launches)).modelSelection, stored);
+
+      // An edit that does not name the choice keeps it; a concrete model ends it.
+      const { task: edited } = yield* service.upsert(
+        yield* webhookTaskInput({ prompt: "Other {{body}}" }),
+      );
+      assert.isTrue(edited.useWorkflowDefaultModel);
+      yield* settings.updateSettings({
+        workflowModelSelections: { feature: codexModel("gpt-5.5") },
+      });
+      const { task: pinned } = yield* service.upsert(
+        yield* webhookTaskInput({ useWorkflowDefaultModel: false }),
+      );
+      assert.isFalse(pinned.useWorkflowDefaultModel);
+      yield* service.triggerWebhook(requestFor(task));
+      assert.deepEqual((yield* Queue.take(launches)).modelSelection, stored);
     }),
   ),
 );

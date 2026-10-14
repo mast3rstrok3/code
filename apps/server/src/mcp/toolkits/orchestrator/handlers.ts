@@ -1,5 +1,13 @@
 import { OrchestratorToolkit } from "./tools.ts";
-import { WORKFLOW_AUTOMATION_RUNTIME_MODE, type ProjectId } from "@t3tools/contracts";
+import {
+  WORKFLOW_AUTOMATION_RUNTIME_MODE,
+  type ProjectId,
+  type ScheduledTaskWorkflow,
+} from "@t3tools/contracts";
+import {
+  resolveProjectSettings,
+  resolveWorkflowModelSelection,
+} from "@t3tools/shared/projectSettings";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
@@ -14,9 +22,10 @@ import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
 
 /**
- * Resolves where an unbound task's runs start: a new worktree from the
- * project's development branch. Without git or projects it resolves nothing,
- * and the task falls back to its old default.
+ * Resolves where an unbound task's runs start, a new worktree from the
+ * project's development branch, and the default models from settings.
+ * Without git, projects or settings it resolves nothing, and the task falls
+ * back to its old default.
  */
 const scheduledTaskDefaults = Effect.gen(function* () {
   const git = yield* Effect.serviceOption(GitVcsDriver.GitVcsDriver);
@@ -30,6 +39,12 @@ const scheduledTaskDefaults = Effect.gen(function* () {
     ),
   );
   return {
+    defaultModelSelection: (projectId: ProjectId) =>
+      settings === null
+        ? null
+        : resolveProjectSettings(settings, projectId).settings.defaultModelSelection,
+    workflowModelSelection: (projectId: ProjectId, workflow: ScheduledTaskWorkflow) =>
+      settings === null ? null : resolveWorkflowModelSelection(settings, projectId, workflow),
     developmentWorktree: (projectId: ProjectId) =>
       Option.isNone(git) || Option.isNone(projects)
         ? Effect.succeed(null)

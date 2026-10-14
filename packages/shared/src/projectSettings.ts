@@ -7,6 +7,7 @@ import {
   type ProjectScopedServerSettingKey,
   type ProjectSettingsOverrides,
   type ResolvedServerSettings,
+  type ScheduledTaskWorkflow,
   type ServerSettings,
   type T3ProjectFile,
   type ThreadEnvMode,
@@ -186,6 +187,31 @@ function resolveProjectOverrides(
     sources[key] = "project";
   }
   return { settings: effective as ServerSettings, sources, overrides };
+}
+
+/**
+ * The model a new workflow starts with when its starter names none: the
+ * workflow's own default, then the project's and the environment's default
+ * model for new threads. A selection on a disabled provider is skipped; null
+ * when nothing usable is set.
+ */
+export function resolveWorkflowModelSelection(
+  settings: ServerSettings,
+  projectId: ProjectId | null,
+  workflow: ScheduledTaskWorkflow,
+  project?: LegacyProjectSettingsFields | null,
+): ModelSelection | null {
+  const candidates = [
+    settings.workflowModelSelections[workflow],
+    resolveProjectSettings(settings, projectId, project).settings.defaultModelSelection,
+    settings.defaultModelSelection,
+  ];
+  return (
+    candidates.find(
+      (selection): selection is ModelSelection =>
+        selection != null && isModelSelectionProviderEnabled(settings, selection),
+    ) ?? null
+  );
 }
 
 /** Replace the project's entry, dropping it entirely when nothing is overridden. */

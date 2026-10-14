@@ -68,6 +68,8 @@ export interface DraftState {
   readonly projectId: string;
   readonly threadId: string;
   readonly workflow: ScheduledTaskWorkflow | null;
+  /** With a workflow, each run starts on the workflow's default model as it is then. */
+  readonly useWorkflowDefaultModel: boolean;
   readonly workspaceMode: WorkspaceMode;
   /** Empty until the project's development branch is known. */
   readonly baseRef: string;
@@ -151,6 +153,7 @@ export function taskToDraft(task: ScheduledTask): DraftState {
     projectId: task.projectId,
     threadId: task.threadId ?? "",
     workflow: task.workflow ?? null,
+    useWorkflowDefaultModel: task.useWorkflowDefaultModel === true,
     workspaceMode: task.workspaceStrategy.type,
     baseRef: task.workspaceStrategy.type === "worktree" ? task.workspaceStrategy.baseRef : "",
     startFromOrigin:
@@ -161,10 +164,16 @@ export function taskToDraft(task: ScheduledTask): DraftState {
       task.workspaceStrategy.type === "existing_worktree"
         ? task.workspaceStrategy.worktreePath
         : "",
-    modelKey: `${task.modelSelection.instanceId}:${task.modelSelection.model}`,
+    // A task on the workflow default stores only a fallback; picking a model
+    // starts from the default as it is now.
+    ...(task.useWorkflowDefaultModel === true
+      ? { modelKey: "", baseModelSelection: null }
+      : {
+          modelKey: `${task.modelSelection.instanceId}:${task.modelSelection.model}`,
+          baseModelSelection: task.modelSelection,
+        }),
     runtimeMode: task.runtimeMode,
     interactionMode: task.interactionMode,
-    baseModelSelection: task.modelSelection,
     ...(schedule.type === "webhook" && schedule.signature !== null
       ? {
           signatureEnabled: true,
@@ -181,11 +190,15 @@ export function taskToDraft(task: ScheduledTask): DraftState {
   };
 }
 
-/** Use configured defaults before the catalog's advertised default model. */
+/**
+ * Use configured defaults before the catalog's advertised default model: for
+ * a workflow its own default first, the way the server resolves it per run.
+ */
 export function scheduledTaskDefaultModel(
   settings: ServerSettings,
   project: (LegacyProjectSettingsFields & { readonly id: ProjectId }) | null,
   entries: readonly ProviderInstanceEntry[],
+  workflow: ScheduledTaskWorkflow | null = null,
 ): ModelSelection | null {
   const available = entries.filter(
     (entry) =>
@@ -196,7 +209,10 @@ export function scheduledTaskDefaultModel(
   );
   const configured = resolveProjectSettings(settings, project?.id ?? null, project).settings
     .defaultModelSelection;
-  for (const selection of [configured, settings.defaultModelSelection]) {
+  // Older servers send no workflow defaults.
+  const workflowDefault =
+    workflow === null ? null : (settings.workflowModelSelections?.[workflow] ?? null);
+  for (const selection of [workflowDefault, configured, settings.defaultModelSelection]) {
     if (
       selection &&
       available.some(

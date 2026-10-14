@@ -42,6 +42,7 @@ import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
+  type ProviderInstanceEntry,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
 import { usePrimaryCloudLinkState } from "../../cloud/primaryCloudLinkState";
@@ -86,6 +87,7 @@ import { Menu, MenuTrigger, MenuPopup, MenuItem, MenuSeparator } from "../ui/men
 import { ToggleGroup, Toggle } from "../ui/toggle-group";
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia } from "../ui/empty";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
+import { getTriggerDisplayModelName } from "../chat/providerIconUtils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
@@ -134,6 +136,8 @@ const EMPTY_DRAFT: DraftState = {
   projectId: "",
   threadId: "",
   workflow: null,
+  // Only read once Start as names a workflow, where it is the default choice.
+  useWorkflowDefaultModel: true,
   workspaceMode: "worktree",
   baseRef: "",
   startFromOrigin: true,
@@ -171,6 +175,18 @@ function Field({
       {children}
     </div>
   );
+}
+
+/** "Workflow default (Codex · GPT-5.5)", naming the model each run would start on now. */
+function describeWorkflowDefault(
+  selection: ModelSelection | null,
+  instanceEntries: readonly ProviderInstanceEntry[],
+): string {
+  if (selection === null) return "Workflow default";
+  const entry = instanceEntries.find((candidate) => candidate.instanceId === selection.instanceId);
+  const option = entry?.models.find((candidate) => candidate.slug === selection.model);
+  const modelName = option ? getTriggerDisplayModelName(option) : selection.model;
+  return `Workflow default (${entry === undefined ? modelName : `${entry.displayName} · ${modelName}`})`;
 }
 
 function splitModelKey(value: string): ModelSelection | null {
@@ -884,9 +900,15 @@ function ScheduledTaskEditorDialog({
   // The real model picker is keyed by a `${instanceId}:${model}` string, which
   // is exactly how the draft stores its selection.
   const firstInstance = instanceEntries[0];
-  const activeSelection = draft.modelKey
-    ? splitModelKey(draft.modelKey)
-    : scheduledTaskDefaultModel(settings, selectedProject ?? null, instanceEntries);
+  const defaultSelection = scheduledTaskDefaultModel(
+    settings,
+    selectedProject ?? null,
+    instanceEntries,
+    draft.workflow,
+  );
+  const workflowDefaultLabel = describeWorkflowDefault(defaultSelection, instanceEntries);
+  const followsWorkflowDefault = draft.workflow !== null && draft.useWorkflowDefaultModel;
+  const activeSelection = draft.modelKey ? splitModelKey(draft.modelKey) : defaultSelection;
   const activeInstanceId =
     activeSelection?.instanceId ?? firstInstance?.instanceId ?? ("" as ProviderInstanceId);
   const activeModel = activeSelection?.model ?? "";
@@ -915,7 +937,9 @@ function ScheduledTaskEditorDialog({
       tasksQuery.data === null
     )
       return;
-    const selection = activeSelection;
+    // On the workflow default the stored model is only the fallback, so it
+    // is the default as it is now.
+    const selection = followsWorkflowDefault ? defaultSelection : activeSelection;
     if (
       !draft.title.trim() ||
       !draft.prompt.trim() ||
@@ -986,6 +1010,7 @@ function ScheduledTaskEditorDialog({
       runtimeMode: draft.runtimeMode,
       interactionMode: draft.interactionMode,
       workflow: draft.workflow,
+      useWorkflowDefaultModel: followsWorkflowDefault,
       creationSource: "web",
     };
     // Lock before React renders, and keep successful creates locked until the form closes.
@@ -1207,20 +1232,51 @@ function ScheduledTaskEditorDialog({
               />
             </Field>
 
-            <Field label="Model">
-              <ProviderModelPicker
-                disabled={saving || !connected}
-                activeInstanceId={activeInstanceId}
-                model={activeModel}
-                lockedProvider={null}
-                instanceEntries={instanceEntries}
-                modelOptionsByInstance={modelOptionsByInstance}
-                isComposerOwned={false}
-                triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                onInstanceModelChange={(instanceId, model) =>
-                  setDraft((current) => ({ ...current, modelKey: `${instanceId}:${model}` }))
-                }
-              />
+            <Field
+              label="Model"
+              {...(draft.workflow === null ? {} : { htmlFor: "scheduled-task-model-source" })}
+              {...(followsWorkflowDefault ? { hint: "Resolved at each run" } : {})}
+            >
+              {draft.workflow === null ? null : (
+                <Select
+                  value={followsWorkflowDefault ? "workflow-default" : "task"}
+                  onValueChange={(value) =>
+                    setDraft((current) => ({
+                      ...current,
+                      useWorkflowDefaultModel: value === "workflow-default",
+                    }))
+                  }
+                >
+                  <SelectTrigger size="sm" id="scheduled-task-model-source">
+                    <SelectValue>
+                      {followsWorkflowDefault ? workflowDefaultLabel : "A specific model"}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup>
+                    <SelectItem value="workflow-default">{workflowDefaultLabel}</SelectItem>
+                    <SelectItem value="task">A specific model</SelectItem>
+                  </SelectPopup>
+                </Select>
+              )}
+              {followsWorkflowDefault ? null : (
+                <ProviderModelPicker
+                  disabled={saving || !connected}
+                  activeInstanceId={activeInstanceId}
+                  model={activeModel}
+                  lockedProvider={null}
+                  instanceEntries={instanceEntries}
+                  modelOptionsByInstance={modelOptionsByInstance}
+                  isComposerOwned={false}
+                  triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+                  onInstanceModelChange={(instanceId, model) =>
+                    setDraft((current) => ({
+                      ...current,
+                      modelKey: `${instanceId}:${model}`,
+                      useWorkflowDefaultModel: false,
+                    }))
+                  }
+                />
+              )}
             </Field>
 
             <div className="space-y-3">

@@ -11,6 +11,7 @@ import {
   hasProjectSettingsOverrides,
   resolveProjectFileBackedSetting,
   resolveProjectSettings,
+  resolveWorkflowModelSelection,
   resolveWorktreeCleanup,
   withProjectSettingsOverrides,
 } from "./projectSettings.ts";
@@ -389,4 +390,63 @@ it("inherits branch naming defaults and applies project overrides independently"
     },
   });
   expect(resolveProjectSettings(cleared, projectId).settings.branchNamingMode).toBe("static");
+});
+
+describe("resolveWorkflowModelSelection", () => {
+  const codex = (model: string) => createModelSelection(ProviderInstanceId.make("codex"), model);
+  const base = {
+    ...DEFAULT_SERVER_SETTINGS,
+    projectSettingsFolded: true,
+    defaultModelSelection: codex("environment"),
+  };
+
+  it("prefers the workflow's own default, then the project's and the environment's", () => {
+    const withProject = {
+      ...base,
+      projectSettingsOverrides: { [projectId]: { defaultModelSelection: codex("project") } },
+    };
+    expect(resolveWorkflowModelSelection(withProject, projectId, "feature")?.model).toBe("project");
+    expect(resolveWorkflowModelSelection(withProject, otherProjectId, "feature")?.model).toBe(
+      "environment",
+    );
+    const withWorkflow = applyServerSettingsPatch(withProject, {
+      workflowModelSelections: { feature: codex("feature") },
+    });
+    expect(resolveWorkflowModelSelection(withWorkflow, projectId, "feature")?.model).toBe(
+      "feature",
+    );
+    // Each workflow has its own default.
+    expect(resolveWorkflowModelSelection(withWorkflow, projectId, "engineering")?.model).toBe(
+      "project",
+    );
+  });
+
+  it("skips a model on a disabled provider and is null when nothing is set", () => {
+    const disabled = createModelSelection(ProviderInstanceId.make("missing-instance"), "x");
+    expect(
+      resolveWorkflowModelSelection(
+        { ...base, workflowModelSelections: { feature: disabled, engineering: null } },
+        projectId,
+        "feature",
+      )?.model,
+    ).toBe("environment");
+    expect(
+      resolveWorkflowModelSelection(DEFAULT_SERVER_SETTINGS, projectId, "engineering"),
+    ).toBeNull();
+  });
+
+  it("patches one workflow at a time and clears it with null", () => {
+    const set = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      workflowModelSelections: { feature: codex("feature"), engineering: codex("engineering") },
+    });
+    const cleared = applyServerSettingsPatch(set, { workflowModelSelections: { feature: null } });
+    expect(cleared.workflowModelSelections).toEqual({
+      feature: null,
+      engineering: codex("engineering"),
+    });
+    expect(DEFAULT_SERVER_SETTINGS.workflowModelSelections).toEqual({
+      feature: null,
+      engineering: null,
+    });
+  });
 });

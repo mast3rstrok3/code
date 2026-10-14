@@ -55,6 +55,7 @@ import {
   type RuntimeMode,
   type ScheduledTask,
   type ScheduledTaskUpsertInput,
+  type ScheduledTaskWorkflow,
   type ServerProvider,
   ThreadId,
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
@@ -234,6 +235,13 @@ export interface ScheduledTaskDefaults {
   readonly developmentWorktree: (
     projectId: ProjectId,
   ) => Effect.Effect<ScheduledTask["workspaceStrategy"] | null>;
+  /** The project's default model for new threads (project, then environment), or null. */
+  readonly defaultModelSelection: (projectId: ProjectId) => ModelSelection | null;
+  /** The model a new workflow starts with when nobody names one, or null. */
+  readonly workflowModelSelection: (
+    projectId: ProjectId,
+    workflow: ScheduledTaskWorkflow,
+  ) => ModelSelection | null;
 }
 
 /**
@@ -268,6 +276,9 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
     projectId: task.projectId,
     boundThreadId: task.threadId,
     workflow: task.workflow ?? null,
+    ...(task.workflow == null
+      ? {}
+      : { useWorkflowDefaultModel: task.useWorkflowDefaultModel === true }),
     schedule: task.schedule,
     nextRunAt: task.nextRunAt,
     lastRunStatus: task.lastRunStatus,
@@ -1556,8 +1567,13 @@ const make = Effect.gen(function* () {
               : "bindToCurrentThread binds to this thread, which belongs to a different project.",
           );
         }
+        // An agent names no model, so a workflow task follows the workflow's
+        // default at each run; the stored model is the fallback.
         const modelSelection =
-          parent?.thread.modelSelection ?? (yield* projectDefaultModelSelection(project));
+          (workflow === null ? null : defaults?.workflowModelSelection(projectId, workflow)) ??
+          parent?.thread.modelSelection ??
+          defaults?.defaultModelSelection(projectId) ??
+          (yield* projectDefaultModelSelection(project));
         const derivedTitle = input.prompt.split("\n")[0]?.trim() ?? "";
         const title =
           input.title ?? (derivedTitle.length > 0 ? derivedTitle.slice(0, 80) : "Scheduled task");
@@ -1577,6 +1593,7 @@ const make = Effect.gen(function* () {
           runtimeMode: limits.runtimeMode,
           interactionMode: limits.interactionMode,
           workflow,
+          useWorkflowDefaultModel: workflow !== null,
           createdBy: "agent",
           creationSource: "mcp",
           // Scope the idempotency key by provider session so two callers
@@ -1678,6 +1695,10 @@ const make = Effect.gen(function* () {
           runtimeMode: existing.runtimeMode,
           interactionMode: existing.interactionMode,
           workflow,
+          // A task that becomes a workflow task follows the workflow's default model.
+          ...(workflow !== null && existing.workflow == null
+            ? { useWorkflowDefaultModel: true }
+            : {}),
           createdBy: existing.createdBy,
           creationSource: existing.creationSource,
         };

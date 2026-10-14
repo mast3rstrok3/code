@@ -324,6 +324,8 @@ export function applyServerSettingsPatch(
     usageModelAliases: usageModelAliasesPatch,
     // Entry replacement: deepMerge would keep keys the client meant to clear.
     projectSettingsOverrides: projectSettingsOverridesPatch,
+    // Per-workflow replacement below, so a model's options never merge.
+    workflowModelSelections: workflowModelSelectionsPatch,
     // Already translated into `projectSettingsOverrides` above; the legacy
     // maps are derived views and must never be merged directly.
     projectAgentBrowserAccessOverrides: _legacyBrowserAccess,
@@ -417,6 +419,14 @@ export function applyServerSettingsPatch(
       : {}),
     ...(patch.workflowStepCycles !== undefined
       ? { workflowStepCycles: patch.workflowStepCycles }
+      : {}),
+    ...(workflowModelSelectionsPatch !== undefined
+      ? {
+          workflowModelSelections: {
+            ...current.workflowModelSelections,
+            ...workflowModelSelectionsPatch,
+          },
+        }
       : {}),
     ...(patch.workspaceUsers !== undefined
       ? {

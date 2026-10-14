@@ -19,6 +19,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 
 import {
@@ -1819,10 +1820,13 @@ describe("OrchestratorMcpService provider resolution", () => {
             {
               developmentWorktree: () =>
                 Effect.succeed({ type: "worktree", baseRef: "dev", startFromOrigin: true }),
+              defaultModelSelection: () => null,
+              workflowModelSelection: () => null,
             },
           );
           const [input] = yield* Ref.get(saved);
           assert.equal(input?.workflow, "feature");
+          assert.equal(input?.useWorkflowDefaultModel, true);
           assert.equal(input?.threadId, null);
           assert.deepEqual(input?.workspaceStrategy, {
             type: "worktree",
@@ -1832,6 +1836,82 @@ describe("OrchestratorMcpService provider resolution", () => {
           assert.equal(updated.workflow, "feature");
           assert.equal(updated.boundThreadId, null);
         }),
+    );
+
+    it.effect("starts a workflow task an agent schedules on the workflow's default model", () =>
+      Effect.gen(function* () {
+        const saved = yield* Ref.make<ReadonlyArray<ScheduledTaskUpsertInput>>([]);
+        const featureModel = {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-opus",
+        };
+        const mcp = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
+          Effect.provide(
+            OrchestratorMcpService.layer.pipe(
+              Layer.provide(
+                Layer.mergeAll(
+                  NodeServices.layer,
+                  Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+                  Layer.mock(ProviderRegistry.ProviderRegistry)({
+                    getProviders: Effect.succeed([]),
+                  }),
+                  Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+                    list: () => Effect.succeed([]),
+                  }),
+                  Layer.mock(ProjectService.ProjectService)({
+                    // The project record has no default; the settings resolve one.
+                    getById: () =>
+                      Effect.succeed(
+                        Option.some({ id: projectId, defaultModelSelection: null } as never),
+                      ),
+                  }),
+                  Layer.mock(SecretRequests.SecretRequests)({}),
+                  Layer.mock(ScheduledTaskService.ScheduledTaskService)({
+                    upsert: (input) =>
+                      Ref.update(saved, (inputs) => [...inputs, input]).pipe(
+                        Effect.as({
+                          task: task({ workflow: "feature", useWorkflowDefaultModel: true }),
+                        }),
+                      ),
+                  }),
+                ),
+              ),
+            ),
+          ),
+        );
+        const fullAccessClient: McpInvocationScope = {
+          ...supervisedClient,
+          client: { sessionId: "scheduled", label: "Claude Code", access: "full-access" },
+        };
+        const defaults = {
+          developmentWorktree: () =>
+            Effect.succeed({ type: "worktree" as const, baseRef: "dev", startFromOrigin: true }),
+          defaultModelSelection: () => task({}).modelSelection,
+          workflowModelSelection: () => featureModel,
+        };
+        const scheduled = yield* mcp.scheduleTask(
+          fullAccessClient,
+          {
+            projectId,
+            prompt: "Fix {{body.title}}",
+            schedule: { type: "webhook" },
+            workflow: "feature",
+          },
+          defaults,
+        );
+        yield* mcp.scheduleTask(
+          fullAccessClient,
+          { projectId, prompt: "Report", schedule: { type: "webhook" } },
+          defaults,
+        );
+        const [workflowInput, plainInput] = yield* Ref.get(saved);
+        assert.deepEqual(workflowInput?.modelSelection, featureModel);
+        assert.equal(workflowInput?.useWorkflowDefaultModel, true);
+        assert.equal(scheduled.useWorkflowDefaultModel, true);
+        // A plain task gets the resolved default, not the project record's missing one.
+        assert.deepEqual(plainInput?.modelSelection, task({}).modelSelection);
+        assert.equal(plainInput?.useWorkflowDefaultModel, false);
+      }),
     );
 
     it.effect("reports a saved task even when its bound thread cannot be read", () =>

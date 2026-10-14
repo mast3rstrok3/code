@@ -1268,6 +1268,13 @@ export const StorageCleanupSettings = Schema.Struct({
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
+/** Keyed by the workflow names `t3_thread_launch` and scheduled tasks accept. */
+export const WorkflowModelSelections = Schema.Struct({
+  feature: Schema.NullOr(ModelSelection).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  engineering: Schema.NullOr(ModelSelection).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+});
+export type WorkflowModelSelections = typeof WorkflowModelSelections.Type;
+
 export const ServerSettings = Schema.Struct({
   worktreeCleanup: WorktreeCleanup.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   storageCleanup: StorageCleanupSettings.pipe(
@@ -1480,6 +1487,14 @@ export const ServerSettings = Schema.Struct({
    */
   workflowStepReviewParts: Schema.Array(WorkflowStepReviewPartsOverride).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  /**
+   * The model a new Feature or Engineering workflow starts with when whoever
+   * starts it names none: a scheduled task set to the workflow default, or an
+   * agent's `t3_thread_launch`. Null follows `defaultModelSelection`.
+   */
+  workflowModelSelections: WorkflowModelSelections.pipe(
+    Schema.withDecodingDefault(Effect.succeed({ feature: null, engineering: null })),
   ),
   /**
    * The merge method pull requests start with; `null` reuses the method
@@ -1826,6 +1841,13 @@ export const ServerSettingsPatch = Schema.Struct({
   workflowStepModels: Schema.optionalKey(Schema.Array(WorkflowStepModelOverride)),
   workflowStepCycles: Schema.optionalKey(Schema.Array(WorkflowStepCycleOverride)),
   workflowStepReviewParts: Schema.optionalKey(Schema.Array(WorkflowStepReviewPartsOverride)),
+  // Per-workflow replacement: null clears one workflow's model, an absent key keeps it.
+  workflowModelSelections: Schema.optionalKey(
+    Schema.Struct({
+      feature: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+      engineering: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+    }),
+  ),
   implementation: Schema.optionalKey(
     Schema.Struct({
       maxParallelTickets: Schema.optionalKey(MaxParallelTickets),

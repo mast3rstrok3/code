@@ -50,6 +50,25 @@ describe("parallel ticket limits", () => {
   );
 });
 
+describe("workflow model defaults", () => {
+  it("decodes absent workflows as following the default model and round-trips one", () => {
+    expect(decodeServerSettings({}).workflowModelSelections).toEqual({
+      feature: null,
+      engineering: null,
+    });
+    const feature = { instanceId: "codex", model: "gpt-5.5" };
+    const decoded = decodeServerSettings({ workflowModelSelections: { feature } });
+    expect(decoded.workflowModelSelections).toEqual({ feature, engineering: null });
+    expect(encodeServerSettings(decoded).workflowModelSelections).toEqual({
+      feature,
+      engineering: null,
+    });
+    expect(decodeServerSettingsPatch({ workflowModelSelections: { engineering: null } })).toEqual({
+      workflowModelSelections: { engineering: null },
+    });
+  });
+});
+
 describe("parallel App Review limits", () => {
   it("persists independent limits in workflow settings and server defaults", () => {
     const limits = { maxParallelTickets: 6, maxParallelAppReviews: 2 };

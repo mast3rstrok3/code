@@ -192,6 +192,11 @@ export const ScheduledTask = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   /** Null (or absent from an older server) starts each run as a plain thread. */
   workflow: Schema.optional(Schema.NullOr(ScheduledTaskWorkflow)),
+  /**
+   * A workflow task's runs start on the workflow's default model as it is when
+   * each run starts, falling back to `modelSelection`. Absent means false.
+   */
+  useWorkflowDefaultModel: Schema.optional(Schema.Boolean),
   createdBy: OrchestrationV2Actor,
   creationSource: OrchestrationV2CreationSource,
   createdAt: IsoDateTime,
@@ -234,6 +239,10 @@ export const ScheduledTaskUpsertInput = Schema.Struct({
   workflow: Schema.optional(Schema.NullOr(ScheduledTaskWorkflow)).annotate({
     description:
       "Start each run's fresh thread as this workflow; null starts a plain thread. Omit to keep the task's current choice. A workflow task cannot be bound to a thread.",
+  }),
+  useWorkflowDefaultModel: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "For a workflow task, start each run on the workflow's default model from settings, resolved at run time; modelSelection is the fallback. Omit to keep the task's current choice. Ignored without a workflow.",
   }),
   createdBy: Schema.optional(OrchestrationV2Actor),
   creationSource: Schema.optional(OrchestrationV2CreationSource),
