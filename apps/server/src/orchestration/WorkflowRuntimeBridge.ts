@@ -468,6 +468,9 @@ export const make = Effect.gen(function* () {
         workflowRole: thread.workflowRole ?? null,
         workflowContext: thread.workflowContext ?? null,
         workflowPreset: thread.workflowPreset ?? null,
+        ...(thread.workflowImplementationSettings === undefined
+          ? {}
+          : { workflowImplementationSettings: thread.workflowImplementationSettings }),
         createdAt: DateTime.formatIso(thread.createdAt),
         historyImport: true,
       });

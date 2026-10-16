@@ -53,6 +53,7 @@ export const WorkflowPromptContract = Schema.Struct({
     "workflow-communications",
     "planning-thread",
     "planning-reviewer",
+    "planning-grill-judge",
     "implementation-orchestrator",
     "implementation-worker",
     "implementation-validator",

@@ -1016,6 +1016,26 @@ describe("buildWorkflowViewModel", () => {
     ).toEqual(["ticket-review", "worker"]);
   });
 
+  it("shows the Grill judge under Grill with Docs", () => {
+    const root = thread("root", { workflowPreset: "planning" });
+    const judge = thread("root::grill-judge", {
+      parentThreadId: "root",
+      workflowRole: "planning-grill-judge",
+      workflowContext: { workflowId: "planning-run", rootThreadId: "root" },
+    });
+    const model = buildWorkflowViewModel([root, judge]);
+    const groups = model.rootsByThreadKey.get("env:root")?.groups ?? [];
+    const planning = groups.find((group) => group.sourceId === "planning-run");
+    const steps = planning
+      ? buildWorkflowSteps(planning, groups, root, { flattenNestedWorkflows: true })
+      : [];
+    const grill = steps.find((step) => step.label?.includes("Grill with Docs"));
+
+    expect(
+      grill?.entries.filter((entry) => entry.kind === "thread").map((entry) => entry.row.thread.id),
+    ).toEqual(["root", "root::grill-judge"]);
+  });
+
   it("marks which Engineering Workflow steps run in the main thread", () => {
     const root = thread("root", { workflowPreset: "planning" });
     const planningReview = thread("planning-review", {

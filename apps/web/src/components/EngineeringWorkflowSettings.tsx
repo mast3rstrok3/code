@@ -1,5 +1,6 @@
 import { TicketTestPlatformPicker } from "./ReviewTestPlatformPicker";
 import type {
+  GrillAnswerer,
   ImplementationWorkflowSettings,
   ModelSelection,
   WorkflowStepCycleOverride,
@@ -29,6 +30,7 @@ import { WorkflowStepCyclePins, type SetWorkflowStepCycles } from "./WorkflowSte
 import type { SetWorkflowStepReviewParts } from "./WorkflowStepReviewParts";
 import { Button } from "./ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "./ui/collapsible";
+import { Toggle, ToggleGroup } from "./ui/toggle-group";
 
 type AppReviewPhaseControl = {
   readonly label: string;
@@ -37,6 +39,10 @@ type AppReviewPhaseControl = {
 } & ({ readonly part: null } | { readonly part: keyof AppReviewParts; readonly addLabel: string });
 
 const TDD_STEP_KEY = { workflowPromptId: "implementation.tdd.codex" } as const;
+const GRILL_JUDGE_KEY = {
+  workflowPromptId: "planning.grill-judge.codex",
+  stepWorkflowPromptId: "planning.grill-stage.codex",
+} as const;
 const TICKET_APP_REVIEW_KEY = {
   workflowPromptId: "implementation.browser-app-review.codex",
   stepWorkflowPromptId: "implementation.tdd.codex",
@@ -129,6 +135,9 @@ export interface EngineeringWorkflowSettingsProps {
     | ((settings: ImplementationWorkflowSettings) => void)
     | undefined;
   readonly implementationSettingsScope?: "defaults" | "run" | undefined;
+  /** Who answers Grill with Docs questions; absent hides the choice. */
+  readonly grillAnswerer?: GrillAnswerer | undefined;
+  readonly onSetGrillAnswerer?: ((answerer: GrillAnswerer) => void) | undefined;
 }
 
 function implementationStepEnabled(
@@ -490,13 +499,62 @@ function EngineeringWorkflowStepControls(
   );
 }
 
+function GrillAnswererControls(
+  props: EngineeringWorkflowSettingsProps & { readonly onSet: (answerer: GrillAnswerer) => void },
+) {
+  const answerer = props.grillAnswerer ?? "human";
+  return (
+    <div className="space-y-3">
+      <div className="space-y-2">
+        <div className="text-xs font-medium text-foreground">Questions answered by</div>
+        <ToggleGroup
+          aria-label="Who answers Grill with Docs questions"
+          value={[answerer]}
+          variant="segmented"
+          onValueChange={(next) => {
+            const value = next[0];
+            if (value === "human" || value === "judge") props.onSet(value);
+          }}
+        >
+          <Toggle value="human">You</Toggle>
+          <Toggle value="judge">LLM judge</Toggle>
+        </ToggleGroup>
+        <p className="text-2xs leading-relaxed text-muted-foreground">
+          {answerer === "judge"
+            ? "A judge thread answers each question round from the task and the Grill's recommendations, so the workflow runs unattended. You can still answer a question first."
+            : "The Grill waits for you to answer each question round."}
+        </p>
+      </div>
+      {answerer === "judge" ? (
+        <StepModelControl
+          label="LLM judge"
+          note="answers every question round of this Grill in one thread"
+          pinKey={GRILL_JUDGE_KEY}
+          pinFor={props.pinFor}
+          inheritedSelection={inheritedSelection(props, GRILL_JUDGE_KEY, props.rootModelSelection)}
+          inheritedLabel={props.rootLabel}
+          choices={props.choices}
+          onSetStepModel={props.onSetStepModel}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 function EngineeringWorkflowStepRow(
   props: EngineeringWorkflowSettingsProps & { readonly target: EngineeringWorkflowDefaultStep },
 ) {
   const [open, setOpen] = useState(false);
   const { target } = props;
   const enabled = implementationStepEnabled(props, target);
-  const configurable = target.modelMode === "configurable" && target.workflowPromptId !== undefined;
+  const onSetGrillAnswerer = target.subSteps.some(
+    (subStep) => subStep.workflowPromptId === GRILL_JUDGE_KEY.workflowPromptId,
+  )
+    ? props.onSetGrillAnswerer
+    : undefined;
+  const configurable =
+    onSetGrillAnswerer !== undefined ||
+    (target.modelMode === "configurable" && target.workflowPromptId !== undefined);
   const setting = skippableImplementationSettingForStep(target);
   const canChangeEnabled =
     setting !== null &&
@@ -522,13 +580,17 @@ function EngineeringWorkflowStepRow(
   }
 
   const summary =
-    target.modelMode === "none"
-      ? "Automatic"
-      : target.modelMode === "workflow" || target.workflowPromptId === undefined
-        ? props.choices.describeSelection(props.rootModelSelection)
-        : props.choices.describeSelection(
-            effectiveSelection(props, { workflowPromptId: target.workflowPromptId }),
-          );
+    onSetGrillAnswerer !== undefined
+      ? props.grillAnswerer === "judge"
+        ? `LLM judge · ${props.choices.describeSelection(effectiveSelection(props, GRILL_JUDGE_KEY))}`
+        : `You answer · ${props.choices.describeSelection(props.rootModelSelection)}`
+      : target.modelMode === "none"
+        ? "Automatic"
+        : target.modelMode === "workflow" || target.workflowPromptId === undefined
+          ? props.choices.describeSelection(props.rootModelSelection)
+          : props.choices.describeSelection(
+              effectiveSelection(props, { workflowPromptId: target.workflowPromptId }),
+            );
 
   if (!configurable) {
     return (
@@ -607,11 +669,15 @@ function EngineeringWorkflowStepRow(
         </div>
         <CollapsiblePanel>
           <div className="border-t border-border/60 px-3 pb-3 pt-3 sm:pl-15">
-            <EngineeringWorkflowStepControls
-              {...props}
-              target={target}
-              workflowPromptId={target.workflowPromptId}
-            />
+            {onSetGrillAnswerer !== undefined ? (
+              <GrillAnswererControls {...props} onSet={onSetGrillAnswerer} />
+            ) : target.workflowPromptId === undefined ? null : (
+              <EngineeringWorkflowStepControls
+                {...props}
+                target={target}
+                workflowPromptId={target.workflowPromptId}
+              />
+            )}
           </div>
         </CollapsiblePanel>
       </Collapsible>

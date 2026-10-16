@@ -4,6 +4,7 @@ import {
   WorkflowPreset,
 } from "./workflowIdentity.ts";
 import { WorkspaceUserId } from "./workspaceUsers.ts";
+import { ImplementationWorkflowSettings } from "./workflowSettings.ts";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -372,6 +373,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   workflowRole: Schema.optionalKey(Schema.NullOr(OrchestrationThreadWorkflowRole)),
   workflowContext: Schema.optionalKey(Schema.NullOr(ThreadWorkflowContext)),
   workflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
+  /** Per-run stage settings a workflow root was launched with; the workflow engine owns them after import. */
+  workflowImplementationSettings: Schema.optionalKey(ImplementationWorkflowSettings),
 
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -2629,6 +2632,8 @@ export const OrchestrationV2Command = Schema.Union([
     workflowRole: Schema.optionalKey(Schema.NullOr(OrchestrationThreadWorkflowRole)),
     workflowContext: Schema.optionalKey(Schema.NullOr(ThreadWorkflowContext)),
     workflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
+    /** Per-run stage settings the root starts with, copied to the workflow engine on import. */
+    workflowImplementationSettings: Schema.optionalKey(ImplementationWorkflowSettings),
     parentThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
     ...OrchestrationV2CreationFields,
     commandId: CommandId,

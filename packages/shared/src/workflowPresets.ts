@@ -402,7 +402,14 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Grill with Docs",
         skillId: "planning.grill-stage.codex",
         threadBoundary: "same thread",
-        note: "human-guided",
+        note: "human-guided, or answered by an LLM judge",
+        subSteps: [
+          {
+            label: "LLM judge",
+            workflowPromptId: "planning.grill-judge.codex",
+            note: "answers the Grill's questions in one judge thread when the run's Grill is set to the LLM judge",
+          },
+        ],
       },
       {
         label: "Spec authoring",

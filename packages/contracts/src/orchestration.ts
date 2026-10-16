@@ -11,6 +11,7 @@ export {
   OrchestrationThreadWorkflowRole,
 } from "./workflowIdentity.ts";
 import { PreviewRecordingMode } from "./previewRecording.ts";
+import { ImplementationWorkflowSettings } from "./workflowSettings.ts";
 import { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 export { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 import { OrchestrationGetWorkflowScriptError } from "./orchestrationV2.ts";
@@ -278,25 +279,14 @@ const ModelSelectionSource = Schema.Struct({
  */
 export const WORKFLOW_AUTOMATION_RUNTIME_MODE: RuntimeMode = "full-access";
 
-export const DEFAULT_MAX_PARALLEL_TICKETS = 10;
-export const DEFAULT_MAX_PARALLEL_APP_REVIEWS = 2;
-export const MAX_PARALLEL_TICKETS = 32;
-export const MaxParallelTickets = Schema.Int.check(
-  Schema.isBetween({ minimum: 1, maximum: MAX_PARALLEL_TICKETS }),
-);
-
-export const ImplementationWorkflowSettings = Schema.Struct({
-  maxParallelTickets: Schema.optionalKey(MaxParallelTickets),
-  maxParallelAppReviews: Schema.optionalKey(MaxParallelTickets),
-  ticketAppReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  appReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  finalCodeReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  pullRequestCreationEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  pullRequestBabysittingEnabled: Schema.Boolean.pipe(
-    Schema.withDecodingDefault(Effect.succeed(true)),
-  ),
-});
-export type ImplementationWorkflowSettings = typeof ImplementationWorkflowSettings.Type;
+export {
+  DEFAULT_MAX_PARALLEL_APP_REVIEWS,
+  DEFAULT_MAX_PARALLEL_TICKETS,
+  GrillAnswerer,
+  ImplementationWorkflowSettings,
+  MAX_PARALLEL_TICKETS,
+  MaxParallelTickets,
+} from "./workflowSettings.ts";
 export const isPlanningWorkflowInteractionMode = (
   mode: ProviderInteractionMode | null | undefined,
 ): mode is "planning-workflow" | "product-workflow" =>

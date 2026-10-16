@@ -15,6 +15,7 @@ import type {
   AppReviewWorkflowPhase,
   AppReviewWorkflowRun,
   EnvironmentId,
+  GrillAnswerer,
   ModelSelection,
   OrchestrationImplementationRerunRunStage,
   OrchestrationImplementationRerunTarget,
@@ -3522,6 +3523,8 @@ export function WorkflowsPanel(props: {
   readonly defaultMaxParallelAppReviews?: number | undefined;
   readonly onSetMaxParallelAppReviews?: ((value: number) => void) | undefined;
   readonly onSetMaxParallelTickets?: ((value: number) => void) | undefined;
+  readonly defaultGrillAnswerer?: GrillAnswerer | undefined;
+  readonly onSetGrillAnswerer?: ((answerer: GrillAnswerer) => void) | undefined;
   readonly workflow: WorkflowRoot<EnvironmentWorkflowThreadShell> | null;
   readonly activeThreadKey: string | null;
   readonly focusedWorkflowId: string | null;
@@ -3773,6 +3776,11 @@ export function WorkflowsPanel(props: {
               props.defaultMaxParallelAppReviews
             }
             onSetMaxParallelAppReviews={props.onSetMaxParallelAppReviews}
+            grillAnswerer={
+              workflow.root.workflowImplementationSettings?.grillAnswerer ??
+              props.defaultGrillAnswerer
+            }
+            onSetGrillAnswerer={props.onSetGrillAnswerer}
             environmentId={workflow.root.environmentId}
             preset={workflow.root.workflowPreset ?? null}
             pinFor={(key) =>

@@ -9,6 +9,7 @@ import { AppReviewWorkflowReactor } from "../Services/AppReviewWorkflowReactor.t
 import { PreviewLifecycleReactor } from "../Services/PreviewLifecycleReactor.ts";
 import { AppStackLifecycleReactor } from "../AppStackLifecycleReactor.ts";
 import { FeatureWorkflowReactor } from "../FeatureWorkflowReactor.ts";
+import { GrillJudgeReactor } from "../GrillJudgeReactor.ts";
 
 it.effect(
   "starts the native bridge before workflow recovery and drains workflow effects before shutdown",
@@ -53,6 +54,11 @@ it.effect(
           evaluate: () => Effect.void,
           drain: record("feature:drain"),
         }),
+        Layer.succeed(GrillJudgeReactor, {
+          start: () => record("grill-judge:start"),
+          evaluate: () => Effect.void,
+          drain: record("grill-judge:drain"),
+        }),
       );
       yield* Effect.gen(function* () {
         const reactor = yield* makeOrchestrationReactor;
@@ -68,6 +74,7 @@ it.effect(
         "preview:start",
         "app-stack:start",
         "feature:start",
+        "grill-judge:start",
         "app-review:recover",
         "app-review:flush",
         "implementation:recover",
@@ -81,6 +88,7 @@ it.effect(
         "native:drain",
         "app-stack:drain",
         "feature:drain",
+        "grill-judge:drain",
       ]);
     }),
 );

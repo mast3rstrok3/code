@@ -429,6 +429,8 @@ function entrySkillIds<TThread extends WorkflowModelThread>(
       ]);
     case "planning-reviewer":
       return new Set(["planning.ticket-reviewer.codex"]);
+    case "planning-grill-judge":
+      return new Set(["planning.grill-stage.codex"]);
     case "implementation-orchestrator":
       return new Set([IMPLEMENTATION_COORDINATOR_SKILL_ID]);
     case "implementation-worker":
