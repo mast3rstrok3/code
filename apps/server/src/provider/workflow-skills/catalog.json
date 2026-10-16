@@ -529,6 +529,16 @@
     "workflowInstructionsFile": "workflows/planning.engineering-grill-automatic.codex.md"
   },
   {
+    "id": "planning.grill-judge.codex",
+    "order": 3,
+    "workflow": "planning",
+    "role": "planning-grill-judge",
+    "stage": "grill-judge",
+    "title": "Grill Judge",
+    "description": "Answers Grill with Docs questions from the task and the Grill's recommendations when a run's Grill is set to the LLM judge.",
+    "file": "workflows/planning.grill-judge.codex.md"
+  },
+  {
     "id": "planning.product-context.codex",
     "order": 2,
     "workflow": "planning",

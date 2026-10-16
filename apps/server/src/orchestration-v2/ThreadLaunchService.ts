@@ -20,6 +20,7 @@ import {
   ThreadId,
   WorkflowId,
   type WorkflowPreset,
+  type ImplementationWorkflowSettings,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -87,6 +88,8 @@ export interface ThreadLaunchInput {
   readonly workspaceStrategy: ThreadLaunchWorkspaceStrategy;
   /** Makes the thread the root of this workflow, as the composer does when it picks one. */
   readonly workflowPreset?: WorkflowPreset;
+  /** The workflow's per-run stage settings, as the composer pins them when it picks one. */
+  readonly workflowImplementationSettings?: ImplementationWorkflowSettings;
   readonly initialMessage?: ThreadLaunchInitialMessage;
   readonly importedNativeThread?: {
     readonly ref: {
@@ -794,6 +797,9 @@ const make = Effect.gen(function* () {
                   ? {}
                   : {
                       workflowPreset: input.workflowPreset,
+                      ...(input.workflowImplementationSettings === undefined
+                        ? {}
+                        : { workflowImplementationSettings: input.workflowImplementationSettings }),
                       // A Feature root tags its App Stacks with this id for teardown.
                       ...(input.workflowPreset === "fast-plan"
                         ? {

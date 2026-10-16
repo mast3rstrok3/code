@@ -147,10 +147,13 @@ describe("workflow presets", () => {
     expect(planning?.helpSteps.at(-2)?.label).toContain("pull request");
   });
 
-  it("keeps the standalone Planning grill choice interactive", () => {
+  it("lets a person or an LLM judge answer the Engineering grill", () => {
     const planning = WORKFLOW_PRESET_DEFINITIONS.find((definition) => definition.id === "planning");
     expect(planning?.helpSteps[1]?.skillId).toBe("planning.grill-stage.codex");
-    expect(planning?.helpSteps[1]?.note).toBe("human-guided");
+    expect(planning?.helpSteps[1]?.note).toBe("human-guided, or answered by an LLM judge");
+    expect(planning?.helpSteps[1]?.subSteps?.map((subStep) => subStep.workflowPromptId)).toEqual([
+      "planning.grill-judge.codex",
+    ]);
   });
 
   it("starts the Engineering Workflow on its grill prompt", () => {

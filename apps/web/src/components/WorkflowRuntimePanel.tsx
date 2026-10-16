@@ -13,6 +13,7 @@ import {
   WorkflowId,
   MessageId,
   type ClientOrchestrationCommand,
+  type ImplementationWorkflowSettings,
   type ScopedThreadRef,
   type WorkflowPreset,
 } from "@t3tools/contracts";
@@ -127,10 +128,8 @@ export function WorkflowRuntimePanel({
   }, [snapshot.dataUpdatedAt, refreshArtifacts]);
   const planning = rootDetail.data?.planningWorkflow;
   const workflowBase = () => ({ ...base(), threadId: rootId });
-  const setConcurrency = (change: {
-    maxParallelTickets?: number;
-    maxParallelAppReviews?: number;
-  }) => {
+  // Run-level choices live on the root's stage settings, the same place the composer pinned them.
+  const setRunSettings = (change: Partial<ImplementationWorkflowSettings>) => {
     const root = workflow?.root;
     if (!root) return;
     void send({
@@ -411,12 +410,16 @@ export function WorkflowRuntimePanel({
         defaultMaxParallelTickets={settings.implementation.maxParallelTickets}
         defaultMaxParallelAppReviews={settings.implementation.maxParallelAppReviews}
         onSetMaxParallelTickets={
-          canDispatch ? (maxParallelTickets) => setConcurrency({ maxParallelTickets }) : undefined
+          canDispatch ? (maxParallelTickets) => setRunSettings({ maxParallelTickets }) : undefined
         }
         onSetMaxParallelAppReviews={
           canDispatch
-            ? (maxParallelAppReviews) => setConcurrency({ maxParallelAppReviews })
+            ? (maxParallelAppReviews) => setRunSettings({ maxParallelAppReviews })
             : undefined
+        }
+        defaultGrillAnswerer={settings.implementation.grillAnswerer}
+        onSetGrillAnswerer={
+          canDispatch ? (grillAnswerer) => setRunSettings({ grillAnswerer }) : undefined
         }
         activeThreadKey={scopedThreadKey(threadRef)}
         focusedWorkflowId={focusedWorkflowId}

@@ -8,7 +8,10 @@ import {
   type WorkflowPreset,
 } from "@t3tools/contracts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import { workflowPromptIdForPreset } from "@t3tools/shared/workflowPresets";
+import {
+  implementationDefaultsForWorkflowPreset,
+  workflowPromptIdForPreset,
+} from "@t3tools/shared/workflowPresets";
 import { formatThreadLink } from "@t3tools/shared/threadLinks";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -155,6 +158,11 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             message:
               "A workflow launch needs a project and a task: pass message, and omit scratch.",
           });
+        if (input.grillAnswerer !== undefined && input.workflowPreset !== "engineering")
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message: 'grillAnswerer only applies to workflowPreset "engineering".',
+          });
         const settings =
           workflow === undefined
             ? null
@@ -194,6 +202,21 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
                   startFromOrigin: startFromOrigin || !development.existsLocally,
                 };
               }));
+        // The composer pins these on the root when a workflow is picked; a launch pins them
+        // the same way, so the run does not follow later changes to the standing defaults.
+        const presetDefaults =
+          workflow === undefined ? null : implementationDefaultsForWorkflowPreset(workflow.preset);
+        const standing = settings?.implementation;
+        const grill =
+          input.grillAnswerer === undefined ? {} : { grillAnswerer: input.grillAnswerer };
+        const workflowImplementationSettings =
+          workflow === undefined
+            ? undefined
+            : presetDefaults !== null
+              ? { ...standing, ...presetDefaults, ...grill }
+              : standing === undefined
+                ? undefined
+                : { ...standing, ...grill };
         const workflowPromptId =
           workflow === undefined ? undefined : workflowPromptIdForPreset(workflow.preset);
         const text =
@@ -214,6 +237,9 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           interactionMode: workflow?.interactionMode ?? interactionMode,
           workspaceStrategy,
           ...(workflow === undefined ? {} : { workflowPreset: workflow.preset }),
+          ...(workflowImplementationSettings === undefined
+            ? {}
+            : { workflowImplementationSettings }),
           ...(input.message === undefined && attachments.length === 0
             ? {}
             : {

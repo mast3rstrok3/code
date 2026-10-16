@@ -19,6 +19,7 @@ export const WORKFLOW_PROMPT_IDS = {
   sharedGrillingCodex: "shared.grilling.codex",
   planningGrillStageCodex: "planning.grill-stage.codex",
   planningAutomaticEngineeringGrillCodex: "planning.engineering-grill-automatic.codex",
+  planningGrillJudgeCodex: "planning.grill-judge.codex",
   planningProductContextCodex: "planning.product-context.codex",
   planningSpecCodex: "planning.spec.codex",
   planningTicketsCodex: "planning.tickets.codex",
@@ -96,6 +97,7 @@ export function listWorkflowPromptContracts(): WorkflowPromptContract[] {
 }
 
 const VISIBLE_T3_SKILL_IDS = new Set<string>([
+  WORKFLOW_PROMPT_IDS.planningGrillJudgeCodex,
   WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex,
   WORKFLOW_PROMPT_IDS.planningFastFeatureCodex,
   WORKFLOW_PROMPT_IDS.implementationFeatureCodex,

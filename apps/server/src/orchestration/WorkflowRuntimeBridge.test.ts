@@ -432,6 +432,15 @@ effectIt.effect("skips a native observation the workflow engine refuses", () =>
   ),
 );
 
+const launchedSettings = {
+  grillAnswerer: "judge" as const,
+  ticketAppReviewEnabled: false,
+  appReviewEnabled: true,
+  finalCodeReviewEnabled: true,
+  pullRequestCreationEnabled: true,
+  pullRequestBabysittingEnabled: true,
+};
+
 // The first workflow RPC must work even before the native subscription imports the launch.
 effectIt.effect("imports a newly launched native thread before applying its workflow mode", () =>
   Effect.scoped(
@@ -454,7 +463,13 @@ effectIt.effect("imports a newly launched native thread before applying its work
         Layer.mock(ProjectionSnapshotQuery)({
           getCommandReadModel: () => Effect.succeed(createEmptyReadModel(at)),
         }),
-        Layer.mock(OrchestratorV2)({ getThreadProjection: () => Effect.succeed(projection) }),
+        Layer.mock(OrchestratorV2)({
+          getThreadProjection: () =>
+            Effect.succeed({
+              ...projection,
+              thread: { ...projection.thread, workflowImplementationSettings: launchedSettings },
+            }),
+        }),
         Layer.mock(EventStoreV2)({}),
         Layer.mock(ProjectService)({
           getById: () =>
@@ -506,6 +521,8 @@ effectIt.effect("imports a newly launched native thread before applying its work
         expect(commands[1]).toMatchObject({
           worktreePath: "/workspace/feature",
           historyImport: true,
+          // Stage settings a launch pinned on the native root reach the workflow engine.
+          workflowImplementationSettings: launchedSettings,
         });
         yield* bridge.dispatchCommand({ ...command, commandId: CommandId.make("mode-again") });
         expect(commands.filter((command) => command.type === "thread.create")).toHaveLength(1);

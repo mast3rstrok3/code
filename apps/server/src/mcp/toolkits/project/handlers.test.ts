@@ -536,6 +536,7 @@ it.effect(
         title: "Engineering",
         projectId,
         workflowPreset: "engineering",
+        grillAnswerer: "judge",
         message: "Plan the billing rewrite",
         workspaceStrategy: { type: "worktree", baseRef: "main" },
       });
@@ -543,7 +544,20 @@ it.effect(
         workflowPreset: "planning",
         interactionMode: "planning-workflow",
         workspaceStrategy: { type: "worktree", baseRef: "main" },
+        // The run keeps Engineering's stage choices and an LLM judge for its Grill.
+        workflowImplementationSettings: { ticketAppReviewEnabled: false, grillAnswerer: "judge" },
       });
+
+      // Only an Engineering Grill has questions for a judge.
+      const featureJudge = yield* handle({
+        title: "Checkout",
+        projectId,
+        workflowPreset: "feature",
+        grillAnswerer: "judge",
+        message: "Add a fast checkout",
+      });
+      expect(featureJudge.at(-1)?.result).toMatchObject({ code: "invalid_request" });
+      expect(launched).toHaveLength(2);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 

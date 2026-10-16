@@ -2291,6 +2291,29 @@ it.effect("launches a Feature root with its workflow identity", () =>
         rootThreadId: "thread:launch:feature",
         ticketScope: [],
       } as Record<string, unknown>);
+
+      const settings = {
+        grillAnswerer: "judge" as const,
+        ticketAppReviewEnabled: false,
+        appReviewEnabled: true,
+        finalCodeReviewEnabled: true,
+        pullRequestCreationEnabled: true,
+        pullRequestBabysittingEnabled: true,
+      };
+      const engineering = yield* launches.launch({
+        ...launchInput({
+          command: "command:launch:engineering",
+          thread: "thread:launch:engineering",
+          message: "Plan the billing rewrite",
+        }),
+        interactionMode: "planning-workflow",
+        workflowPreset: "planning",
+        workflowImplementationSettings: settings,
+      });
+      assert.deepEqual(
+        { ...engineering.projection.thread.workflowImplementationSettings },
+        settings as Record<string, unknown>,
+      );
     }).pipe(Effect.provide(harness.layer));
   }),
 );

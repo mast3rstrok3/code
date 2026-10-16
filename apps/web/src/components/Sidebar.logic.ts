@@ -1450,6 +1450,8 @@ export function workflowRoleShortLabel(
       return "Planning";
     case "planning-reviewer":
       return "Ticket review";
+    case "planning-grill-judge":
+      return "Grill judge";
     case "implementation-orchestrator":
       return "Build";
     case "implementation-worker":

@@ -1,5 +1,6 @@
 import type {
   EnvironmentId,
+  GrillAnswerer,
   ImplementationWorkflowSettings,
   ModelSelection,
   WorkflowPreset,
@@ -118,9 +119,20 @@ export function WorkflowSettingsBody(props: {
     | ((settings: ImplementationWorkflowSettings) => void)
     | undefined;
   readonly implementationSettingsScope?: "defaults" | "run" | undefined;
+  /** A running workflow's Grill answerer; without it the choice follows `implementationSettings`. */
+  readonly grillAnswerer?: GrillAnswerer | undefined;
+  readonly onSetGrillAnswerer?: ((answerer: GrillAnswerer) => void) | undefined;
 }) {
   const choices = useWorkflowModelChoices(props.environmentId);
   const { implementationSettings, onSetImplementationSettings } = props;
+  const grillAnswerer =
+    props.grillAnswerer ?? implementationSettings?.grillAnswerer ?? ("human" as const);
+  const onSetGrillAnswerer =
+    props.onSetGrillAnswerer ??
+    (implementationSettings && onSetImplementationSettings
+      ? (answerer: GrillAnswerer) =>
+          onSetImplementationSettings({ ...implementationSettings, grillAnswerer: answerer })
+      : undefined);
   const onSetConcurrency =
     props.onSetMaxParallelTickets ??
     (implementationSettings && onSetImplementationSettings
@@ -215,6 +227,8 @@ export function WorkflowSettingsBody(props: {
             implementationSettings={props.implementationSettings}
             onSetImplementationSettings={props.onSetImplementationSettings}
             implementationSettingsScope={props.implementationSettingsScope}
+            grillAnswerer={grillAnswerer}
+            onSetGrillAnswerer={onSetGrillAnswerer}
           />
         </div>
       </ScrollArea>
@@ -324,6 +338,9 @@ export function WorkflowSettingsMenu(props: {
   readonly stepReviewParts?: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
   readonly defaultStepReviewParts?: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
   readonly onSetStepReviewParts?: SetWorkflowStepReviewParts | undefined;
+  /** The run's Grill with Docs answerer, switchable while the Grill runs. */
+  readonly grillAnswerer?: GrillAnswerer | undefined;
+  readonly onSetGrillAnswerer?: ((answerer: GrillAnswerer) => void) | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const { onSetStepModel } = props;
@@ -373,6 +390,8 @@ export function WorkflowSettingsMenu(props: {
             stepReviewParts={props.stepReviewParts}
             defaultStepReviewParts={props.defaultStepReviewParts}
             onSetStepReviewParts={props.onSetStepReviewParts}
+            grillAnswerer={props.grillAnswerer}
+            onSetGrillAnswerer={props.onSetGrillAnswerer}
           />
         ) : null}
       </PopoverPopup>

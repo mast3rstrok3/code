@@ -2199,6 +2199,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ? {}
         : { workflowContext: command.workflowContext }),
       ...(command.workflowPreset === undefined ? {} : { workflowPreset: command.workflowPreset }),
+      ...(command.workflowImplementationSettings === undefined
+        ? {}
+        : { workflowImplementationSettings: command.workflowImplementationSettings }),
       id: command.threadId,
       projectId: command.projectId,
       title: command.title,
