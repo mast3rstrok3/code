@@ -84,6 +84,7 @@ const layerConfig = (overrides: Partial<ServerConfig.ServerConfig["Service"]>) =
         appStackBackendOidcClientId: undefined,
         appStackBackendOidcClientSecret: undefined,
         appStackNative: undefined,
+        buildBatchesEnabled: false,
         previewBrowserMode: "off",
         previewBrowserSource: "auto",
         previewBrowserExecutablePath: undefined,

@@ -155,6 +155,7 @@ const makeConfigLayer = (input?: {
     appStackBackendOidcClientSecret:
       input?.oidc === undefined ? undefined : Redacted.make(input.oidc.clientSecret),
     appStackNative: input?.native,
+    buildBatchesEnabled: false,
     noBrowser: true,
     startupPresentation: "browser",
     desktopBootstrapToken: undefined,
