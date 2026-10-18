@@ -69,7 +69,7 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
 
 /** The workflows an agent can start, keyed by the names the tool accepts. */
 const LAUNCHABLE_WORKFLOWS = {
-  feature: { preset: "fast-plan", interactionMode: "plan" },
+  feature: { preset: "fast-plan", interactionMode: "default" },
   engineering: { preset: "planning", interactionMode: "planning-workflow" },
 } as const satisfies Record<
   string,

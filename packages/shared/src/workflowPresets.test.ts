@@ -74,13 +74,13 @@ describe("workflow presets", () => {
     ).toContain("up to five cycles");
   });
 
-  it("plans, implements, reviews, tests, and publishes Feature from one thread", () => {
+  it("instructs, implements, tests, reviews, and publishes Feature from one thread", () => {
     const steps = WORKFLOW_PRESET_DEFINITION_BY_ID["fast-plan"].helpSteps;
     expect(steps.map((step) => step.label)).toEqual([
-      "Plan",
-      "Implement",
-      "Code Review",
+      "Instruction",
+      "TDD implementation",
       "App Review",
+      "Code Review",
       "Create PR",
     ]);
     expect(steps.map((step) => step.threadBoundary)).toEqual([
@@ -131,7 +131,7 @@ describe("workflow presets", () => {
 
   it("maps presets to provider modes and intent kinds", () => {
     expect(interactionModeForWorkflowPreset("fast-feature")).toBe("plan");
-    expect(interactionModeForWorkflowPreset("fast-plan")).toBe("plan");
+    expect(interactionModeForWorkflowPreset("fast-plan")).toBe("default");
     expect(interactionModeForWorkflowPreset("product-planning")).toBe("product-workflow");
     expect(interactionModeForWorkflowPreset("implementation")).toBe("implementation-workflow");
     expect(expectedIntentKindForWorkflowPreset("fix")).toBe("fix");

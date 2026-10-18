@@ -48,7 +48,7 @@ it("lists the eleven Engineering steps in phase order", () => {
   ]);
 });
 
-it("runs Feature as Plan, Implement, Code Review, App Review, then Create PR", () => {
+it("runs Feature as Instruction, TDD implementation, App Review, Code Review, then Create PR", () => {
   const targets = engineeringWorkflowDefaultSteps("fast-plan");
 
   expect(targets.map((target) => target.phase)).toEqual([
@@ -59,10 +59,10 @@ it("runs Feature as Plan, Implement, Code Review, App Review, then Create PR", (
     "implementation",
   ]);
   expect(targets.map((target) => target.label)).toEqual([
-    "Plan",
-    "Implement",
-    "Code Review",
+    "Instruction",
+    "TDD implementation",
     "App Review",
+    "Code Review",
     "Create PR",
   ]);
   // Only the reviewers run in their own threads, so only they take a model of their own.
@@ -73,8 +73,8 @@ it("runs Feature as Plan, Implement, Code Review, App Review, then Create PR", (
     "configurable",
     "workflow",
   ]);
-  expect(targets[2]?.workflowPromptId).toBe("implementation.code-review.codex");
-  expect(targets[3]?.workflowPromptId).toBe("implementation.browser-app-review.codex");
+  expect(targets[2]?.workflowPromptId).toBe("implementation.browser-app-review.codex");
+  expect(targets[3]?.workflowPromptId).toBe("implementation.code-review.codex");
 });
 
 it("drops the phase prefix a guided workflow adds to its step labels", () => {

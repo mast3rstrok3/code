@@ -60,6 +60,7 @@ import {
   WorkflowStepReviewPartsOverride,
   ImplementationWorkflowSettings,
   AppReviewId,
+  AppReviewWorkflowRunId,
   type WorkspaceUserView,
   ThreadPullRequestSnapshot,
   ThreadPullRequestStack,
@@ -1519,19 +1520,25 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     Request: Schema.Union([
       Schema.Struct({ threadId: ThreadId, excludePaused: Schema.optional(Schema.Boolean) }),
       Schema.Struct({ reviewId: AppReviewId, excludePaused: Schema.optional(Schema.Boolean) }),
+      Schema.Struct({
+        runId: AppReviewWorkflowRunId,
+        excludePaused: Schema.optional(Schema.Boolean),
+      }),
     ]),
     Result: ProjectionAppReviewWorkflowRunDbRowSchema,
     execute: (input) => sql`
       SELECT run_id AS "runId", target_thread_id AS "sourceThreadId", run_json AS "run"
       FROM projection_app_review_workflow_runs AS runs
       WHERE ${
-        "reviewId" in input
-          ? sql`EXISTS (
+        "runId" in input
+          ? sql`run_id = ${input.runId}`
+          : "reviewId" in input
+            ? sql`EXISTS (
               SELECT 1 FROM json_each(run_json, '$.cycles') AS cycle
               WHERE json_extract(cycle.value, '$.reviewId') = ${input.reviewId}
                  OR json_extract(cycle.value, '$.e2eReviewId') = ${input.reviewId}
             )`
-          : sql`status = 'running' AND (
+            : sql`status = 'running' AND (
               controller_thread_id = ${input.threadId}
               OR json_extract(run_json, '$.activeThreadId') = ${input.threadId}
               OR EXISTS (

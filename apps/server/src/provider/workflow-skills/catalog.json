@@ -5,8 +5,8 @@
     "workflow": "planning",
     "role": "planning-thread",
     "stage": "planning",
-    "title": "Planning",
-    "description": "Plans a Feature that the same thread implements, checks, and publishes.",
+    "title": "Feature Instruction",
+    "description": "Turns the user's message into the Feature's instruction: user intent, guardrails, and goal.",
     "file": "workflows/planning.fast-feature.codex.md",
     "associatedDocs": [
       {
@@ -24,7 +24,7 @@
     "role": "implementation-worker",
     "stage": "feature-implementation",
     "title": "Feature Implementation",
-    "description": "Implements the accepted plan in the planning thread, runs the repository's checks, and commits.",
+    "description": "Implements the Feature's instruction test-first, with end-to-end tests for its user flows, runs the repository's checks, and commits.",
     "file": "workflows/implementation.feature.codex.md",
     "associatedDocs": [
       {
@@ -42,7 +42,7 @@
     "role": "implementation-worker",
     "stage": "feature-pull-request",
     "title": "Feature Pull Request",
-    "description": "Opens the Feature's pull request after Code Review and links it to the thread.",
+    "description": "Opens the Feature's pull request with its instruction and review results, and links it to the thread.",
     "file": "workflows/implementation.feature-pull-request.codex.md"
   },
   {

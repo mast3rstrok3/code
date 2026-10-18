@@ -79,16 +79,22 @@ const APP_REVIEW_SUB_STEPS: ReadonlyArray<WorkflowPresetSubStep> = [
 
 const FEATURE_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
   {
-    label: "Plan",
+    label: "Instruction",
     skillId: "planning.fast-feature.codex",
     threadBoundary: "same thread",
-    note: "uses native CLI Plan mode and answers planning questions automatically",
+    note: "your message runs in Build mode and writes the user intent, guardrails, and goal",
   },
   {
-    label: "Implement",
+    label: "TDD implementation",
     skillId: "implementation.feature.codex",
     threadBoundary: "same thread",
-    note: "runs the repository's checks and commits; starts an App Stack only when a check needs a running app",
+    note: "test-first, with end-to-end tests for the user flows; runs the repository's checks and commits",
+  },
+  {
+    label: "App Review",
+    skillId: "implementation.browser-app-review.codex",
+    threadBoundary: "new review thread",
+    note: "starts the worktree's App Stack and runs the project's E2E suites on it, recording each flow as an rrweb replay; a recorded browser review when the project has no suites; the Feature thread fixes failures; three cycles by default",
   },
   {
     label: "Code Review",
@@ -97,16 +103,10 @@ const FEATURE_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
     note: "one reviewer thread per cycle; the Feature thread fixes its findings; stops clean or after five cycles by default",
   },
   {
-    label: "App Review",
-    skillId: "implementation.browser-app-review.codex",
-    threadBoundary: "new review thread",
-    note: "starts the worktree's App Stack; a reviewer tests the change in the preview browser and records it for the App Review panel; the Feature thread fixes failures; three cycles by default",
-  },
-  {
     label: "Create PR",
     skillId: "implementation.feature-pull-request.codex",
     threadBoundary: "same thread",
-    note: "opens the pull request into the base branch and lists findings Code Review or App Review left unresolved",
+    note: "opens the pull request into the base branch with the instruction, the recorded flows, and any findings App Review or Code Review left unresolved",
   },
 ];
 
@@ -174,9 +174,9 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     id: "fast-plan",
     label: "Feature",
     description:
-      "Plan with the provider CLI, implement and review the change, test it in the running app with a recorded App Review, then open a pull request from the same thread.",
+      "Write the instruction from your message, implement it test-first, test it in the running app with recorded end-to-end flows, review the code, then open a pull request from the same thread.",
     route: "product",
-    interactionMode: "plan",
+    interactionMode: "default",
     workflowPromptId: "planning.fast-feature.codex",
     helpSteps: FEATURE_HELP_STEPS,
     group: "plan",

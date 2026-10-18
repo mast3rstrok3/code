@@ -524,7 +524,7 @@ it.effect(
       expect(launched).toHaveLength(1);
       expect(launched[0]).toMatchObject({
         workflowPreset: "fast-plan",
-        interactionMode: "plan",
+        interactionMode: "default",
         runtimeMode: "full-access",
         workspaceStrategy: { type: "worktree", baseRef: "dev", startFromOrigin: true },
       });
