@@ -57,7 +57,7 @@ export const WORKFLOW_STEP_CYCLE_TARGETS: ReadonlyArray<WorkflowStepCycleTarget>
     key: FEATURE_APP_REVIEW_CYCLE_KEY,
     label: "Feature App Review cycles",
     description:
-      "One recorded browser review of the running Feature plus the fix it asks for. The pull request lists the last findings when the budget runs out.",
+      "One run of the project's E2E suites on the running Feature, recorded flow by flow, plus the fix it asks for. The pull request lists the last findings when the budget runs out.",
     defaultCycles: 3,
     maxCycles: 10,
   },

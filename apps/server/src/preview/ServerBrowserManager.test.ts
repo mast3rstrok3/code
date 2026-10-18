@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeEvents from "node:events";
 import * as NodeStream from "node:stream";
 
@@ -318,7 +318,7 @@ describe("ServerBrowserManager lifecycle", () => {
       expect(harness.launchOptions[0]?.args).not.toContain("--disable-gpu");
     }).pipe(
       Effect.provide(harness.layer),
-      Effect.provideService(HostProcessEnvironment, { T3CODE_SERVER_BROWSER_GPU: "1" }),
+      Effect.provideService(HostProcess.Environment, { T3CODE_SERVER_BROWSER_GPU: "1" }),
       Effect.scoped,
     );
   });

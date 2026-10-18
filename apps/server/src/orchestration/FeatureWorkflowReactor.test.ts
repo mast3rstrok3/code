@@ -1,9 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
-  PlanId,
   ProjectId,
   ProviderInstanceId,
-  RunId,
   ThreadId,
   type ModelSelection,
   type OrchestrationCommand,
@@ -16,12 +14,14 @@ import * as Stream from "effect/Stream";
 
 import { AppStackManager } from "../appStack/AppStackManager.ts";
 import { OrchestratorV2 } from "../orchestration-v2/Orchestrator.ts";
+import { T3ProjectFileLoader } from "../project/T3ProjectFileLoader.ts";
 import { layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
 import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
 import {
   featureAppReviewFixMessageId,
   featureAppReviewId,
   featureAppReviewThreadId,
+  featureE2eAppReviewRunId,
   featureFixMessageId,
   featureImplementMessageId,
   featurePullRequestMessageId,
@@ -37,7 +37,8 @@ import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 
 const threadId = ThreadId.make("thread-feature");
-const planId = PlanId.make("plan-1");
+const instructionText =
+  "## User intent\nFaster checkout.\n## Guardrails\nKeep the cart.\n## Goal\nOne-click checkout.";
 const reviewerModel: ModelSelection = {
   instanceId: ProviderInstanceId.make("claudeAgent"),
   model: "claude-opus-4-8",
@@ -48,18 +49,20 @@ interface FakeRun {
   readonly ordinal: number;
   readonly status: string;
   readonly userMessageId: string;
-  readonly sourcePlanRef?: { readonly threadId: ThreadId; readonly planId: PlanId };
 }
 
 interface FakeWorld {
-  interactionMode: string;
   runs: FakeRun[];
   pullRequests: ReadonlyArray<unknown>;
   completedActivities: ReadonlyArray<unknown>;
   /** Final reviewer message by reviewer thread id; present threads have a completed run. */
   reviews?: Record<string, string>;
-  /** App Review records by reviewer thread id; present threads have a completed run. */
+  /** Browser App Review records by reviewer thread id; present threads have a completed run. */
   appReviews?: Record<string, { status: string; summary: string }>;
+  /** E2E App Review Workflow runs by run id. */
+  e2eRuns?: Record<string, { status: string; findings?: string; recordings?: string[] }>;
+  /** The worktree's `e2eCommands`; none means App Review falls back to the browser. */
+  e2eCommands?: string[];
   /** The worktree's App Stack: its frontend, or why it did not start. */
   appStack?: { frontendUrl: string } | { failure: string };
   withoutWorkflowContext?: boolean;
@@ -74,7 +77,7 @@ const featureThread = (world: FakeWorld) => ({
   title: "Feature",
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6.1-sol" },
   runtimeMode: "full-access",
-  interactionMode: world.interactionMode,
+  interactionMode: "default",
   branch: "t3/fast-checkout",
   worktreePath: "/repo.worktrees/fast-checkout",
   workflowPreset: "fast-plan",
@@ -122,18 +125,17 @@ function makeSystem(world: FakeWorld) {
             ? Effect.succeed({
                 thread: featureThread(world),
                 runs: world.runs,
-                plans: [
-                  {
-                    id: planId,
-                    threadId,
-                    runId: RunId.make("run-plan"),
-                    kind: "proposed_plan",
-                    status: world.runs.some((run) => run.sourcePlanRef) ? "completed" : "active",
-                    markdown: "## Implementation steps\n1. Add the fast checkout.",
-                  },
-                ],
                 runtimeRequests: [],
                 turnItems: [],
+                messages: [
+                  {
+                    id: "instruction-answer",
+                    runId: "run-instruction",
+                    role: "assistant",
+                    streaming: false,
+                    text: instructionText,
+                  },
+                ],
               } as never)
             : world.appReviews?.[id] !== undefined
               ? Effect.succeed({
@@ -171,6 +173,41 @@ function makeSystem(world: FakeWorld) {
     Layer.provide(
       Layer.mock(ProjectionSnapshotQuery)({
         getThreadShellById: () => Effect.succeed(Option.none()),
+        getAppReviewWorkflowRun: (input) => {
+          const run = "runId" in input ? world.e2eRuns?.[input.runId] : undefined;
+          return Effect.succeed(
+            run === undefined
+              ? Option.none()
+              : (Option.some({
+                  status: run.status,
+                  failure: null,
+                  cycles: [
+                    {
+                      actionableFindingsMarkdown: run.findings ?? null,
+                      e2eExecution: {
+                        id: "execution",
+                        commands: [],
+                        results: [
+                          {
+                            command: "pnpm e2e",
+                            executedCommand: "pnpm e2e",
+                            status: run.status === "passed" ? "passed" : "failed",
+                            outputMarkdown: "",
+                            recordings: (run.recordings ?? []).map((label) => ({
+                              id: label,
+                              label,
+                              path: `/recordings/${label}`,
+                              sizeBytes: 1,
+                            })),
+                            completedAt: "2026-10-18T00:00:00.000Z",
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                }) as never),
+          );
+        },
         getThreadDetailById: (id) => {
           const record = world.appReviews?.[id];
           return Effect.succeed(
@@ -180,7 +217,7 @@ function makeSystem(world: FakeWorld) {
                   id,
                   appReviews: [
                     {
-                      id: featureAppReviewId(threadId, planId, Number(id.split("::").at(-1))),
+                      id: featureAppReviewId(threadId, Number(id.split("::").at(-1))),
                       status: record.status,
                       document: { summary: record.summary, findings: [] },
                     },
@@ -231,6 +268,16 @@ function makeSystem(world: FakeWorld) {
       }),
     ),
     Layer.provide(
+      Layer.mock(T3ProjectFileLoader)({
+        loadStrict: () =>
+          Effect.succeed(
+            world.e2eCommands === undefined
+              ? Option.none()
+              : (Option.some({ e2eCommands: world.e2eCommands }) as never),
+          ),
+      }),
+    ),
+    Layer.provide(
       Layer.mock(GitVcsDriver)({
         readConfigValue: () => Effect.succeed("dev"),
         statusDetailsLocal: () =>
@@ -257,8 +304,8 @@ function makeSystem(world: FakeWorld) {
   return { layer, evaluate, nativeCommands, workflowCommands, teardowns, stackRequests };
 }
 
-const planningRun: FakeRun = {
-  id: "run-plan",
+const instructionRun: FakeRun = {
+  id: "run-instruction",
   ordinal: 1,
   status: "completed",
   userMessageId: "user-prompt",
@@ -267,18 +314,32 @@ const implementRun: FakeRun = {
   id: "run-implement",
   ordinal: 2,
   status: "completed",
-  userMessageId: featureImplementMessageId(threadId, planId),
-  sourcePlanRef: { threadId, planId },
+  userMessageId: featureImplementMessageId(threadId),
 };
+const passedE2e = {
+  [featureE2eAppReviewRunId(threadId, 1)]: {
+    status: "passed",
+    recordings: ["checkout completes", "cart keeps items"],
+  },
+};
+const cleanReviews = {
+  [featureReviewThreadId(threadId, 1)]: [
+    "```json",
+    '{"type":"feature-code-review-result","status":"clean","reportMarkdown":"Looks right."}',
+    "```",
+  ].join("\n"),
+};
+const implementedWorld = (overrides: Partial<FakeWorld> = {}): FakeWorld => ({
+  runs: [instructionRun, implementRun],
+  pullRequests: [],
+  completedActivities: [],
+  e2eCommands: ["pnpm e2e"],
+  ...overrides,
+});
 
 describe("FeatureWorkflowReactor", () => {
-  it.effect("implements the proposed plan in the Feature thread itself, once", () => {
-    const world: FakeWorld = {
-      interactionMode: "plan",
-      runs: [planningRun],
-      pullRequests: [],
-      completedActivities: [],
-    };
+  it.effect("implements the instruction test-first in the Feature thread itself, once", () => {
+    const world: FakeWorld = { runs: [instructionRun], pullRequests: [], completedActivities: [] };
     const system = makeSystem(world);
     return Effect.gen(function* () {
       yield* system.evaluate;
@@ -286,11 +347,7 @@ describe("FeatureWorkflowReactor", () => {
         system.nativeCommands.map((command) => command.type),
         ["thread.interaction-mode.set", "thread.runtime-mode.set", "message.dispatch"],
       );
-      const [mode, runtime, message] = system.nativeCommands;
-      assert.strictEqual(
-        mode?.type === "thread.interaction-mode.set" && mode.interactionMode,
-        "default",
-      );
+      const [, runtime, message] = system.nativeCommands;
       assert.strictEqual(
         runtime?.type === "thread.runtime-mode.set" && runtime.runtimeMode,
         "full-access",
@@ -298,12 +355,12 @@ describe("FeatureWorkflowReactor", () => {
       assert.ok(message?.type === "message.dispatch");
       if (message?.type !== "message.dispatch") return;
       assert.strictEqual(message.threadId, threadId);
-      assert.deepStrictEqual(message.sourcePlanRef, { threadId, planId });
+      assert.strictEqual(message.messageId, featureImplementMessageId(threadId));
       assert.match(message.text, /implementation\.feature\.codex/);
+      assert.match(message.text, /matt-pocock\.tdd/);
 
-      // The run the plan started is what marks it implemented; nothing starts twice.
-      world.interactionMode = "default";
-      world.runs = [planningRun, { ...implementRun, status: "running" }];
+      // The implement turn is what marks the instruction step done; nothing starts twice.
+      world.runs = [instructionRun, { ...implementRun, status: "running" }];
       yield* system.evaluate;
       assert.strictEqual(system.nativeCommands.length, 3);
     }).pipe(Effect.provide(system.layer));
@@ -311,8 +368,7 @@ describe("FeatureWorkflowReactor", () => {
 
   it.effect("leaves Feature threads from before the workflow id alone", () => {
     const world: FakeWorld = {
-      interactionMode: "plan",
-      runs: [planningRun],
+      runs: [instructionRun],
       pullRequests: [],
       completedActivities: [],
       withoutWorkflowContext: true,
@@ -324,20 +380,101 @@ describe("FeatureWorkflowReactor", () => {
     }).pipe(Effect.provide(system.layer));
   });
 
-  it.effect("reviews with the Code Review model chosen in the workflow settings", () => {
-    const world: FakeWorld = {
-      interactionMode: "default",
-      runs: [planningRun, implementRun],
-      pullRequests: [],
-      completedActivities: [],
-    };
+  it.effect("tests the change with the project's E2E suites on the worktree's App Stack", () => {
+    const system = makeSystem(implementedWorld());
+    return Effect.gen(function* () {
+      yield* system.evaluate;
+      assert.deepStrictEqual(
+        system.stackRequests.map((request) => request.workflowId),
+        [`workflow-${threadId}`],
+      );
+      const launch = system.workflowCommands[0];
+      assert.ok(launch?.type === "thread.app-review-workflow.launch");
+      if (launch?.type !== "thread.app-review-workflow.launch") return;
+      assert.strictEqual(launch.targetThreadId, threadId);
+      assert.strictEqual(launch.controllerThreadId, featureAppReviewThreadId(threadId, 1));
+      assert.deepStrictEqual(launch.caller, { type: "standalone", sourceThreadId: threadId });
+      assert.deepStrictEqual(launch.previewTargets, ["https://feature.stack.example"]);
+      assert.strictEqual(launch.previewTargetsPinned, true);
+      assert.strictEqual(launch.reviewOnly, true);
+      assert.strictEqual(launch.appReviewScope, "e2e");
+      assert.match(launch.briefMarkdown, /cycle 1 of 3/);
+      assert.match(launch.briefMarkdown, /One-click checkout/);
+      // Code Review and the pull request wait for the App Review verdict.
+      assert.deepStrictEqual(system.nativeCommands, []);
+    }).pipe(Effect.provide(system.layer));
+  });
+
+  it.effect("drives the app in the browser when the project has no E2E suites", () => {
+    const { e2eCommands: _none, ...world } = implementedWorld();
     const system = makeSystem(world);
+    return Effect.gen(function* () {
+      yield* system.evaluate;
+      const launch = system.workflowCommands[0];
+      assert.ok(launch?.type === "thread.app-review.launch");
+      if (launch?.type !== "thread.app-review.launch") return;
+      assert.strictEqual(launch.sourceThreadId, threadId);
+      assert.strictEqual(launch.reviewThreadId, featureAppReviewThreadId(threadId, 1));
+      assert.strictEqual(launch.reviewId, featureAppReviewId(threadId, 1));
+      assert.strictEqual(launch.appReviewScope, "browser");
+      assert.strictEqual(launch.workflowPromptId, "implementation.browser-app-review.codex");
+      assert.match(launch.message.text, /Feature URL: https:\/\/feature\.stack\.example/);
+      assert.match(launch.message.text, /App Stack: stack-feature/);
+      assert.match(launch.message.text, /One-click checkout/);
+    }).pipe(Effect.provide(system.layer));
+  });
+
+  it.effect("has the Feature thread fix what a failed E2E App Review found", () => {
+    const system = makeSystem(
+      implementedWorld({
+        e2eRuns: {
+          [featureE2eAppReviewRunId(threadId, 1)]: {
+            status: "exhausted",
+            findings: "Suite: pnpm e2e\ncheckout never finishes",
+          },
+        },
+      }),
+    );
+    return Effect.gen(function* () {
+      yield* system.evaluate;
+      const [fix] = system.nativeCommands;
+      assert.ok(fix?.type === "message.dispatch");
+      if (fix?.type !== "message.dispatch") return;
+      assert.strictEqual(fix.threadId, threadId);
+      assert.strictEqual(fix.messageId, featureAppReviewFixMessageId(threadId, 1));
+      assert.match(fix.text, /App Review cycle 1 of 3 failed/);
+      assert.match(fix.text, /checkout never finishes/);
+    }).pipe(Effect.provide(system.layer));
+  });
+
+  it.effect("has the Feature thread fix what a failed browser App Review found", () => {
+    const { e2eCommands: _none, ...world } = implementedWorld({
+      appReviews: {
+        [featureAppReviewThreadId(threadId, 1)]: {
+          status: "failed",
+          summary: "Checkout never finishes.",
+        },
+      },
+    });
+    const system = makeSystem(world);
+    return Effect.gen(function* () {
+      yield* system.evaluate;
+      const [fix] = system.nativeCommands;
+      assert.ok(fix?.type === "message.dispatch");
+      if (fix?.type !== "message.dispatch") return;
+      assert.strictEqual(fix.messageId, featureAppReviewFixMessageId(threadId, 1));
+      assert.match(fix.text, /Checkout never finishes\./);
+    }).pipe(Effect.provide(system.layer));
+  });
+
+  it.effect("reviews the code after App Review, with the Code Review model from settings", () => {
+    const system = makeSystem(implementedWorld({ e2eRuns: passedE2e }));
     return Effect.gen(function* () {
       yield* system.evaluate;
       const [create, message] = system.nativeCommands;
       assert.ok(create?.type === "thread.create");
       if (create?.type !== "thread.create") return;
-      assert.strictEqual(create.threadId, featureReviewThreadId(threadId, planId, 1));
+      assert.strictEqual(create.threadId, featureReviewThreadId(threadId, 1));
       assert.strictEqual(create.parentThreadId, threadId);
       assert.deepStrictEqual(create.modelSelection, reviewerModel);
       assert.strictEqual(create.worktreePath, "/repo.worktrees/fast-checkout");
@@ -345,21 +482,30 @@ describe("FeatureWorkflowReactor", () => {
       assert.ok(message?.type === "message.dispatch");
       if (message?.type !== "message.dispatch") return;
       assert.match(message.text, /Base branch: dev/);
-      assert.match(message.text, /Add the fast checkout/);
+      assert.match(message.text, /One-click checkout/);
       assert.match(message.text, /feature-code-review-result/);
     }).pipe(Effect.provide(system.layer));
   });
 
+  it.effect("opens the pull request with the recorded flows once both reviews are done", () => {
+    const system = makeSystem(implementedWorld({ e2eRuns: passedE2e, reviews: cleanReviews }));
+    return Effect.gen(function* () {
+      yield* system.evaluate;
+      const [pullRequest] = system.nativeCommands;
+      assert.ok(pullRequest?.type === "message.dispatch");
+      if (pullRequest?.type !== "message.dispatch") return;
+      assert.strictEqual(pullRequest.messageId, featurePullRequestMessageId(threadId));
+      assert.match(pullRequest.text, /App Review passed in cycle 1/);
+      assert.match(pullRequest.text, /Recorded flows: checkout completes, cart keeps items/);
+      assert.match(pullRequest.text, /User intent, Guardrails, and Goal/);
+      assert.match(pullRequest.text, /The last Code Review cycle came back clean/);
+    }).pipe(Effect.provide(system.layer));
+  });
+
   it.effect(
-    "finishes without review or pull request when the implement turn changed nothing",
+    "finishes without reviews or pull request when the implement turn changed nothing",
     () => {
-      const world: FakeWorld = {
-        interactionMode: "default",
-        runs: [planningRun, implementRun],
-        pullRequests: [],
-        completedActivities: [],
-        commitsAhead: 0,
-      };
+      const world = implementedWorld({ commitsAhead: 0 });
       const system = makeSystem(world);
       return Effect.gen(function* () {
         yield* system.evaluate;
@@ -368,6 +514,7 @@ describe("FeatureWorkflowReactor", () => {
           ["thread.settle"],
         );
         assert.deepStrictEqual(system.teardowns, [`workflow-${threadId}`]);
+        assert.deepStrictEqual(system.stackRequests, []);
         const marker = system.workflowCommands[0];
         assert.ok(marker?.type === "thread.activity.append");
         if (marker?.type !== "thread.activity.append") return;
@@ -385,30 +532,29 @@ describe("FeatureWorkflowReactor", () => {
   );
 
   it.effect("finishes without changes when a fix turn leaves nothing to review", () => {
-    const world: FakeWorld = {
-      interactionMode: "default",
-      runs: [
-        planningRun,
-        implementRun,
-        {
-          id: "run-fix",
-          ordinal: 3,
-          status: "completed",
-          userMessageId: featureFixMessageId(threadId, planId, 1),
+    const system = makeSystem(
+      implementedWorld({
+        runs: [
+          instructionRun,
+          implementRun,
+          {
+            id: "run-fix",
+            ordinal: 3,
+            status: "completed",
+            userMessageId: featureFixMessageId(threadId, 1),
+          },
+        ],
+        commitsAhead: 0,
+        e2eRuns: passedE2e,
+        reviews: {
+          [featureReviewThreadId(threadId, 1)]: [
+            "```json",
+            '{"type":"feature-code-review-result","status":"findings","reportMarkdown":"Revert it."}',
+            "```",
+          ].join("\n"),
         },
-      ],
-      pullRequests: [],
-      completedActivities: [],
-      commitsAhead: 0,
-      reviews: {
-        [featureReviewThreadId(threadId, planId, 1)]: [
-          "```json",
-          '{"type":"feature-code-review-result","status":"findings","reportMarkdown":"Revert it."}',
-          "```",
-        ].join("\n"),
-      },
-    };
-    const system = makeSystem(world);
+      }),
+    );
     return Effect.gen(function* () {
       yield* system.evaluate;
       assert.deepStrictEqual(
@@ -422,50 +568,32 @@ describe("FeatureWorkflowReactor", () => {
     }).pipe(Effect.provide(system.layer));
   });
 
-  it.effect("reviews uncommitted work even when nothing is committed yet", () => {
-    const world: FakeWorld = {
-      interactionMode: "default",
-      runs: [planningRun, implementRun],
-      pullRequests: [],
-      completedActivities: [],
-      commitsAhead: 0,
-      dirty: true,
-    };
-    const system = makeSystem(world);
+  it.effect("tests uncommitted work even when nothing is committed yet", () => {
+    const system = makeSystem(implementedWorld({ commitsAhead: 0, dirty: true }));
     return Effect.gen(function* () {
       yield* system.evaluate;
       assert.deepStrictEqual(
-        system.nativeCommands.map((command) => command.type),
-        ["thread.create", "message.dispatch"],
+        system.workflowCommands.map((command) => command.type),
+        ["thread.app-review-workflow.launch"],
       );
       assert.deepStrictEqual(system.teardowns, []);
     }).pipe(Effect.provide(system.layer));
   });
 
   it.effect("stops the workflow's App Stacks and settles once the pull request is linked", () => {
-    const world: FakeWorld = {
-      interactionMode: "default",
+    const world = implementedWorld({
       runs: [
-        planningRun,
+        instructionRun,
         implementRun,
         {
           id: "run-pr",
           ordinal: 3,
           status: "completed",
-          userMessageId: featurePullRequestMessageId(threadId, planId),
+          userMessageId: featurePullRequestMessageId(threadId),
         },
       ],
-      pullRequests: [],
-      completedActivities: [],
-    };
+    });
     const system = makeSystem(world);
-    world.reviews = {
-      [featureReviewThreadId(threadId, planId, 1)]: [
-        "```json",
-        '{"type":"feature-code-review-result","status":"clean","reportMarkdown":"Looks right."}',
-        "```",
-      ].join("\n"),
-    };
     return Effect.gen(function* () {
       yield* system.evaluate;
       // The pull-request turn finished without linking anything: nothing to tear down.
@@ -500,122 +628,36 @@ describe("FeatureWorkflowReactor", () => {
       assert.deepStrictEqual(system.teardowns, [`workflow-${threadId}`]);
     }).pipe(Effect.provide(system.layer));
   });
-  const cleanReviews = {
-    [featureReviewThreadId(threadId, planId, 1)]: [
-      "```json",
-      '{"type":"feature-code-review-result","status":"clean","reportMarkdown":"Looks right."}',
-      "```",
-    ].join("\n"),
-  };
 
-  it.effect("tests the change in the running app once Code Review is clean", () => {
-    const world: FakeWorld = {
-      interactionMode: "default",
-      runs: [planningRun, implementRun],
-      pullRequests: [],
-      completedActivities: [],
-      reviews: cleanReviews,
-    };
-    const system = makeSystem(world);
-    return Effect.gen(function* () {
-      yield* system.evaluate;
-      assert.deepStrictEqual(
-        system.stackRequests.map((request) => request.workflowId),
-        [`workflow-${threadId}`],
+  it.effect(
+    "reviews the code and says so in the pull request when the App Stack does not start",
+    () => {
+      const system = makeSystem(
+        implementedWorld({
+          reviews: cleanReviews,
+          appStack: { failure: "This project has no App Stack" },
+        }),
       );
-      const launch = system.workflowCommands[0];
-      assert.ok(launch?.type === "thread.app-review.launch");
-      if (launch?.type !== "thread.app-review.launch") return;
-      assert.strictEqual(launch.sourceThreadId, threadId);
-      assert.strictEqual(launch.reviewThreadId, featureAppReviewThreadId(threadId, planId, 1));
-      assert.strictEqual(launch.reviewId, featureAppReviewId(threadId, planId, 1));
-      assert.strictEqual(launch.appReviewScope, "browser");
-      assert.strictEqual(launch.workflowPromptId, "implementation.browser-app-review.codex");
-      assert.match(launch.message.text, /App Review cycle 1 of 3/);
-      assert.match(launch.message.text, /Feature URL: https:\/\/feature\.stack\.example/);
-      assert.match(launch.message.text, /App Stack: stack-feature/);
-      assert.match(launch.message.text, /Add the fast checkout/);
-      // No pull request yet: it waits for the App Review verdict.
-      assert.deepStrictEqual(system.nativeCommands, []);
-    }).pipe(Effect.provide(system.layer));
-  });
-
-  it.effect("has the Feature thread fix what a failed App Review found", () => {
-    const world: FakeWorld = {
-      interactionMode: "default",
-      runs: [planningRun, implementRun],
-      pullRequests: [],
-      completedActivities: [],
-      reviews: cleanReviews,
-      appReviews: {
-        [featureAppReviewThreadId(threadId, planId, 1)]: {
-          status: "failed",
-          summary: "Checkout never finishes.",
-        },
-      },
-    };
-    const system = makeSystem(world);
-    return Effect.gen(function* () {
-      yield* system.evaluate;
-      const [fix] = system.nativeCommands;
-      assert.ok(fix?.type === "message.dispatch");
-      if (fix?.type !== "message.dispatch") return;
-      assert.strictEqual(fix.threadId, threadId);
-      assert.strictEqual(fix.messageId, featureAppReviewFixMessageId(threadId, planId, 1));
-      assert.match(fix.text, /App Review cycle 1 of 3 failed/);
-      assert.match(fix.text, /Checkout never finishes\./);
-    }).pipe(Effect.provide(system.layer));
-  });
-
-  it.effect("opens the pull request when App Review passed", () => {
-    const world: FakeWorld = {
-      interactionMode: "default",
-      runs: [planningRun, implementRun],
-      pullRequests: [],
-      completedActivities: [],
-      reviews: cleanReviews,
-      appReviews: {
-        [featureAppReviewThreadId(threadId, planId, 1)]: { status: "passed", summary: "Works." },
-      },
-    };
-    const system = makeSystem(world);
-    return Effect.gen(function* () {
-      yield* system.evaluate;
-      const [pullRequest] = system.nativeCommands;
-      assert.ok(pullRequest?.type === "message.dispatch");
-      if (pullRequest?.type !== "message.dispatch") return;
-      assert.strictEqual(pullRequest.messageId, featurePullRequestMessageId(threadId, planId));
-      assert.match(pullRequest.text, /App Review passed in cycle 1/);
-    }).pipe(Effect.provide(system.layer));
-  });
-
-  it.effect("opens the pull request without App Review when the App Stack does not start", () => {
-    const world: FakeWorld = {
-      interactionMode: "default",
-      runs: [planningRun, implementRun],
-      pullRequests: [],
-      completedActivities: [],
-      reviews: cleanReviews,
-      appStack: { failure: "This project has no App Stack" },
-    };
-    const system = makeSystem(world);
-    return Effect.gen(function* () {
-      yield* system.evaluate;
-      const skipped = system.workflowCommands[0];
-      assert.ok(skipped?.type === "thread.activity.append");
-      if (skipped?.type !== "thread.activity.append") return;
-      assert.strictEqual(skipped.activity.kind, FEATURE_APP_REVIEW_SKIPPED_ACTIVITY_KIND);
-      assert.ok(
-        !system.workflowCommands.some((command) => command.type === "thread.app-review.launch"),
-      );
-      const [pullRequest] = system.nativeCommands;
-      assert.ok(pullRequest?.type === "message.dispatch");
-      if (pullRequest?.type !== "message.dispatch") return;
-      assert.strictEqual(pullRequest.messageId, featurePullRequestMessageId(threadId, planId));
-      assert.match(
-        pullRequest.text,
-        /App Review cycle 1 could not run: its App Stack did not start \(This project has no App Stack\)\./,
-      );
-    }).pipe(Effect.provide(system.layer));
-  });
+      return Effect.gen(function* () {
+        yield* system.evaluate;
+        const skipped = system.workflowCommands[0];
+        assert.ok(skipped?.type === "thread.activity.append");
+        if (skipped?.type !== "thread.activity.append") return;
+        assert.strictEqual(skipped.activity.kind, FEATURE_APP_REVIEW_SKIPPED_ACTIVITY_KIND);
+        assert.ok(
+          !system.workflowCommands.some(
+            (command) => command.type === "thread.app-review-workflow.launch",
+          ),
+        );
+        const [pullRequest] = system.nativeCommands;
+        assert.ok(pullRequest?.type === "message.dispatch");
+        if (pullRequest?.type !== "message.dispatch") return;
+        assert.strictEqual(pullRequest.messageId, featurePullRequestMessageId(threadId));
+        assert.match(
+          pullRequest.text,
+          /App Review cycle 1 could not run: its App Stack did not start \(This project has no App Stack\)\./,
+        );
+      }).pipe(Effect.provide(system.layer));
+    },
+  );
 });

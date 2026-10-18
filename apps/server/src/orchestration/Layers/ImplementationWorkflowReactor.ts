@@ -116,6 +116,7 @@ import {
 } from "../implementationReviewBlocks.ts";
 import { readyTicketsWithinLimit, ticketIsPaused } from "../implementationTicketConcurrency.ts";
 import {
+  ImplementationRecoverySweepInterval,
   ImplementationWorkflowReactor,
   type ImplementationWorkflowReactorShape,
 } from "../Services/ImplementationWorkflowReactor.ts";
@@ -2538,14 +2539,14 @@ const make = Effect.gen(function* () {
     );
 
   const serverCommandId = (tag: string) =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
-  const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
+    crypto.randomUUIDv4().pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
+  const serverEventId = () => crypto.randomUUIDv4().pipe(Effect.map(EventId.make));
   const serverMessageId = (tag: string) =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
+    crypto.randomUUIDv4().pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
   const serverThreadId = (tag: string) =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
+    crypto.randomUUIDv4().pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
   const serverAppReviewId = () =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => AppReviewId.make(`app-review-${uuid}`)));
+    crypto.randomUUIDv4().pipe(Effect.map((uuid) => AppReviewId.make(`app-review-${uuid}`)));
 
   // Projection updates trail command dispatch by a small window. Keep the
   // latest run written by this single-worker reactor so two queued commands
@@ -14353,6 +14354,7 @@ const make = Effect.gen(function* () {
       }),
     );
     if ((yield* ServerActivation) === undefined) yield* reconcileStartup();
+    const sweepInterval = yield* ImplementationRecoverySweepInterval;
     yield* Effect.forkScoped(
       Effect.gen(function* () {
         yield* reconcileCanonicalStageExecutions().pipe(
@@ -14383,7 +14385,7 @@ const make = Effect.gen(function* () {
             }),
           ),
         );
-      }).pipe(Effect.repeat(Schedule.spaced(Duration.seconds(30)))),
+      }).pipe(Effect.repeat(Schedule.spaced(sweepInterval))),
     );
   });
 

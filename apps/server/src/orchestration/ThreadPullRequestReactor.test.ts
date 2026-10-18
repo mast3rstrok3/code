@@ -1,4 +1,4 @@
-import { DEFAULT_WORKSPACE_USER_ID } from "@t3tools/contracts";
+import { DEFAULT_WORKSPACE_USER_ID, SourceControlProviderKind } from "@t3tools/contracts";
 import {
   CheckpointRef,
   EventId,
@@ -78,7 +78,7 @@ function branchPullRequest(
 function summary(input: PullRequestRef, state: PullRequestSummary["state"]): PullRequestSummary {
   return {
     ...input,
-    provider: "github",
+    provider: SourceControlProviderKind.make("github"),
     title: "Pull request",
     url: reference(input.number).url,
     state,

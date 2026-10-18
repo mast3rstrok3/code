@@ -20,6 +20,7 @@ import {
 } from "@t3tools/contracts";
 import * as FileSystem from "effect/FileSystem";
 import * as ServerConfig from "../../../config.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
@@ -29,7 +30,6 @@ import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.t
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as SourceControlRepositoryService from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
-import * as ServerSettings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const shared = {
@@ -105,7 +105,7 @@ const ProjectCloneTool = Tool.make("t3_project_clone", {
 const ThreadLaunchTool = Tool.make("t3_thread_launch", {
   ...shared,
   description:
-    'Create an ordinary TOP-LEVEL thread with an explicit workspace binding before its agent starts. Use this when the user requests independent work, a new thread, or a PR stack in its own worktree; use delegate_task for child subagents. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree based on local commits, or {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to use an existing checkout. For upstream commits, set startFromOrigin:true. Omitted workspaceStrategy means the project root, NOT the caller\'s worktree. Omit projectId/modelSelection/modes to inherit those settings from the calling thread; a caller outside a T3 thread must pass projectId and gets the project\'s default model. Set scratch:true instead of projectId for a thread without a project: it runs in a fresh folder of its own, outside any repository. Put the task in message. Do not ask the agent to create its own worktree via shell: that does not update the thread binding. Each call creates a new launch with no retry key; retain threadId and use t3_thread_read/t3_thread_wait to follow preparation. Paste the returned link when you mention the thread. After errors or lost responses, inspect t3_thread_list before retrying. Attachments must be pending uploads. The new thread may not run with broader runtime or interaction modes than the caller: the calling T3 thread\'s own modes, or the permission mode an outside agent was approved with. Set workflowPreset to start the thread as a workflow, as the composer does: "feature" plans in Plan mode, implements, runs Code Review cycles and opens a pull request on its own; "engineering" runs the Engineering workflow, whose Grill with Docs asks questions before planning; set grillAnswerer:"judge" to have an LLM judge answer them so it runs unattended. A workflow needs message as its task, ignores interactionMode, runs unattended in full access (so the caller must allow full-access/default), and without workspaceStrategy starts in a new worktree from the project\'s development branch (its configured branch, else dev, else the default branch).',
+    'Create an ordinary TOP-LEVEL thread with an explicit workspace binding before its agent starts. Use this when the user requests independent work, a new thread, or a PR stack in its own worktree; use delegate_task for child subagents. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree based on local commits, or {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to use an existing checkout. For upstream commits, set startFromOrigin:true. Omitted workspaceStrategy means the project root, NOT the caller\'s worktree. Omit projectId/modelSelection/modes to inherit those settings from the calling thread; a caller outside a T3 thread must pass projectId and gets the project\'s default model. Set scratch:true instead of projectId for a thread without a project: it runs in a fresh folder of its own, outside any repository. Put the task in message. Do not ask the agent to create its own worktree via shell: that does not update the thread binding. Each call creates a new launch with no retry key; retain threadId and use t3_thread_read/t3_thread_wait to follow preparation. To link a thread for the user, write `[title](t3-thread://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; T3 Code shows the thread\'s current title. After errors or lost responses, inspect t3_thread_list before retrying. Attachments must be pending uploads. The new thread may not run with broader runtime or interaction modes than the caller: the calling T3 thread\'s own modes, or the permission mode an outside agent was approved with. Set workflowPreset to start the thread as a workflow, as the composer does: "feature" plans in Plan mode, implements, runs Code Review cycles and opens a pull request on its own; "engineering" runs the Engineering workflow, whose Grill with Docs asks questions before planning; set grillAnswerer:"judge" to have an LLM judge answer them so it runs unattended. A workflow needs message as its task, ignores interactionMode, runs unattended in full access (so the caller must allow full-access/default), and without workspaceStrategy starts in a new worktree from the project\'s development branch (its configured branch, else dev, else the default branch).',
   parameters: Schema.Struct({
     projectId: Schema.optional(ProjectId),
     scratch: Schema.optional(
@@ -146,8 +146,6 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
   }),
   success: Schema.Struct({
     threadId: ThreadId,
-    /** Paste this whenever you mention the thread, so the user can click to open it. */
-    link: Schema.String,
     projectId: ProjectId,
     modelSelection: ModelSelection,
     runId: Schema.NullOr(RunId),
@@ -161,6 +159,7 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
     ServerSettings.ServerSettingsService,
     FileSystem.FileSystem,
     ServerConfig.ServerConfig,
+    ServerSettings.ServerSettingsService,
   ],
 })
   .annotate(Tool.Destructive, true)

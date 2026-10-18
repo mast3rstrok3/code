@@ -21,9 +21,7 @@ export type ThreadFixtureOverrides = Partial<Thread> & {
   readonly parentThreadId?: ThreadId | null;
   readonly planningWorkflow?: import("@t3tools/contracts").OrchestrationPlanningWorkflow | null;
   readonly appReviews?: ReadonlyArray<unknown>;
-  /** Test-only fallback data for the generic thread-sort contract. */
   readonly messages?: ReadonlyArray<ChatMessage>;
-  /** Accepted while older unit cases are migrated; never consumed by production code. */
   readonly proposedPlans?: ReadonlyArray<unknown>;
 };
 
@@ -75,7 +73,6 @@ export function makeThreadProjectionFixture(): OrchestrationV2ThreadProjection {
   };
 }
 
-/** Creates a structurally complete V2 shell for UI unit tests. */
 export function makeThreadFixture(overrides: ThreadFixtureOverrides = {}): Thread {
   const environmentId = overrides.environmentId ?? EnvironmentId.make("environment-test");
   const id = overrides.id ?? ThreadId.make("thread-test");
@@ -143,7 +140,6 @@ export function makeThreadFixture(overrides: ThreadFixtureOverrides = {}): Threa
   return { ...shell, ...overrides };
 }
 
-/** Canonical v2 history and a live response for streaming projection tests. */
 export function makeStreamingTimelineFixture(text = "") {
   const threadId = ThreadId.make("streaming-thread");
   const runId = RunId.make("live-run");

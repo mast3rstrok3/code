@@ -50,25 +50,21 @@ const overriddenDefinition: WorkflowSubagentSpawnDefinition = {
 };
 
 function settingsWith(input: {
-  readonly legacyCodexEnabled?: boolean;
+  readonly codexEnabled?: boolean;
   readonly providerInstances?: ProviderInstanceConfigMap;
   readonly workflowStepModels?: ServerSettings["workflowStepModels"];
 }): ServerSettings {
+  const providerInstances =
+    input.providerInstances ??
+    (input.codexEnabled === false
+      ? { [ProviderInstanceId.make("codex")]: { driver: codexDriver, enabled: false } }
+      : undefined);
   return {
     ...DEFAULT_SERVER_SETTINGS,
-    ...(input.providerInstances !== undefined
-      ? { providerInstances: input.providerInstances }
-      : {}),
+    ...(providerInstances !== undefined ? { providerInstances } : {}),
     ...(input.workflowStepModels !== undefined
       ? { workflowStepModels: input.workflowStepModels }
       : {}),
-    providers: {
-      ...DEFAULT_SERVER_SETTINGS.providers,
-      codex: {
-        ...DEFAULT_SERVER_SETTINGS.providers.codex,
-        enabled: input.legacyCodexEnabled ?? true,
-      },
-    },
   };
 }
 
@@ -210,7 +206,7 @@ describe("resolveWorkflowSubagentModelSelection", () => {
       definition: overriddenDefinition,
       parentModelSelection: claudeParentSelection,
       settings: settingsWith({
-        legacyCodexEnabled: true,
+        codexEnabled: true,
         providerInstances: {
           [ProviderInstanceId.make("codex")]: { driver: codexDriver, enabled: false },
           [ProviderInstanceId.make("codex_work")]: { driver: codexDriver, enabled: false },
@@ -227,11 +223,11 @@ describe("resolveWorkflowSubagentModelSelection", () => {
     expect(resolved.fallbackDetail).toContain("gpt-5.6-sol");
   });
 
-  it("uses the synthesized legacy codex instance when it is enabled", () => {
+  it("uses the default codex instance when it is enabled", () => {
     const resolved = resolveWorkflowSubagentModelSelection({
       definition: overriddenDefinition,
       parentModelSelection: claudeParentSelection,
-      settings: settingsWith({ legacyCodexEnabled: true }),
+      settings: settingsWith({ codexEnabled: true }),
     });
     expect(resolved.modelSelection).toEqual({
       instanceId: "codex",
@@ -240,11 +236,11 @@ describe("resolveWorkflowSubagentModelSelection", () => {
     });
   });
 
-  it("falls back when only the legacy codex settings exist and are disabled", () => {
+  it("falls back when the default codex instance is disabled", () => {
     const resolved = resolveWorkflowSubagentModelSelection({
       definition: overriddenDefinition,
       parentModelSelection: claudeParentSelection,
-      settings: settingsWith({ legacyCodexEnabled: false }),
+      settings: settingsWith({ codexEnabled: false }),
     });
     expect(resolved.modelSelection).toEqual(claudeParentSelection);
     expect(resolved.overrideApplied).toBe(false);
@@ -284,7 +280,7 @@ describe("resolveWorkflowStepModelSelection", () => {
       definition: overriddenDefinition,
       stepModels: [],
       parentModelSelection: claudeParentSelection,
-      settings: settingsWith({ legacyCodexEnabled: true }),
+      settings: settingsWith({ codexEnabled: true }),
     });
     expect(resolved.modelSelection).toEqual({
       instanceId: "codex",

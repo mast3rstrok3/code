@@ -212,16 +212,17 @@ describe("WorkflowPromptRegistry", () => {
     const fastFeaturePlanning = catalog.skills.find(
       (skill) => skill.id === WORKFLOW_PROMPT_IDS.planningFastFeatureCodex,
     );
-    NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /## Implementation steps/);
-    NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /## Checks/);
-    NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /planning turn is unattended/i);
-    NodeAssert.doesNotMatch(fastFeaturePlanning?.promptText ?? "", /App Review/);
+    for (const section of ["## User intent", "## Guardrails", "## Goal"]) {
+      NodeAssert.ok(fastFeaturePlanning?.promptText.includes(section), section);
+    }
+    NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /This turn is unattended/);
     const featureImplementation = catalog.skills.find(
       (skill) => skill.id === WORKFLOW_PROMPT_IDS.implementationFeatureCodex,
     );
     NodeAssert.deepEqual(featureImplementation?.workflowIds, ["fast-plan"]);
     NodeAssert.match(featureImplementation?.promptText ?? "", /app_stack_start/);
     NodeAssert.match(featureImplementation?.promptText ?? "", /AGENTS\.md/);
+    NodeAssert.match(featureImplementation?.promptText ?? "", /e2eCommands/);
     NodeAssert.match(
       featureImplementation?.promptText ?? "",
       /Do not push and do not open a pull request/,
@@ -233,11 +234,11 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(featurePullRequest?.promptText ?? "", /link_pull_request/);
     NodeAssert.match(
       featurePullRequest?.promptText ?? "",
-      /unresolved Code Review or App Review findings/,
+      /unresolved App Review or Code Review findings/,
     );
     NodeAssert.match(
       featurePullRequest?.promptText ?? "",
-      /Do not run another App Review or babysit the pull request/,
+      /Do not run another review or babysit the pull request/,
     );
     NodeAssert.ok(
       catalog.skills
@@ -279,13 +280,11 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(resolvingMergeConflictsDoc?.content ?? "", /never [`]--abort[`]/);
     for (const workflow of catalog.workflows) {
       for (const step of workflow.steps) {
-        // Only Feature reviews in the browser; Engineering's App Review runs the E2E suites.
-        if (workflow.id !== "fast-plan") {
-          NodeAssert.notEqual(
-            step.workflowPromptId,
-            WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
-          );
-        }
+        // Workflow App Reviews run the E2E suites.
+        NodeAssert.notEqual(
+          step.workflowPromptId,
+          WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+        );
         if (step.skillId !== undefined) {
           NodeAssert.ok(catalog.skills.some((skill) => skill.id === step.skillId));
         }

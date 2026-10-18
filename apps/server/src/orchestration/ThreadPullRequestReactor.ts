@@ -303,7 +303,7 @@ export const make = Effect.gen(function* () {
             updates,
             ({ thread, branchPullRequest, replacement }) =>
               Effect.gen(function* () {
-                const uuid = yield* crypto.randomUUIDv4;
+                const uuid = yield* crypto.randomUUIDv4();
                 yield* engine.dispatch({
                   type: "thread.pull-request.sync",
                   commandId: CommandId.make(`server:thread-pull-request:${thread.id}:${uuid}`),

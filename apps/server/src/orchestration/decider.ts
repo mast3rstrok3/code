@@ -1162,7 +1162,7 @@ function withEventBase(
 > {
   return Crypto.Crypto.pipe(
     Effect.flatMap((crypto) =>
-      crypto.randomUUIDv4.pipe(
+      crypto.randomUUIDv4().pipe(
         Effect.map((eventId) => ({
           eventId: EventId.make(eventId),
           aggregateKind: input.aggregateKind,
@@ -2994,7 +2994,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // planning-orchestrator child used to carry. The preset is pinned so the
       // thread still reads as a product root once its interaction mode flips.
       const crypto = yield* Crypto.Crypto;
-      const messageUuid = yield* crypto.randomUUIDv4;
+      const messageUuid = yield* crypto.randomUUIDv4();
       const productContextOnly = productRootThread.workflowPreset === "product-planning";
       const messageId = MessageId.make(
         `message-product-${productContextOnly ? "context" : "engineering-grill"}-${messageUuid}`,
@@ -3124,7 +3124,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       }
 
       const crypto = yield* Crypto.Crypto;
-      const messageUuid = yield* crypto.randomUUIDv4;
+      const messageUuid = yield* crypto.randomUUIDv4();
       const messageId = MessageId.make(`message-planning-${command.stage}-stage-${messageUuid}`);
       const stage =
         command.stage === "grill"
@@ -3311,8 +3311,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const crypto = yield* Crypto.Crypto;
-      const specUuid = yield* crypto.randomUUIDv4;
-      const ticketMessageUuid = yield* crypto.randomUUIDv4;
+      const specUuid = yield* crypto.randomUUIDv4();
+      const ticketMessageUuid = yield* crypto.randomUUIDv4();
       const spec = buildPlanningSpecFromArtifact({
         specId:
           existingArtifact?.id ??
@@ -3431,7 +3431,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
         const crypto = yield* Crypto.Crypto;
         const generatedTicketIds = yield* Effect.forEach(command.tickets, () =>
-          crypto.randomUUIDv4.pipe(Effect.map((uuid) => `planning-ticket-${uuid}`)),
+          crypto.randomUUIDv4().pipe(Effect.map((uuid) => `planning-ticket-${uuid}`)),
         );
         const tickets = resolvePlanningTicketProjects(
           readModel,
@@ -3498,7 +3498,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       }
       const crypto = yield* Crypto.Crypto;
       const generatedTicketIds = yield* Effect.forEach(command.tickets, () =>
-        crypto.randomUUIDv4.pipe(Effect.map((uuid) => `planning-ticket-${uuid}`)),
+        crypto.randomUUIDv4().pipe(Effect.map((uuid) => `planning-ticket-${uuid}`)),
       );
       const tickets = resolvePlanningTicketProjects(
         readModel,
@@ -3600,8 +3600,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const crypto = yield* Crypto.Crypto;
-      const reviewerThreadUuid = yield* crypto.randomUUIDv4;
-      const reviewerMessageUuid = yield* crypto.randomUUIDv4;
+      const reviewerThreadUuid = yield* crypto.randomUUIDv4();
+      const reviewerMessageUuid = yield* crypto.randomUUIDv4();
       const reviewerThreadId = ThreadId.make(`thread-planning-reviewer-${reviewerThreadUuid}`);
       const reviewerMessageId = MessageId.make(`message-planning-reviewer-${reviewerMessageUuid}`);
       const { cycleNumber, mode, targetPlanningTicketIds, previousCycle } = reviewRequest;
@@ -3819,7 +3819,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const crypto = yield* Crypto.Crypto;
       const generatedTicketIds = yield* Effect.forEach(edits, (edit) =>
         edit.type === "create"
-          ? crypto.randomUUIDv4.pipe(Effect.map((uuid) => `planning-ticket-${uuid}`))
+          ? crypto.randomUUIDv4().pipe(Effect.map((uuid) => `planning-ticket-${uuid}`))
           : Effect.succeed(""),
       );
       const editedTickets = resolvePlanningTicketProjects(
@@ -4032,8 +4032,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const crypto = yield* Crypto.Crypto;
-      const runUuid = yield* crypto.randomUUIDv4;
-      const orchestratorThreadUuid = yield* crypto.randomUUIDv4;
+      const runUuid = yield* crypto.randomUUIDv4();
+      const orchestratorThreadUuid = yield* crypto.randomUUIDv4();
       const orchestratorThreadId = ThreadId.make(
         `thread-implementation-orchestrator-${orchestratorThreadUuid}`,
       );

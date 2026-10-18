@@ -411,7 +411,8 @@ function EngineeringWorkflowStepControls(
   }
 
   if (props.preset === "fast-plan" && props.workflowPromptId === APP_REVIEW_KEY.workflowPromptId) {
-    // Feature's App Review is one recorded browser reviewer, not Engineering's three phases.
+    // Feature's App Review is one review-only run per cycle that the Feature thread fixes,
+    // not Engineering's three phases.
     return (
       <div className="space-y-3">
         <StepModelControl

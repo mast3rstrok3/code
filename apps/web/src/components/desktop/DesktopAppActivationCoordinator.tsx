@@ -1,6 +1,6 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { DesktopAppActivationRequest } from "@t3tools/contracts";
-import { useEffect, useEffectEvent, useMemo, useRef } from "react";
+import { useEffect, useEffectEvent, useRef } from "react";
 
 import { handleDesktopAppActivationRequest } from "../../desktopAppActivation";
 import { useClientSettings, usePrimarySettings } from "../../hooks/useSettings";
@@ -11,8 +11,7 @@ import { resolveDefaultThreadOwnerUserId } from "../../lib/workspaceUsers";
 import { readProjects, waitForProject } from "../../state/entities";
 import { usePrimaryEnvironment } from "../../state/environments";
 import { projectEnvironment } from "../../state/projects";
-import { useEnvironmentQuery } from "../../state/query";
-import { environmentShell } from "../../state/shell";
+import { useEnvironmentShellHasSnapshot } from "../../state/shell";
 import { useAtomCommand } from "../../state/use-atom-command";
 
 export function DesktopAppActivationCoordinator() {
@@ -20,23 +19,18 @@ export function DesktopAppActivationCoordinator() {
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
   const activeWorkspaceUserId = useClientSettings((settings) => settings.activeWorkspaceUserId);
   const workspaceUsers = usePrimarySettings((settings) => settings.workspaceUsers);
-  const ownerUserId = useMemo(
-    () => resolveDefaultThreadOwnerUserId({ activeWorkspaceUserId, workspaceUsers }),
-    [activeWorkspaceUserId, workspaceUsers],
-  );
+  const ownerUserId = resolveDefaultThreadOwnerUserId({ activeWorkspaceUserId, workspaceUsers });
   const openThread = useNewThreadHandler();
   const queueRef = useRef(Promise.resolve());
   const activation = window.desktopBridge?.appActivation;
-  const shell = useEnvironmentQuery(
-    primaryEnvironment === null
-      ? null
-      : environmentShell.stateAtom(primaryEnvironment.environmentId),
+  const shellHasSnapshot = useEnvironmentShellHasSnapshot(
+    primaryEnvironment?.environmentId ?? null,
   );
   const ready =
     activation !== undefined &&
     primaryEnvironment?.connection.phase === "connected" &&
     primaryEnvironment.serverConfig !== null &&
-    shell.data?.snapshot._tag === "Some";
+    shellHasSnapshot;
 
   const processRequest = useEffectEvent(async (request: DesktopAppActivationRequest) =>
     handleDesktopAppActivationRequest(request, {

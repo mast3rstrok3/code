@@ -7,7 +7,7 @@ import {
   type UserInputQuestion,
 } from "@t3tools/contracts";
 
-import { resolvePlanQuestionAnswers } from "./featureWorkflow.ts";
+import { resolveFeatureQuestionAnswers } from "./featureWorkflow.ts";
 import { extractJsonFenceBlocks } from "./workflowDirectives.ts";
 
 /**
@@ -250,7 +250,7 @@ export function nextGrillJudgeAction(input: {
   if (retry.ok) return { type: "answer", answers: retry.answers, fallbackReason: null };
   return {
     type: "answer",
-    answers: resolvePlanQuestionAnswers({ questions: input.question.questions }),
+    answers: resolveFeatureQuestionAnswers({ questions: input.question.questions }),
     fallbackReason: retry.problem,
   };
 }

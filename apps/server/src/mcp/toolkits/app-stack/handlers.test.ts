@@ -25,6 +25,7 @@ import { ProjectionSnapshotQuery } from "../../../orchestration/Services/Project
 import { McpInvocationContext, type McpCapability } from "../../McpInvocationContext.ts";
 import { AppStackToolkitRegistrationLive } from "../../McpHttpServer.ts";
 import { handlers } from "./handlers.ts";
+import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 
 const thread = Schema.decodeUnknownSync(OrchestrationThreadShell)({
   ownerUserId: DEFAULT_WORKSPACE_USER_ID,
@@ -363,6 +364,7 @@ it.effect("registers workspace tools, validates inputs, and returns results thro
   const layer = AppStackToolkitRegistrationLive.pipe(
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provideMerge(test.layer),
+    Layer.provideMerge(Layer.mock(ThreadManagement.ThreadManagementService)({})),
   );
   return Effect.scoped(
     Effect.gen(function* () {

@@ -221,12 +221,12 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
 
   const serverCommandId = (tag: string) =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
-  const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
+    crypto.randomUUIDv4().pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
+  const serverEventId = () => crypto.randomUUIDv4().pipe(Effect.map(EventId.make));
   const serverMessageId = (tag: string) =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
+    crypto.randomUUIDv4().pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
   const serverThreadId = (tag: string) =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
+    crypto.randomUUIDv4().pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
 
   const resolveThread = (threadId: ThreadId) =>
     projectionSnapshotQuery.getThreadDetailById(threadId).pipe(Effect.map(Option.getOrUndefined));

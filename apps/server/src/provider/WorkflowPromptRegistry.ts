@@ -162,9 +162,8 @@ function buildWorkflowCatalog(): WorkflowCatalog {
     description: definition.description,
     interactionMode: definition.interactionMode,
     steps: definition.helpSteps.map((step) => {
-      // Engineering's App Review runs the end-to-end suites; Feature's is a browser review.
+      // Workflow App Reviews run the end-to-end suites.
       const workflowPromptId =
-        definition.id !== "fast-plan" &&
         step.skillId === WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex
           ? WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex
           : step.skillId;

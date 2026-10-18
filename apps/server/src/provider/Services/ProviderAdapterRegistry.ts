@@ -15,7 +15,7 @@ import type * as Scope from "effect/Scope";
 
 import type { ProviderAdapterError, ProviderUnsupportedError } from "../legacyErrors.ts";
 import type { ProviderAdapterShape } from "./ProviderAdapter.ts";
-import type { ProviderContinuationIdentity } from "../ProviderDriver.ts";
+import type { ProviderContinuationIdentity } from "@t3tools/provider-core/server/driver";
 
 export interface ProviderInstanceRoutingInfo {
   readonly instanceId: ProviderInstanceId;

@@ -2,7 +2,6 @@ import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
 import type { WorkflowPresetSubStep } from "@t3tools/shared/workflowPresets";
 import { createModelSelection } from "@t3tools/shared/model";
-import { useMemo } from "react";
 
 import { cn } from "~/lib/utils";
 import { getProviderModelPickerChoices } from "../modelSelection";
@@ -44,9 +43,9 @@ export function useWorkflowModelChoices(environmentId: EnvironmentId) {
   const providers = environmentConfig?.providers ?? primaryProviders;
   const settings = useEnvironmentSettings(environmentId);
 
-  const { instanceEntries, modelOptionsByInstance } = useMemo(
-    () => getProviderModelPickerChoices(settings, providers),
-    [providers, settings],
+  const { instanceEntries, modelOptionsByInstance } = getProviderModelPickerChoices(
+    settings,
+    providers,
   );
 
   const describeSelection = (selection: ModelSelection): string => {
@@ -60,7 +59,7 @@ export function useWorkflowModelChoices(environmentId: EnvironmentId) {
     return instanceName === undefined ? modelName : `${instanceName} · ${modelName}`;
   };
 
-  return { instanceEntries, modelOptionsByInstance, describeSelection };
+  return { environmentId, instanceEntries, modelOptionsByInstance, describeSelection };
 }
 
 export type WorkflowModelChoices = ReturnType<typeof useWorkflowModelChoices>;
@@ -115,6 +114,7 @@ export function WorkflowModelPinControls(props: {
       ) : (
         <>
           <ProviderModelPicker
+            environmentId={props.choices.environmentId}
             activeInstanceId={active.instanceId}
             model={active.model}
             lockedProvider={null}
