@@ -1,3 +1,4 @@
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { appStackServiceBlocksReadiness } from "@t3tools/shared/appStack";
 import {
   type AppStackStatus,
@@ -38,7 +39,6 @@ import {
   type AppReviewParts,
 } from "@t3tools/shared/appReviewParts";
 import { makeDrainableWorker, type DrainableWorker } from "@t3tools/shared/DrainableWorker";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { extractPreviewUrls } from "@t3tools/shared/preview";
 import { resolveAppReviewE2eCommands } from "@t3tools/shared/t3ProjectFile";
 import * as Cause from "effect/Cause";
@@ -1850,13 +1850,13 @@ const make = Effect.gen(function* () {
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const serverCommandId = (tag: string) =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
+    crypto.randomUUIDv4().pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverMessageId = (tag: string) =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
+    crypto.randomUUIDv4().pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
   const serverThreadId = (tag: string) =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
+    crypto.randomUUIDv4().pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
   const serverReviewId = () =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => AppReviewId.make(`app-review-${uuid}`)));
+    crypto.randomUUIDv4().pipe(Effect.map((uuid) => AppReviewId.make(`app-review-${uuid}`)));
 
   const resolveThread = (threadId: ThreadId) =>
     projectionSnapshotQuery.getThreadDetailById(threadId).pipe(Effect.map(Option.getOrUndefined));
@@ -2639,7 +2639,7 @@ const make = Effect.gen(function* () {
       text: buildE2eReviewPrompt({
         run,
         cycle,
-        hostPlatform: yield* HostProcessPlatform,
+        hostPlatform: yield* HostProcess.Platform,
         e2eCommands,
         priorFindingIds: prior.findingIds,
       }),
@@ -2825,7 +2825,7 @@ const make = Effect.gen(function* () {
       ...(includesE2e
         ? {
             e2eExecution: {
-              id: yield* crypto.randomUUIDv4,
+              id: yield* crypto.randomUUIDv4(),
               commands: rerunAllTests
                 ? appReviewTestCommands({ cycles: [] }, e2eCommands)
                 : appReviewTestCommands(run, e2eCommands),

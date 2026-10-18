@@ -20,6 +20,7 @@ import { getWorkflowArtifactsForThread } from "../../../orchestration/workflowAr
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { handlers, WorkflowArtifactsToolkitHandlersLive } from "./handlers.ts";
 import { WorkflowArtifactsToolkit } from "./tools.ts";
+import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 
 const projectId = ProjectId.make("project-workflow-artifacts");
 const otherProjectId = ProjectId.make("project-other");
@@ -332,6 +333,7 @@ const mcpLayer = (threadId = nestedReviewerThreadId) =>
       }),
     ),
     Layer.provideMerge(Layer.succeed(McpSchema.McpServerClient, mcpClient)),
+    Layer.provideMerge(Layer.mock(ThreadManagement.ThreadManagementService)({})),
   );
 const decodeReviews = Schema.decodeUnknownSync(
   Schema.Struct({ appReviews: Schema.Array(AppReviewRecord) }),

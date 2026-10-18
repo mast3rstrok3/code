@@ -1,8 +1,8 @@
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { describe } from "vite-plus/test";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, expect } from "@effect/vitest";
 import { AppReviewWorkflowRunId, type AppReviewWorkflowCycle } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -116,7 +116,7 @@ it.effect("retains failure output beyond the inline limit in private logs", () =
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const platform = yield* HostProcessPlatform;
+    const platform = yield* HostProcess.Platform;
     const cwd = yield* fs.makeTempDirectoryScoped();
     const script = path.join(cwd, "fail.cjs");
     const stdout = `${"x".repeat(9_000)}\nLast stdout failure\n`;

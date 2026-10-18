@@ -1,29 +1,11 @@
-import {
-  buildPlanImplementationPrompt,
-  proposedPlanTitle,
-} from "@t3tools/shared/orchestrationPlanning";
+import { buildPlanImplementationPrompt } from "@t3tools/shared/orchestrationPlanning";
+import { stripDisplayedPlanMarkdown, proposedPlanTitle } from "@t3tools/shared/proposedPlanText";
 
 export {
   buildPlanImplementationPrompt,
   buildPlanImplementationThreadTitle,
-  proposedPlanTitle,
 } from "@t3tools/shared/orchestrationPlanning";
-
-export function stripDisplayedPlanMarkdown(planMarkdown: string): string {
-  const lines = planMarkdown.trimEnd().split(/\r?\n/);
-  const sourceLines = lines[0] && /^\s{0,3}#{1,6}\s+/.test(lines[0]) ? lines.slice(1) : [...lines];
-  while (sourceLines[0]?.trim().length === 0) {
-    sourceLines.shift();
-  }
-  const firstHeadingMatch = sourceLines[0]?.match(/^\s{0,3}#{1,6}\s+(.+)$/);
-  if (firstHeadingMatch?.[1]?.trim().toLowerCase() === "summary") {
-    sourceLines.shift();
-    while (sourceLines[0]?.trim().length === 0) {
-      sourceLines.shift();
-    }
-  }
-  return sourceLines.join("\n");
-}
+export { proposedPlanTitle, stripDisplayedPlanMarkdown } from "@t3tools/shared/proposedPlanText";
 
 export function buildCollapsedProposedPlanPreviewMarkdown(
   planMarkdown: string,

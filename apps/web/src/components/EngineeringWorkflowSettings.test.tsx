@@ -1,4 +1,5 @@
 import {
+  EnvironmentId,
   ProviderInstanceId,
   type ImplementationWorkflowSettings,
   type ModelSelection,
@@ -15,6 +16,7 @@ const modelSelection: ModelSelection = {
 };
 
 const choices = {
+  environmentId: EnvironmentId.make("environment-1"),
   instanceEntries: [],
   modelOptionsByInstance: new Map(),
   describeSelection: (selection: ModelSelection) => selection.model,

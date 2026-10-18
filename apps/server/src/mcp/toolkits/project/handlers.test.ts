@@ -19,10 +19,10 @@ import * as Stream from "effect/Stream";
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ServerConfig from "../../../config.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
-import * as ServerSettings from "../../../serverSettings.ts";
 import * as VcsProcess from "../../../vcs/VcsProcess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -48,6 +48,7 @@ it.effect("attributes a launched thread's first message to the calling thread", 
     } as OrchestrationV2ThreadShell;
     let launchedSender: ThreadId | undefined;
     const layerDependencies = Layer.mergeAll(
+      ServerSettings.layerTest(),
       NodeCrypto.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
@@ -70,7 +71,7 @@ it.effect("attributes a launched thread's first message to the calling thread", 
           return Effect.succeed({
             threadId: input.threadId,
             projection: {
-              thread: { id: input.threadId, projectId, modelSelection, title: input.title },
+              thread: { id: input.threadId, projectId, modelSelection },
               runs: [],
             },
             resumed: false,
@@ -96,11 +97,7 @@ it.effect("attributes a launched thread's first message to the calling thread", 
     const result = yield* toolkit
       .handle("t3_thread_launch", { title: "Audit", message: "Review the change" })
       .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(layerDependencies));
-    expect(result.at(-1)?.result).toMatchObject({
-      projectId,
-      modelSelection,
-      link: expect.stringMatching(/^\[Audit\]\(t3-thread:\/\/v1\/environment\//),
-    });
+    expect(result.at(-1)?.result).toMatchObject({ projectId, modelSelection });
     expect(launchedSender).toBe(sourceThreadId);
   }),
 );
@@ -124,6 +121,7 @@ it.effect("launches a scratch thread into the Scratch project", () =>
     } as OrchestrationV2ThreadShell;
     const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
     const layerDependencies = Layer.mergeAll(
+      ServerSettings.layerTest(),
       NodeCrypto.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
@@ -146,12 +144,7 @@ it.effect("launches a scratch thread into the Scratch project", () =>
           return Effect.succeed({
             threadId: input.threadId,
             projection: {
-              thread: {
-                id: input.threadId,
-                projectId: input.projectId,
-                modelSelection,
-                title: input.title,
-              },
+              thread: { id: input.threadId, projectId: input.projectId, modelSelection },
               runs: [],
             },
             resumed: false,
@@ -227,6 +220,7 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
       deletedAt: null,
     };
     const layerDependencies = Layer.mergeAll(
+      ServerSettings.layerTest(),
       NodeCrypto.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
@@ -294,11 +288,9 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
     });
     expect(named).toEqual(["Pinball Stats"]);
 
-    // A path still registers that folder, and never makes a named project.
     yield* handle({ title: "Existing", workspaceRoot: "/work/existing" });
     expect(registered).toEqual(["/work/existing"]);
 
-    // Fields this mode cannot apply are rejected, not dropped.
     for (const extra of [
       { scripts: [] },
       { defaultModelSelection: { instanceId: providerInstanceId, model: "gpt-5" } },
@@ -314,10 +306,15 @@ const clientLaunchHarness = (input: {
   readonly runtimeModeCeiling: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
   readonly launched: Array<ThreadLaunch.ThreadLaunchInput>;
   readonly workspaceRoot?: string;
+  readonly checkWorktreeBase?: ThreadLaunch.ThreadLaunchService["Service"]["checkWorktreeBase"];
 }) => {
   const projectId = ProjectId.make("project:client-target");
-  const modelSelection = { instanceId: ProviderInstanceId.make("claude"), model: "claude-opus" };
+  const modelSelection = {
+    instanceId: ProviderInstanceId.make("claudeAgent"),
+    model: "claude-opus",
+  };
   const layerDependencies = Layer.mergeAll(
+    ServerSettings.layerTest(),
     NodeCrypto.layer,
     Layer.succeed(McpInvocationContext.McpInvocationContext, {
       environmentId: EnvironmentId.make("environment"),
@@ -333,6 +330,7 @@ const clientLaunchHarness = (input: {
     }),
     Layer.mock(ThreadManagement.ThreadManagementService)({}),
     Layer.mock(ThreadLaunch.ThreadLaunchService)({
+      checkWorktreeBase: input.checkWorktreeBase ?? (() => Effect.void),
       launch: (launch) => {
         input.launched.push(launch);
         return Effect.succeed({
@@ -342,7 +340,6 @@ const clientLaunchHarness = (input: {
               id: launch.threadId,
               projectId: launch.projectId,
               modelSelection: launch.modelSelection,
-              title: launch.title,
             },
             runs: [],
           },
@@ -364,7 +361,6 @@ const clientLaunchHarness = (input: {
     }),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
     NodeServices.layer,
-    ServerSettings.layerTest(),
   ).pipe(
     Layer.provideMerge(GitVcsDriver.layer),
     Layer.provideMerge(VcsProcess.layer),
@@ -460,8 +456,6 @@ it.effect("a launch binds only an existing checkout that is one of the project's
       { type: "existing_worktree", worktreePath: repo },
     ]);
 
-    // A removed worktree stays listed as prunable until `git worktree prune`;
-    // whatever directory is later made at its path is not one of the project's.
     yield* fileSystem.remove(worktree, { recursive: true });
     yield* fileSystem.makeDirectory(worktree);
     expect((yield* launchInto(worktree)).at(-1)?.result).toMatchObject({
@@ -583,5 +577,49 @@ it.effect("refuses a workflow launch to a caller that may not run unattended in 
       .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
     expect(result.at(-1)?.result).toMatchObject({ code: "runtime_mode_escalation_denied" });
     expect(launched).toHaveLength(0);
+  }),
+);
+
+it.effect("a launch into a new worktree creates nothing when its base ref has no commit", () =>
+  Effect.gen(function* () {
+    const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+    const { projectId, dependencies } = clientLaunchHarness({
+      runtimeModeCeiling: "auto",
+      launched,
+      checkWorktreeBase: ({ projectId, workspaceStrategy }) =>
+        workspaceStrategy.type === "worktree" && workspaceStrategy.baseRef === "t3/renamed"
+          ? Effect.fail(
+              new ThreadLaunch.ThreadLaunchBaseRefError({
+                projectId,
+                projectTitle: "Client target",
+                workspaceRoot: "/projects/client-target",
+                baseRef: workspaceStrategy.baseRef,
+              }),
+            )
+          : Effect.void,
+    });
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(dependencies)),
+      ),
+    );
+    const launchFrom = (baseRef: string) =>
+      toolkit
+        .handle("t3_thread_launch", {
+          title: "Fix",
+          projectId,
+          workspaceStrategy: { type: "worktree", baseRef, startFromOrigin: false },
+        })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+
+    const refused = (yield* launchFrom("t3/renamed")).at(-1)?.result;
+    expect(refused).toMatchObject({ code: "invalid_request" });
+    expect((refused as { message: string }).message).toContain(
+      'Base ref "t3/renamed" does not resolve to a commit in project "Client target" (/projects/client-target). No thread was created.',
+    );
+    expect(launched).toHaveLength(0);
+
+    expect((yield* launchFrom("main")).at(-1)?.result).toMatchObject({ projectId });
+    expect(launched).toHaveLength(1);
   }),
 );

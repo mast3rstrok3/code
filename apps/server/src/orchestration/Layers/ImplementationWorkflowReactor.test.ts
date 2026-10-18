@@ -1,3 +1,4 @@
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
@@ -22,6 +23,7 @@ import {
   IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS,
   IMPLEMENTATION_STAGE_MAX_LAUNCHES,
   MessageId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ProjectId,
   type OrchestrationImplementationRepository,
@@ -37,6 +39,7 @@ import {
   type T3ProjectFile,
   type VcsCreateWorktreeInput,
   type VcsRemoveWorktreeInput,
+  SourceControlProviderKind,
 } from "@t3tools/contracts";
 import { type DeepPartial } from "@t3tools/shared/Struct";
 import { implementationDefaultsForWorkflowPreset } from "@t3tools/shared/workflowPresets";
@@ -49,7 +52,6 @@ import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import { ChildProcessSpawner } from "effect/process";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
@@ -115,6 +117,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import {
+  ImplementationRecoverySweepInterval,
   ImplementationWorkflowReactor,
   type ImplementationWorkflowReactorShape,
 } from "../Services/ImplementationWorkflowReactor.ts";
@@ -1263,7 +1266,7 @@ function makeTestLayer(
                     ),
               ),
               Effect.as({
-                provider: "github" as const,
+                provider: SourceControlProviderKind.make("github"),
                 number: 1,
                 title: "Implementation PR",
                 url: "https://example.test/pr/1",
@@ -1671,7 +1674,11 @@ function withSystem<A, E>(
         const query = yield* ProjectionSnapshotQuery;
         const reactor = yield* ImplementationWorkflowReactor;
         const ingestionBacklog = yield* ProviderIngestionBacklog;
-        if (options?.startReactor !== false) yield* reactor.start();
+        // Recovery runs by hand here; a clock jump would otherwise sweep every 30s it crosses.
+        if (options?.startReactor !== false)
+          yield* reactor
+            .start()
+            .pipe(Effect.provideService(ImplementationRecoverySweepInterval, Duration.infinity));
         return yield* use({
           ...calls,
           engine,
@@ -8647,7 +8654,7 @@ describe("ImplementationWorkflowReactor", () => {
             activeCodeReviewHeadSha: null,
             activeCodeReviewThreadId: null,
             changeRequest: {
-              provider: "github",
+              provider: SourceControlProviderKind.make("github"),
               number: 70,
               title: "Implementation PR",
               url: "https://example.test/pr/70",
@@ -9509,7 +9516,16 @@ describe("ImplementationWorkflowReactor", () => {
             ),
           ).toBe(false);
         }),
-      { serverSettings: { providers: { codex: { enabled: false } } } },
+      {
+        serverSettings: {
+          providerInstances: {
+            [ProviderInstanceId.make("codex")]: {
+              driver: ProviderDriverKind.make("codex"),
+              enabled: false,
+            },
+          },
+        },
+      },
     ),
   );
   it.effect("a skipped ticket keeps its branch so dependents still build on it", () =>
@@ -13624,11 +13640,11 @@ it.effect(
         if (!claimed) throw new Error("Missing claim");
         fetched = commitSha;
         const local = yield* execute({ operation: "checkout", handoff: claimed, projectId }).pipe(
-          Effect.provideService(HostProcessPlatform, "darwin"),
+          Effect.provideService(HostProcess.Platform, "darwin"),
         );
         expect(local.type).toBe("checkout");
         yield* execute({ operation: "checkout", handoff: claimed, projectId }).pipe(
-          Effect.provideService(HostProcessPlatform, "darwin"),
+          Effect.provideService(HostProcess.Platform, "darwin"),
         );
         const localThread = (yield* system.query.getSnapshot()).threads.find(
           (thread) => thread.id === claimed.claim?.threadId,

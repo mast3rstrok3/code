@@ -1,11 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off - Browser discovery intentionally probes PATH and executable bits.
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeModule from "node:module";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import type { ServerPreviewBrowserStatus } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -303,7 +303,7 @@ export const resolveFfmpegExecutable = (
   adapter?: BrowserExecutableResolverAdapter,
 ) =>
   Effect.gen(function* () {
-    const hostPlatform = yield* HostProcessPlatform;
+    const hostPlatform = yield* HostProcess.Platform;
     return yield* Effect.tryPromise({
       try: () => resolveFfmpegExecutablePromise({ ...input, hostPlatform }, adapter),
       catch: (cause) =>

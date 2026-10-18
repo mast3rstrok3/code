@@ -6837,7 +6837,14 @@ describe("ProviderRuntimeIngestion", () => {
 
   it("keeps the parent selection for browser app review when codex is disabled", async () => {
     const harness = await createHarness({
-      serverSettings: { providers: { codex: { enabled: false } } },
+      serverSettings: {
+        providerInstances: {
+          [ProviderInstanceId.make("codex")]: {
+            driver: ProviderDriverKind.make("codex"),
+            enabled: false,
+          },
+        },
+      },
     });
     const createdAt = "2026-01-01T00:00:00.000Z";
     const parentThreadId = asThreadId("thread-hardlock-fallback-parent");

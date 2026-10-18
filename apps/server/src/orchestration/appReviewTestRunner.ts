@@ -1,3 +1,4 @@
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import type {
   AppReviewTestRecording,
   AppReviewTestResult,
@@ -15,7 +16,6 @@ import {
   APP_REVIEW_RECORDING_DIR_ENV,
   APP_REVIEW_TEST_RECORDING_SUFFIX,
 } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -37,7 +37,7 @@ const prepareTestLogs = Effect.fn("prepareTestLogs")(function* (runDir: string) 
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const crypto = yield* Crypto.Crypto;
-  const id = yield* crypto.randomUUIDv4;
+  const id = yield* crypto.randomUUIDv4();
   yield* fs.makeDirectory(runDir, { recursive: true });
   const logs = {
     stdout: {
@@ -103,7 +103,7 @@ const prepareTestRecording = Effect.fn("prepareTestRecording")(function* (runDir
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const crypto = yield* Crypto.Crypto;
-  const id = yield* crypto.randomUUIDv4;
+  const id = yield* crypto.randomUUIDv4();
   const incomingDir = path.join(runDir, `${id}.incoming`);
   yield* fileSystem.makeDirectory(incomingDir, { recursive: true });
   const scriptPath = path.join(runDir, "recorder.js");
@@ -282,7 +282,7 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
   readonly timeoutMinutes?: number | undefined;
 }) {
   const runner = yield* ProcessRunner;
-  const platform = yield* HostProcessPlatform;
+  const platform = yield* HostProcess.Platform;
   const timeoutMinutes = input.timeoutMinutes ?? 45;
   // Recording is evidence, not the test: a full disk must not fail the suite.
   const recording =

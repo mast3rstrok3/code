@@ -1,13 +1,3 @@
-/**
- * T3ProjectFileLoader - Effect service that loads the checked-in `t3.json`
- * project file from a workspace root.
- *
- * `load` logs invalid files and falls back to defaults. `loadStrict` preserves
- * read and decode errors for workflows that require the configuration.
- * Both return `Option.none` when the file is missing.
- *
- * @module T3ProjectFileLoader
- */
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -36,15 +26,12 @@ export class T3ProjectFileLoadError extends Schema.TaggedError<T3ProjectFileLoad
   }
 }
 
-/** Service tag for t3.json project file loading. */
 export class T3ProjectFileLoader extends Context.Service<
   T3ProjectFileLoader,
   {
     /**
-     * Load and decode `t3.json` at the workspace root.
-     *
-     * Never fails: missing, unreadable, or invalid files resolve to
-     * `Option.none` (invalid files are logged as warnings).
+     * Never fails: missing, unreadable, or invalid files resolve to `Option.none` (invalid files
+     * are logged as warnings).
      */
     readonly load: (workspaceRoot: string) => Effect.Effect<Option.Option<T3ProjectFile>>;
     /** Required workflow configuration preserves read and decode errors. */
@@ -107,9 +94,10 @@ export const make = Effect.gen(function* () {
   });
   const load: T3ProjectFileLoader["Service"]["load"] = (workspaceRoot) =>
     loadStrict(workspaceRoot).pipe(
-      Effect.catchTag("T3ProjectFileLoadError", (error) =>
-        logT3ProjectFileLoadError(error).pipe(Effect.as(Option.none<T3ProjectFile>())),
-      ),
+      Effect.catchTags({
+        T3ProjectFileLoadError: (error) =>
+          logT3ProjectFileLoadError(error).pipe(Effect.as(Option.none<T3ProjectFile>())),
+      }),
     );
 
   return T3ProjectFileLoader.of({ load, loadStrict });

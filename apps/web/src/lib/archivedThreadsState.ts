@@ -6,13 +6,10 @@ import {
   createArchivedThreadSnapshotsAtomFamily,
   makeArchivedThreadsEnvironmentKey,
 } from "@t3tools/client-runtime/state/threads";
-import { type EnvironmentId, type WorkspaceUserView } from "@t3tools/contracts";
-import { useCallback, useMemo } from "react";
+import type { EnvironmentId } from "@t3tools/contracts";
 
 import { orchestrationEnvironment } from "../state/orchestration";
 import { appAtomRegistry } from "../rpc/atomRegistry";
-import { useClientSettings, usePrimarySettings } from "../hooks/useSettings";
-import { resolveWorkspaceUserView } from "@t3tools/shared/model";
 import { activeWorkspaceUserViewAtom } from "../state/shell";
 
 const archivedSnapshotForEnvironment = Atom.family((environmentId: EnvironmentId) =>
@@ -32,7 +29,9 @@ const archivedSnapshotForEnvironment = Atom.family((environmentId: EnvironmentId
     );
   }),
 );
-function archivedSnapshotAtom(environmentId: EnvironmentId, _userView?: WorkspaceUserView) {
+// Reads the active workspace user view itself, so one atom per environment
+// follows view changes without re-keying.
+function archivedSnapshotAtom(environmentId: EnvironmentId) {
   return archivedSnapshotForEnvironment(environmentId);
 }
 
@@ -42,9 +41,7 @@ const archivedSnapshotsAtom = createArchivedThreadSnapshotsAtomFamily({
 });
 
 export function refreshArchivedThreadsForEnvironment(environmentId: EnvironmentId): void {
-  appAtomRegistry.refresh(
-    archivedSnapshotAtom(environmentId, appAtomRegistry.get(activeWorkspaceUserViewAtom)),
-  );
+  appAtomRegistry.refresh(archivedSnapshotAtom(environmentId));
 }
 
 export function useArchivedThreadSnapshots(environmentIds: ReadonlyArray<EnvironmentId>): {
@@ -53,22 +50,13 @@ export function useArchivedThreadSnapshots(environmentIds: ReadonlyArray<Environ
   readonly isLoading: boolean;
   readonly refresh: () => void;
 } {
-  const activeWorkspaceUserView = useClientSettings((s) => s.activeWorkspaceUserView);
-  const workspaceUsers = usePrimarySettings((s) => s.workspaceUsers);
-  const userView = useMemo(
-    () => resolveWorkspaceUserView(activeWorkspaceUserView, workspaceUsers),
-    [activeWorkspaceUserView, workspaceUsers],
-  );
-  const environmentKey = useMemo(
-    () => makeArchivedThreadsEnvironmentKey(environmentIds),
-    [environmentIds, userView],
-  );
+  const environmentKey = makeArchivedThreadsEnvironmentKey(environmentIds);
   const result = useAtomValue(archivedSnapshotsAtom(environmentKey));
-  const refresh = useCallback(() => {
+  const refresh = () => {
     for (const environmentId of environmentIds) {
-      appAtomRegistry.refresh(archivedSnapshotAtom(environmentId, userView));
+      appAtomRegistry.refresh(archivedSnapshotAtom(environmentId));
     }
-  }, [environmentIds, userView]);
+  };
 
   return {
     ...result,

@@ -18,11 +18,6 @@ const TRANSPORT_ERROR_PATTERNS = [
   /\bping timeout\b/i,
 ] as const;
 
-/**
- * Check whether an error message originates from a transport-level connection
- * failure (socket close, socket open, ping timeout, etc.) rather than a
- * business-logic error.
- */
 export function isTransportConnectionErrorMessage(message: string | null | undefined): boolean {
   if (typeof message !== "string") {
     return false;
