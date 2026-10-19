@@ -319,6 +319,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         appStackBackendOidcClientId: undefined,
         appStackBackendOidcClientSecret: undefined,
         appStackNative: undefined,
+        buildBatchesEnabled: false,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: true,
         tailscaleServeEnabled: false,
@@ -396,6 +397,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         appStackBackendOidcClientId: undefined,
         appStackBackendOidcClientSecret: undefined,
         appStackNative: undefined,
+        buildBatchesEnabled: false,
         autoBootstrapProjectFromCwd: true,
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
@@ -526,6 +528,41 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     }),
   );
 
+  it.effect("enables build batches from T3CODE_BUILD_BATCHES_ENABLED", () =>
+    Effect.gen(function* () {
+      const { join } = yield* Path.Path;
+      const resolved = yield* resolveServerConfig(
+        {
+          previewBrowserMode: Option.none(),
+          mode: Option.some("web"),
+          port: Option.some(3773),
+          host: Option.none(),
+          baseDir: Option.some(join(NodeOS.tmpdir(), "t3-cli-config-build-batches")),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.none(),
+          bootstrapFd: Option.none(),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+          tailscaleServeEnabled: Option.none(),
+          tailscaleServePort: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({ env: { T3CODE_BUILD_BATCHES_ENABLED: "true" } }),
+            ),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      expect(resolved.buildBatchesEnabled).toBe(true);
+    }),
+  );
+
   it.effect("reads the pre-rename T3CODE_APP_DEV_STACK_* names when the new name is unset", () =>
     Effect.gen(function* () {
       const { join } = yield* Path.Path;
@@ -648,6 +685,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         appStackBackendOidcClientId: undefined,
         appStackBackendOidcClientSecret: undefined,
         appStackNative: undefined,
+        buildBatchesEnabled: false,
         autoBootstrapProjectFromCwd: true,
         logWebSocketEvents: true,
         tailscaleServeEnabled: true,
@@ -729,6 +767,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         appStackBackendOidcClientId: undefined,
         appStackBackendOidcClientSecret: undefined,
         appStackNative: undefined,
+        buildBatchesEnabled: false,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
@@ -817,6 +856,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         appStackBackendOidcClientId: undefined,
         appStackBackendOidcClientSecret: undefined,
         appStackNative: undefined,
+        buildBatchesEnabled: false,
         desktopTelemetryFd: 4,
         desktopTelemetryControlFd: 5,
         resourceMonitorPath: undefined,
@@ -988,6 +1028,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         appStackBackendOidcClientId: undefined,
         appStackBackendOidcClientSecret: undefined,
         appStackNative: undefined,
+        buildBatchesEnabled: false,
         autoBootstrapProjectFromCwd: true,
         logWebSocketEvents: true,
         tailscaleServeEnabled: false,
@@ -1067,6 +1108,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         appStackBackendOidcClientId: undefined,
         appStackBackendOidcClientSecret: undefined,
         appStackNative: undefined,
+        buildBatchesEnabled: false,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
@@ -1240,6 +1282,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         appStackBackendOidcClientId: undefined,
         appStackBackendOidcClientSecret: undefined,
         appStackNative: undefined,
+        buildBatchesEnabled: false,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,

@@ -117,6 +117,8 @@ export class ServerConfig extends Context.Service<
     readonly appStackBackendOidcClientId: string | undefined;
     readonly appStackBackendOidcClientSecret: Redacted.Redacted<string> | undefined;
     readonly appStackNative: NativeAppStackConfig | undefined;
+    /** Lets agents open and finish merge batches of the home cluster's app builds. */
+    readonly buildBatchesEnabled: boolean;
     readonly devAuthToken?: Redacted.Redacted<string> | undefined;
     readonly devAllowedOrigins: ReadonlyArray<string>;
     readonly noBrowser: boolean;
@@ -299,6 +301,7 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     appStackBackendOidcClientId: undefined,
     appStackBackendOidcClientSecret: undefined,
     appStackNative: undefined,
+    buildBatchesEnabled: false,
     devAllowedOrigins: [],
     noBrowser: false,
     startupPresentation: "browser",
@@ -336,6 +339,7 @@ export const FORK_CONFIG_DEFAULTS = {
   appStackBackendOidcClientId: undefined,
   appStackBackendOidcClientSecret: undefined,
   appStackNative: undefined,
+  buildBatchesEnabled: false,
   previewBrowserMode: "auto" as const,
   previewBrowserSource: "auto" as const,
   previewBrowserExecutablePath: undefined,

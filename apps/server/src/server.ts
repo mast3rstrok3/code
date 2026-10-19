@@ -3,6 +3,7 @@ import * as WorkflowDrain from "./orchestration/WorkflowDrainCoordinator.ts";
 import * as WorkflowNativeEventStore from "./orchestration-v2/EventStore.ts";
 import * as WorkflowRuntime from "./orchestration/workflowRuntimeLayer.ts";
 import * as AppStackManager from "./appStack/AppStackManager.ts";
+import * as BuildBatchService from "./buildBatch/BuildBatchService.ts";
 import * as PreviewCoordinator from "./preview/PreviewCoordinator.ts";
 import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects.ts";
 import { ProjectionThreadRepositoryLive } from "./persistence/Layers/ProjectionThreads.ts";
@@ -618,6 +619,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
 ).pipe(
   Layer.provideMerge(layerOrchestrationApplication),
   Layer.provideMerge(AppStackManager.AppStackManager.layer),
+  Layer.provideMerge(BuildBatchService.layer.pipe(Layer.provide(ProcessRunner.layer))),
   Layer.provideMerge(
     Layer.merge(RuntimeLayer.layerEventInfrastructure, WorkflowNativeEventStore.layer),
   ),
