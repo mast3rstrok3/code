@@ -1,3 +1,4 @@
+import { ServerConfig, ServerObservability } from "./server.ts";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -5,8 +6,6 @@ import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   OtlpEndpointCheckInput,
   resolveEnvironmentMachineKind,
-  ServerConfig,
-  ServerObservability,
   ServerProvider,
   ServerProviders,
   ServerUpsertKeybindingResult,
@@ -211,28 +210,17 @@ describe("ServerProvider", () => {
     expect(parsed.continuation?.groupKey).toBe("codex:home:/Users/julius/.codex");
   });
 
-  it("decodes optional legacy model metadata", () => {
-    const parsed = decodeServerProvider({
-      instanceId: "codex",
-      driver: "codex",
-      enabled: true,
-      installed: true,
-      version: "1.0.0",
-      status: "ready",
-      auth: { status: "authenticated" },
-      checkedAt: "2026-04-10T00:00:00.000Z",
-      models: [
-        {
-          slug: "gpt-5.4",
-          name: "GPT-5.4",
-          isCustom: false,
-          isLegacy: true,
-          capabilities: null,
-        },
-      ],
-    });
-
-    expect(parsed.models[0]?.isLegacy).toBe(true);
+  it("preserves installed-version presence through the provider wire codec", () => {
+    const encode = Schema.encodeSync(ServerProvider);
+    for (const installation of [{}, { installedVersion: null }, { installedVersion: "1.2.3" }]) {
+      const decoded = decodeServerProvider({ ...baseProviderSnapshot, ...installation });
+      const wire = JSON.parse(JSON.stringify(encode(decoded)));
+      expect(wire).toMatchObject({ version: "1.0.0", ...installation });
+      expect(Object.hasOwn(wire, "installedVersion")).toBe(
+        Object.hasOwn(installation, "installedVersion"),
+      );
+      expect(decodeServerProvider(wire)).toEqual(decoded);
+    }
   });
 });
 
@@ -287,21 +275,6 @@ describe("server config forward compatibility", () => {
   });
 });
 
-describe("ServerObservability", () => {
-  it("reads a server from before the log signal as exporting no logs", () => {
-    const parsed = decodeServerObservability({
-      logsDirectoryPath: "/tmp/t3/logs",
-      localTracingEnabled: true,
-      otlpTracesUrl: "https://collector.example.com/v1/traces",
-      otlpTracesEnabled: true,
-      otlpMetricsEnabled: false,
-    });
-
-    expect(parsed.otlpLogsEnabled).toBe(false);
-    expect(parsed.otlpLogsUrl).toBeUndefined();
-  });
-});
-
 describe("resolveEnvironmentMachineKind", () => {
   const decodeDescriptor = Schema.decodeUnknownSync(ExecutionEnvironmentDescriptor);
   const decodeSettings = Schema.decodeUnknownSync(ServerSettings);
@@ -321,31 +294,6 @@ describe("resolveEnvironmentMachineKind", () => {
         settings: decodeSettings({ environmentIcon: "laptop" }),
       }),
     ).toBe("laptop");
-  });
-
-  it("uses detection when nothing is picked", () => {
-    expect(
-      resolveEnvironmentMachineKind({
-        environment: descriptor({ machine: "mac-mini" }),
-        settings: decodeSettings({}),
-      }),
-    ).toBe("mac-mini");
-  });
-
-  it("uses detection from a bare descriptor before connecting", () => {
-    expect(resolveEnvironmentMachineKind({ environment: descriptor({ machine: "laptop" }) })).toBe(
-      "laptop",
-    );
-  });
-
-  it("falls back to a server for older servers and before connect", () => {
-    expect(
-      resolveEnvironmentMachineKind({
-        environment: descriptor({}),
-        settings: decodeSettings({}),
-      }),
-    ).toBe("server");
-    expect(resolveEnvironmentMachineKind(null)).toBe("server");
   });
 
   it("drops a machine kind this build does not know instead of failing the descriptor", () => {

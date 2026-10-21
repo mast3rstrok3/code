@@ -1,10 +1,9 @@
+import { ThreadId, type OrchestrationV2ThreadShell } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
-  ThreadId,
-  type OrchestrationV2ThreadShell,
   type Project as ProjectRecord,
 } from "@t3tools/contracts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";

@@ -6,7 +6,7 @@ import {
 import {
   useClientSettings,
   usePrimarySettings,
-  useUpdateClientSettings,
+  updateClientSettings,
 } from "../../hooks/useSettings";
 import { workspaceUserScopePatch } from "../../lib/workspaceUsers";
 import { setActiveWorkspaceUserView } from "../../state/shell";
@@ -34,7 +34,6 @@ export function WorkspaceUserViewSync() {
 /** Everyone / per-user segmented control heading the sidebar's project filter. */
 export function WorkspaceUserScopeToggle() {
   const { workspaceUsers, view } = useWorkspaceUserView();
-  const updateSettings = useUpdateClientSettings();
   return (
     <ToggleGroup
       aria-label="Show threads for"
@@ -42,7 +41,7 @@ export function WorkspaceUserScopeToggle() {
       value={[workspaceUserViewCacheKey(view)]}
       onValueChange={(next) => {
         const scopeKey = next[0];
-        if (scopeKey) updateSettings(workspaceUserScopePatch(scopeKey));
+        if (scopeKey) void updateClientSettings(workspaceUserScopePatch(scopeKey));
       }}
     >
       <Toggle value="all">Everyone</Toggle>

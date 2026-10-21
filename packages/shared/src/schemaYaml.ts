@@ -58,7 +58,7 @@ function stringifyYaml(options?: YamlStringifyOptions): SchemaGetter.Getter<stri
   );
 }
 
-export const fromYamlString = new SchemaTransformation.Transformation<unknown, string>(
+const fromYamlString = new SchemaTransformation.Transformation<unknown, string>(
   parseYaml(),
   stringifyYaml(),
 );
