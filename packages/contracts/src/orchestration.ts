@@ -489,6 +489,19 @@ export type WorkflowStepModelOverride = typeof WorkflowStepModelOverride.Type;
 export const WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN = "workflow.recovery-fallback";
 
 /**
+ * Standing `workflowStepModels` pins for the model a Feature or Engineering
+ * workflow starts on when whoever starts it names none: a scheduled task on
+ * its workflow default, or an agent's `t3_thread_launch`. Without one it
+ * starts on the default model for new threads. Kept as pins rather than a
+ * settings field because the WebSocket RPC group sits at the compiler's type
+ * instantiation budget, and every new `ServerSettings` field tips it over.
+ */
+export const WORKFLOW_START_MODEL_PINS = {
+  feature: "workflow.feature-start",
+  engineering: "workflow.engineering-start",
+} as const;
+
+/**
  * How many times one workflow step repeats before the run moves on.
  *
  * Only steps that loop can carry one — App Review reviews, plans a repair and

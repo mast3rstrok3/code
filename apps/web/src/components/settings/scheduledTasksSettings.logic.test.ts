@@ -6,6 +6,7 @@ import {
   ProviderInstanceId,
   ScheduledTaskId,
   type ScheduledTask,
+  WORKFLOW_START_MODEL_PINS,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -350,7 +351,9 @@ describe("scheduled task model defaults", () => {
     const featureSelection = { instanceId, model: "first-model" };
     const settings = {
       ...config.settings,
-      workflowModelSelections: { feature: featureSelection, engineering: null },
+      workflowStepModels: [
+        { workflowPromptId: WORKFLOW_START_MODEL_PINS.feature, modelSelection: featureSelection },
+      ],
     };
     const entries = deriveProviderInstanceEntries(config.providers);
     const project = { id: projectId, defaultModelSelection: projectSelection };

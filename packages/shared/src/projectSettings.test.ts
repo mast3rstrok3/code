@@ -1,8 +1,10 @@
 import {
   DEFAULT_SERVER_SETTINGS,
+  type ModelSelection,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  WORKFLOW_START_MODEL_PINS,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import { createModelSelection } from "./model.ts";
@@ -416,6 +418,10 @@ describe("resolveWorktreeCleanup", () => {
 
 describe("resolveWorkflowModelSelection", () => {
   const codex = (model: string) => createModelSelection(ProviderInstanceId.make("codex"), model);
+  const startModel = (workflow: "feature" | "engineering", modelSelection: ModelSelection) => ({
+    workflowPromptId: WORKFLOW_START_MODEL_PINS[workflow],
+    modelSelection,
+  });
   const base = {
     ...DEFAULT_SERVER_SETTINGS,
     projectSettingsFolded: true,
@@ -431,9 +437,10 @@ describe("resolveWorkflowModelSelection", () => {
     expect(resolveWorkflowModelSelection(withProject, otherProjectId, "feature")?.model).toBe(
       "environment",
     );
-    const withWorkflow = applyServerSettingsPatch(withProject, {
-      workflowModelSelections: { feature: codex("feature") },
-    });
+    const withWorkflow = {
+      ...withProject,
+      workflowStepModels: [startModel("feature", codex("feature"))],
+    };
     expect(resolveWorkflowModelSelection(withWorkflow, projectId, "feature")?.model).toBe(
       "feature",
     );
@@ -447,7 +454,7 @@ describe("resolveWorkflowModelSelection", () => {
     const disabled = createModelSelection(ProviderInstanceId.make("missing-instance"), "x");
     expect(
       resolveWorkflowModelSelection(
-        { ...base, workflowModelSelections: { feature: disabled, engineering: null } },
+        { ...base, workflowStepModels: [startModel("feature", disabled)] },
         projectId,
         "feature",
       )?.model,
@@ -455,20 +462,5 @@ describe("resolveWorkflowModelSelection", () => {
     expect(
       resolveWorkflowModelSelection(DEFAULT_SERVER_SETTINGS, projectId, "engineering"),
     ).toBeNull();
-  });
-
-  it("patches one workflow at a time and clears it with null", () => {
-    const set = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
-      workflowModelSelections: { feature: codex("feature"), engineering: codex("engineering") },
-    });
-    const cleared = applyServerSettingsPatch(set, { workflowModelSelections: { feature: null } });
-    expect(cleared.workflowModelSelections).toEqual({
-      feature: null,
-      engineering: codex("engineering"),
-    });
-    expect(DEFAULT_SERVER_SETTINGS.workflowModelSelections).toEqual({
-      feature: null,
-      engineering: null,
-    });
   });
 });

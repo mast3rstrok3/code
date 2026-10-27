@@ -5,6 +5,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   type Project as ProjectRecord,
+  WORKFLOW_START_MODEL_PINS,
 } from "@t3tools/contracts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -483,7 +484,11 @@ it.effect(
         runtimeModeCeiling: "full-access",
         launched,
         workspaceRoot: repo,
-        settings: { workflowModelSelections: { feature: featureModel } },
+        settings: {
+          workflowStepModels: [
+            { workflowPromptId: WORKFLOW_START_MODEL_PINS.feature, modelSelection: featureModel },
+          ],
+        },
       });
       const git = yield* GitVcsDriver.GitVcsDriver.pipe(Effect.provide(dependencies));
       for (const args of [

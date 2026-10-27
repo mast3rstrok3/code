@@ -8,6 +8,7 @@ import {
   ScheduledTaskUpsertInput,
   ScheduledTaskWebhookDeliveryId,
   SecretRequestError,
+  WORKFLOW_START_MODEL_PINS,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -355,14 +356,16 @@ it.effect("starts each delivery as a Feature workflow thread titled from the req
   ),
 );
 
+const featureStartModel = (model: string) => [
+  { workflowPromptId: WORKFLOW_START_MODEL_PINS.feature, modelSelection: codexModel(model) },
+];
+
 it.effect("starts each workflow run on the workflow's default model as it is then", () =>
   withService(({ service, launches }) =>
     Effect.gen(function* () {
       const settings = yield* ServerSettings.ServerSettingsService;
       const stored = codexModel("gpt-5.4");
-      yield* settings.updateSettings({
-        workflowModelSelections: { feature: codexModel("gpt-5.5") },
-      });
+      yield* settings.updateSettings({ workflowStepModels: featureStartModel("gpt-5.5") });
       const { task } = yield* service.upsert(
         yield* webhookTaskInput({ workflow: "feature", useWorkflowDefaultModel: true }),
       );
@@ -371,15 +374,13 @@ it.effect("starts each workflow run on the workflow's default model as it is the
       assert.equal((yield* Queue.take(launches)).modelSelection.model, "gpt-5.5");
 
       // A settings change reaches the next run without editing the task.
-      yield* settings.updateSettings({
-        workflowModelSelections: { feature: codexModel("gpt-5.6") },
-      });
+      yield* settings.updateSettings({ workflowStepModels: featureStartModel("gpt-5.6") });
       yield* service.triggerWebhook(requestFor(task));
       assert.equal((yield* Queue.take(launches)).modelSelection.model, "gpt-5.6");
 
       // Unset, the run follows the default model for new threads, then the task's own.
       yield* settings.updateSettings({
-        workflowModelSelections: { feature: null },
+        workflowStepModels: [],
         defaultModelSelection: codexModel("gpt-5.3"),
       });
       yield* service.triggerWebhook(requestFor(task));
@@ -393,9 +394,7 @@ it.effect("starts each workflow run on the workflow's default model as it is the
         yield* webhookTaskInput({ prompt: "Other {{body}}" }),
       );
       assert.isTrue(edited.useWorkflowDefaultModel);
-      yield* settings.updateSettings({
-        workflowModelSelections: { feature: codexModel("gpt-5.5") },
-      });
+      yield* settings.updateSettings({ workflowStepModels: featureStartModel("gpt-5.5") });
       const { task: pinned } = yield* service.upsert(
         yield* webhookTaskInput({ useWorkflowDefaultModel: false }),
       );

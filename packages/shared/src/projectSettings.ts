@@ -13,12 +13,10 @@ import {
   type T3ProjectFile,
   type ThreadEnvMode,
   type WorktreeCleanupRules,
+  WORKFLOW_START_MODEL_PINS,
 } from "@t3tools/contracts";
 import { normalizeProjectPathForComparison } from "./path.ts";
-import {
-  fallbackTextGenerationModelSelection,
-  isModelSelectionProviderEnabled,
-} from "./serverSettings.ts";
+import { fallbackTextGenerationModelSelection } from "./serverSettings.ts";
 
 export type ProjectSettingSource = "environment" | "project" | "t3.json";
 
@@ -216,6 +214,19 @@ export function resolveSendEnvMode(input: {
   return input.isGitRepo ? input.requestedEnvMode : "local";
 }
 
+/** The model set for a workflow to start on, or null when it follows the default model. */
+export function workflowStartModel(
+  settings: Pick<ServerSettings, "workflowStepModels">,
+  workflow: ScheduledTaskWorkflow,
+): ModelSelection | null {
+  const pin = WORKFLOW_START_MODEL_PINS[workflow];
+  return (
+    settings.workflowStepModels.find(
+      (entry) => entry.workflowPromptId === pin && entry.stepWorkflowPromptId === undefined,
+    )?.modelSelection ?? null
+  );
+}
+
 /**
  * The model a new workflow starts with when its starter names none: the
  * workflow's own default, then the project's and the environment's default
@@ -229,14 +240,15 @@ export function resolveWorkflowModelSelection(
   project?: LegacyProjectSettingsFields | null,
 ): ModelSelection | null {
   const candidates = [
-    settings.workflowModelSelections[workflow],
+    workflowStartModel(settings, workflow),
     resolveProjectSettings(settings, projectId, project).settings.defaultModelSelection,
     settings.defaultModelSelection,
   ];
   return (
     candidates.find(
       (selection): selection is ModelSelection =>
-        selection != null && isModelSelectionProviderEnabled(settings, selection),
+        selection != null &&
+        resolveProjectProviderInstanceEnabled(settings, projectId, selection.instanceId),
     ) ?? null
   );
 }

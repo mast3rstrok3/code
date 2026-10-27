@@ -22,6 +22,7 @@ import {
 
 import {
   resolveProjectSettings,
+  workflowStartModel,
   type LegacyProjectSettingsFields,
 } from "@t3tools/shared/projectSettings";
 import type { ProviderInstanceEntry } from "../../providerInstances";
@@ -291,9 +292,7 @@ export function scheduledTaskDefaultModel(
   );
   const configured = resolveProjectSettings(settings, project?.id ?? null, project).settings
     .defaultModelSelection;
-  // Older servers send no workflow defaults.
-  const workflowDefault =
-    workflow === null ? null : (settings.workflowModelSelections?.[workflow] ?? null);
+  const workflowDefault = workflow === null ? null : workflowStartModel(settings, workflow);
   for (const selection of [workflowDefault, configured, settings.defaultModelSelection]) {
     if (
       selection &&

@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import {
   WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN,
+  WORKFLOW_START_MODEL_PINS,
   type EnvironmentId,
   type ModelSelection,
   type ScheduledTaskWorkflow,
@@ -25,6 +26,7 @@ import { type WorkflowCatalogState, useWorkflowCatalog } from "../../workflowCat
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
 import { setWorkflowStepReviewPartsOverride } from "@t3tools/shared/appReviewParts";
 import { isModelSelectionProviderEnabled } from "@t3tools/shared/serverSettings";
+import { workflowStartModel } from "@t3tools/shared/projectSettings";
 import { resolveDefaultAgentModelSelectionState } from "../../modelSelection";
 import { primaryServerProvidersAtom } from "../../state/server";
 import { usePrimaryEnvironmentId } from "../../state/environments";
@@ -132,19 +134,27 @@ function WorkflowStepModelDefaults() {
       ? settings.defaultModelSelection
       : resolveDefaultAgentModelSelectionState(settings, providers);
   const onSetWorkflowModel = (workflow: ScheduledTaskWorkflow, selection: ModelSelection | null) =>
-    updateSettings({ workflowModelSelections: { [workflow]: selection } });
+    updateSettings({
+      workflowStepModels: [
+        ...setWorkflowStepModelDefault(
+          settings.workflowStepModels,
+          { workflowPromptId: WORKFLOW_START_MODEL_PINS[workflow] },
+          selection,
+        ),
+      ],
+    });
   return (
     <>
       <FeatureWorkflowDefaults
         environmentId={environmentId}
-        workflowModel={settings.workflowModelSelections.feature}
+        workflowModel={workflowStartModel(settings, "feature")}
         newThreadModel={newThreadModel}
         onSetWorkflowModel={(selection) => onSetWorkflowModel("feature", selection)}
       />
       <WorkflowStepModelDefaultsBody
         environmentId={environmentId}
         defaults={settings.workflowStepModels}
-        workflowModel={settings.workflowModelSelections.engineering}
+        workflowModel={workflowStartModel(settings, "engineering")}
         newThreadModel={newThreadModel}
         onSetWorkflowModel={(selection) => onSetWorkflowModel("engineering", selection)}
         cycleDefaults={settings.workflowStepCycles}
@@ -233,7 +243,7 @@ function FeatureWorkflowDefaults(props: {
     >
       <SettingsRow
         title="Model"
-        description="What a Feature started by a scheduled task or an agent runs on when it names no model. Plan and Implement run on it; Code Review and App Review use the models set for those steps under Engineering Workflow defaults."
+        description="What a Feature started by a scheduled task or an agent runs on when it names no model. The instruction and the TDD implementation run on it; App Review and Code Review use the models set for those steps under Engineering Workflow defaults."
       >
         <WorkflowModelControl
           workflow="feature"
@@ -267,9 +277,10 @@ function WorkflowStepModelDefaultsBody(props: {
 }) {
   const choices = useWorkflowModelChoices(props.environmentId);
   const rootModel = props.workflowModel ?? props.newThreadModel;
+  // The Feature workflow's start model is pinned here too but counts under its own section.
   const configuredDefaultCount =
-    (props.workflowModel === null ? 0 : 1) +
-    props.defaults.length +
+    props.defaults.filter((entry) => entry.workflowPromptId !== WORKFLOW_START_MODEL_PINS.feature)
+      .length +
     props.cycleDefaults.length +
     props.reviewPartsDefaults.length +
     Object.values(props.implementationSettings).filter((enabled) => !enabled).length;
