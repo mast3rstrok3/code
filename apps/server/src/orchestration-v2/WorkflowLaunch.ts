@@ -42,8 +42,18 @@ export const LAUNCHABLE_WORKFLOWS = {
 export function workflowLaunchImplementationSettings(
   preset: WorkflowPreset,
   settings: ServerSettings | null,
-  grillAnswerer: GrillAnswerer | undefined,
+  starter: {
+    readonly grillAnswerer?: GrillAnswerer | undefined;
+    /** Nobody watches the run, as with a scheduled task's. */
+    readonly unattended?: boolean;
+  },
 ): ImplementationWorkflowSettings | undefined {
+  // An unattended Engineering run has nobody to answer its Grill, so the LLM judge does.
+  const grillAnswerer =
+    starter.grillAnswerer ??
+    (starter.unattended === true && preset === LAUNCHABLE_WORKFLOWS.engineering.preset
+      ? "judge"
+      : undefined);
   const presetDefaults = implementationDefaultsForWorkflowPreset(preset);
   const grill = grillAnswerer === undefined ? {} : { grillAnswerer };
   if (presetDefaults !== null) return { ...settings?.implementation, ...presetDefaults, ...grill };

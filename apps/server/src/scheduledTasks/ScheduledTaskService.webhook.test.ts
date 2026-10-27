@@ -356,6 +356,18 @@ it.effect("starts each delivery as a Feature workflow thread titled from the req
   ),
 );
 
+it.effect("starts an Engineering run with the LLM judge answering its Grill", () =>
+  withService(({ service, launches }) =>
+    Effect.gen(function* () {
+      const { task } = yield* service.upsert(yield* webhookTaskInput({ workflow: "engineering" }));
+      yield* service.triggerWebhook(requestFor(task));
+      const launched = yield* Queue.take(launches);
+      assert.equal(launched.workflowPreset, "planning");
+      assert.equal(launched.workflowImplementationSettings?.grillAnswerer, "judge");
+    }),
+  ),
+);
+
 const featureStartModel = (model: string) => [
   { workflowPromptId: WORKFLOW_START_MODEL_PINS.feature, modelSelection: codexModel(model) },
 ];

@@ -209,7 +209,9 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
         const workflowImplementationSettings =
           workflow === undefined
             ? undefined
-            : workflowLaunchImplementationSettings(workflow.preset, settings, input.grillAnswerer);
+            : workflowLaunchImplementationSettings(workflow.preset, settings, {
+                grillAnswerer: input.grillAnswerer,
+              });
         const text =
           workflow === undefined
             ? (input.message ?? "")

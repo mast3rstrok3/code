@@ -876,7 +876,7 @@ export const layer = Layer.effect(
         const workflowImplementationSettings =
           workflow === null
             ? undefined
-            : workflowLaunchImplementationSettings(workflow.preset, settings, undefined);
+            : workflowLaunchImplementationSettings(workflow.preset, settings, { unattended: true });
         // Resolved per run, so a settings change reaches the task without an edit.
         const launchModelSelection =
           (active.workflow != null && active.useWorkflowDefaultModel === true && settings !== null
