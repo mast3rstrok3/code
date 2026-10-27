@@ -83,6 +83,7 @@ const REVIEW_DIFF_ARGS = [
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
 const STATUS_UPSTREAM_FETCH_TIMEOUT = Duration.minutes(5);
+const STATUS_BRANCH_CHANGES_TIMEOUT = Duration.seconds(2);
 
 const STATUS_UPSTREAM_REFRESH_FAILURE_BASE_COOLDOWN = Duration.seconds(30);
 const STATUS_UPSTREAM_REFRESH_FAILURE_MAX_COOLDOWN = Duration.minutes(15);
@@ -2237,6 +2238,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
     const branchChanges = options?.includeBranchChanges
       ? yield* readBranchChangeTotals(repositoryPaths?.worktreeRoot ?? cwd, refName).pipe(
+          // Large untracked assets can make indexing or diffing take minutes. Keep the
+          // entire optional calculation within the status budget, including index cleanup.
+          Effect.timeoutOption(STATUS_BRANCH_CHANGES_TIMEOUT),
+          Effect.map(Option.getOrUndefined),
           Effect.orElseSucceed(() => undefined),
         )
       : undefined;
