@@ -12,6 +12,7 @@ import { WorkflowRuntimeBridge } from "../WorkflowRuntimeBridge.ts";
 import { AppStackLifecycleReactor } from "../AppStackLifecycleReactor.ts";
 import { FeatureWorkflowReactor } from "../FeatureWorkflowReactor.ts";
 import { GrillJudgeReactor } from "../GrillJudgeReactor.ts";
+import { ScheduledWorkflowReporter } from "../ScheduledWorkflowReporter.ts";
 
 export const makeOrchestrationReactor = Effect.gen(function* () {
   const bridge = yield* WorkflowRuntimeBridge;
@@ -22,6 +23,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const appStacks = yield* AppStackLifecycleReactor;
   const feature = yield* FeatureWorkflowReactor;
   const grillJudge = yield* GrillJudgeReactor;
+  const scheduledReports = yield* ScheduledWorkflowReporter;
   const reconcilePendingProviderCommands = Effect.gen(function* () {
     yield* appReview.reconcile();
     yield* appReview.flush ?? appReview.drain;
@@ -42,6 +44,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
         yield* appStacks.start();
         yield* feature.start();
         yield* grillJudge.start();
+        yield* scheduledReports.start();
       }),
     drainPendingProviderCommands: bridge.drain,
     reconcilePendingProviderCommands,
@@ -53,6 +56,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
       yield* appStacks.drain;
       yield* feature.drain;
       yield* grillJudge.drain;
+      yield* scheduledReports.drain;
     }),
   } satisfies OrchestrationReactorShape;
 });
