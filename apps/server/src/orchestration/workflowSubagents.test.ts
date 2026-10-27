@@ -582,6 +582,66 @@ describe("resolveWorkflowStepModelSelection", () => {
     expect(finalReview.modelSelection).toEqual(claudeParentSelection);
   });
 
+  it("prefers the workflow's own Settings default over an unscoped one", () => {
+    const featureSelection: ModelSelection = {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claude-haiku-5",
+    };
+    const settings = settingsWith({
+      providerInstances: {
+        [ProviderInstanceId.make("claudeAgent")]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          enabled: true,
+        },
+      },
+      workflowStepModels: [
+        {
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+          workflow: "feature",
+          modelSelection: featureSelection,
+        },
+        {
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+          modelSelection: pinnedSelection,
+        },
+      ],
+    });
+    const resolve = (workflow: "feature" | "engineering" | null) =>
+      resolveWorkflowStepModelSelection({
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+        definition: undefined,
+        stepModels: [],
+        workflow,
+        parentModelSelection: claudeParentSelection,
+        settings,
+      }).modelSelection;
+    expect(resolve("feature")).toEqual(featureSelection);
+    // Engineering has no default of its own, so the unscoped one still applies to it.
+    expect(resolve("engineering")).toEqual(pinnedSelection);
+    expect(resolve(null)).toEqual(pinnedSelection);
+  });
+
+  it("keeps one workflow's Settings default away from another workflow", () => {
+    const resolved = resolveWorkflowStepModelSelection({
+      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+      definition: undefined,
+      stepModels: [],
+      workflow: "engineering",
+      parentModelSelection: claudeParentSelection,
+      settings: settingsWith({
+        workflowStepModels: [
+          {
+            workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+            workflow: "feature",
+            modelSelection: pinnedSelection,
+          },
+        ],
+      }),
+    });
+    expect(resolved.modelSelection).toEqual(claudeParentSelection);
+    expect(resolved.overrideApplied).toBe(false);
+  });
+
   it("falls back and explains when the pinned instance is disabled", () => {
     const resolved = resolveWorkflowStepModelSelection({
       workflowPromptId: WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,

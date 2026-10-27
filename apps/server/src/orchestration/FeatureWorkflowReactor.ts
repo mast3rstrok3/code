@@ -406,6 +406,7 @@ export const make = Effect.gen(function* () {
       workflowPromptId: APP_REVIEW_PROMPT_ID,
       definition: undefined,
       stepModels: Option.getOrUndefined(input.workflowShell)?.workflowStepModels,
+      workflow: "feature",
       parentModelSelection: thread.modelSelection,
       settings: settings ?? undefined,
     });
@@ -572,6 +573,7 @@ export const make = Effect.gen(function* () {
             workflowPromptId: CODE_REVIEW_PROMPT_ID,
             definition: undefined,
             stepModels,
+            workflow: "feature",
             parentModelSelection: thread.modelSelection,
             settings: settings ?? undefined,
           });

@@ -13,6 +13,7 @@ import {
   WORKFLOW_PRESET_DEFINITION_BY_ID,
   type WorkflowPresetHelpStep,
   workflowPresetStepCanPinModel,
+  workflowStepModelScopeForPreset,
 } from "@t3tools/shared/workflowPresets";
 import { SlidersHorizontal } from "lucide-react";
 import { useState } from "react";
@@ -28,9 +29,9 @@ import {
   WorkflowStepReviewPartPins,
   type SetWorkflowStepReviewParts,
 } from "./WorkflowStepReviewParts";
+import { standingWorkflowStepModel } from "./settings/workflowStepModelDefaults";
 import {
   useWorkflowModelChoices,
-  workflowModelPinKey,
   WorkflowModelPinControls,
   WorkflowStepModelPins,
   type SetWorkflowStepModel,
@@ -155,9 +156,11 @@ export function WorkflowSettingsBody(props: {
   ) : null;
   const steps = pinnableSteps(props.preset);
   const defaultPinFor = (key: WorkflowModelPinKey): ModelSelection | null =>
-    props.defaultStepModels?.find(
-      (entry) => workflowModelPinKey(entry) === workflowModelPinKey(key),
-    )?.modelSelection ?? null;
+    standingWorkflowStepModel(
+      props.defaultStepModels ?? [],
+      key,
+      workflowStepModelScopeForPreset(props.preset),
+    );
   const recoveryBackup = props.pinFor(RECOVERY_BACKUP_PIN_KEY);
   const defaultRecoveryBackup = defaultPinFor(RECOVERY_BACKUP_PIN_KEY);
   const recoveryInheritedSelection = defaultRecoveryBackup ?? props.rootModelSelection;

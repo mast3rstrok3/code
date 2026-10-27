@@ -11,7 +11,7 @@ export {
   OrchestrationThreadWorkflowRole,
 } from "./workflowIdentity.ts";
 import { PreviewRecordingMode } from "./previewRecording.ts";
-import { ImplementationWorkflowSettings } from "./workflowSettings.ts";
+import { ImplementationWorkflowSettings, LaunchableWorkflow } from "./workflowSettings.ts";
 import { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 export { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 import { OrchestrationGetWorkflowScriptError } from "./orchestrationV2.ts";
@@ -284,6 +284,7 @@ export {
   DEFAULT_MAX_PARALLEL_TICKETS,
   GrillAnswerer,
   ImplementationWorkflowSettings,
+  LaunchableWorkflow,
   MAX_PARALLEL_TICKETS,
   MaxParallelTickets,
 } from "./workflowSettings.ts";
@@ -482,6 +483,12 @@ export const WorkflowStepModelOverride = Schema.Struct({
    * by `workflowPromptId` and every agent it starts.
    */
   stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
+  /**
+   * The workflow a standing default applies to. Absent covers every workflow
+   * that runs the step, which is how defaults were stored before workflows had
+   * their own; a scoped default outranks it. Run pins carry none.
+   */
+  workflow: Schema.optionalKey(LaunchableWorkflow),
   modelSelection: ModelSelection,
 });
 export type WorkflowStepModelOverride = typeof WorkflowStepModelOverride.Type;

@@ -48,7 +48,7 @@ import { WorkflowCatalogContent } from "./WorkflowCatalogContent";
 import {
   setWorkflowStepModelDefault,
   setWorkflowStepModelDefaults,
-  workflowStepModelPinKeysEqual,
+  standingWorkflowStepModel,
 } from "./workflowStepModelDefaults";
 import { setWorkflowStepCycleOverride } from "@t3tools/shared/workflowStepCycles";
 
@@ -118,8 +118,8 @@ function FocusedRow({ focused, children }: { focused: boolean; children: React.R
  * The standing model choice for every workflow step and sub-step.
  *
  * Pins set from a running workflow's Models menu govern that run only; these
- * are what every new run starts from. Defaults are keyed by the step's agent,
- * so one entry covers each workflow that runs that step.
+ * are what every new run starts from. Each workflow keeps its own defaults, so
+ * Feature's Code Review and Engineering's Final Code Review can differ.
  */
 function WorkflowStepModelDefaults() {
   const environmentId = usePrimaryEnvironmentId();
@@ -147,9 +147,22 @@ function WorkflowStepModelDefaults() {
     <>
       <FeatureWorkflowDefaults
         environmentId={environmentId}
+        defaults={settings.workflowStepModels}
         workflowModel={workflowStartModel(settings, "feature")}
         newThreadModel={newThreadModel}
         onSetWorkflowModel={(selection) => onSetWorkflowModel("feature", selection)}
+        onSetStepModel={(key, selection) => {
+          updateSettings({
+            workflowStepModels: [
+              ...setWorkflowStepModelDefault(
+                settings.workflowStepModels,
+                key,
+                selection,
+                "feature",
+              ),
+            ],
+          });
+        }}
       />
       <WorkflowStepModelDefaultsBody
         environmentId={environmentId}
@@ -163,14 +176,24 @@ function WorkflowStepModelDefaults() {
         onSetStepModel={(key, selection) => {
           updateSettings({
             workflowStepModels: [
-              ...setWorkflowStepModelDefault(settings.workflowStepModels, key, selection),
+              ...setWorkflowStepModelDefault(
+                settings.workflowStepModels,
+                key,
+                selection,
+                "engineering",
+              ),
             ],
           });
         }}
         onSetStepModels={(keys, selection) => {
           updateSettings({
             workflowStepModels: [
-              ...setWorkflowStepModelDefaults(settings.workflowStepModels, keys, selection),
+              ...setWorkflowStepModelDefaults(
+                settings.workflowStepModels,
+                keys,
+                selection,
+                "engineering",
+              ),
             ],
           });
         }}
@@ -222,28 +245,44 @@ function WorkflowModelControl(props: {
   );
 }
 
+/** Feature's reviewers run in threads of their own, so only they take a model of their own. */
+const FEATURE_REVIEW_STEPS = [
+  { label: "App Review", key: { workflowPromptId: "implementation.browser-app-review.codex" } },
+  { label: "Code Review", key: { workflowPromptId: "implementation.code-review.codex" } },
+] as const;
+
 function FeatureWorkflowDefaults(props: {
   readonly environmentId: EnvironmentId;
+  readonly defaults: ServerSettings["workflowStepModels"];
   readonly workflowModel: ModelSelection | null;
   readonly newThreadModel: ModelSelection;
   readonly onSetWorkflowModel: (selection: ModelSelection | null) => void;
+  readonly onSetStepModel: SetWorkflowStepModel;
 }) {
   const choices = useWorkflowModelChoices(props.environmentId);
+  const rootModel = props.workflowModel ?? props.newThreadModel;
+  const stepModels = FEATURE_REVIEW_STEPS.map((step) => ({
+    ...step,
+    selection: standingWorkflowStepModel(props.defaults, step.key, "feature"),
+  }));
+  const configuredDefaultCount =
+    (props.workflowModel === null ? 0 : 1) +
+    stepModels.filter((step) => step.selection !== null).length;
   return (
     <SettingsSection
       title="Feature workflow defaults"
       icon={<SlidersHorizontalIcon className="size-3.5" />}
       headerAction={
-        props.workflowModel === null ? null : (
+        configuredDefaultCount === 0 ? null : (
           <Badge variant="secondary" size="sm">
-            1 set
+            {configuredDefaultCount} set
           </Badge>
         )
       }
     >
       <SettingsRow
         title="Model"
-        description="What a Feature started by a scheduled task or an agent runs on when it names no model. The instruction and the TDD implementation run on it; App Review and Code Review use the models set for those steps under Engineering Workflow defaults."
+        description="What a Feature started by a scheduled task or an agent runs on when it names no model. Instruction, implementation, and pull request creation run on it, and so do the reviewers below unless they have their own."
       >
         <WorkflowModelControl
           workflow="feature"
@@ -252,6 +291,25 @@ function FeatureWorkflowDefaults(props: {
           choices={choices}
           onSetWorkflowModel={props.onSetWorkflowModel}
         />
+      </SettingsRow>
+      <SettingsRow
+        title="Review models"
+        description="Feature's own reviewers. Engineering's App Review and Final Code Review are set separately below."
+      >
+        <div className="mt-1 max-w-md space-y-3 pb-3">
+          {stepModels.map((step) => (
+            <WorkflowModelPinControls
+              key={step.label}
+              pinKey={step.key}
+              label={step.label}
+              pinnedSelection={step.selection}
+              inheritedSelection={rootModel}
+              inheritedLabel={`Workflow model (${choices.describeSelection(rootModel)})`}
+              choices={choices}
+              onSetStepModel={props.onSetStepModel}
+            />
+          ))}
+        </div>
       </SettingsRow>
     </SettingsSection>
   );
@@ -277,16 +335,18 @@ function WorkflowStepModelDefaultsBody(props: {
 }) {
   const choices = useWorkflowModelChoices(props.environmentId);
   const rootModel = props.workflowModel ?? props.newThreadModel;
-  // The Feature workflow's start model is pinned here too but counts under its own section.
+  // Feature's own defaults, its start model included, count under its own section.
   const configuredDefaultCount =
-    props.defaults.filter((entry) => entry.workflowPromptId !== WORKFLOW_START_MODEL_PINS.feature)
-      .length +
+    props.defaults.filter(
+      (entry) =>
+        entry.workflow !== "feature" &&
+        entry.workflowPromptId !== WORKFLOW_START_MODEL_PINS.feature,
+    ).length +
     props.cycleDefaults.length +
     props.reviewPartsDefaults.length +
     Object.values(props.implementationSettings).filter((enabled) => !enabled).length;
   const pinFor = (key: WorkflowModelPinKey): ModelSelection | null =>
-    props.defaults.find((entry) => workflowStepModelPinKeysEqual(entry, key))?.modelSelection ??
-    null;
+    standingWorkflowStepModel(props.defaults, key, "engineering");
   const recoveryKey: WorkflowModelPinKey = {
     workflowPromptId: WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN,
   };

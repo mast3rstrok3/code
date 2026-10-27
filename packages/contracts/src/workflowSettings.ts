@@ -12,6 +12,14 @@ export const MaxParallelTickets = Schema.Int.check(
 );
 
 /**
+ * The workflows a thread can start as without the composer, by the names
+ * `t3_thread_launch` and scheduled tasks accept. Also the scope of a standing
+ * step model, so Feature's and Engineering's Code Review keep separate defaults.
+ */
+export const LaunchableWorkflow = Schema.Literals(["feature", "engineering"]);
+export type LaunchableWorkflow = typeof LaunchableWorkflow.Type;
+
+/**
  * Who answers Grill with Docs questions: the person who started the workflow,
  * or a separate LLM judge thread that answers them from the task and the
  * Grill's recommendations so the workflow can run unattended.

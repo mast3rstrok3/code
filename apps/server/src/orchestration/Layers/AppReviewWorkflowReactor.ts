@@ -110,6 +110,7 @@ import { appReviewWaitsForAdmission } from "../implementationTicketConcurrency.t
 import { parseWorkflowDirectiveFromMarkdown } from "../workflowDirectives.ts";
 import {
   findWorkflowStepModels,
+  findWorkflowStepModelScope,
   findWorkflowStepReviewParts,
   resolveWorkflowStepModelSelection,
   resolveWorkflowSubagentSpawnDefinition,
@@ -2307,6 +2308,8 @@ const make = Effect.gen(function* () {
       inheritStepPin: stepWorkflowPromptId !== WORKFLOW_PROMPT_IDS.implementationTddCodex,
       definition: resolveWorkflowSubagentSpawnDefinition(workflowPromptId),
       stepModels: findWorkflowStepModels(parent, readModel.threads),
+      // App Review runs inside Engineering unless its root says otherwise.
+      workflow: findWorkflowStepModelScope(parent, readModel.threads) ?? "engineering",
       parentModelSelection: parent.modelSelection,
       settings,
     }).modelSelection;

@@ -10,6 +10,7 @@ import {
   setWorkflowStepModelDefaults,
   engineeringWorkflowDefaultSteps,
   skippableImplementationSettingForStep,
+  standingWorkflowStepModel,
 } from "./workflowStepModelDefaults.ts";
 
 const selection: ModelSelection = {
@@ -177,6 +178,45 @@ it("sets and clears a model across several review pins", () => {
   expect(assigned).toHaveLength(2);
   expect(assigned.every((entry) => entry.modelSelection === selection)).toBe(true);
   expect(setWorkflowStepModelDefaults(assigned, keys, null)).toEqual([]);
+});
+
+const codeReview = { workflowPromptId: "implementation.code-review.codex" };
+const other: ModelSelection = {
+  instanceId: ProviderInstanceId.make("claudeAgent"),
+  model: "claude-opus-5-5",
+};
+
+it("keeps Feature's and Engineering's Code Review defaults apart", () => {
+  const feature = setWorkflowStepModelDefault([], codeReview, selection, "feature");
+  expect(feature).toEqual([{ ...codeReview, workflow: "feature", modelSelection: selection }]);
+  const both = setWorkflowStepModelDefault(feature, codeReview, other, "engineering");
+  expect(standingWorkflowStepModel(both, codeReview, "feature")).toEqual(selection);
+  expect(standingWorkflowStepModel(both, codeReview, "engineering")).toEqual(other);
+  expect(
+    standingWorkflowStepModel(
+      setWorkflowStepModelDefault(both, codeReview, null, "feature"),
+      codeReview,
+      "feature",
+    ),
+  ).toBeNull();
+});
+
+it("shows an unscoped default from older settings for every workflow", () => {
+  const legacy = setWorkflowStepModelDefault([], codeReview, selection);
+  expect(standingWorkflowStepModel(legacy, codeReview, "feature")).toEqual(selection);
+  expect(standingWorkflowStepModel(legacy, codeReview, "engineering")).toEqual(selection);
+});
+
+it("clears an unscoped default for one workflow while the other keeps it", () => {
+  const legacy = setWorkflowStepModelDefault([], codeReview, selection);
+  const cleared = setWorkflowStepModelDefault(legacy, codeReview, null, "engineering");
+  expect(standingWorkflowStepModel(cleared, codeReview, "engineering")).toBeNull();
+  expect(standingWorkflowStepModel(cleared, codeReview, "feature")).toEqual(selection);
+  expect(cleared).toEqual([{ ...codeReview, workflow: "feature", modelSelection: selection }]);
+
+  const changed = setWorkflowStepModelDefault(legacy, codeReview, other, "feature");
+  expect(standingWorkflowStepModel(changed, codeReview, "feature")).toEqual(other);
+  expect(standingWorkflowStepModel(changed, codeReview, "engineering")).toEqual(selection);
 });
 
 it("stores the recovery backup in the reserved workflow model pin", () => {

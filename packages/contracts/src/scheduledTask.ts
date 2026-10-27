@@ -17,6 +17,7 @@ import {
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
 } from "./orchestrationV2.ts";
 import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
+import { LaunchableWorkflow } from "./workflowSettings.ts";
 
 /** 24-hour "HH:MM" wall-clock time. Mirrors `parseTimeOfDay` on the server. */
 const TimeOfDay = TrimmedNonEmptyString.check(
@@ -236,8 +237,8 @@ export type ScheduledTaskWebhookEndpoint = typeof ScheduledTaskWebhookEndpoint.T
  * `t3_thread_launch` accepts: `feature` plans, implements, reviews and opens a
  * pull request on its own; `engineering` runs the Engineering workflow.
  */
-export const ScheduledTaskWorkflow = Schema.Literals(["feature", "engineering"]);
-export type ScheduledTaskWorkflow = typeof ScheduledTaskWorkflow.Type;
+export const ScheduledTaskWorkflow = LaunchableWorkflow;
+export type ScheduledTaskWorkflow = LaunchableWorkflow;
 
 export const ScheduledTask = Schema.Struct({
   id: ScheduledTaskId,

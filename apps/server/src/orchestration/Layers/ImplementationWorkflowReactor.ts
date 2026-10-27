@@ -125,6 +125,7 @@ import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts"
 import {
   findWorkflowStepReviewParts,
   findWorkflowStepModels,
+  findWorkflowStepModelScope,
   resolveWorkflowStepModelSelection,
   resolveWorkflowSubagentSpawnDefinition,
 } from "../workflowSubagents.ts";
@@ -2731,6 +2732,8 @@ const make = Effect.gen(function* () {
         : { stepWorkflowPromptId: input.stepWorkflowPromptId }),
       definition: resolveWorkflowSubagentSpawnDefinition(input.workflowPromptId),
       stepModels: findWorkflowStepModels(input.orchestratorThread, readModel.threads),
+      workflow:
+        findWorkflowStepModelScope(input.orchestratorThread, readModel.threads) ?? "engineering",
       parentModelSelection: input.orchestratorThread.modelSelection,
       settings,
     });
