@@ -493,8 +493,6 @@ export const WorkflowStepModelOverride = Schema.Struct({
 });
 export type WorkflowStepModelOverride = typeof WorkflowStepModelOverride.Type;
 
-export const WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN = "workflow.recovery-fallback";
-
 /**
  * Standing `workflowStepModels` pins for the model a Feature or Engineering
  * workflow starts on when whoever starts it names none: a scheduled task on

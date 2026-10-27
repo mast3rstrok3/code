@@ -10,7 +10,6 @@ import {
   WorkflowIcon,
 } from "lucide-react";
 import {
-  WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN,
   WORKFLOW_START_MODEL_PINS,
   type EnvironmentId,
   type ModelSelection,
@@ -347,10 +346,6 @@ function WorkflowStepModelDefaultsBody(props: {
     Object.values(props.implementationSettings).filter((enabled) => !enabled).length;
   const pinFor = (key: WorkflowModelPinKey): ModelSelection | null =>
     standingWorkflowStepModel(props.defaults, key, "engineering");
-  const recoveryKey: WorkflowModelPinKey = {
-    workflowPromptId: WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN,
-  };
-  const recoveryBackup = pinFor(recoveryKey);
   return (
     <SettingsSection
       title="Engineering Workflow defaults"
@@ -374,23 +369,6 @@ function WorkflowStepModelDefaultsBody(props: {
           choices={choices}
           onSetWorkflowModel={props.onSetWorkflowModel}
         />
-      </SettingsRow>
-      <SettingsRow
-        title="Recovery backup"
-        description="After one retry on the selected model, retryable provider failures can continue on this backup for up to eight hours. Auto leaves failover disabled."
-      >
-        <div className="mt-1 max-w-md pb-3">
-          <WorkflowModelPinControls
-            pinKey={recoveryKey}
-            label="Backup provider and model"
-            note="This choice applies only to recovery turns."
-            pinnedSelection={recoveryBackup}
-            inheritedSelection={rootModel}
-            inheritedLabel="Auto has no backup. Recovery stays on the primary model."
-            choices={choices}
-            onSetStepModel={props.onSetStepModel}
-          />
-        </div>
       </SettingsRow>
       <SettingsRow
         title="Ticket scheduling"

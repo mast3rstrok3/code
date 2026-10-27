@@ -1,8 +1,4 @@
-import {
-  ProviderInstanceId,
-  WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN,
-  type ModelSelection,
-} from "@t3tools/contracts";
+import { ProviderInstanceId, type ModelSelection } from "@t3tools/contracts";
 import { expect, it } from "vite-plus/test";
 
 import {
@@ -217,26 +213,4 @@ it("clears an unscoped default for one workflow while the other keeps it", () =>
   const changed = setWorkflowStepModelDefault(legacy, codeReview, other, "feature");
   expect(standingWorkflowStepModel(changed, codeReview, "feature")).toEqual(other);
   expect(standingWorkflowStepModel(changed, codeReview, "engineering")).toEqual(selection);
-});
-
-it("stores the recovery backup in the reserved workflow model pin", () => {
-  const assigned = setWorkflowStepModelDefault(
-    [],
-    { workflowPromptId: WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN },
-    selection,
-  );
-
-  expect(assigned).toEqual([
-    {
-      workflowPromptId: WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN,
-      modelSelection: selection,
-    },
-  ]);
-  expect(
-    setWorkflowStepModelDefault(
-      assigned,
-      { workflowPromptId: WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN },
-      null,
-    ),
-  ).toEqual([]);
 });
