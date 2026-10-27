@@ -145,7 +145,11 @@ To have every request start its own Feature workflow, set **Start as** to
 Code Review and opens a pull request in a new worktree from the base branch,
 which defaults to the project's development branch. **Engineering workflow**
 starts the Engineering workflow instead. Workflow runs work unattended in full
-access. The task's name may use the prompt's placeholders, so
+access, and an Engineering run's Grill with Docs questions are answered by the
+LLM judge. Because the server opens an Engineering run's pull request, the
+task's thread gets one more turn when the pull request opens, naming its URL,
+and another if the run stops for a person, so the prompt can report either.
+The task's name may use the prompt's placeholders, so
 `Fix {{body.summary}}` titles each thread after its request. **Model** starts
 as **Workflow default**: each run uses the workflow's model from
 **Settings → Workflows** as it is when the run starts, so changing it there
