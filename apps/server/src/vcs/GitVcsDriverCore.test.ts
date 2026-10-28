@@ -16,6 +16,7 @@ import * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import {
@@ -2050,6 +2051,66 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           deletions: 0,
         });
       }),
+    );
+
+    it.effect.each(["index", "diff"] as const)(
+      "returns basic status and cleans up when Changes %s exceeds its budget",
+      (stage) =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTmpDir();
+          const { initialBranch } = yield* initRepoWithCommit(cwd);
+          yield* writeTextFile(cwd, "README.md", "changed\n");
+          yield* writeTextFile(cwd, "untracked.txt", "new\n");
+          const indexBefore = NodeFS.readFileSync(`${cwd}/.git/index`);
+          const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+          const started = yield* Deferred.make<void>();
+          let released = false;
+          let temporaryIndex: string | undefined;
+          const spawner = ChildProcessSpawner.make((command) =>
+            Effect.gen(function* () {
+              if (!ChildProcess.isStandardCommand(command))
+                return yield* Effect.die("expected a standard Git command");
+              const shouldBlock =
+                stage === "index"
+                  ? command.args.includes("--intent-to-add")
+                  : command.args[0] === "diff" && command.args.includes("--numstat");
+              if (!shouldBlock) return yield* delegate.spawn(command);
+              temporaryIndex = command.options.env?.GIT_INDEX_FILE;
+              return yield* Effect.acquireRelease(
+                Deferred.succeed(started, undefined).pipe(
+                  Effect.as(
+                    ChildProcessSpawner.makeHandle({
+                      ...makeSuccessfulHandle(""),
+                      exitCode: Effect.never,
+                    }),
+                  ),
+                ),
+                () => Effect.sync(() => (released = true)),
+              );
+            }),
+          );
+          const driver = yield* makeGitVcsDriverCore().pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Effect.provide(layerServerConfig),
+          );
+          const refreshing = yield* driver
+            .statusDetailsLocal(cwd, { includeBranchChanges: true })
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(started);
+          yield* TestClock.adjust("2 seconds");
+          const status = yield* Fiber.join(refreshing);
+          assert.equal(status.branch, initialBranch);
+          assert.isTrue(status.hasWorkingTreeChanges);
+          assert.includeMembers(
+            status.workingTree.files.map((file) => file.path),
+            ["README.md", "untracked.txt"],
+          );
+          assert.isUndefined(status.branchChanges);
+          assert.isTrue(released);
+          assert.isString(temporaryIndex);
+          assert.isFalse(NodeFS.existsSync(temporaryIndex!));
+          assert.deepStrictEqual(NodeFS.readFileSync(`${cwd}/.git/index`), indexBefore);
+        }),
     );
 
     it.effect("Changes does not show newer base commits as deletions", () =>
