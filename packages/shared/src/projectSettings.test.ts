@@ -1,8 +1,10 @@
 import {
   DEFAULT_SERVER_SETTINGS,
+  type ModelSelection,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  WORKFLOW_START_MODEL_PINS,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import { createModelSelection } from "./model.ts";
@@ -12,6 +14,7 @@ import {
   resolveNewThreadEnvMode,
   resolveProjectSettings,
   resolveSendEnvMode,
+  resolveWorkflowModelSelection,
   resolveWorktreeCleanup,
 } from "./projectSettings.ts";
 import { applyServerSettingsPatch } from "./serverSettings.ts";
@@ -410,5 +413,54 @@ describe("resolveWorktreeCleanup", () => {
       resolveWorktreeCleanup(applyServerSettingsPatch(edited, { worktreeCleanup: null }), null)
         .worktreeAfterDays,
     ).toBe(8);
+  });
+});
+
+describe("resolveWorkflowModelSelection", () => {
+  const codex = (model: string) => createModelSelection(ProviderInstanceId.make("codex"), model);
+  const startModel = (workflow: "feature" | "engineering", modelSelection: ModelSelection) => ({
+    workflowPromptId: WORKFLOW_START_MODEL_PINS[workflow],
+    modelSelection,
+  });
+  const base = {
+    ...DEFAULT_SERVER_SETTINGS,
+    projectSettingsFolded: true,
+    defaultModelSelection: codex("environment"),
+  };
+
+  it("prefers the workflow's own default, then the project's and the environment's", () => {
+    const withProject = {
+      ...base,
+      projectSettingsOverrides: { [projectId]: { defaultModelSelection: codex("project") } },
+    };
+    expect(resolveWorkflowModelSelection(withProject, projectId, "feature")?.model).toBe("project");
+    expect(resolveWorkflowModelSelection(withProject, otherProjectId, "feature")?.model).toBe(
+      "environment",
+    );
+    const withWorkflow = {
+      ...withProject,
+      workflowStepModels: [startModel("feature", codex("feature"))],
+    };
+    expect(resolveWorkflowModelSelection(withWorkflow, projectId, "feature")?.model).toBe(
+      "feature",
+    );
+    // Each workflow has its own default.
+    expect(resolveWorkflowModelSelection(withWorkflow, projectId, "engineering")?.model).toBe(
+      "project",
+    );
+  });
+
+  it("skips a model on a disabled provider and is null when nothing is set", () => {
+    const disabled = createModelSelection(ProviderInstanceId.make("missing-instance"), "x");
+    expect(
+      resolveWorkflowModelSelection(
+        { ...base, workflowStepModels: [startModel("feature", disabled)] },
+        projectId,
+        "feature",
+      )?.model,
+    ).toBe("environment");
+    expect(
+      resolveWorkflowModelSelection(DEFAULT_SERVER_SETTINGS, projectId, "engineering"),
+    ).toBeNull();
   });
 });

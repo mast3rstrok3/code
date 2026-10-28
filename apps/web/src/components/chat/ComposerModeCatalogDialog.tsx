@@ -4,6 +4,7 @@ import {
   implementationDefaultsForWorkflowPreset,
   WORKFLOW_PRESET_DEFINITION_BY_ID,
   WORKFLOW_PRESET_DEFINITIONS,
+  workflowStepModelScopeForPreset,
 } from "@t3tools/shared/workflowPresets";
 import { setWorkflowStepCycleOverride } from "@t3tools/shared/workflowStepCycles";
 import { CheckIcon, CircleHelpIcon } from "lucide-react";
@@ -13,6 +14,7 @@ import { WorkflowSettingsBody } from "../WorkflowSettingsMenu";
 import {
   setWorkflowStepModelDefault,
   setWorkflowStepModelDefaults,
+  standingWorkflowStepModel,
 } from "../settings/workflowStepModelDefaults";
 import { WorkflowCatalogContent } from "../settings/WorkflowCatalogContent";
 import { Button } from "../ui/button";
@@ -127,6 +129,7 @@ export function ComposerModeCatalogDialog(props: {
   };
 
   const definition = WORKFLOW_PRESET_DEFINITION_BY_ID[configuringPreset];
+  const stepModelScope = workflowStepModelScopeForPreset(configuringPreset);
   const showingSkills = props.catalog === "skills";
 
   return (
@@ -214,21 +217,19 @@ export function ComposerModeCatalogDialog(props: {
             <WorkflowSettingsBody
               environmentId={props.workflowDefaults.environmentId}
               preset={definition.id}
-              pinFor={(key) =>
-                stepModels.find(
-                  (entry) =>
-                    entry.workflowPromptId === key.workflowPromptId &&
-                    (entry.stepWorkflowPromptId ?? null) === (key.stepWorkflowPromptId ?? null),
-                )?.modelSelection ?? null
-              }
+              pinFor={(key) => standingWorkflowStepModel(stepModels, key, stepModelScope)}
               rootModelSelection={props.workflowDefaults.rootModelSelection}
               rootLabel="The model selected in the composer"
               description="Shared-thread steps use the composer model. Steps that start separate threads also use it unless you set an override. You can change the same controls after the workflow starts."
               onSetStepModel={(key, selection) =>
-                setStepModels((current) => setWorkflowStepModelDefault(current, key, selection))
+                setStepModels((current) =>
+                  setWorkflowStepModelDefault(current, key, selection, stepModelScope),
+                )
               }
               onSetStepModels={(keys, selection) =>
-                setStepModels((current) => setWorkflowStepModelDefaults(current, keys, selection))
+                setStepModels((current) =>
+                  setWorkflowStepModelDefaults(current, keys, selection, stepModelScope),
+                )
               }
               stepCycles={stepCycles}
               onSetStepCycles={(key, maxCycles) =>

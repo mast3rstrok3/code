@@ -150,7 +150,7 @@ One orchestrated execution of a Spec's tickets: a dedicated worktree, dependency
 
 #### Workflow nudge
 
-The provider-facing part of stage recovery. It resumes the primary model once, resolves the run or standing `workflow.recovery-fallback` pin, and can replace the provider-native session while retaining the T3 thread and workspace. Usage limits then park until `retryAt` or five hours and may repeat without an attempt ceiling. Transport failures remain bounded to eight hours. Unknown historical failures keep two compatibility attempts. Authentication, configuration, pauses, live turns, approvals, user-input waits, and deliberate interruptions do not enter automatic retry. [StaleTurnReconciler.ts][32] records provider evidence; the stage execution owns the canonical recovery state.
+The provider-facing part of stage recovery. It resumes the primary model once and keeps the T3 thread and workspace. A workflow agent thread limited on a model other than its root's continues on the root's model instead of waiting. Usage limits then park until `retryAt` or five hours and may repeat without an attempt ceiling. Transport failures remain bounded to eight hours. Unknown historical failures keep two compatibility attempts. Authentication, configuration, pauses, live turns, approvals, user-input waits, and deliberate interruptions do not enter automatic retry. [StaleTurnReconciler.ts][32] records provider evidence; the stage execution owns the canonical recovery state.
 
 #### App stack
 

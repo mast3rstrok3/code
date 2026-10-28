@@ -23,6 +23,7 @@ import type {
   ScheduledTaskSchedule,
   ScheduledTaskUpsertInput,
   ScheduledTaskWebhookDeliverySummary,
+  ScheduledTaskWorkflow,
   ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -51,6 +52,7 @@ import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
+  type ProviderInstanceEntry,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
 import { usePrimaryCloudLinkState } from "../../cloud/primaryCloudLinkState";
@@ -69,6 +71,13 @@ import { environmentAtomList, environmentIdsKey } from "../../state/environmentA
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
+import {
+  DEVELOPMENT_BRANCH_NAME,
+  findDevelopmentBranchRef,
+  resolveWorktreeBaseBranch,
+} from "@t3tools/shared/git";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { vcsEnvironment } from "../../state/vcs";
 import { WorktreeBaseBranchPicker } from "../WorktreeBaseBranchPicker";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { ConnectionStatusDot, connectionPhaseDotClassName } from "../ConnectionStatusDot";
@@ -82,6 +91,7 @@ import {
   WEBHOOK_SIGNATURE_DEFAULTS,
   webhookDraftErrors,
   webhookDeliveryLabel,
+  WORKFLOW_LABELS,
   matchesScheduledTaskScope,
   scheduleFromDraft,
   scheduledTaskDefaultModel,
@@ -95,6 +105,7 @@ import { Menu, MenuTrigger, MenuPopup, MenuItem, MenuSeparator } from "../ui/men
 import { ToggleGroup, Toggle } from "../ui/toggle-group";
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia } from "../ui/empty";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
+import { getTriggerDisplayModelName } from "../chat/providerIconUtils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
@@ -141,8 +152,11 @@ const EMPTY_DRAFT: DraftState = {
   weekdays: new Set([1, 2, 3, 4, 5]),
   projectId: "",
   threadId: "",
+  workflow: null,
+  // Only read once Start as names a workflow, where it is the default choice.
+  useWorkflowDefaultModel: true,
   workspaceMode: "worktree",
-  baseRef: "main",
+  baseRef: "",
   startFromOrigin: true,
   existingWorktreePath: "",
   modelKey: "",
@@ -275,6 +289,18 @@ function Field({
       {children}
     </div>
   );
+}
+
+/** "Workflow default (Codex · GPT-5.5)", naming the model each run would start on now. */
+function describeWorkflowDefault(
+  selection: ModelSelection | null,
+  instanceEntries: readonly ProviderInstanceEntry[],
+): string {
+  if (selection === null) return "Workflow default";
+  const entry = instanceEntries.find((candidate) => candidate.instanceId === selection.instanceId);
+  const option = entry?.models.find((candidate) => candidate.slug === selection.model);
+  const modelName = option ? getTriggerDisplayModelName(option) : selection.model;
+  return `Workflow default (${entry === undefined ? modelName : `${entry.displayName} · ${modelName}`})`;
 }
 
 function splitModelKey(value: string): ModelSelection | null {
@@ -1057,6 +1083,41 @@ function WebhookDeliveryMode({ environmentId }: { readonly environmentId: Enviro
   );
 }
 
+/**
+ * The branch a project's new worktrees start from: its configured branch,
+ * else dev, else the repository default. Null until the refs load.
+ */
+function useDevelopmentBranch(
+  environmentId: EnvironmentId,
+  cwd: string | null,
+  configured: string | null,
+): string | null {
+  const developmentRefs = useEnvironmentQuery(
+    cwd && !configured
+      ? vcsEnvironment.listRefs({
+          environmentId,
+          input: {
+            cwd,
+            query: DEVELOPMENT_BRANCH_NAME,
+            includeMatchingRemoteRefs: true,
+            limit: 10,
+          },
+        })
+      : null,
+  );
+  const developmentBranch = findDevelopmentBranchRef(developmentRefs.data?.refs ?? []);
+  const defaultRefs = useEnvironmentQuery(
+    cwd && !configured && developmentRefs.data && !developmentBranch
+      ? vcsEnvironment.listRefs({ environmentId, input: { cwd, limit: 50 } })
+      : null,
+  );
+  return resolveWorktreeBaseBranch({
+    configured,
+    developmentBranch,
+    defaultBranch: defaultRefs.data?.refs.find((ref) => ref.isDefault)?.name ?? null,
+  });
+}
+
 function ScheduledTaskEditorDialog({
   initialEnvironmentId,
   task,
@@ -1144,14 +1205,30 @@ function ScheduledTaskEditorForm({
       selectedProject?.id ?? null,
     ),
   );
+  const developmentBranch = useDevelopmentBranch(
+    environmentId,
+    selectedProject?.workspaceRoot ?? null,
+    resolveProjectSettings(settings, selectedProject?.id ?? null, selectedProject ?? null).settings
+      .worktreeBaseBranch,
+  );
+  // Until someone picks a base, a new worktree starts from the development branch.
+  const baseRef = draft.baseRef.trim() || developmentBranch || "";
 
   const firstInstance = instanceEntries[0];
+  const defaultSelection = scheduledTaskDefaultModel(
+    settings,
+    selectedProject ?? null,
+    instanceEntries,
+    draft.workflow,
+  );
+  const workflowDefaultLabel = describeWorkflowDefault(defaultSelection, instanceEntries);
+  const followsWorkflowDefault = draft.workflow !== null && draft.useWorkflowDefaultModel;
   const draftSelection = draft.modelKey ? splitModelKey(draft.modelKey) : null;
   const activeSelection =
     draftSelection &&
     instanceEntries.some((entry) => entry.instanceId === draftSelection.instanceId && entry.enabled)
       ? draftSelection
-      : scheduledTaskDefaultModel(settings, selectedProject ?? null, instanceEntries);
+      : defaultSelection;
   const activeInstanceId =
     activeSelection?.instanceId ?? firstInstance?.instanceId ?? ("" as ProviderInstanceId);
   const activeModel = activeSelection?.model ?? "";
@@ -1182,7 +1259,9 @@ function ScheduledTaskEditorForm({
       tasksQuery.data === null
     )
       return;
-    const selection = activeSelection;
+    // On the workflow default the stored model is only the fallback, so it
+    // is the default as it is now.
+    const selection = followsWorkflowDefault ? defaultSelection : activeSelection;
     if (
       !draft.title.trim() ||
       !draft.prompt.trim() ||
@@ -1236,7 +1315,7 @@ function ScheduledTaskEditorForm({
           ? { type: "existing_worktree", worktreePath: draft.existingWorktreePath.trim() }
           : {
               type: "worktree",
-              baseRef: draft.baseRef.trim() || "main",
+              baseRef: baseRef || "main",
               startFromOrigin: draft.startFromOrigin,
             };
     const input: ScheduledTaskUpsertInput = {
@@ -1246,11 +1325,14 @@ function ScheduledTaskEditorForm({
       enabled: draft.enabled,
       schedule,
       projectId: selectedProjectId as ProjectId,
-      threadId: draft.threadId ? (draft.threadId as ThreadId) : null,
+      // A workflow starts a fresh thread on every run.
+      threadId: draft.threadId && draft.workflow === null ? (draft.threadId as ThreadId) : null,
       workspaceStrategy,
       modelSelection,
       runtimeMode: draft.runtimeMode,
       interactionMode: draft.interactionMode,
+      workflow: draft.workflow,
+      useWorkflowDefaultModel: followsWorkflowDefault,
       creationSource: "web",
     };
     // Lock before React renders, and keep successful creates locked until the form closes.
@@ -1296,7 +1378,7 @@ function ScheduledTaskEditorForm({
                   projectId: "",
                   modelKey: "",
                   baseModelSelection: null,
-                  baseRef: "main",
+                  baseRef: "",
                   startFromOrigin: true,
                   existingWorktreePath: "",
                 }));
@@ -1423,7 +1505,7 @@ function ScheduledTaskEditorForm({
                 id="scheduled-task-base-ref"
                 environmentId={environmentId}
                 cwd={selectedProject?.workspaceRoot ?? null}
-                value={draft.baseRef}
+                value={baseRef}
                 onValueChange={(baseRef) => setDraft((current) => ({ ...current, baseRef }))}
                 startFromOrigin={draft.startFromOrigin}
                 onStartFromOriginChange={(startFromOrigin) =>
@@ -1449,6 +1531,38 @@ function ScheduledTaskEditorForm({
             </Field>
           ) : null}
 
+          <Field
+            label="Start as"
+            htmlFor="scheduled-task-workflow"
+            {...(draft.workflow === null
+              ? {}
+              : {
+                  hint:
+                    draft.workflow === "feature"
+                      ? "Opens a pull request on its own, in full access"
+                      : "Runs unattended, in full access",
+                })}
+          >
+            <Select
+              value={draft.workflow ?? "thread"}
+              onValueChange={(value) =>
+                setDraft((current) => ({
+                  ...current,
+                  workflow: value === "thread" ? null : (value as ScheduledTaskWorkflow),
+                }))
+              }
+            >
+              <SelectTrigger size="sm" id="scheduled-task-workflow">
+                <SelectValue>{WORKFLOW_LABELS[draft.workflow ?? "thread"]}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup>
+                <SelectItem value="thread">{WORKFLOW_LABELS.thread}</SelectItem>
+                <SelectItem value="feature">{WORKFLOW_LABELS.feature}</SelectItem>
+                <SelectItem value="engineering">{WORKFLOW_LABELS.engineering}</SelectItem>
+              </SelectPopup>
+            </Select>
+          </Field>
+
           <Field label="Prompt" htmlFor="scheduled-task-prompt">
             <Textarea
               id="scheduled-task-prompt"
@@ -1461,8 +1575,33 @@ function ScheduledTaskEditorForm({
             />
           </Field>
 
-          <Field label="Model">
-            <div>
+          <Field
+            label="Model"
+            {...(draft.workflow === null ? {} : { htmlFor: "scheduled-task-model-source" })}
+            {...(followsWorkflowDefault ? { hint: "Resolved at each run" } : {})}
+          >
+            {draft.workflow === null ? null : (
+              <Select
+                value={followsWorkflowDefault ? "workflow-default" : "task"}
+                onValueChange={(value) =>
+                  setDraft((current) => ({
+                    ...current,
+                    useWorkflowDefaultModel: value === "workflow-default",
+                  }))
+                }
+              >
+                <SelectTrigger size="sm" id="scheduled-task-model-source">
+                  <SelectValue>
+                    {followsWorkflowDefault ? workflowDefaultLabel : "A specific model"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup>
+                  <SelectItem value="workflow-default">{workflowDefaultLabel}</SelectItem>
+                  <SelectItem value="task">A specific model</SelectItem>
+                </SelectPopup>
+              </Select>
+            )}
+            {followsWorkflowDefault ? null : (
               <ProviderModelPicker
                 environmentId={environmentId}
                 disabled={saving || !connected}
@@ -1474,10 +1613,14 @@ function ScheduledTaskEditorForm({
                 isComposerOwned={false}
                 triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
                 onInstanceModelChange={(instanceId, model) =>
-                  setDraft((current) => ({ ...current, modelKey: `${instanceId}:${model}` }))
+                  setDraft((current) => ({
+                    ...current,
+                    modelKey: `${instanceId}:${model}`,
+                    useWorkflowDefaultModel: false,
+                  }))
                 }
               />
-            </div>
+            )}
           </Field>
 
           <div className="space-y-3">

@@ -1,5 +1,9 @@
-import type { ImplementationWorkflowSettings, ModelSelection } from "@t3tools/contracts";
-import type { WorkflowStepModelOverride } from "@t3tools/contracts";
+import type {
+  ImplementationWorkflowSettings,
+  LaunchableWorkflow,
+  ModelSelection,
+  WorkflowStepModelOverride,
+} from "@t3tools/contracts";
 import {
   WORKFLOW_PRESET_DEFINITION_BY_ID,
   type WorkflowPresetSubStep,
@@ -85,28 +89,80 @@ export function workflowStepModelPinKeysEqual(
   );
 }
 
+const LAUNCHABLE_WORKFLOWS: ReadonlyArray<LaunchableWorkflow> = ["feature", "engineering"];
+
+function defaultEntry(
+  key: WorkflowModelPinKey,
+  workflow: LaunchableWorkflow | null,
+  modelSelection: ModelSelection,
+): WorkflowStepModelOverride {
+  // Optional keys stay absent rather than undefined so the patch encodes as the contract's.
+  return {
+    workflowPromptId: key.workflowPromptId,
+    ...(key.stepWorkflowPromptId === undefined
+      ? {}
+      : { stepWorkflowPromptId: key.stepWorkflowPromptId }),
+    ...(workflow === null ? {} : { workflow }),
+    modelSelection,
+  };
+}
+
+function findDefault(
+  defaults: ReadonlyArray<WorkflowStepModelOverride>,
+  key: WorkflowModelPinKey,
+  workflow: LaunchableWorkflow | null,
+): WorkflowStepModelOverride | undefined {
+  return defaults.find(
+    (entry) => workflowStepModelPinKeysEqual(entry, key) && (entry.workflow ?? null) === workflow,
+  );
+}
+
 /**
- * The default pins after setting or clearing one of them.
+ * The standing default one workflow's step runs on: its own, else the unscoped
+ * one settings stored before workflows had their own, which the server still
+ * honours. Null with `workflow` null reads only unscoped defaults.
+ */
+export function standingWorkflowStepModel(
+  defaults: ReadonlyArray<WorkflowStepModelOverride>,
+  key: WorkflowModelPinKey,
+  workflow: LaunchableWorkflow | null,
+): ModelSelection | null {
+  return (
+    (workflow === null ? undefined : findDefault(defaults, key, workflow))?.modelSelection ??
+    findDefault(defaults, key, null)?.modelSelection ??
+    null
+  );
+}
+
+/**
+ * The default pins after setting or clearing one workflow's pin.
  *
- * `stepWorkflowPromptId` stays absent rather than explicitly undefined so the
- * settings patch encodes as the contract's optional key.
+ * An unscoped default that the change would otherwise leave shadowing this
+ * workflow is split into one default per other workflow first, so clearing a
+ * pin really clears it here while the other workflow keeps the model it had.
  */
 export function setWorkflowStepModelDefault(
   defaults: ReadonlyArray<WorkflowStepModelOverride>,
   key: WorkflowModelPinKey,
   selection: ModelSelection | null,
+  workflow: LaunchableWorkflow | null = null,
 ): ReadonlyArray<WorkflowStepModelOverride> {
-  const others = defaults.filter((entry) => !workflowStepModelPinKeysEqual(entry, key));
-  if (selection === null) return others;
+  const legacy = workflow === null ? undefined : findDefault(defaults, key, null);
+  const inherited =
+    legacy === undefined
+      ? []
+      : LAUNCHABLE_WORKFLOWS.filter(
+          (other) => other !== workflow && findDefault(defaults, key, other) === undefined,
+        ).map((other) => defaultEntry(key, other, legacy.modelSelection));
+  const others = defaults.filter(
+    (entry) =>
+      !workflowStepModelPinKeysEqual(entry, key) ||
+      ((entry.workflow ?? null) !== workflow && entry !== legacy),
+  );
   return [
     ...others,
-    {
-      workflowPromptId: key.workflowPromptId,
-      ...(key.stepWorkflowPromptId === undefined
-        ? {}
-        : { stepWorkflowPromptId: key.stepWorkflowPromptId }),
-      modelSelection: selection,
-    },
+    ...inherited,
+    ...(selection === null ? [] : [defaultEntry(key, workflow, selection)]),
   ];
 }
 
@@ -114,9 +170,10 @@ export function setWorkflowStepModelDefaults(
   defaults: ReadonlyArray<WorkflowStepModelOverride>,
   keys: ReadonlyArray<WorkflowModelPinKey>,
   selection: ModelSelection | null,
+  workflow: LaunchableWorkflow | null = null,
 ): ReadonlyArray<WorkflowStepModelOverride> {
   return keys.reduce(
-    (current, key) => setWorkflowStepModelDefault(current, key, selection),
+    (current, key) => setWorkflowStepModelDefault(current, key, selection, workflow),
     defaults,
   );
 }

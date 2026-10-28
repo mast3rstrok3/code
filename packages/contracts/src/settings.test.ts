@@ -1009,3 +1009,13 @@ describe("server model preferences", () => {
     expect(decodeServerSettingsPatch(input)).toEqual(input);
   });
 });
+
+describe("retired workflow model pins", () => {
+  it("still decodes a stored Recovery backup pin", () => {
+    const pin = {
+      workflowPromptId: "workflow.recovery-fallback",
+      modelSelection: { instanceId: "codex", model: "gpt-5.5" },
+    };
+    expect(decodeServerSettings({ workflowStepModels: [pin] }).workflowStepModels).toEqual([pin]);
+  });
+});

@@ -6,6 +6,7 @@ import {
   ProviderInstanceId,
   ScheduledTaskId,
   type ScheduledTask,
+  WORKFLOW_START_MODEL_PINS,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -151,6 +152,22 @@ describe("editing scheduled task branch settings", () => {
   });
 });
 
+describe("scheduled task workflows", () => {
+  it("edits a task that an older server sent without a workflow as a plain thread", () => {
+    expect(taskToDraft(legacyTask).workflow).toBeNull();
+  });
+
+  it("keeps a Feature task's workflow and leaves an unset base for the development branch", () => {
+    const draft = taskToDraft({
+      ...legacyTask,
+      workflow: "feature",
+      workspaceStrategy: { type: "root" },
+    });
+    expect(draft.workflow).toBe("feature");
+    expect(draft.baseRef).toBe("");
+  });
+});
+
 describe("webhook scheduled tasks", () => {
   const signature = { header: "x-signature", encoding: "base64", prefix: "" } as const;
   const webhookTask: ScheduledTask = {
@@ -212,6 +229,18 @@ describe("webhook scheduled tasks", () => {
       maxDeliveryAgeMinutes: null,
       dedupe: {},
     });
+  });
+
+  it("opens a task on the workflow default without a stored model to edit", () => {
+    const draft = taskToDraft({
+      ...webhookTask,
+      workflow: "feature",
+      useWorkflowDefaultModel: true,
+    });
+    expect(draft.useWorkflowDefaultModel).toBe(true);
+    expect(draft.modelKey).toBe("");
+    expect(draft.baseModelSelection).toBeNull();
+    expect(taskToDraft(webhookTask).useWorkflowDefaultModel).toBe(false);
   });
 
   it("round-trips the max age, treats blank as no limit, and rejects an invalid limit", () => {
@@ -317,6 +346,24 @@ describe("scheduled task model defaults", () => {
         },
       }),
     ).toEqual(environmentSelection);
+  });
+  it("puts a workflow's own default first, and only for that workflow", () => {
+    const featureSelection = { instanceId, model: "first-model" };
+    const settings = {
+      ...config.settings,
+      workflowStepModels: [
+        { workflowPromptId: WORKFLOW_START_MODEL_PINS.feature, modelSelection: featureSelection },
+      ],
+    };
+    const entries = deriveProviderInstanceEntries(config.providers);
+    const project = { id: projectId, defaultModelSelection: projectSelection };
+    expect(scheduledTaskDefaultModel(settings, project, entries, "feature")).toEqual(
+      featureSelection,
+    );
+    expect(scheduledTaskDefaultModel(settings, project, entries, "engineering")).toEqual(
+      projectSelection,
+    );
+    expect(scheduledTaskDefaultModel(settings, project, entries)).toEqual(projectSelection);
   });
 });
 
