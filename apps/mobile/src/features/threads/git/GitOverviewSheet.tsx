@@ -49,6 +49,8 @@ import {
   useLinkedPullRequestLines,
 } from "../LinkedPullRequestList";
 import { useLinkedPullRequestActions } from "../useLinkedPullRequestActions";
+import { appStackStatusLabel } from "../../app-stacks/appStackPresentation";
+import { threadAppStackPath, useThreadAppStack } from "../../app-stacks/useAppStackQueries";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
 
@@ -91,6 +93,13 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
     thread: selectedThread,
     project: selectedThreadProject,
     runtime: selectedEnvironmentRuntime,
+  });
+  const appStack = useThreadAppStack({
+    environmentId,
+    worktreePath: threadAppStackPath({
+      worktreePath: selectedThread?.worktreePath,
+      workspaceRoot: selectedThreadProject?.workspaceRoot,
+    }),
   });
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
@@ -310,6 +319,26 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
           />
         ) : null}
       </ListSection>
+
+      {appStack.enabled ? (
+        <ListSection>
+          <ListRow
+            icon="server.rack"
+            label="App Stack"
+            description={
+              appStack.stack === null
+                ? "Deploy this worktree as a preview stack"
+                : appStackStatusLabel(appStack.stack.status)
+            }
+            onPress={() =>
+              navigation.navigate("ThreadAppStack", {
+                environmentId: String(environmentId),
+                threadId: String(threadId),
+              })
+            }
+          />
+        </ListSection>
+      ) : null}
 
       {linkedPrLines.length > 0 ? (
         <ListSection title="Linked pull requests">
