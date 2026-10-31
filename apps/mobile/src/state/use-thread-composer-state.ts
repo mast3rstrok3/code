@@ -46,6 +46,16 @@ import {
   isModelSelectionUnavailable,
 } from "../lib/modelOptions";
 import { resolveProviderInteractionMode } from "./legacy-plan-mode";
+import { isPlanningWorkflowAvailableForProvider } from "@t3tools/client-runtime/workflow-composer-mode";
+import {
+  applyComposerModeChoice,
+  composerWorkflowSendForQueue,
+  leaveComposerWorkflow,
+  resolveComposerWorkflowPreset,
+  resolveComposerWorkflowSend,
+  type ComposerModeChoice,
+} from "./composer-workflow";
+import { workflowSettingsValueAtom } from "./workflows";
 import {
   convertPastedImagesToAttachments,
   createPastedTextComposerAttachment,
@@ -326,6 +336,14 @@ export function useThreadComposerState() {
         selectedDraft.interactionMode ?? selectedThread.interactionMode,
       )
     : null;
+  const workflowAvailable = isPlanningWorkflowAvailableForProvider(selectedProvider?.driver);
+  const workflowPreset = selectedThread
+    ? resolveComposerWorkflowPreset({
+        draftWorkflow: selectedDraft.workflow,
+        threadPreset: selectedThread.workflowPreset,
+      })
+    : null;
+  const lastWorkflowPreset = selectedDraft.workflow?.lastPreset ?? null;
   const canSwitchThreadProvider = threadAllowsProviderSwitch({
     thread: selectedThreadShell,
     projection: selectedThreadProjection?.projection,
@@ -683,6 +701,19 @@ export function useThreadComposerState() {
         provider,
         draft.interactionMode ?? thread.interactionMode,
       ),
+      ...(() => {
+        const workflow = composerWorkflowSendForQueue(
+          resolveComposerWorkflowSend({
+            draftWorkflow: draft.workflow,
+            threadPreset: thread.workflowPreset,
+            provider: provider?.driver,
+            standingImplementation: appAtomRegistry.get(
+              workflowSettingsValueAtom(thread.environmentId),
+            ).implementation,
+          }),
+        );
+        return workflow === undefined ? {} : { workflow };
+      })(),
       ...(followUpDispatchMode === null ? {} : { dispatchMode: followUpDispatchMode }),
       createdAt: metadata.createdAt,
     });
@@ -949,10 +980,25 @@ export function useThreadComposerState() {
     const provider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
       (candidate) => candidate.instanceId === value.instanceId,
     );
+    // A provider without workflows starts plain turns, so the draft leaves the thread's workflow.
+    const leavesWorkflow =
+      !isPlanningWorkflowAvailableForProvider(provider?.driver) &&
+      resolveComposerWorkflowPreset({
+        draftWorkflow: getComposerDraftSnapshot(selectedThreadKey).workflow,
+        threadPreset: selectedThread?.workflowPreset,
+      }) !== null;
     updateComposerDraftSettings(selectedThreadKey, {
       modelSelection: value,
-      ...(provider?.showInteractionModeToggle === false
+      ...(provider?.showInteractionModeToggle === false || leavesWorkflow
         ? { interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE }
+        : {}),
+      ...(leavesWorkflow
+        ? {
+            workflow: leaveComposerWorkflow({
+              current: getComposerDraftSnapshot(selectedThreadKey).workflow,
+              threadPreset: selectedThread?.workflowPreset,
+            }),
+          }
         : {}),
     });
   };
@@ -964,8 +1010,36 @@ export function useThreadComposerState() {
     updateComposerDraftSettings(selectedThreadKey, { runtimeMode: value });
   };
 
+  const onUpdateComposerMode = (choice: ComposerModeChoice) => {
+    if (!selectedThreadKey || !selectedThread) {
+      return;
+    }
+    const modelSelection =
+      getComposerDraftSnapshot(selectedThreadKey).modelSelection ?? selectedThread.modelSelection;
+    const provider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
+      (candidate) => candidate.instanceId === modelSelection.instanceId,
+    );
+    const next = applyComposerModeChoice({
+      choice,
+      current: getComposerDraftSnapshot(selectedThreadKey).workflow,
+      threadPreset: selectedThread.workflowPreset,
+      standingImplementation: appAtomRegistry.get(
+        workflowSettingsValueAtom(selectedThread.environmentId),
+      ).implementation,
+    });
+    updateComposerDraftSettings(selectedThreadKey, {
+      interactionMode: resolveProviderInteractionMode(provider, next.interactionMode),
+      workflow: next.workflow,
+    });
+  };
+
   const onUpdateInteractionMode = (value: ProviderInteractionMode) => {
     if (!selectedThreadKey) {
+      return;
+    }
+    // "/plan" and "/default" pick a mode the same way the mode menu does.
+    if (value === "plan" || value === "default") {
+      onUpdateComposerMode({ kind: value === "plan" ? "plan" : "build" });
       return;
     }
     const modelSelection =
@@ -1003,6 +1077,17 @@ export function useThreadComposerState() {
     canSwitchThreadProvider,
     runtimeMode,
     interactionMode,
+    composerMode:
+      interactionMode === null
+        ? null
+        : {
+            interactionMode,
+            workflowPreset,
+            lastWorkflowPreset,
+            workflowAvailable,
+            planAvailable: selectedProvider?.showInteractionModeToggle !== false,
+            onSelect: onUpdateComposerMode,
+          },
     activeThreadBusy,
     interruptibleRunId,
     onChangeDraftMessage,
@@ -1016,5 +1101,6 @@ export function useThreadComposerState() {
     onUpdateModelSelection,
     onUpdateRuntimeMode,
     onUpdateInteractionMode,
+    onUpdateComposerMode,
   };
 }

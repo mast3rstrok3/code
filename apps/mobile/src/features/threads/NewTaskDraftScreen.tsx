@@ -125,6 +125,7 @@ import {
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { enqueueThreadOutboxMessage } from "../../state/thread-outbox";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
+import { ComposerModeControl } from "./ComposerModeControl";
 import { useNewTaskFlow } from "./new-task-flow-provider";
 import {
   nextEnvironmentId,
@@ -490,7 +491,9 @@ export function NewTaskDraftScreen(props: {
     offersUsageLimits: offersUsageLimits,
     enabled: isComposerFocused && !isComposerInteractionLocked,
     onChangeDraftMessage: flow.setPrompt,
-    onUpdateInteractionMode: flow.planModeEnabled ? flow.setInteractionMode : undefined,
+    onUpdateInteractionMode: flow.planModeEnabled
+      ? (mode) => flow.setComposerMode({ kind: mode === "plan" ? "plan" : "build" })
+      : undefined,
   });
   const voiceInput = useVoiceInputController({
     ownerKey: flow.draftKey,
@@ -1748,7 +1751,17 @@ export function NewTaskDraftScreen(props: {
                         onPress={settingsSheetPresentation.open}
                       />
                     </View>
-                    {flow.planModeEnabled ? (
+                    {flow.workflowAvailable ? (
+                      <ComposerModeControl
+                        interactionMode={flow.interactionMode}
+                        workflowPreset={flow.workflowPreset}
+                        lastWorkflowPreset={flow.lastWorkflowPreset}
+                        workflowAvailable
+                        planAvailable={flow.planModeEnabled}
+                        disabled={isComposerInteractionLocked}
+                        onSelect={flow.setComposerMode}
+                      />
+                    ) : flow.planModeEnabled ? (
                       <ComposerInlineControl
                         accessibilityHint={`Switches to ${flow.interactionMode === "plan" ? "Build" : "Plan"} mode`}
                         accessibilityLabel={`Interaction mode: ${flow.interactionMode === "plan" ? "Plan" : "Build"}`}

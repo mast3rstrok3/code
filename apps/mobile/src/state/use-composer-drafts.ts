@@ -12,6 +12,10 @@ import {
   ProviderInteractionMode as ProviderInteractionModeSchema,
   ProviderOptionSelection as ProviderOptionSelectionSchema,
   RuntimeMode as RuntimeModeSchema,
+  ImplementationWorkflowSettings as ImplementationWorkflowSettingsSchema,
+  WorkflowPreset as WorkflowPresetSchema,
+  type ImplementationWorkflowSettings,
+  type WorkflowPreset,
   type EnvironmentId,
   type ModelSelection,
   type ProjectId,
@@ -339,8 +343,19 @@ export interface ComposerDraft {
   readonly modelSelection?: ModelSelection;
   readonly runtimeMode?: RuntimeMode;
   readonly interactionMode?: ProviderInteractionMode;
+  readonly workflow?: ComposerDraftWorkflow;
   readonly workspaceSelection?: ComposerDraftWorkspaceSelection;
   readonly project?: ComposerDraftProject;
+}
+
+/**
+ * The workflow the next turn starts. Absent means the thread's own preset
+ * applies; a null `preset` means the user chose Build or Plan instead.
+ */
+export interface ComposerDraftWorkflow {
+  readonly preset: WorkflowPreset | null;
+  readonly lastPreset: WorkflowPreset | null;
+  readonly implementationSettings: ImplementationWorkflowSettings | null;
 }
 
 export interface ComposerDraftProject {
@@ -366,8 +381,19 @@ export interface ComposerDraftWorkspaceSelection {
 
 export type ComposerDraftSettingsUpdate = Pick<
   ComposerDraft,
-  "modelSelection" | "runtimeMode" | "interactionMode" | "workspaceSelection" | "project"
+  | "modelSelection"
+  | "runtimeMode"
+  | "interactionMode"
+  | "workflow"
+  | "workspaceSelection"
+  | "project"
 >;
+
+const ComposerDraftWorkflowSchema = Schema.Struct({
+  preset: Schema.NullOr(WorkflowPresetSchema),
+  lastPreset: Schema.NullOr(WorkflowPresetSchema),
+  implementationSettings: Schema.NullOr(ImplementationWorkflowSettingsSchema),
+});
 
 const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
   mode: Schema.Literals(["local", "worktree"]),
@@ -398,6 +424,7 @@ const ComposerDraftSchema = Schema.Struct({
   modelSelection: Schema.optional(ModelSelectionSchema),
   runtimeMode: Schema.optional(RuntimeModeSchema),
   interactionMode: Schema.optional(ProviderInteractionModeSchema),
+  workflow: Schema.optional(ComposerDraftWorkflowSchema),
   workspaceSelection: Schema.optional(ComposerDraftWorkspaceSelectionSchema),
   project: Schema.optional(ComposerDraftProjectSchema),
 });
@@ -567,6 +594,7 @@ function isEmptyDraft(draft: ComposerDraft): boolean {
     draft.modelSelection === undefined &&
     draft.runtimeMode === undefined &&
     draft.interactionMode === undefined &&
+    draft.workflow === undefined &&
     draft.workspaceSelection === undefined
   );
 }
@@ -633,6 +661,7 @@ export function decodePersistedComposerState(value: unknown): {
               draft.attachments.length === 0 &&
               draft.runtimeMode === undefined &&
               draft.interactionMode === undefined &&
+              draft.workflow === undefined &&
               draft.workspaceSelection === undefined
               ? { ...draft, modelSelection: undefined }
               : draft,
@@ -1134,12 +1163,14 @@ export async function removeDeliveredCloudQueuedMessage(
         archived.modelSelection,
         archived.runtimeMode,
         archived.interactionMode,
+        archived.workflow,
         archived.creation,
       ]) !==
       JSON.stringify([
         message.modelSelection,
         message.runtimeMode,
         message.interactionMode,
+        message.workflow,
         message.creation,
       ])
     )
@@ -1742,6 +1773,7 @@ export function sameComposerDraftState(a: ComposerDraft, b: ComposerDraft): bool
     a.modelSelection === b.modelSelection &&
     a.runtimeMode === b.runtimeMode &&
     a.interactionMode === b.interactionMode &&
+    a.workflow === b.workflow &&
     a.workspaceSelection === b.workspaceSelection
   );
 }
@@ -1773,7 +1805,12 @@ export function undoComposerDraftMergeState(
       .map((attachment) => attachment.id),
   );
   const undoSetting = <
-    K extends "modelSelection" | "runtimeMode" | "interactionMode" | "workspaceSelection",
+    K extends
+      | "modelSelection"
+      | "runtimeMode"
+      | "interactionMode"
+      | "workflow"
+      | "workspaceSelection",
   >(
     key: K,
   ): ComposerDraft[K] => (existing[key] === merged[key] ? snapshot[key] : existing[key]);
@@ -1793,6 +1830,7 @@ export function undoComposerDraftMergeState(
     modelSelection: undoSetting("modelSelection"),
     runtimeMode: undoSetting("runtimeMode"),
     interactionMode: undoSetting("interactionMode"),
+    workflow: undoSetting("workflow"),
     workspaceSelection: undoSetting("workspaceSelection"),
   };
   return withComposerDraft(current, draftKey, draft);
@@ -2027,7 +2065,7 @@ export const composerDraftUploadSourcesAtom = Atom.make((get): ComposerDraftUplo
 
 type ComposerDraftSettings = Pick<
   ComposerDraft,
-  "modelSelection" | "runtimeMode" | "interactionMode"
+  "modelSelection" | "runtimeMode" | "interactionMode" | "workflow"
 >;
 const EMPTY_DRAFT_SETTINGS: ComposerDraftSettings = {};
 // Text edits copy the other fields by reference, so this stays equal while typing.
@@ -2038,13 +2076,15 @@ const composerDraftSettingsAtom = Atom.family((draftKey: string) =>
       modelSelection: draft.modelSelection,
       runtimeMode: draft.runtimeMode,
       interactionMode: draft.interactionMode,
+      workflow: draft.workflow,
     };
   }).pipe(
     Atom.withEquality(
       (a: ComposerDraftSettings, b: ComposerDraftSettings) =>
         a.modelSelection === b.modelSelection &&
         a.runtimeMode === b.runtimeMode &&
-        a.interactionMode === b.interactionMode,
+        a.interactionMode === b.interactionMode &&
+        a.workflow === b.workflow,
     ),
   ),
 );
