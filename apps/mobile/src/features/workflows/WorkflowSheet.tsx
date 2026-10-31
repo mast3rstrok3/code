@@ -51,7 +51,6 @@ export function WorkflowSheet({ route }: StaticScreenProps<WorkflowSheetTarget>)
       <WorkflowDocument markdown={document.markdown} onBack={() => setDocument(null)} />
     ) : (
       <WorkflowSheetContent
-        target={target}
         run={run}
         commands={commands}
         onOpenDocument={setDocument}
@@ -84,7 +83,6 @@ export function WorkflowSheet({ route }: StaticScreenProps<WorkflowSheetTarget>)
 }
 
 function WorkflowSheetContent(props: {
-  readonly target: WorkflowSheetTarget;
   readonly run: WorkflowRun;
   readonly commands: WorkflowCommands;
   readonly onOpenThread: (threadId: ThreadId) => void;
@@ -214,8 +212,8 @@ function WorkflowSheetContent(props: {
           onSubmit={(requestId, answers) =>
             commands.send({
               type: "thread.user-input.respond",
+              // The questions come from the root's activities, so the answer goes there too.
               ...commands.base(),
-              threadId: props.target.threadId,
               requestId,
               answers,
             })
