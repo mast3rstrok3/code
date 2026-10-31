@@ -19,6 +19,29 @@ export interface AppReviewWorkflowLaunchRequest {
   readonly reviewOnly: boolean;
 }
 
+const DOM_REPLAY_MIME_TYPE = "application/x-rrweb+jsonl";
+
+/** An rrweb DOM recording, which only a DOM replayer can play. */
+export function isDomReplayRecording(mimeType: string | null | undefined): boolean {
+  return mimeType === DOM_REPLAY_MIME_TYPE;
+}
+
+/**
+ * The exchange a launch hands the reviewer as context: the newest user message
+ * and everything after it.
+ */
+export function appReviewSupportingContext(
+  messages: ReadonlyArray<{ readonly role: string; readonly text: string }>,
+): string | null {
+  let start = messages.length - 1;
+  while (start >= 0 && messages[start]?.role !== "user") start -= 1;
+  const context = messages
+    .slice(Math.max(0, start))
+    .map((message) => `${message.role}: ${message.text}`)
+    .join("\n\n");
+  return context.length > 0 ? context : null;
+}
+
 /** The URL a launch pins, or null when it should resolve the worktree's App Stack. */
 export function normalizeAppReviewPreviewTarget(value: string): string | null {
   if (value.trim().length === 0) return null;
@@ -292,6 +315,7 @@ export const APP_REVIEW_CYCLE_STEP_STATUS_LABELS: Record<AppReviewCycleStepStatu
 
 /** One step of a cycle as the panel lists it, with the thread its action opens. */
 export interface AppReviewCycleStep {
+  readonly phase: AppReviewWorkflowPhase;
   readonly number: number;
   readonly title: string;
   readonly description: string;
@@ -311,6 +335,7 @@ export function appReviewCycleSteps(cycle: AppReviewWorkflowCycle): readonly App
   const repairTicketCount = cycle.repairTickets?.length ?? 0;
   const steps: AppReviewCycleStep[] = [
     {
+      phase: "e2e",
       number: 1,
       title: "End-to-end test",
       description: "Run the configured E2E suite and publish its checks and replay links.",
@@ -321,6 +346,7 @@ export function appReviewCycleSteps(cycle: AppReviewWorkflowCycle): readonly App
   ];
   if (!e2eOnly) {
     steps.push({
+      phase: "review",
       number: 2,
       title: "Human-style UI review",
       description: "Use the app UI, test the acceptance brief, and save evidence.",
@@ -331,6 +357,7 @@ export function appReviewCycleSteps(cycle: AppReviewWorkflowCycle): readonly App
   }
   steps.push(
     {
+      phase: "planning",
       number: e2eOnly ? 2 : 3,
       title: "Gap analysis & repair tickets",
       description: "Turn actionable findings into repair tickets in a separate planning thread.",
@@ -344,6 +371,7 @@ export function appReviewCycleSteps(cycle: AppReviewWorkflowCycle): readonly App
         (e2eOnly ? (cycle.e2eThreadId ?? cycle.reviewerThreadId) : cycle.reviewerThreadId),
     },
     {
+      phase: "fixing",
       number: e2eOnly ? 3 : 4,
       title: "Implement the repair tickets",
       description: "Use the Implement skill in a fresh thread and validate every child ticket.",

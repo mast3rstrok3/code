@@ -74,6 +74,9 @@ import { ThreadAgentsSheet } from "./features/threads/ThreadAgentsSheet";
 import { WorkflowRunSettingsSheet } from "./features/workflows/WorkflowRunSettingsSheet";
 import { WorkflowSheet } from "./features/workflows/WorkflowSheet";
 import { ThreadBackgroundWorkSheet } from "./features/threads/ThreadBackgroundWorkSheet";
+import { AppReviewDocumentScreen } from "./features/app-review/AppReviewDocumentScreen";
+import { AppReviewLaunchSheet } from "./features/app-review/AppReviewLaunchSheet";
+import { AppReviewSheet } from "./features/app-review/AppReviewSheet";
 import { AppStackListSheet } from "./features/app-stacks/AppStackListSheet";
 import { AppStackLogsScreen } from "./features/app-stacks/AppStackLogsScreen";
 import { AppStackSheet } from "./features/app-stacks/AppStackSheet";
@@ -590,6 +593,9 @@ const WORKSPACE_OVERLAY_ROUTES = new Set([
   "SettingsLegal",
   "SettingsSheet",
   "ThreadAgents",
+  "ThreadAppReview",
+  "ThreadAppReviewDocument",
+  "ThreadAppReviewLaunch",
   "ThreadAppStack",
   "ThreadAppStackLogs",
   "ThreadAppStacks",
@@ -959,6 +965,39 @@ const RootStackConfig = createWorkspaceStackNavigator({
         ...FORM_SHEET_PRESENTATION_OPTIONS,
         sheetAllowedDetents: [0.55, 0.92],
         sheetGrabberVisible: true,
+      },
+    }),
+    ThreadAppReview: createNativeStackScreen({
+      screen: AppReviewSheet,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: [0.6, 0.95],
+        sheetGrabberVisible: true,
+      },
+    }),
+    ThreadAppReviewDocument: createNativeStackScreen({
+      screen: AppReviewDocumentScreen,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: [0.95],
+        sheetGrabberVisible: true,
+      },
+    }),
+    ThreadAppReviewLaunch: createNativeStackScreen({
+      screen: AppReviewLaunchSheet,
+      options: {
+        headerShown: false,
+        gestureEnabled: true,
+        // The brief needs the keyboard, which an Android formSheet cannot host.
+        ...(Platform.OS === "android"
+          ? { presentation: "card" as const }
+          : {
+              ...FORM_SHEET_PRESENTATION_OPTIONS,
+              sheetAllowedDetents: [0.92],
+              sheetGrabberVisible: true,
+            }),
       },
     }),
     ThreadAppStack: createNativeStackScreen({

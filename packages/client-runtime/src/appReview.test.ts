@@ -21,6 +21,7 @@ import {
   appReviewRunReplayCount,
   appReviewRunStatusLabel,
   appReviewRunTicketLabel,
+  appReviewSupportingContext,
   appReviewTargetLabel,
   appReviewWorkflowLaunchCommand,
   isValidAppReviewWorkflowLaunch,
@@ -494,14 +495,31 @@ describe("appReviewWorkflowLaunchCommand", () => {
   });
 });
 
+describe("appReviewSupportingContext", () => {
+  it("hands over the newest user message and the replies after it", () => {
+    expect(
+      appReviewSupportingContext([
+        { role: "user", text: "Old ask" },
+        { role: "assistant", text: "Old answer" },
+        { role: "user", text: "Fix login" },
+        { role: "assistant", text: "Fixed" },
+      ]),
+    ).toBe("user: Fix login\n\nassistant: Fixed");
+  });
+
+  it("has nothing to hand over for an empty thread", () => {
+    expect(appReviewSupportingContext([])).toBeNull();
+  });
+});
+
 describe("appReviewCycleSteps", () => {
   it("lists all four steps for a browser cycle", () => {
     const cycle = makeAppReviewWorkflowRun().cycles[0]!;
-    expect(appReviewCycleSteps(cycle).map((step) => [step.number, step.title])).toEqual([
-      [1, "End-to-end test"],
-      [2, "Human-style UI review"],
-      [3, "Gap analysis & repair tickets"],
-      [4, "Implement the repair tickets"],
+    expect(appReviewCycleSteps(cycle).map((step) => [step.number, step.phase])).toEqual([
+      [1, "e2e"],
+      [2, "review"],
+      [3, "planning"],
+      [4, "fixing"],
     ]);
   });
 
