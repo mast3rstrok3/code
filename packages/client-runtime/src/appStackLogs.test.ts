@@ -19,7 +19,7 @@ import {
   stackLogReadLimitLabel,
   stackLogTailSelectionLabel,
   stackLogTailSelectionToReadLimit,
-} from "./AppStackLogsPanel.logic";
+} from "./appStackLogs.ts";
 
 const backendEntry: AppStackPodLogEntry = {
   podName: "backend-abc",

@@ -27,7 +27,7 @@ import {
   primaryPreviewForStack,
   reconcileAppStackIds,
   shouldPollAppStacks,
-} from "./AppStackPanel.logic";
+} from "./appStackPanel.ts";
 
 const makeStack = (input: Partial<AppStack> = {}): AppStack => ({
   id: "hero-dev",

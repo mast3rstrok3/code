@@ -439,6 +439,14 @@
       "types": "./src/pullRequestQuery.ts",
       "default": "./src/pullRequestQuery.ts"
     },
+    "./app-stack-panel": {
+      "types": "./src/appStackPanel.ts",
+      "default": "./src/appStackPanel.ts"
+    },
+    "./app-stack-logs": {
+      "types": "./src/appStackLogs.ts",
+      "default": "./src/appStackLogs.ts"
+    },
     "./state/native-verification": {
       "types": "./src/state/nativeVerification.ts",
       "default": "./src/state/nativeVerification.ts"
