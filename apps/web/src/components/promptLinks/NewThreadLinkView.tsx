@@ -25,7 +25,7 @@ import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useClientSettings, usePrimarySettings } from "~/hooks/useSettings";
 import { useScratchProject } from "~/hooks/useScratchProject";
 import { newProjectId } from "~/lib/utils";
-import { resolveDefaultThreadOwnerUserId } from "~/lib/workspaceUsers";
+import { resolveDefaultThreadOwnerUserId } from "@t3tools/shared/workspaceUsers";
 import { useProjects, useThreadShells, waitForProject } from "~/state/entities";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";

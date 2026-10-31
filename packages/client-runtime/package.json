@@ -439,6 +439,14 @@
       "types": "./src/pullRequestQuery.ts",
       "default": "./src/pullRequestQuery.ts"
     },
+    "./app-stack-panel": {
+      "types": "./src/appStackPanel.ts",
+      "default": "./src/appStackPanel.ts"
+    },
+    "./app-stack-logs": {
+      "types": "./src/appStackLogs.ts",
+      "default": "./src/appStackLogs.ts"
+    },
     "./state/native-verification": {
       "types": "./src/state/nativeVerification.ts",
       "default": "./src/state/nativeVerification.ts"
@@ -454,6 +462,30 @@
     "./model-traits": {
       "types": "./src/modelTraits.ts",
       "default": "./src/modelTraits.ts"
+    },
+    "./workflow-model": {
+      "types": "./src/workflowModel.ts",
+      "default": "./src/workflowModel.ts"
+    },
+    "./workflow-panel": {
+      "types": "./src/workflowPanel.ts",
+      "default": "./src/workflowPanel.ts"
+    },
+    "./workflow-composer-mode": {
+      "types": "./src/workflowComposerMode.ts",
+      "default": "./src/workflowComposerMode.ts"
+    },
+    "./workflow-step-models": {
+      "types": "./src/workflowStepModels.ts",
+      "default": "./src/workflowStepModels.ts"
+    },
+    "./workflow-model-quick-actions": {
+      "types": "./src/workflowModelQuickActions.ts",
+      "default": "./src/workflowModelQuickActions.ts"
+    },
+    "./app-review": {
+      "types": "./src/appReview.ts",
+      "default": "./src/appReview.ts"
     }
   },
   "scripts": {

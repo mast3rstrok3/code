@@ -1,6 +1,5 @@
 import {
   CommandId,
-  DEFAULT_WORKSPACE_USER_ID,
   MessageId,
   ThreadId,
   type ChatAttachment,
@@ -9,17 +8,21 @@ import {
   type ProjectId,
   type ProviderInteractionMode,
   type RuntimeMode,
+  type WorkspaceUserId,
 } from "@t3tools/contracts";
 import {
   deriveThreadTitleSeed,
   threadTitleTextFromPrompt,
 } from "@t3tools/client-runtime/operations";
 
+import type { ComposerWorkflowSend } from "../state/composer-workflow";
 import type { UploadedMobileAttachment } from "./attachmentUpload";
 
 export interface ProjectThreadStartTurnSpec {
   readonly projectId: ProjectId;
   readonly projectCwd: string;
+  /** Runs use this user's git identity and GitHub token. */
+  readonly ownerUserId: WorkspaceUserId;
   readonly threadId: string;
   readonly commandId: string;
   readonly messageId: string;
@@ -31,6 +34,7 @@ export interface ProjectThreadStartTurnSpec {
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
+  readonly workflow?: ComposerWorkflowSend | undefined;
   readonly workspaceMode: "local" | "worktree";
   readonly branch: string | null;
   readonly worktreePath: string | null;
@@ -59,10 +63,11 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
     titleSeed: title,
     runtimeMode: spec.runtimeMode,
     interactionMode: spec.interactionMode,
+    ...spec.workflow,
     bootstrap: {
       createThread: {
         projectId: spec.projectId,
-        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        ownerUserId: spec.ownerUserId,
         title,
         modelSelection: spec.modelSelection,
         runtimeMode: spec.runtimeMode,

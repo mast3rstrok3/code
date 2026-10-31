@@ -149,6 +149,7 @@ export const make = Effect.gen(function* () {
       stepWorkflowPromptId: GRILL_PROMPT_ID,
       definition: undefined,
       stepModels: root.workflowStepModels,
+      workflow: "engineering",
       parentModelSelection: root.modelSelection,
       settings: settings ?? undefined,
     });

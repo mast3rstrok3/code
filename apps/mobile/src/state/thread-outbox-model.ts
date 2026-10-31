@@ -7,6 +7,7 @@ import type { EnvironmentShellStatus } from "@t3tools/client-runtime/state/shell
 import {
   CommandId,
   EnvironmentId,
+  ImplementationWorkflowSettings,
   IsoDateTime,
   MessageId,
   ModelSelection,
@@ -15,11 +16,14 @@ import {
   ProviderInteractionMode,
   RuntimeMode,
   ThreadId,
+  WorkflowPreset,
   type ModelSelection as ModelSelectionType,
   type ProjectId as ProjectIdType,
   type ProviderInteractionMode as ProviderInteractionModeType,
   type RuntimeMode as RuntimeModeType,
   type ServerProvider,
+  WorkspaceUserId,
+  type WorkspaceUserId as WorkspaceUserIdType,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
@@ -27,6 +31,7 @@ import { DraftComposerAttachmentSchema } from "../lib/composer-image-schema";
 import type { ComposerDispatchMode } from "@t3tools/client-runtime/state/composer-dispatch";
 import type { DraftComposerAttachment } from "../lib/composerImages";
 import { scopedThreadKey } from "../lib/scopedEntities";
+import type { ComposerWorkflowSend } from "./composer-workflow";
 import { resolveProviderInteractionMode } from "./legacy-plan-mode";
 
 // Keep current writes until a compatible native baseline includes the v4 reader.
@@ -35,6 +40,7 @@ const THREAD_OUTBOX_MAX_RETRY_DELAY_MS = 16_000;
 
 const QueuedThreadCreationSchema = Schema.Struct({
   projectId: ProjectId,
+  ownerUserId: Schema.optional(WorkspaceUserId),
   projectTitle: Schema.optional(Schema.String),
   projectCwd: Schema.optional(Schema.String),
   workspaceMode: Schema.Literals(["local", "worktree"]),
@@ -42,6 +48,14 @@ const QueuedThreadCreationSchema = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
   startFromOrigin: Schema.optional(Schema.Boolean),
   pullRequestReference: Schema.optional(Schema.String),
+});
+
+// Older readers ignore the key, so adding it needs no schema version bump.
+const QueuedThreadWorkflowSchema = Schema.Struct({
+  workflowPreset: Schema.NullOr(WorkflowPreset),
+  workflowPromptId: Schema.NullOr(Schema.String),
+  workflowImplementationSettings: ImplementationWorkflowSettings,
+  clearWorkflowMode: Schema.Boolean,
 });
 
 export const QueuedThreadMessageSchema = Schema.Struct({
@@ -57,6 +71,7 @@ export const QueuedThreadMessageSchema = Schema.Struct({
   dispatchMode: Schema.optional(Schema.Literals(["auto", "queue", "steer", "restart"])),
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  workflow: Schema.optional(QueuedThreadWorkflowSchema),
   creation: Schema.optional(QueuedThreadCreationSchema),
   createdAt: IsoDateTime,
 });
@@ -66,6 +81,8 @@ const encodeStoredQueuedThreadMessage = Schema.encodeUnknownSync(QueuedThreadMes
 
 export interface QueuedThreadCreation {
   readonly projectId: ProjectIdType;
+  /** Captured when queued: switching users later must not reassign a waiting task. */
+  readonly ownerUserId?: WorkspaceUserIdType;
   readonly projectTitle?: string;
   readonly projectCwd?: string;
   readonly workspaceMode: "local" | "worktree";
@@ -86,6 +103,8 @@ export interface QueuedThreadMessage {
   readonly modelSelection?: ModelSelectionType;
   readonly runtimeMode?: RuntimeModeType;
   readonly interactionMode?: ProviderInteractionModeType;
+  /** Captured at enqueue time like the other settings; absent for a plain turn. */
+  readonly workflow?: ComposerWorkflowSend;
   /**
    * Captured at enqueue time because the drain can fire long after the tap.
    */

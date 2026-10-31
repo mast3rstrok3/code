@@ -84,7 +84,7 @@ import {
   shouldPollAppStacks,
   type AutoCreateNotice,
   type PreviewCandidate,
-} from "./AppStackPanel.logic";
+} from "@t3tools/client-runtime/app-stack-panel";
 import {
   AppStackWorkflowConflictWarning,
   AppStackWorkflowOwnershipBadge,
@@ -94,7 +94,7 @@ import {
   isSameOrChildStackPath,
   normalizeStackWorktreePath as normalizeWorktreePath,
   resolveCurrentStackPath,
-} from "./AppStackLogsPanel.logic";
+} from "@t3tools/client-runtime/app-stack-logs";
 
 const KUBERNETES_NAMESPACE_MAX_LENGTH = 63;
 

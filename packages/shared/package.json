@@ -157,6 +157,12 @@
       "import": "./src/workspaceUsers.ts",
       "default": "./src/workspaceUsers.ts"
     },
+    "./workspaceUserSettings": {
+      "types": "./src/workspaceUserSettings.ts",
+      "browser": "./src/workspaceUserSettings.ts",
+      "import": "./src/workspaceUserSettings.ts",
+      "default": "./src/workspaceUserSettings.ts"
+    },
     "./backgroundActivitySettings": {
       "types": "./src/backgroundActivitySettings.ts",
       "import": "./src/backgroundActivitySettings.ts"

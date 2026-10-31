@@ -108,7 +108,10 @@ import {
 } from "./promptLinks/copyPromptLink";
 import { useClientSettings, usePrimarySettings } from "../hooks/useSettings";
 import { useStableCallback } from "../hooks/useStableCallback";
-import { isProjectGroupOwnedBy, resolveDefaultThreadOwnerUserId } from "../lib/workspaceUsers";
+import {
+  isProjectGroupOwnedBy,
+  resolveDefaultThreadOwnerUserId,
+} from "@t3tools/shared/workspaceUsers";
 import { useTheme } from "../hooks/useTheme";
 import { useCustomThemes } from "../hooks/useCustomThemes";
 import { useEnvironmentThemeDefinitions } from "../hooks/useEnvironmentTheme";

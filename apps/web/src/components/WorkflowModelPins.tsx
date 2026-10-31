@@ -2,6 +2,11 @@ import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
 import type { WorkflowPresetSubStep } from "@t3tools/shared/workflowPresets";
 import { createModelSelection } from "@t3tools/shared/model";
+import {
+  workflowModelPinKey,
+  type SetWorkflowStepModel,
+  type WorkflowModelPinKey,
+} from "@t3tools/client-runtime/workflow-step-models";
 
 import { cn } from "~/lib/utils";
 import { getProviderModelPickerChoices } from "../modelSelection";
@@ -9,25 +14,6 @@ import { primaryServerProvidersAtom, serverEnvironment } from "../state/server";
 import { useEnvironmentSettings } from "../hooks/useSettings";
 import { ProviderModelPicker } from "./chat/ProviderModelPicker";
 import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
-
-/**
- * A pin is identified by the step it belongs to and, for a sub-step, the agent
- * within it. `stepWorkflowPromptId` is undefined for a step's own pin.
- */
-export interface WorkflowModelPinKey {
-  readonly workflowPromptId: string;
-  readonly stepWorkflowPromptId?: string | undefined;
-}
-
-export type SetWorkflowStepModel = (
-  key: WorkflowModelPinKey,
-  selection: ModelSelection | null,
-) => void;
-
-export function workflowModelPinKey(key: WorkflowModelPinKey): string {
-  // NUL separates the two ids so no prompt id can forge another pair's key.
-  return `${key.stepWorkflowPromptId ?? ""}\u0000${key.workflowPromptId}`;
-}
 
 /**
  * Providers and models the workflow's own environment can offer.

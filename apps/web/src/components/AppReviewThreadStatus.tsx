@@ -5,7 +5,7 @@ import {
   appReviewRunFailureSummary,
   appReviewRunStatusLabel,
   selectLatestAppReviewControllerRun,
-} from "./AppReviewPanel.logic";
+} from "@t3tools/client-runtime/app-review";
 import { Button } from "./ui/button";
 import { useAppReviewWorkflowRuns } from "~/state/workflows";
 import { useRightPanelStore } from "~/rightPanelStore";

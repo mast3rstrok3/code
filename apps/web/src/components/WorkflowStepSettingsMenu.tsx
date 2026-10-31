@@ -17,12 +17,11 @@ import {
   WorkflowStepReviewPartPins,
   type SetWorkflowStepReviewParts,
 } from "./WorkflowStepReviewParts";
+import { useWorkflowModelChoices, WorkflowStepModelPins } from "./WorkflowModelPins";
 import {
-  useWorkflowModelChoices,
-  WorkflowStepModelPins,
   type SetWorkflowStepModel,
   type WorkflowModelPinKey,
-} from "./WorkflowModelPins";
+} from "@t3tools/client-runtime/workflow-step-models";
 
 /**
  * The step's model choices, split out so the provider and settings

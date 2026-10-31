@@ -58,9 +58,11 @@ import {
   type RuntimeMode,
   type ScheduledTask,
   type ScheduledTaskUpsertInput,
+  type ScheduledTaskWorkflow,
   type ServerProvider,
   ThreadId,
   isOrchestrationV2WorkActive,
+  WORKFLOW_AUTOMATION_RUNTIME_MODE,
 } from "@t3tools/contracts";
 import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import {
@@ -156,6 +158,7 @@ export interface OrchestratorMcpServiceShape {
   readonly scheduleTask: (
     scope: McpInvocationScope,
     input: OrchestratorMcpScheduleTaskInput,
+    defaults?: ScheduledTaskDefaults,
   ) => Effect.Effect<OrchestratorMcpScheduleTaskResult, OrchestratorMcpFailure>;
   readonly listScheduledTasks: (
     scope: McpInvocationScope,
@@ -164,6 +167,7 @@ export interface OrchestratorMcpServiceShape {
   readonly updateScheduledTask: (
     scope: McpInvocationScope,
     input: OrchestratorMcpUpdateScheduledTaskInput,
+    defaults?: ScheduledTaskDefaults,
   ) => Effect.Effect<OrchestratorMcpScheduleTaskResult, OrchestratorMcpFailure>;
   readonly deleteScheduledTask: (
     scope: McpInvocationScope,
@@ -257,13 +261,41 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function scheduledTaskWorkspaceStrategy(
-  boundToThread: boolean,
-): ScheduledTask["workspaceStrategy"] {
-  return boundToThread
-    ? { type: "root" }
-    : { type: "worktree", baseRef: "main", startFromOrigin: true };
+/** What the tool layer resolves for a scheduled task before the service saves it. */
+export interface ScheduledTaskDefaults {
+  /**
+   * A new worktree from the project's development branch, or null when the
+   * project names none. Unbound runs start there.
+   */
+  readonly developmentWorktree: (
+    projectId: ProjectId,
+  ) => Effect.Effect<ScheduledTask["workspaceStrategy"] | null>;
+  /** The project's default model for new threads (project, then environment), or null. */
+  readonly defaultModelSelection: (projectId: ProjectId) => ModelSelection | null;
+  /** The model a new workflow starts with when nobody names one, or null. */
+  readonly workflowModelSelection: (
+    projectId: ProjectId,
+    workflow: ScheduledTaskWorkflow,
+  ) => ModelSelection | null;
 }
+
+/**
+ * Workspace strategy for a scheduled task created/updated over MCP: bound runs
+ * post into the existing thread (the strategy is unused, keep root); unbound
+ * runs launch a fresh worktree per run, from the project's development branch.
+ */
+const scheduledTaskWorkspaceStrategy = (
+  boundToThread: boolean,
+  projectId: ProjectId,
+  defaults: ScheduledTaskDefaults | undefined,
+): Effect.Effect<ScheduledTask["workspaceStrategy"]> =>
+  boundToThread
+    ? Effect.succeed({ type: "root" })
+    : (defaults?.developmentWorktree(projectId) ?? Effect.succeed(null)).pipe(
+        Effect.map(
+          (strategy) => strategy ?? { type: "worktree", baseRef: "main", startFromOrigin: true },
+        ),
+      );
 
 function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): OrchestratorMcpScheduledTask {
   return {
@@ -273,6 +305,10 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
     enabled: task.enabled,
     projectId: task.projectId,
     boundThreadId: task.threadId,
+    workflow: task.workflow ?? null,
+    ...(task.workflow == null
+      ? {}
+      : { useWorkflowDefaultModel: task.useWorkflowDefaultModel === true }),
     schedule: task.schedule,
     nextRunAt: task.nextRunAt,
     lastRunStatus: task.lastRunStatus,
@@ -1720,61 +1756,89 @@ const make = Effect.gen(function* () {
   });
 
   return OrchestratorMcpService.of({
-    scheduleTask: Effect.fn("OrchestratorMcpService.scheduleTask")(function* (scope, input) {
-      const { parent, limits } = yield* loadCaller(scope);
-      const projectId = yield* resolveProjectTarget(parent, input.projectId);
-      yield* assertLiveCallerForOtherProject(scope, parent, projectId);
-      const project = yield* requireProject(projectId);
-      const bindToCurrentThread =
-        input.bindToCurrentThread ??
-        (parent !== undefined && parent.thread.projectId === projectId);
-      if (bindToCurrentThread && (parent === undefined || parent.thread.projectId !== projectId)) {
-        return yield* failure(
-          "invalid_request",
-          parent === undefined
-            ? "bindToCurrentThread needs an agent running inside a T3 thread."
-            : "bindToCurrentThread binds to this thread, which belongs to a different project.",
-        );
-      }
-      const modelSelection =
-        parent?.thread.modelSelection ?? (yield* projectDefaultModelSelection(project));
-      const derivedTitle = input.prompt.split("\n")[0]?.trim() ?? "";
-      const title =
-        input.title ?? (derivedTitle.length > 0 ? derivedTitle.slice(0, 80) : "Scheduled task");
-      const upsertInput: ScheduledTaskUpsertInput = {
-        title,
-        prompt: input.prompt,
-        enabled: input.enabled ?? true,
-        schedule: input.schedule,
-        projectId,
-        threadId: bindToCurrentThread && parent !== undefined ? parent.thread.id : null,
-        workspaceStrategy: scheduledTaskWorkspaceStrategy(bindToCurrentThread),
-        modelSelection,
-        runtimeMode: limits.runtimeMode,
-        interactionMode: limits.interactionMode,
-        createdBy: "agent",
-        creationSource: "mcp",
-        // Scope the idempotency key by provider session so two callers
-        // reusing the same clientRequestId cannot collide on one task row.
-        ...(input.clientRequestId === undefined
-          ? {}
-          : {
-              commandId: stableCommandId({
-                scope,
-                requestKey: input.clientRequestId,
-                operation: "schedule-task",
-              }),
-            }),
-      };
-      const { task } = yield* scheduledTasks
-        .upsert(upsertInput)
-        .pipe(
-          Effect.mapError((error) =>
-            failure("orchestration_error", `Could not schedule task: ${error.message}`),
+    scheduleTask: Effect.fn("OrchestratorMcpService.scheduleTask")(
+      function* (scope, input, defaults) {
+        const { parent, limits } = yield* loadCaller(scope);
+        const projectId = yield* resolveProjectTarget(parent, input.projectId);
+        yield* assertLiveCallerForOtherProject(scope, parent, projectId);
+        const project = yield* requireProject(projectId);
+        const workflow = input.workflow ?? null;
+        if (workflow !== null) {
+          if (input.bindToCurrentThread === true) {
+            return yield* failure(
+              "invalid_request",
+              "A workflow task starts a fresh thread on every run; omit bindToCurrentThread.",
+            );
+          }
+          // Its runs start unattended in full access.
+          yield* resolveRuntimeMode(limits.runtimeMode, WORKFLOW_AUTOMATION_RUNTIME_MODE);
+        }
+        // Binding means "wake this thread", which only a thread caller in that project has.
+        const bindToCurrentThread =
+          input.bindToCurrentThread ??
+          (workflow === null && parent !== undefined && parent.thread.projectId === projectId);
+        if (
+          bindToCurrentThread &&
+          (parent === undefined || parent.thread.projectId !== projectId)
+        ) {
+          return yield* failure(
+            "invalid_request",
+            parent === undefined
+              ? "bindToCurrentThread needs an agent running inside a T3 thread."
+              : "bindToCurrentThread binds to this thread, which belongs to a different project.",
+          );
+        }
+        // An agent names no model, so a workflow task follows the workflow's
+        // default at each run; the stored model is the fallback.
+        const modelSelection =
+          (workflow === null ? null : defaults?.workflowModelSelection(projectId, workflow)) ??
+          parent?.thread.modelSelection ??
+          defaults?.defaultModelSelection(projectId) ??
+          (yield* projectDefaultModelSelection(project));
+        const derivedTitle = input.prompt.split("\n")[0]?.trim() ?? "";
+        const title =
+          input.title ?? (derivedTitle.length > 0 ? derivedTitle.slice(0, 80) : "Scheduled task");
+        const upsertInput: ScheduledTaskUpsertInput = {
+          title,
+          prompt: input.prompt,
+          enabled: input.enabled ?? true,
+          schedule: input.schedule,
+          projectId,
+          threadId: bindToCurrentThread && parent !== undefined ? parent.thread.id : null,
+          workspaceStrategy: yield* scheduledTaskWorkspaceStrategy(
+            bindToCurrentThread,
+            projectId,
+            defaults,
           ),
-        );
-      return yield* summarizeScheduledTask(scope, { parent, limits }, task);
-    }),
+          modelSelection,
+          runtimeMode: limits.runtimeMode,
+          interactionMode: limits.interactionMode,
+          workflow,
+          useWorkflowDefaultModel: workflow !== null,
+          createdBy: "agent",
+          creationSource: "mcp",
+          // Scope the idempotency key by provider session so two callers
+          // reusing the same clientRequestId cannot collide on one task row.
+          ...(input.clientRequestId === undefined
+            ? {}
+            : {
+                commandId: stableCommandId({
+                  scope,
+                  requestKey: input.clientRequestId,
+                  operation: "schedule-task",
+                }),
+              }),
+        };
+        const { task } = yield* scheduledTasks
+          .upsert(upsertInput)
+          .pipe(
+            Effect.mapError((error) =>
+              failure("orchestration_error", `Could not schedule task: ${error.message}`),
+            ),
+          );
+        return yield* summarizeScheduledTask(scope, { parent, limits }, task);
+      },
+    ),
     listScheduledTasks: Effect.fn("OrchestratorMcpService.listScheduledTasks")(
       function* (scope, input) {
         const { parent, limits } = yield* loadCaller(scope);
@@ -1795,12 +1859,26 @@ const make = Effect.gen(function* () {
       },
     ),
     updateScheduledTask: Effect.fn("OrchestratorMcpService.updateScheduledTask")(
-      function* (scope, input) {
+      function* (scope, input, defaults) {
         const { parent, limits } = yield* loadCaller(scope);
         const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
         yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
+        const workflow =
+          input.workflow === undefined ? (existing.workflow ?? null) : input.workflow;
+        if (workflow !== null) {
+          if (input.bindToCurrentThread === true) {
+            return yield* failure(
+              "invalid_request",
+              "A workflow task starts a fresh thread on every run; set workflow to null to bind it.",
+            );
+          }
+          yield* resolveRuntimeMode(limits.runtimeMode, WORKFLOW_AUTOMATION_RUNTIME_MODE);
+        }
+        // Choosing a workflow unbinds the task: each run starts its own thread.
+        const bindToCurrentThread =
+          workflow !== null && existing.threadId !== null ? false : input.bindToCurrentThread;
         if (
-          input.bindToCurrentThread === true &&
+          bindToCurrentThread === true &&
           (parent === undefined || parent.thread.projectId !== existing.projectId)
         ) {
           return yield* failure(
@@ -1811,18 +1889,22 @@ const make = Effect.gen(function* () {
           );
         }
         const threadId =
-          input.bindToCurrentThread === undefined
+          bindToCurrentThread === undefined
             ? existing.threadId
-            : input.bindToCurrentThread && parent !== undefined
+            : bindToCurrentThread && parent !== undefined
               ? parent.thread.id
               : null;
         // Rebinding changes where runs execute, so the workspace strategy must
         // follow: unbinding a root-strategy task would otherwise run loose
         // prompts in the shared project checkout.
         const workspaceStrategy =
-          input.bindToCurrentThread === undefined
+          bindToCurrentThread === undefined
             ? existing.workspaceStrategy
-            : scheduledTaskWorkspaceStrategy(input.bindToCurrentThread);
+            : yield* scheduledTaskWorkspaceStrategy(
+                bindToCurrentThread,
+                existing.projectId,
+                defaults,
+              );
         const upsertInput: ScheduledTaskUpsertInput = {
           id: existing.id,
           title: input.title ?? existing.title,
@@ -1835,6 +1917,11 @@ const make = Effect.gen(function* () {
           modelSelection: existing.modelSelection,
           runtimeMode: existing.runtimeMode,
           interactionMode: existing.interactionMode,
+          workflow,
+          // A task that becomes a workflow task follows the workflow's default model.
+          ...(workflow !== null && existing.workflow == null
+            ? { useWorkflowDefaultModel: true }
+            : {}),
           createdBy: existing.createdBy,
           creationSource: existing.creationSource,
         };

@@ -54,6 +54,13 @@ explicitly when needed. Starting reuses an existing stack or resumes a stopped o
 the namespace, while deleting removes it. Explicit stop, restart, and delete actions apply even
 when the stack is protected.
 
+On mobile, open **App Stack** from a thread's Git sheet. While the thread's stack is running,
+starting, or failing, a stack button also appears above the composer. The sheet shows the stack's
+status, services and preview links, and start, stop, restart, protect and delete controls, plus
+per-service pod logs and a list of every stack in the environment. Mobile always starts the dev
+variant in the worktree's default bundle; use web or desktop to pick bundle apps, leave services
+out, or start a prod stack.
+
 When a thread settles, T3 Code stops its unprotected dev and prod stacks to free resources.
 This includes automatic settlement after a pull request merges or closes. Stacks stay running
 while another active thread uses their worktree or workflow. A bundle stays running if any

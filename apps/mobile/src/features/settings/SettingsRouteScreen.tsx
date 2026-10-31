@@ -164,6 +164,12 @@ function SettingsIndexSections() {
 
       <SettingsSection title="Automations">
         <SettingsRow icon="clock" label="Scheduled tasks" target="SettingsScheduledTasks" />
+        <SettingsRow
+          icon="point.3.connected.trianglepath.dotted"
+          label="Workflows"
+          target="SettingsWorkflows"
+          disabled={noServerTargets}
+        />
       </SettingsSection>
 
       <SettingsSection title="Projects & threads">
@@ -182,6 +188,12 @@ function SettingsIndexSections() {
       </SettingsSection>
 
       <SettingsSection title="Server settings">
+        <SettingsRow
+          icon="person.2"
+          label="Users"
+          target="SettingsUsers"
+          disabled={noServerTargets}
+        />
         <SettingsRow
           icon="person.crop.circle"
           label="Provider accounts"

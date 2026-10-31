@@ -77,6 +77,11 @@ import { fileRoutePathSegments } from "../files/filePath";
 import { ComposerActionButton, ComposerToolbarRow } from "../../components/ComposerToolbar";
 import { ComposerModelControl } from "../../components/ComposerModelControl";
 import {
+  ComposerModeControl,
+  composerModeControlVisible,
+  type ComposerModeControlProps,
+} from "./ComposerModeControl";
+import {
   composerStripAttachments,
   type DraftComposerFileAttachment,
 } from "../../lib/composerImages";
@@ -184,6 +189,7 @@ export interface ThreadComposerProps {
   readonly onUpdateModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateRuntimeMode: (runtimeMode: RuntimeMode) => void;
   readonly onUpdateInteractionMode: (interactionMode: ProviderInteractionMode) => void;
+  readonly composerMode: ComposerModeControlProps | null;
   /** True while the draft is stacked above the controls rather than in the one-row capsule. */
   readonly onExpandedChange?: (expanded: boolean) => void;
   readonly onEditorFocusChange?: (focused: boolean) => void;
@@ -776,6 +782,17 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     </View>
   );
 
+  // The card always offers the mode; the one-row capsule only shows a mode that is not Build.
+  const composerMode = props.composerMode;
+  const modeControl =
+    composerMode !== null &&
+    composerModeControlVisible(composerMode) &&
+    (usesCard ||
+      composerMode.workflowPreset !== null ||
+      composerMode.interactionMode !== "default") ? (
+      <ComposerModeControl {...composerMode} disabled={isSubmissionLocked} iconOnly={!usesCard} />
+    ) : null;
+
   return (
     <Animated.View
       className="px-[12px]"
@@ -1064,6 +1081,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                 className="min-w-0 shrink flex-row items-center"
                 onLayout={(event) => measureRow("trailingWidth", event.nativeEvent.layout.width)}
               >
+                {modeControl}
                 {modelControl}
                 <ComposerDictationStartAction
                   state={voiceInput.state}
@@ -1148,7 +1166,10 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                       onPickMedia={props.onPickDraftMedia}
                       onPickFiles={props.onPickDraftFiles}
                     />
-                    {modelControl}
+                    <View className="min-w-0 shrink flex-row items-center justify-end">
+                      {modeControl}
+                      {modelControl}
+                    </View>
                   </View>
                 )}
                 <View className="shrink-0 flex-row items-center">

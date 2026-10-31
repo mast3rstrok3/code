@@ -71,7 +71,15 @@ import { GitConfirmSheet } from "./features/threads/git/GitConfirmSheet";
 import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
 import { ThreadPullRequestsSheet } from "./features/threads/ThreadPullRequestsSheet";
 import { ThreadAgentsSheet } from "./features/threads/ThreadAgentsSheet";
+import { WorkflowRunSettingsSheet } from "./features/workflows/WorkflowRunSettingsSheet";
+import { WorkflowSheet } from "./features/workflows/WorkflowSheet";
 import { ThreadBackgroundWorkSheet } from "./features/threads/ThreadBackgroundWorkSheet";
+import { AppReviewDocumentScreen } from "./features/app-review/AppReviewDocumentScreen";
+import { AppReviewLaunchSheet } from "./features/app-review/AppReviewLaunchSheet";
+import { AppReviewSheet } from "./features/app-review/AppReviewSheet";
+import { AppStackListSheet } from "./features/app-stacks/AppStackListSheet";
+import { AppStackLogsScreen } from "./features/app-stacks/AppStackLogsScreen";
+import { AppStackSheet } from "./features/app-stacks/AppStackSheet";
 import { ThreadQueueSheet } from "./features/threads/ThreadQueueControl";
 import { ThreadRouteScreen } from "./features/threads/ThreadRouteScreen";
 import { McpAppFullscreenScreen } from "./features/threads/McpAppFullscreenScreen";
@@ -133,6 +141,12 @@ import { SettingsAboutRouteScreen } from "./features/settings/SettingsAboutRoute
 import { SettingsNotificationsRouteScreen } from "./features/settings/SettingsNotificationsRouteScreen";
 import { SettingsRouteScreen } from "./features/settings/SettingsRouteScreen";
 import { SettingsThreadsRouteScreen } from "./features/settings/SettingsThreadsRouteScreen";
+import {
+  SettingsUserGithubTokenRouteScreen,
+  SettingsUserRouteScreen,
+  SettingsUsersRouteScreen,
+} from "./features/settings/SettingsUsersRouteScreen";
+import { SettingsWorkflowsRouteScreen } from "./features/settings/SettingsWorkflowsRouteScreen";
 import { SettingsEnvironmentFilterProvider } from "./features/settings/settings-environment-filter";
 import { ShowcaseCaptureCoordinator } from "./features/showcase/ShowcaseCaptureCoordinator";
 import {
@@ -254,6 +268,21 @@ const SettingsContentStack = createV5SheetStackNavigator({
       linking: "agent-behavior",
       options: { title: "Agent behavior" },
     }),
+    SettingsUsers: createNativeStackScreen({
+      screen: SettingsUsersRouteScreen,
+      linking: "users",
+      options: { title: "Users" },
+    }),
+    SettingsUser: createNativeStackScreen({
+      screen: SettingsUserRouteScreen,
+      linking: "users/:environmentId/:userId",
+      options: { title: "User" },
+    }),
+    // No path: a token form is entered from its user, never restored from a link.
+    SettingsUserGithubToken: createNativeStackScreen({
+      screen: SettingsUserGithubTokenRouteScreen,
+      options: { title: "GitHub token" },
+    }),
     SettingsProviderAccounts: createNativeStackScreen({
       screen: SettingsProviderAccountsRouteScreen,
       linking: "provider-accounts",
@@ -273,6 +302,11 @@ const SettingsContentStack = createV5SheetStackNavigator({
       screen: SettingsThreadsRouteScreen,
       linking: "thread-preferences",
       options: { title: "Thread behavior" },
+    }),
+    SettingsWorkflows: createNativeStackScreen({
+      screen: SettingsWorkflowsRouteScreen,
+      linking: "workflows",
+      options: { title: "Workflows" },
     }),
     SettingsAbout: createNativeStackScreen({
       screen: SettingsAboutRouteScreen,
@@ -559,7 +593,15 @@ const WORKSPACE_OVERLAY_ROUTES = new Set([
   "SettingsLegal",
   "SettingsSheet",
   "ThreadAgents",
+  "ThreadAppReview",
+  "ThreadAppReviewDocument",
+  "ThreadAppReviewLaunch",
+  "ThreadAppStack",
+  "ThreadAppStackLogs",
+  "ThreadAppStacks",
   "ThreadBackgroundWork",
+  "ThreadWorkflow",
+  "ThreadWorkflowSettings",
   "ThreadPullRequests",
   "ThreadQueue",
   "ThreadReviewComment",
@@ -889,6 +931,24 @@ const RootStackConfig = createWorkspaceStackNavigator({
         sheetGrabberVisible: true,
       },
     }),
+    ThreadWorkflow: createNativeStackScreen({
+      screen: WorkflowSheet,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: [0.6, 0.95],
+        sheetGrabberVisible: true,
+      },
+    }),
+    ThreadWorkflowSettings: createNativeStackScreen({
+      screen: WorkflowRunSettingsSheet,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: [0.7, 0.95],
+        sheetGrabberVisible: true,
+      },
+    }),
     GitOverview: createNativeStackScreen({
       screen: GitOverviewSheet,
       linking: `${THREAD_LINKING_PREFIX}/git`,
@@ -905,6 +965,75 @@ const RootStackConfig = createWorkspaceStackNavigator({
         ...FORM_SHEET_PRESENTATION_OPTIONS,
         sheetAllowedDetents: [0.55, 0.92],
         sheetGrabberVisible: true,
+      },
+    }),
+    ThreadAppReview: createNativeStackScreen({
+      screen: AppReviewSheet,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: [0.6, 0.95],
+        sheetGrabberVisible: true,
+      },
+    }),
+    ThreadAppReviewDocument: createNativeStackScreen({
+      screen: AppReviewDocumentScreen,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: [0.95],
+        sheetGrabberVisible: true,
+      },
+    }),
+    ThreadAppReviewLaunch: createNativeStackScreen({
+      screen: AppReviewLaunchSheet,
+      options: {
+        headerShown: false,
+        gestureEnabled: true,
+        // The brief needs the keyboard, which an Android formSheet cannot host.
+        ...(Platform.OS === "android"
+          ? { presentation: "card" as const }
+          : {
+              ...FORM_SHEET_PRESENTATION_OPTIONS,
+              sheetAllowedDetents: [0.92],
+              sheetGrabberVisible: true,
+            }),
+      },
+    }),
+    ThreadAppStack: createNativeStackScreen({
+      screen: AppStackSheet,
+      linking: `${THREAD_LINKING_PREFIX}/app-stack`,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: [0.55, 0.92],
+        sheetGrabberVisible: true,
+      },
+    }),
+    ThreadAppStacks: createNativeStackScreen({
+      screen: AppStackListSheet,
+      linking: `${THREAD_LINKING_PREFIX}/app-stacks`,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: [0.92],
+        sheetGrabberVisible: true,
+      },
+    }),
+    ThreadAppStackLogs: createNativeStackScreen({
+      screen: AppStackLogsScreen,
+      linking: `${THREAD_LINKING_PREFIX}/app-stack/logs/:stackId`,
+      options: {
+        headerShown: false,
+        gestureEnabled: true,
+        // The log filter needs the keyboard, which an Android formSheet cannot host.
+        ...(Platform.OS === "android"
+          ? { presentation: "card" as const }
+          : {
+              ...FORM_SHEET_PRESENTATION_OPTIONS,
+              sheetAllowedDetents: [0.92],
+              sheetGrabberVisible: true,
+            }),
       },
     }),
     GitCommit: createNativeStackScreen({

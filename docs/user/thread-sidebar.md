@@ -5,11 +5,13 @@ need a separate branch and working directory.
 
 ## Start a thread
 
-On web and desktop, add users and their GitHub tokens in **Settings > Users**. Then pick a user
-at the top of the sidebar's project filter (the folder button next to search). The sidebar then
+Add users and their GitHub tokens in **Settings > Users**. Then pick a user at the top of the
+sidebar's project filter (the folder button next to search). On mobile, pick one under **User** in
+the thread list filter, which appears once a server has more than one user. The list then
 shows only that user's projects and threads, and new threads and projects belong to them.
 **Everyone** shows all projects and threads and keeps the user you last picked for new work.
-The selection stays in that browser, so people on different devices can choose different users.
+The selection stays on that device, so people on different devices can choose different users.
+Mobile keeps a separate selection for each environment.
 
 Change a project's owner in **Settings > Projects**. The new thread picker offers only your
 projects, even while the sidebar shows everyone's.

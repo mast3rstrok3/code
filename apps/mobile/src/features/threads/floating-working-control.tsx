@@ -1,4 +1,5 @@
 import type { SubagentPillSegment } from "@t3tools/client-runtime/state/thread-subagents";
+import type { AppStackStatus } from "@t3tools/contracts";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import { GlassContainer, GlassView } from "expo-glass-effect";
 import { type ReactNode, useEffect, useRef, useState } from "react";
@@ -26,6 +27,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { ControlPill } from "../../components/ui/ControlPill";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
+import { AppStackPreviewButton } from "../app-stacks/app-stack-preview-button";
 import { BrowserPreviewButton } from "../browser/browser-preview-button";
 import { DevicePreviewButton } from "../devices/device-preview-button";
 import type { FloatingWorkingStatus } from "./floating-working-status";
@@ -73,12 +75,17 @@ export function FloatingWorkingControl(props: {
   readonly status: FloatingWorkingStatus | null;
   readonly devicePreview: { readonly count: number; readonly onPress: () => void } | null;
   readonly browserPreview: { readonly count: number; readonly onPress: () => void } | null;
+  readonly appStack: { readonly status: AppStackStatus; readonly onPress: () => void } | null;
   readonly showScrollToEnd: boolean;
   readonly onScrollToEnd: () => void;
   readonly agents: SubagentPillSegment | null;
   readonly onOpenAgents: () => void;
   readonly queuedCount: number;
   readonly onOpenQueue: () => void;
+  /** Present on a workflow's root or member threads; opens the Workflow sheet. */
+  readonly onOpenWorkflow?: (() => void) | null;
+  /** Present on threads an App Review started; opens the App Review sheet. */
+  readonly appReview?: { readonly label: string; readonly onPress: () => void } | null;
   readonly lift?: SharedValue<number>;
 }) {
   const { width: windowWidth } = useWindowDimensions();
@@ -90,8 +97,18 @@ export function FloatingWorkingControl(props: {
       ? props.status.action
       : null;
   const [agentsWidth, setAgentsWidth] = useState(0);
+  const [workflowWidth, setWorkflowWidth] = useState(0);
+  const onOpenWorkflow = props.onOpenWorkflow ?? null;
+  const hasWorkflow = onOpenWorkflow !== null;
+  const [appReviewWidth, setAppReviewWidth] = useState(0);
+  const appReview = props.appReview ?? null;
+  const hasAppReview = appReview !== null;
   const hasQueue = props.queuedCount > 0;
-  const hasPreview = props.devicePreview !== null || props.browserPreview !== null;
+  const previewCount =
+    (props.devicePreview !== null ? 1 : 0) +
+    (props.browserPreview !== null ? 1 : 0) +
+    (props.appStack !== null ? 1 : 0);
+  const hasPreview = previewCount > 0;
   const [previewWidth, setPreviewWidth] = useState(0);
   const agents = props.agents;
   const hasAgents = agents !== null;
@@ -103,6 +120,8 @@ export function FloatingWorkingControl(props: {
       (action !== null ? actionWidth : 0) -
       (hasQueue ? queueWidth : 0) -
       (hasAgents ? agentsWidth : 0) -
+      (hasWorkflow ? workflowWidth : 0) -
+      (hasAppReview ? appReviewWidth : 0) -
       (hasPreview ? previewWidth : 0),
   );
   const separationProgress = useSharedValue(props.showScrollToEnd ? 1 : 0);
@@ -138,7 +157,8 @@ export function FloatingWorkingControl(props: {
     capsuleWidth.value = first ? width : withTiming(width, CONTROL_TIMING);
   };
   const hasStatus = props.status !== null;
-  const hasCapsule = hasStatus || hasQueue || hasAgents || hasPreview;
+  const hasCapsule =
+    hasStatus || hasQueue || hasAgents || hasWorkflow || hasAppReview || hasPreview;
   useEffect(() => {
     if (!hasStatus) {
       measuredWidthRef.current = null;
@@ -157,16 +177,19 @@ export function FloatingWorkingControl(props: {
   }
 
   const previewCompact =
-    hasStatus ||
-    hasAgents ||
-    hasQueue ||
-    (props.devicePreview !== null && props.browserPreview !== null);
+    hasStatus || hasAgents || hasWorkflow || hasAppReview || hasQueue || previewCount > 1;
   const statusInteractive =
     props.status?.kind === "connection" ||
     props.status?.kind === "child-input" ||
     props.status?.kind === "background";
   const capsuleInteractive =
-    statusInteractive || action !== null || hasQueue || hasAgents || hasPreview;
+    statusInteractive ||
+    action !== null ||
+    hasQueue ||
+    hasAgents ||
+    hasWorkflow ||
+    hasAppReview ||
+    hasPreview;
   const statusContent =
     props.status !== null ? (
       <View
@@ -223,6 +246,9 @@ export function FloatingWorkingControl(props: {
           {props.browserPreview !== null ? (
             <BrowserPreviewButton {...props.browserPreview} compact={previewCompact} />
           ) : null}
+          {props.appStack !== null ? (
+            <AppStackPreviewButton {...props.appStack} compact={previewCompact} />
+          ) : null}
         </View>
       ) : null}
       {agents !== null ? (
@@ -241,6 +267,54 @@ export function FloatingWorkingControl(props: {
           </Text>
         </Pressable>
       ) : null}
+      {onOpenWorkflow !== null ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open workflow"
+          accessibilityHint="Opens the workflow's steps, tickets, and controls"
+          onPress={onOpenWorkflow}
+          onLayout={(event) => setWorkflowWidth(settleWidth(event.nativeEvent.layout.width))}
+          className="h-11 flex-row items-center gap-1.5 px-3 active:opacity-70"
+        >
+          {hasStatus || hasPreview || hasAgents ? (
+            <View className="mr-1 h-4 w-px bg-border" />
+          ) : null}
+          <SymbolView
+            name="point.3.connected.trianglepath.dotted"
+            size={13}
+            tintColorClassName="accent-foreground-muted"
+          />
+          {hasStatus ? null : (
+            <Text className="font-t3-medium text-xs" numberOfLines={1}>
+              Workflow
+            </Text>
+          )}
+        </Pressable>
+      ) : null}
+      {appReview !== null ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Open App Review, ${appReview.label}`}
+          accessibilityHint="Opens the App Review's cycles, results, and controls"
+          onPress={appReview.onPress}
+          onLayout={(event) => setAppReviewWidth(settleWidth(event.nativeEvent.layout.width))}
+          className="h-11 flex-row items-center gap-1.5 px-3 active:opacity-70"
+        >
+          {hasStatus || hasPreview || hasAgents || hasWorkflow ? (
+            <View className="mr-1 h-4 w-px bg-border" />
+          ) : null}
+          <SymbolView
+            name="checkmark.circle"
+            size={13}
+            tintColorClassName="accent-foreground-muted"
+          />
+          {hasStatus ? null : (
+            <Text className="font-t3-medium text-xs" numberOfLines={1}>
+              {appReview.label}
+            </Text>
+          )}
+        </Pressable>
+      ) : null}
       {hasQueue ? (
         <Pressable
           accessibilityRole="button"
@@ -251,7 +325,7 @@ export function FloatingWorkingControl(props: {
           style={{ maxWidth: Math.min(overlayWidth, windowWidth) * 0.45 }}
           className="h-11 flex-row items-center gap-2 px-3 active:opacity-70"
         >
-          {hasStatus || hasPreview || hasAgents ? (
+          {hasStatus || hasPreview || hasAgents || hasWorkflow || hasAppReview ? (
             <View className="mr-1 h-4 w-px bg-border" />
           ) : null}
           <SymbolView name="list.number" size={13} tintColorClassName="accent-foreground-muted" />

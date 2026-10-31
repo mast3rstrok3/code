@@ -22,7 +22,7 @@ import {
   getProjectOrderKey,
   selectProjectGroupingSettings,
 } from "../logicalProject";
-import { resolveDefaultThreadOwnerUserId } from "../lib/workspaceUsers";
+import { resolveDefaultThreadOwnerUserId } from "@t3tools/shared/workspaceUsers";
 import { resolveNewThreadEnvMode, resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
   readProject,

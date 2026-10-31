@@ -12,9 +12,12 @@ import { Atom } from "effect/reactivity";
 
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
+import { workspaceUserViewAtom } from "./workspace-users";
 
 export const shellEnvironment = createShellEnvironmentAtoms(connectionAtomRuntime);
-export const environmentShell = createEnvironmentShellAtoms(connectionAtomRuntime);
+export const environmentShell = createEnvironmentShellAtoms(connectionAtomRuntime, {
+  userViewAtom: (environmentId) => workspaceUserViewAtom(environmentId),
+});
 export const environmentSnapshotAtom = createEnvironmentSnapshotAtom(environmentShell.stateAtom);
 export const environmentShellSummaryAtom = createEnvironmentShellSummaryAtom({
   catalogValueAtom: environmentCatalog.catalogValueAtom,

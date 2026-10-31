@@ -1,5 +1,6 @@
 import type {
   ImplementationWorkflowSettings,
+  LaunchableWorkflow,
   ProviderInteractionMode,
   WorkflowPreset,
 } from "@t3tools/contracts";
@@ -531,6 +532,20 @@ export function workflowPresetStepCanPinModel(
 
 export function interactionModeForWorkflowPreset(preset: WorkflowPreset): ProviderInteractionMode {
   return WORKFLOW_PRESET_DEFINITION_BY_ID[preset].interactionMode;
+}
+
+/** Which workflow's standing step models a preset's runs read; null reads only unscoped ones. */
+export function workflowStepModelScopeForPreset(
+  preset: WorkflowPreset | null | undefined,
+): LaunchableWorkflow | null {
+  switch (preset) {
+    case "fast-plan":
+      return "feature";
+    case "planning":
+      return "engineering";
+    default:
+      return null;
+  }
 }
 
 export function workflowPromptIdForPreset(

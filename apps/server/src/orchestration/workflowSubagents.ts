@@ -6,12 +6,14 @@ import {
   type ProviderInteractionMode,
   type ProviderOptionSelection,
   type ProviderDriverKind,
+  type LaunchableWorkflow,
   type ServerSettings,
+  type WorkflowPreset,
   type WorkflowStepModelOverride,
   type WorkflowStepReviewPartsOverride,
-  WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
+import { workflowStepModelScopeForPreset } from "@t3tools/shared/workflowPresets";
 
 import { WORKFLOW_PROMPT_IDS } from "../provider/WorkflowPromptRegistry.ts";
 import {
@@ -279,6 +281,24 @@ export interface WorkflowStepModelThread {
 }
 
 /**
+ * Which workflow's standing step models govern `thread`'s run: the one its
+ * root was started as.
+ */
+export function findWorkflowStepModelScope(
+  thread: WorkflowStepModelThread & { readonly workflowPreset?: WorkflowPreset | null },
+  threads: ReadonlyArray<
+    WorkflowStepModelThread & { readonly workflowPreset?: WorkflowPreset | null }
+  >,
+): LaunchableWorkflow | null {
+  const rootThreadId = thread.workflowContext?.rootThreadId ?? thread.id;
+  const root =
+    rootThreadId === thread.id
+      ? thread
+      : (threads.find((candidate) => candidate.id === rootThreadId) ?? thread);
+  return workflowStepModelScopeForPreset(root.workflowPreset);
+}
+
+/**
  * Find the step pins that govern `thread`'s run.
  *
  * Nested runs (an implementation orchestrator under a planning root) carry the
@@ -295,44 +315,6 @@ export function findWorkflowStepModels(
     threads.find((candidate) => candidate.id === rootThreadId)?.workflowStepModels ??
     thread.workflowStepModels
   );
-}
-
-export function resolveWorkflowRecoveryBackupSelection(input: {
-  readonly thread: WorkflowStepModelThread;
-  readonly threads: ReadonlyArray<WorkflowStepModelThread>;
-  readonly settings: ServerSettings;
-  readonly primaryModelSelection: ModelSelection;
-}): { readonly modelSelection: ModelSelection | null; readonly skippedReason: string | null } {
-  const runPin = findWorkflowStepModels(input.thread, input.threads)?.find(
-    (entry) =>
-      entry.workflowPromptId === WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN &&
-      entry.stepWorkflowPromptId === undefined,
-  );
-  const standingPin = input.settings.workflowStepModels.find(
-    (entry) =>
-      entry.workflowPromptId === WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN &&
-      entry.stepWorkflowPromptId === undefined,
-  );
-  const selected = runPin?.modelSelection ?? standingPin?.modelSelection;
-  if (selected === undefined) {
-    return { modelSelection: null, skippedReason: "No recovery backup is selected." };
-  }
-  if (!isProviderInstanceEnabled(input.settings, selected.instanceId)) {
-    return {
-      modelSelection: null,
-      skippedReason: `Recovery backup provider instance '${selected.instanceId}' is disabled or no longer configured.`,
-    };
-  }
-  if (
-    selected.instanceId === input.primaryModelSelection.instanceId &&
-    selected.model === input.primaryModelSelection.model
-  ) {
-    return {
-      modelSelection: null,
-      skippedReason: "Recovery backup matches the primary provider instance and model.",
-    };
-  }
-  return { modelSelection: selected, skippedReason: null };
 }
 
 /** A thread as far as run-level App Review parts are concerned. */
@@ -417,6 +399,11 @@ export function resolveWorkflowStepModelSelection(input: {
   readonly inheritStepPin?: boolean | undefined;
   readonly definition: WorkflowSubagentSpawnDefinition | undefined;
   readonly stepModels: ReadonlyArray<WorkflowStepModelOverride> | undefined;
+  /**
+   * The workflow whose standing defaults apply. Its own defaults outrank the
+   * unscoped ones; unset reads only the unscoped ones.
+   */
+  readonly workflow?: LaunchableWorkflow | null | undefined;
   readonly parentModelSelection: ModelSelection;
   readonly settings: ServerSettings | undefined;
 }): {
@@ -426,14 +413,18 @@ export function resolveWorkflowStepModelSelection(input: {
 } {
   const step = input.stepWorkflowPromptId;
   const inheritStepPin = input.inheritStepPin !== false;
-  const pin =
-    findWorkflowStepPin(input.stepModels ?? [], input.workflowPromptId, step, inheritStepPin) ??
+  const standing = input.settings?.workflowStepModels ?? [];
+  const standingPin = (workflow: LaunchableWorkflow | undefined) =>
     findWorkflowStepPin(
-      input.settings?.workflowStepModels ?? [],
+      standing.filter((entry) => entry.workflow === workflow),
       input.workflowPromptId,
       step,
       inheritStepPin,
     );
+  const pin =
+    findWorkflowStepPin(input.stepModels ?? [], input.workflowPromptId, step, inheritStepPin) ??
+    (input.workflow == null ? undefined : standingPin(input.workflow)) ??
+    standingPin(undefined);
   if (pin === undefined) {
     return resolveWorkflowSubagentModelSelection({
       definition: input.definition,

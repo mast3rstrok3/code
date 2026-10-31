@@ -3,6 +3,11 @@ import { useCallback, useMemo } from "react";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { ThreadListToolbar } from "./ThreadListToolbar";
 import type { HomeHeaderProps } from "./HomeHeader.types";
+import {
+  parseWorkspaceUserMenuActionId,
+  workspaceUserMenuActions,
+  workspaceUserMenuIsCustomized,
+} from "../workspace-users/workspaceUserMenu";
 
 export type { HomeHeaderEnvironment } from "./HomeHeader.types";
 
@@ -12,9 +17,12 @@ function checkedMenuState(checked: boolean) {
 
 export function HomeHeader(props: HomeHeaderProps) {
   const hasCustomListOptions =
-    props.selectedEnvironmentId !== null || props.selectedProjectKey !== null;
+    props.selectedEnvironmentId !== null ||
+    props.selectedProjectKey !== null ||
+    workspaceUserMenuIsCustomized(props.userScopes);
   const menuActions = useMemo<MenuAction[]>(
     () => [
+      ...workspaceUserMenuActions(props.userScopes),
       {
         id: "environment",
         title: "Environment",
@@ -52,11 +60,22 @@ export function HomeHeader(props: HomeHeaderProps) {
             },
           ] satisfies MenuAction[])),
     ],
-    [props.environments, props.projects, props.selectedEnvironmentId, props.selectedProjectKey],
+    [
+      props.environments,
+      props.projects,
+      props.selectedEnvironmentId,
+      props.selectedProjectKey,
+      props.userScopes,
+    ],
   );
   const handleMenuAction = useCallback(
     (event: { nativeEvent: { event: string } }) => {
       const id = event.nativeEvent.event;
+      const userScope = parseWorkspaceUserMenuActionId(id, props.userScopes);
+      if (userScope) {
+        props.onUserScopeChange(userScope.environmentId, userScope.key);
+        return;
+      }
       if (id === "environment:all") {
         props.onEnvironmentChange(null);
         return;

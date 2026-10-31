@@ -18,6 +18,7 @@ import {
   AuthTerminalOperateScope,
   AuthTerminalReadScope,
   DEFAULT_SERVER_SETTINGS,
+  DEFAULT_WORKSPACE_USER_ID,
   EnvironmentId,
   ThreadId,
   type ProjectScript,
@@ -815,6 +816,7 @@ function ThreadRouteContent(
         ...metadata,
         projectId: selectedThread.projectId,
         projectCwd: selectedThreadProject.workspaceRoot,
+        ownerUserId: selectedThread.ownerUserId ?? DEFAULT_WORKSPACE_USER_ID,
         text: setupMessage.text,
         titleText: selectedThread.title,
         ...(setupMessage.context ? { context: setupMessage.context } : {}),
@@ -973,6 +975,7 @@ function ThreadRouteContent(
           onUpdateThreadModelSelection={composer.onUpdateModelSelection}
           onUpdateThreadRuntimeMode={composer.onUpdateRuntimeMode}
           onUpdateThreadInteractionMode={composer.onUpdateInteractionMode}
+          composerMode={composer.composerMode}
           onRespondToApproval={requests.onRespondToApproval}
           onSelectUserInputOption={requests.onSelectUserInputOption}
           onChangeUserInputCustomAnswer={requests.onChangeUserInputCustomAnswer}

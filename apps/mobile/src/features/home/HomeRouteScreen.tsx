@@ -26,6 +26,7 @@ import { AndroidHomeFabLayout } from "./AndroidHomeFab";
 import { HomeScreen } from "./HomeScreen";
 import { HomeHeader } from "./HomeHeader";
 import { useHomeListOptions } from "./home-list-options";
+import { useWorkspaceUserMenu } from "../workspace-users/useWorkspaceUserMenu";
 import { useAtomValueWhileVisible, useHomeRouteVisible } from "./home-route-visibility";
 import { useHomeThreadSelection } from "./home-thread-navigation";
 import { buildHomeProjectScopes } from "./homeThreadList";
@@ -127,6 +128,10 @@ export function HomeRouteScreen() {
     setSelectedProjectKey,
   } = useHomeListOptions(availableEnvironmentIds);
   const selectedEnvironmentId = listOptions.selectedEnvironmentId;
+  const { userScopes, onUserScopeChange } = useWorkspaceUserMenu(
+    environments,
+    selectedEnvironmentId,
+  );
   const projectScopeKey = listOptions.selectedProjectKey;
   const resolvedProjectKey = resolveScratchProjectScopeKey(projectScopeKey, projects, {
     sidebarProjectGroupingMode: listOptions.projectGroupingMode,
@@ -234,8 +239,10 @@ export function HomeRouteScreen() {
           searchQuery={searchQuery}
           selectedEnvironmentId={selectedEnvironmentId}
           selectedProjectKey={selectedProjectKey}
+          userScopes={userScopes}
           onEnvironmentChange={setSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
+          onUserScopeChange={onUserScopeChange}
           onOpenEnvironments={() =>
             navigation.navigate("SettingsSheet", {
               screen: "SettingsContent",

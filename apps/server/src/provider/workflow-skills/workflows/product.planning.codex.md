@@ -24,6 +24,8 @@ Format a round like so:
 ➡️ <your recommended answer>
 ```
 
+Word each question so "yes" accepts your recommended answer.
+
 Each round the user answers reshapes the tree: settled decisions push the frontier outward and unblock questions that depended on them. Recompute the frontier and ask the next round. A question whose answer depends on another question still open in this round belongs to a _later_ round, not this one.
 
 Finding _facts_ is your job, never the user's. When a frontier question needs a fact from the environment, inspect the filesystem and available tools in this thread. Resolve that fact before asking questions that depend on it. The _decisions_ are the user's. Put each decision to them and wait.

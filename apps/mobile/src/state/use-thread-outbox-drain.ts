@@ -12,6 +12,7 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
+  DEFAULT_WORKSPACE_USER_ID,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   type MessageId,
 } from "@t3tools/contracts";
@@ -80,6 +81,7 @@ import {
   waitForComposerDraftsLoaded,
 } from "./use-composer-drafts";
 import { useAtomCommand } from "./use-atom-command";
+import { draftWorkflowFromQueued } from "./composer-workflow";
 import {
   dispatchingQueuedMessageIdAtom,
   editingQueuedMessageIdsAtom,
@@ -366,6 +368,7 @@ export async function recoverEditedCreationAfterDelivery(
       ...(kept.modelSelection !== undefined ? { modelSelection: kept.modelSelection } : {}),
       ...(kept.runtimeMode !== undefined ? { runtimeMode: kept.runtimeMode } : {}),
       ...(kept.interactionMode !== undefined ? { interactionMode: kept.interactionMode } : {}),
+      ...(kept.workflow !== undefined ? { workflow: draftWorkflowFromQueued(kept.workflow) } : {}),
     });
     // The append only schedules a debounced write; the queue entry is the
     // only durable copy until the draft lands, so flush before removing.
@@ -457,6 +460,9 @@ export async function restoreRejectedQueuedMessage(
       ...(queuedMessage.modelSelection ? { modelSelection: queuedMessage.modelSelection } : {}),
       ...(queuedMessage.runtimeMode ? { runtimeMode: queuedMessage.runtimeMode } : {}),
       ...(queuedMessage.interactionMode ? { interactionMode: queuedMessage.interactionMode } : {}),
+      ...(queuedMessage.workflow
+        ? { workflow: draftWorkflowFromQueued(queuedMessage.workflow) }
+        : {}),
       ...(queuedMessage.creation
         ? {
             workspaceSelection: {
@@ -867,6 +873,7 @@ export function useThreadOutboxDrain(): void {
           }),
           runtimeMode: sendSettings.runtimeMode,
           interactionMode: sendSettings.interactionMode,
+          ...queuedMessage.workflow,
           createdAt: queuedMessage.createdAt,
           dispatchMode: queuedMessage.dispatchMode ?? "start",
         },
@@ -1015,6 +1022,8 @@ export function useThreadOutboxDrain(): void {
         input: buildProjectThreadStartTurnInput({
           projectId: creation.projectId,
           projectCwd,
+          // Tasks queued before owners were recorded keep the owner they were built for.
+          ownerUserId: creation.ownerUserId ?? DEFAULT_WORKSPACE_USER_ID,
           threadId: queuedMessage.threadId,
           commandId: queuedMessage.commandId,
           messageId: queuedMessage.messageId,
@@ -1033,6 +1042,7 @@ export function useThreadOutboxDrain(): void {
           modelSelection: sendSettings.modelSelection,
           runtimeMode: sendSettings.runtimeMode,
           interactionMode: sendSettings.interactionMode,
+          workflow: queuedMessage.workflow,
           workspaceMode: workspace.workspaceMode,
           branch: workspace.branch,
           worktreePath: workspace.worktreePath,
