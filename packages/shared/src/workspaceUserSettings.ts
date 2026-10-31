@@ -2,7 +2,7 @@ import type { WorkspaceUser } from "@t3tools/contracts";
 import {
   createWorkspaceUserIdFromDisplayName,
   hasWorkspaceUserDisplayNameConflict,
-} from "@t3tools/shared/workspaceUsers";
+} from "./workspaceUsers.ts";
 
 export type WorkspaceUserDisplayNameValidation =
   | {
@@ -13,6 +13,24 @@ export type WorkspaceUserDisplayNameValidation =
       readonly valid: false;
       readonly reason: "blank" | "duplicate" | "unchanged";
     };
+
+/** Null when there is nothing to tell the user, including an unchanged name. */
+export function workspaceUserDisplayNameMessage(
+  validation: WorkspaceUserDisplayNameValidation,
+): string | null {
+  if (validation.valid || validation.reason === "unchanged") {
+    return null;
+  }
+  if (validation.reason === "blank") {
+    return "Display name is required.";
+  }
+  return "Display name already exists.";
+}
+
+/** Owner and legacy ownerless tokens alike authenticate the user's runs. */
+export function workspaceUserGithubTokenCount(user: WorkspaceUser): number {
+  return (user.github.ownerTokens?.length ?? 0) + (user.github.personalAccessTokenRedacted ? 1 : 0);
+}
 
 export function validateAddWorkspaceUser(
   displayName: string,
@@ -125,6 +143,22 @@ export type GithubOwnerTokenValidation =
       readonly valid: false;
       readonly reason: "blank-owner" | "invalid-owner" | "duplicate-owner" | "blank-token";
     };
+
+/** A blank owner gets no message yet; a blank token only disables saving. */
+export function githubOwnerTokenValidationMessage(
+  validation: GithubOwnerTokenValidation,
+): string | null {
+  if (validation.valid) {
+    return null;
+  }
+  if (validation.reason === "invalid-owner") {
+    return "Enter a GitHub user or organization name.";
+  }
+  if (validation.reason === "duplicate-owner") {
+    return "That owner already has a token.";
+  }
+  return null;
+}
 
 // GitHub user and organization logins: letters, digits, and single inner hyphens.
 const GITHUB_OWNER_PATTERN = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d]))*$/i;

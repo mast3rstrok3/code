@@ -13,6 +13,8 @@ import {
   type ProviderInstanceId,
   type PullRequestMergeMethod,
   type SidebarProjectGroupingMode,
+  WorkspaceUserId,
+  WorkspaceUserView,
 } from "@t3tools/contracts";
 import type { ComposerEnterBehavior } from "../lib/composerEnterBehavior";
 import type { FollowUpBehavior } from "../lib/followUpBehavior";
@@ -47,7 +49,16 @@ const PullRequestListPreferences = Schema.Struct({
 });
 export type PullRequestListPreferences = typeof PullRequestListPreferences.Type;
 
+/** The acting user and thread view on one server; users belong to their server. */
+const WorkspaceUserScope = Schema.Struct({
+  activeUserId: Schema.optional(WorkspaceUserId),
+  view: WorkspaceUserView,
+});
+export type WorkspaceUserScope = typeof WorkspaceUserScope.Type;
+const WorkspaceUserScopes = Schema.Record(Schema.String, WorkspaceUserScope);
+
 const isThreadListFilters = Schema.is(ThreadListFilters);
+const isWorkspaceUserScopes = Schema.is(WorkspaceUserScopes);
 const isPullRequestListPreferences = Schema.is(PullRequestListPreferences);
 
 export interface Preferences {
@@ -85,6 +96,8 @@ export interface Preferences {
   readonly threadListWorkingShelfExpanded?: boolean;
   readonly threadListFilters?: ThreadListFilters;
   readonly pullRequestListFilters?: PullRequestListPreferences;
+  /** Keyed by environment id. */
+  readonly workspaceUserScopes?: Readonly<Record<string, WorkspaceUserScope>>;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedError<MobilePreferencesLoadError>()(
@@ -155,6 +168,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     threadListWorkingShelfExpanded?: boolean;
     threadListFilters?: ThreadListFilters;
     pullRequestListFilters?: PullRequestListPreferences;
+    workspaceUserScopes?: Readonly<Record<string, WorkspaceUserScope>>;
   } = {};
 
   if (typeof parsed.pullRequestHideTestFiles === "boolean") {
@@ -281,6 +295,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (isPullRequestListPreferences(parsed.pullRequestListFilters)) {
     preferences.pullRequestListFilters = parsed.pullRequestListFilters;
+  }
+  if (isWorkspaceUserScopes(parsed.workspaceUserScopes)) {
+    preferences.workspaceUserScopes = parsed.workspaceUserScopes;
   }
   return preferences;
 }

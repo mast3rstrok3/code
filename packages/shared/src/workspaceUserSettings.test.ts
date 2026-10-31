@@ -6,13 +6,16 @@ import {
   clearWorkspaceUserGithubPersonalAccessToken,
   createWorkspaceUser,
   githubFineGrainedTokenUrl,
+  githubOwnerTokenValidationMessage,
   removeWorkspaceUserGithubOwnerToken,
   renameWorkspaceUser,
   replaceWorkspaceUserGithubOwnerToken,
   validateAddGithubOwnerToken,
   validateAddWorkspaceUser,
   validateRenameWorkspaceUser,
-} from "./UsersSettings.logic";
+  workspaceUserDisplayNameMessage,
+  workspaceUserGithubTokenCount,
+} from "./workspaceUserSettings.ts";
 
 function user(input: {
   readonly id: string;
@@ -210,5 +213,65 @@ describe("githubFineGrainedTokenUrl", () => {
     expect(new URL(githubFineGrainedTokenUrl()).searchParams.has("target_name")).toBe(false);
     const long = new URL(githubFineGrainedTokenUrl("a".repeat(39)));
     expect(long.searchParams.get("name")?.length).toBe(40);
+  });
+});
+
+describe("validation messages", () => {
+  const alice = user({ id: "alice", displayName: "Alice" });
+
+  it("explains blank and duplicate names but not an unchanged one", () => {
+    expect(workspaceUserDisplayNameMessage(validateAddWorkspaceUser("  ", [alice]))).toBe(
+      "Display name is required.",
+    );
+    expect(workspaceUserDisplayNameMessage(validateAddWorkspaceUser("alice", [alice]))).toBe(
+      "Display name already exists.",
+    );
+    expect(
+      workspaceUserDisplayNameMessage(
+        validateRenameWorkspaceUser({ user: alice, displayName: "Alice", workspaceUsers: [alice] }),
+      ),
+    ).toBeNull();
+  });
+
+  it("waits for an owner before complaining and leaves a blank token to the disabled button", () => {
+    expect(
+      githubOwnerTokenValidationMessage(validateAddGithubOwnerToken(alice, "", "t")),
+    ).toBeNull();
+    expect(
+      githubOwnerTokenValidationMessage(validateAddGithubOwnerToken(alice, "acme", "")),
+    ).toBeNull();
+    expect(
+      githubOwnerTokenValidationMessage(validateAddGithubOwnerToken(alice, "-acme", "t")),
+    ).toBe("Enter a GitHub user or organization name.");
+    const withAcme = user({
+      id: "alice",
+      displayName: "Alice",
+      github: {
+        personalAccessToken: "",
+        ownerTokens: [{ owner: "Acme", personalAccessToken: "" }],
+      },
+    });
+    expect(
+      githubOwnerTokenValidationMessage(validateAddGithubOwnerToken(withAcme, "acme", "t")),
+    ).toBe("That owner already has a token.");
+  });
+});
+
+describe("workspaceUserGithubTokenCount", () => {
+  it("counts owner tokens and a saved token without an owner", () => {
+    expect(workspaceUserGithubTokenCount(user({ id: "a", displayName: "A" }))).toBe(0);
+    expect(
+      workspaceUserGithubTokenCount(
+        user({
+          id: "a",
+          displayName: "A",
+          github: {
+            personalAccessToken: "",
+            personalAccessTokenRedacted: true,
+            ownerTokens: [{ owner: "acme", personalAccessToken: "" }],
+          },
+        }),
+      ),
+    ).toBe(2);
   });
 });

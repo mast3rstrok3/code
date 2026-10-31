@@ -52,6 +52,8 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { projectEnvironment } from "../../state/projects";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { readActingWorkspaceUserId, useActingWorkspaceUserIds } from "../../state/workspace-users";
+import { filterProjectsForActingUsers } from "../workspace-users/workspaceUserScope";
 import {
   appendComposerDraftAttachments,
   type ComposerDraftInsertion,
@@ -257,7 +259,13 @@ type NewTaskFlowContextValue = {
 const NewTaskFlowContext = React.createContext<NewTaskFlowContextValue | null>(null);
 
 export function NewTaskFlowProvider(props: React.PropsWithChildren) {
-  const projects = useProjects();
+  const serverConfigs = useServerConfigs();
+  const projects = filterProjectsForActingUsers(
+    useProjects(),
+    useActingWorkspaceUserIds(),
+    (project) =>
+      isScratchProject(project, serverConfigs.get(project.environmentId)?.scratchWorkspaceRoot),
+  );
   const threads = useThreadShells();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const groupingSettings = useMobileProjectGroupingSettings();
@@ -358,7 +366,6 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const isScratchDraft =
     selectedProject !== null &&
     isScratchProject(selectedProject, selectedEnvironmentServerConfig?.scratchWorkspaceRoot);
-  const serverConfigs = useServerConfigs();
   const { connectedEnvironments } = useRemoteConnectionStatus();
   const scratchEnvironments = connectedEnvironments.filter(
     (environment) =>
@@ -1025,6 +1032,12 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       }),
       creation: {
         projectId: selectedProject.id,
+        // Editing a queued task in its own project keeps the owner it was queued for.
+        ownerUserId:
+          (editingPendingTask?.environmentId === selectedProject.environmentId &&
+          editingPendingTask.creation?.projectId === selectedProject.id
+            ? editingPendingTask.creation.ownerUserId
+            : undefined) ?? readActingWorkspaceUserId(selectedProject.environmentId),
         ...(projectTitle !== undefined ? { projectTitle } : {}),
         ...(projectCwd !== undefined ? { projectCwd } : {}),
         workspaceMode: mode,

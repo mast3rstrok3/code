@@ -20,6 +20,8 @@ import {
   type ProviderInteractionMode as ProviderInteractionModeType,
   type RuntimeMode as RuntimeModeType,
   type ServerProvider,
+  WorkspaceUserId,
+  type WorkspaceUserId as WorkspaceUserIdType,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
@@ -35,6 +37,7 @@ const THREAD_OUTBOX_MAX_RETRY_DELAY_MS = 16_000;
 
 const QueuedThreadCreationSchema = Schema.Struct({
   projectId: ProjectId,
+  ownerUserId: Schema.optional(WorkspaceUserId),
   projectTitle: Schema.optional(Schema.String),
   projectCwd: Schema.optional(Schema.String),
   workspaceMode: Schema.Literals(["local", "worktree"]),
@@ -66,6 +69,8 @@ const encodeStoredQueuedThreadMessage = Schema.encodeUnknownSync(QueuedThreadMes
 
 export interface QueuedThreadCreation {
   readonly projectId: ProjectIdType;
+  /** Captured when queued: switching users later must not reassign a waiting task. */
+  readonly ownerUserId?: WorkspaceUserIdType;
   readonly projectTitle?: string;
   readonly projectCwd?: string;
   readonly workspaceMode: "local" | "worktree";

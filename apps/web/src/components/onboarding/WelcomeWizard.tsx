@@ -37,7 +37,7 @@ import { useEffect, useRef, useState } from "react";
 import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { useClientSettings, usePrimarySettings } from "../../hooks/useSettings";
-import { resolveDefaultThreadOwnerUserId } from "../../lib/workspaceUsers";
+import { resolveDefaultThreadOwnerUserId } from "@t3tools/shared/workspaceUsers";
 import { hasCloudPublicConfig } from "../../cloud/publicConfig";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";

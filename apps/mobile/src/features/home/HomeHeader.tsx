@@ -13,6 +13,7 @@ import { createNativeMailSearchToolbarItem } from "../layout/native-mail-search-
 import { useNativeMailSearchToolbar } from "../../native/use-native-mail-search-toolbar";
 import { useDeviceType } from "../../native/native-layout-metrics";
 import { buildHomeListFilterMenu } from "./home-list-filter-menu";
+import { workspaceUserMenuIsCustomized } from "../workspace-users/workspaceUserMenu";
 import {
   createSidebarFilterHeaderItem,
   createSidebarHeaderItems,
@@ -47,7 +48,9 @@ export function HomeHeader(props: HomeHeaderProps) {
   );
   const iconColor = useUniwindTheme()["--color-icon"];
   const hasCustomListOptions =
-    props.selectedEnvironmentId !== null || props.selectedProjectKey !== null;
+    props.selectedEnvironmentId !== null ||
+    props.selectedProjectKey !== null ||
+    workspaceUserMenuIsCustomized(props.userScopes);
   const focusSearch = useCallback(() => {
     if (primaryColumn && !panes.primarySidebarVisible) {
       focusAfterReveal.current = true;
@@ -187,6 +190,21 @@ export function HomeHeader(props: HomeHeaderProps) {
             title="Thread list options"
             separateBackground
           >
+            {props.userScopes.map((scope) => (
+              <Toolbar.Menu key={scope.environmentId} title={scope.title}>
+                <Toolbar.Label>{scope.title}</Toolbar.Label>
+                {scope.options.map((option) => (
+                  <Toolbar.MenuAction
+                    key={option.key}
+                    isOn={option.selected}
+                    onPress={() => props.onUserScopeChange(scope.environmentId, option.key)}
+                  >
+                    <Toolbar.Label>{option.title}</Toolbar.Label>
+                  </Toolbar.MenuAction>
+                ))}
+              </Toolbar.Menu>
+            ))}
+
             <Toolbar.Menu title="Environment">
               <Toolbar.Label>Environment</Toolbar.Label>
               <Toolbar.MenuAction

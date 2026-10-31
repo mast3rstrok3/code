@@ -1,5 +1,7 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 
+import type { WorkspaceUserMenuScope } from "../workspace-users/workspaceUserMenu";
+
 export interface HomeListFilterMenuEnvironment {
   readonly environmentId: EnvironmentId;
   readonly label: string;
@@ -34,10 +36,25 @@ export function buildHomeListFilterMenu(props: {
   readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
+  readonly userScopes: ReadonlyArray<WorkspaceUserMenuScope>;
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
+  readonly onUserScopeChange: (environmentId: EnvironmentId, key: string) => void;
 }): HomeListFilterMenu {
   const items: Array<HomeListFilterMenuAction | HomeListFilterMenuSubmenu> = [];
+
+  for (const scope of props.userScopes) {
+    items.push({
+      type: "submenu",
+      title: scope.title,
+      items: scope.options.map((option) => ({
+        type: "action" as const,
+        title: option.title,
+        state: option.selected ? ("on" as const) : ("off" as const),
+        onPress: () => props.onUserScopeChange(scope.environmentId, option.key),
+      })),
+    });
+  }
 
   items.push({
     type: "submenu",

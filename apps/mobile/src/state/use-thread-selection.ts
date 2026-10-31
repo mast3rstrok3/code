@@ -68,6 +68,7 @@ function threadDetailToShell(
   return presentThreadShell(environmentId, {
     id: thread.id,
     projectId: thread.projectId,
+    ...(thread.ownerUserId === undefined ? {} : { ownerUserId: thread.ownerUserId }),
     title: thread.title,
     providerInstanceId: thread.providerInstanceId,
     modelSelection: thread.modelSelection,

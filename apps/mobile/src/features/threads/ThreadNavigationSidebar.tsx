@@ -42,6 +42,12 @@ import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import { useHomeListOptions } from "../home/home-list-options";
 import { buildHomeListFilterMenu } from "../home/home-list-filter-menu";
+import { useWorkspaceUserMenu } from "../workspace-users/useWorkspaceUserMenu";
+import {
+  parseWorkspaceUserMenuActionId,
+  workspaceUserMenuActions,
+  workspaceUserMenuIsCustomized,
+} from "../workspace-users/workspaceUserMenu";
 import { buildHomeProjectScopes } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
@@ -169,6 +175,10 @@ function ThreadNavigationSidebarPane(
   );
   const { options, setSelectedEnvironmentId, setSelectedProjectKey } =
     useHomeListOptions(availableEnvironmentIds);
+  const { userScopes, onUserScopeChange } = useWorkspaceUserMenu(
+    environments,
+    options.selectedEnvironmentId,
+  );
   const searchEnvironmentIds =
     options.selectedEnvironmentId === null
       ? workspaceEnvironments
@@ -401,6 +411,7 @@ function ThreadNavigationSidebarPane(
     return items;
   })();
   const listMenuActions = [
+    ...workspaceUserMenuActions(userScopes),
     {
       id: "environment",
       title: "Environment",
@@ -449,6 +460,11 @@ function ThreadNavigationSidebarPane(
     readonly nativeEvent: { readonly event: string };
   }) => {
     const event = nativeEvent.event;
+    const userScope = parseWorkspaceUserMenuActionId(event, userScopes);
+    if (userScope) {
+      onUserScopeChange(userScope.environmentId, userScope.key);
+      return;
+    }
     if (event === "environment:all") {
       setSelectedEnvironmentId(null);
       return;
@@ -695,7 +711,10 @@ function ThreadNavigationSidebarPane(
         );
     }
   };
-  const filterCustomized = options.selectedEnvironmentId !== null || selectedProjectKey !== null;
+  const filterCustomized =
+    options.selectedEnvironmentId !== null ||
+    selectedProjectKey !== null ||
+    workspaceUserMenuIsCustomized(userScopes);
   const filterIcon = filterCustomized
     ? "line.3.horizontal.decrease.circle.fill"
     : "line.3.horizontal.decrease.circle";
@@ -704,8 +723,10 @@ function ThreadNavigationSidebarPane(
     projects: projectFilterOptions,
     selectedEnvironmentId: options.selectedEnvironmentId,
     selectedProjectKey,
+    userScopes,
     onEnvironmentChange: setSelectedEnvironmentId,
     onProjectChange: setSelectedProjectKey,
+    onUserScopeChange,
   });
   const nativeHeaderItems = createSidebarHeaderItems({
     filterIcon,
