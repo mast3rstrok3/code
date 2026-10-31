@@ -52,7 +52,6 @@ import {
   type EnvironmentMachineKind,
   ProjectId,
   resolveEnvironmentMachineKind,
-  DEFAULT_WORKSPACE_USER_ID,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
 import { CommonActions, StackActions, useNavigation } from "@react-navigation/native";
@@ -70,6 +69,7 @@ import { filesystemEnvironment } from "../../state/filesystem";
 import { projectEnvironment } from "../../state/projects";
 import { useEnvironmentQuery } from "../../state/query";
 import { environmentSession, useEnvironmentScope, readEnvironmentScope } from "../../state/session";
+import { readActingWorkspaceUserId } from "../../state/workspace-users";
 import { useEnvironmentPresentation } from "../../state/presentation";
 import { sourceControlEnvironment } from "../../state/sourceControl";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
@@ -721,8 +721,7 @@ function useCreateProject(environment: EnvironmentOption | null) {
     const command = buildProjectCreateCommand({
       commandId: CommandId.make(uuidv4()),
       projectId,
-      // Mobile has no user switcher yet; new projects belong to the default user.
-      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+      ownerUserId: readActingWorkspaceUserId(environment.environmentId),
       workspaceRoot,
     });
     const result = await createProject({
@@ -1333,7 +1332,7 @@ export function AddProjectDestinationScreen(props: {
         environmentId: environment.environmentId,
         input: {
           projectId,
-          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+          ownerUserId: readActingWorkspaceUserId(environment.environmentId),
           title,
           createdAt: new Date().toISOString(),
           remoteUrl,

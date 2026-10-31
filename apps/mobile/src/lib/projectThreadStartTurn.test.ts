@@ -1,4 +1,9 @@
-import { ProjectId, ProviderInstanceId } from "@t3tools/contracts";
+import {
+  DEFAULT_WORKSPACE_USER_ID,
+  ProjectId,
+  ProviderInstanceId,
+  WorkspaceUserId,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { serializeComposerMessageForServer } from "./composerContext";
@@ -37,6 +42,7 @@ describe("project thread title", () => {
     const spec = {
       projectId: ProjectId.make("project"),
       projectCwd: "/workspace",
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
       threadId: "image-thread",
       commandId: "image-command",
       messageId: "image-message",
@@ -68,5 +74,31 @@ describe("project thread title", () => {
     expect(relaunched.titleSeed).toBe(title);
     expect(relaunched.message.text).toBe(wire.text);
     expect(relaunched.message.attachments).toEqual(uploadedAttachments);
+  });
+});
+
+describe("project thread owner", () => {
+  it("creates the thread for the given owner", () => {
+    const ada = WorkspaceUserId.make("ada");
+    const input = buildProjectThreadStartTurnInput({
+      projectId: ProjectId.make("project"),
+      projectCwd: "/workspace",
+      ownerUserId: ada,
+      threadId: "thread",
+      commandId: "command",
+      messageId: "message",
+      createdAt: "2026-09-04T00:00:00Z",
+      text: "Fix the build",
+      uploadedAttachments: [],
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      workspaceMode: "local",
+      branch: null,
+      worktreePath: null,
+      startFromOrigin: false,
+      worktreeBranchName: "unused",
+    });
+    expect(input.bootstrap.createThread.ownerUserId).toBe(ada);
   });
 });

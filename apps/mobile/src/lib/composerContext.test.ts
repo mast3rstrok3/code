@@ -1,6 +1,7 @@
 import { upgradeLegacyContextMessage } from "@t3tools/shared/composerContextLegacy";
 import { buildProjectThreadStartTurnInput } from "./projectThreadStartTurn";
 import {
+  DEFAULT_WORKSPACE_USER_ID,
   ProjectId,
   ProviderInstanceId,
   ComposerContextId,
@@ -346,6 +347,7 @@ describe("host context compatibility", () => {
             ...wire,
             projectId: ProjectId.make("project"),
             projectCwd: "/workspace",
+            ownerUserId: DEFAULT_WORKSPACE_USER_ID,
             threadId: "thread",
             commandId: "command",
             messageId: "message",

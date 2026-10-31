@@ -133,6 +133,11 @@ import { SettingsAboutRouteScreen } from "./features/settings/SettingsAboutRoute
 import { SettingsNotificationsRouteScreen } from "./features/settings/SettingsNotificationsRouteScreen";
 import { SettingsRouteScreen } from "./features/settings/SettingsRouteScreen";
 import { SettingsThreadsRouteScreen } from "./features/settings/SettingsThreadsRouteScreen";
+import {
+  SettingsUserGithubTokenRouteScreen,
+  SettingsUserRouteScreen,
+  SettingsUsersRouteScreen,
+} from "./features/settings/SettingsUsersRouteScreen";
 import { SettingsEnvironmentFilterProvider } from "./features/settings/settings-environment-filter";
 import { ShowcaseCaptureCoordinator } from "./features/showcase/ShowcaseCaptureCoordinator";
 import {
@@ -253,6 +258,21 @@ const SettingsContentStack = createV5SheetStackNavigator({
       screen: SettingsEnvironmentAgentBehaviorRouteScreen,
       linking: "agent-behavior",
       options: { title: "Agent behavior" },
+    }),
+    SettingsUsers: createNativeStackScreen({
+      screen: SettingsUsersRouteScreen,
+      linking: "users",
+      options: { title: "Users" },
+    }),
+    SettingsUser: createNativeStackScreen({
+      screen: SettingsUserRouteScreen,
+      linking: "users/:environmentId/:userId",
+      options: { title: "User" },
+    }),
+    // No path: a token form is entered from its user, never restored from a link.
+    SettingsUserGithubToken: createNativeStackScreen({
+      screen: SettingsUserGithubTokenRouteScreen,
+      options: { title: "GitHub token" },
     }),
     SettingsProviderAccounts: createNativeStackScreen({
       screen: SettingsProviderAccountsRouteScreen,

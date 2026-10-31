@@ -28,6 +28,8 @@ import { useProjects, useThreadShell, useThreadShells } from "../../state/entiti
 import { useThreadSearch } from "../../state/queries";
 import { useWorkspaceEnvironments } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
+import { useActingWorkspaceUserIds } from "../../state/workspace-users";
+import { filterProjectsForActingUsers } from "../workspace-users/workspaceUserScope";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { ThreadSearchMatchExcerpt } from "../threads/thread-search-match";
@@ -143,6 +145,7 @@ export function CommandPalette(props: {
   const { selectThread } = useAdaptiveWorkspaceLayout();
   const runCommand = props.onCommand;
   const projects = useProjects();
+  const actingUserIds = useActingWorkspaceUserIds();
   const threads = useThreadShells();
   const activeThreadRef = useMemo(() => parseActiveThreadPath(props.pathname), [props.pathname]);
   const activeThread = useThreadShell(activeThreadRef);
@@ -301,7 +304,11 @@ export function CommandPalette(props: {
         })),
       );
     }
-    const projectItems: CommandPaletteItem[] = projects.map((project) => ({
+    // A new thread belongs to the acting user, so it starts in one of their projects.
+    const projectItems: CommandPaletteItem[] = filterProjectsForActingUsers(
+      projects,
+      actingUserIds,
+    ).map((project) => ({
       key: `project:${scopedProjectKey(project.environmentId, project.id)}`,
       kind: "project",
       title: project.title,
@@ -344,6 +351,7 @@ export function CommandPalette(props: {
       });
     return [...actions, ...projectItems, ...threadItems];
   }, [
+    actingUserIds,
     activeThread,
     activeThreadRef,
     navigation,

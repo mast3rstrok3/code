@@ -183,6 +183,12 @@ function SettingsIndexSections() {
 
       <SettingsSection title="Server settings">
         <SettingsRow
+          icon="person.2"
+          label="Users"
+          target="SettingsUsers"
+          disabled={noServerTargets}
+        />
+        <SettingsRow
           icon="person.crop.circle"
           label="Provider accounts"
           target="SettingsProviderAccounts"

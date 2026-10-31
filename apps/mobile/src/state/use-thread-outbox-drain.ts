@@ -12,6 +12,7 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
+  DEFAULT_WORKSPACE_USER_ID,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   type MessageId,
 } from "@t3tools/contracts";
@@ -1015,6 +1016,8 @@ export function useThreadOutboxDrain(): void {
         input: buildProjectThreadStartTurnInput({
           projectId: creation.projectId,
           projectCwd,
+          // Tasks queued before owners were recorded keep the owner they were built for.
+          ownerUserId: creation.ownerUserId ?? DEFAULT_WORKSPACE_USER_ID,
           threadId: queuedMessage.threadId,
           commandId: queuedMessage.commandId,
           messageId: queuedMessage.messageId,
