@@ -13,7 +13,15 @@ import {
   WORKFLOW_PRESET_DEFINITION_BY_ID,
 } from "@t3tools/shared/workflowPresets";
 
-import type { ComposerDraftWorkflow } from "./use-composer-drafts";
+/**
+ * The workflow the next turn starts. Absent means the thread's own preset
+ * applies; a null `preset` means the user chose Build or Plan instead.
+ */
+export interface ComposerDraftWorkflow {
+  readonly preset: WorkflowPreset | null;
+  readonly lastPreset: WorkflowPreset | null;
+  readonly implementationSettings: ImplementationWorkflowSettings | null;
+}
 
 /** What the composer's mode control changes when the user picks an entry. */
 export type ComposerModeChoice =

@@ -14,8 +14,6 @@ import {
   RuntimeMode as RuntimeModeSchema,
   ImplementationWorkflowSettings as ImplementationWorkflowSettingsSchema,
   WorkflowPreset as WorkflowPresetSchema,
-  type ImplementationWorkflowSettings,
-  type WorkflowPreset,
   type EnvironmentId,
   type ModelSelection,
   type ProjectId,
@@ -70,6 +68,7 @@ import {
   type QueuedThreadMessage,
 } from "./thread-outbox-model";
 import { flushThreadOutbox, threadOutboxManager } from "./thread-outbox";
+import type { ComposerDraftWorkflow } from "./composer-workflow";
 import { composerDraftEnvironmentId } from "../lib/composerAttachmentUploadQueue";
 
 const COMPOSER_DRAFTS_SCHEMA_VERSION = 1;
@@ -346,16 +345,6 @@ export interface ComposerDraft {
   readonly workflow?: ComposerDraftWorkflow;
   readonly workspaceSelection?: ComposerDraftWorkspaceSelection;
   readonly project?: ComposerDraftProject;
-}
-
-/**
- * The workflow the next turn starts. Absent means the thread's own preset
- * applies; a null `preset` means the user chose Build or Plan instead.
- */
-export interface ComposerDraftWorkflow {
-  readonly preset: WorkflowPreset | null;
-  readonly lastPreset: WorkflowPreset | null;
-  readonly implementationSettings: ImplementationWorkflowSettings | null;
 }
 
 export interface ComposerDraftProject {
