@@ -320,8 +320,8 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
         ) : null}
       </ListSection>
 
-      {appStack.enabled ? (
-        <ListSection>
+      <ListSection>
+        {appStack.enabled ? (
           <ListRow
             icon="server.rack"
             label="App Stack"
@@ -337,8 +337,14 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
               })
             }
           />
-        </ListSection>
-      ) : null}
+        ) : null}
+        <ListRow
+          icon="checkmark.circle"
+          label="App Review"
+          description="Test this worktree's app and repair what fails"
+          onPress={() => navigation.navigate("ThreadAppReview", { environmentId, threadId })}
+        />
+      </ListSection>
 
       {linkedPrLines.length > 0 ? (
         <ListSection title="Linked pull requests">
