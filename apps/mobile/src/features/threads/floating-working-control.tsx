@@ -82,6 +82,8 @@ export function FloatingWorkingControl(props: {
   readonly onOpenAgents: () => void;
   readonly queuedCount: number;
   readonly onOpenQueue: () => void;
+  /** Present on a workflow's root or member threads; opens the Workflow sheet. */
+  readonly onOpenWorkflow?: (() => void) | null;
   readonly lift?: SharedValue<number>;
 }) {
   const { width: windowWidth } = useWindowDimensions();
@@ -93,6 +95,9 @@ export function FloatingWorkingControl(props: {
       ? props.status.action
       : null;
   const [agentsWidth, setAgentsWidth] = useState(0);
+  const [workflowWidth, setWorkflowWidth] = useState(0);
+  const onOpenWorkflow = props.onOpenWorkflow ?? null;
+  const hasWorkflow = onOpenWorkflow !== null;
   const hasQueue = props.queuedCount > 0;
   const previewCount =
     (props.devicePreview !== null ? 1 : 0) +
@@ -110,6 +115,7 @@ export function FloatingWorkingControl(props: {
       (action !== null ? actionWidth : 0) -
       (hasQueue ? queueWidth : 0) -
       (hasAgents ? agentsWidth : 0) -
+      (hasWorkflow ? workflowWidth : 0) -
       (hasPreview ? previewWidth : 0),
   );
   const separationProgress = useSharedValue(props.showScrollToEnd ? 1 : 0);
@@ -145,7 +151,7 @@ export function FloatingWorkingControl(props: {
     capsuleWidth.value = first ? width : withTiming(width, CONTROL_TIMING);
   };
   const hasStatus = props.status !== null;
-  const hasCapsule = hasStatus || hasQueue || hasAgents || hasPreview;
+  const hasCapsule = hasStatus || hasQueue || hasAgents || hasWorkflow || hasPreview;
   useEffect(() => {
     if (!hasStatus) {
       measuredWidthRef.current = null;
@@ -163,13 +169,13 @@ export function FloatingWorkingControl(props: {
     return null;
   }
 
-  const previewCompact = hasStatus || hasAgents || hasQueue || previewCount > 1;
+  const previewCompact = hasStatus || hasAgents || hasWorkflow || hasQueue || previewCount > 1;
   const statusInteractive =
     props.status?.kind === "connection" ||
     props.status?.kind === "child-input" ||
     props.status?.kind === "background";
   const capsuleInteractive =
-    statusInteractive || action !== null || hasQueue || hasAgents || hasPreview;
+    statusInteractive || action !== null || hasQueue || hasAgents || hasWorkflow || hasPreview;
   const statusContent =
     props.status !== null ? (
       <View
@@ -247,6 +253,30 @@ export function FloatingWorkingControl(props: {
           </Text>
         </Pressable>
       ) : null}
+      {onOpenWorkflow !== null ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open workflow"
+          accessibilityHint="Opens the workflow's steps, tickets, and controls"
+          onPress={onOpenWorkflow}
+          onLayout={(event) => setWorkflowWidth(settleWidth(event.nativeEvent.layout.width))}
+          className="h-11 flex-row items-center gap-1.5 px-3 active:opacity-70"
+        >
+          {hasStatus || hasPreview || hasAgents ? (
+            <View className="mr-1 h-4 w-px bg-border" />
+          ) : null}
+          <SymbolView
+            name="point.3.connected.trianglepath.dotted"
+            size={13}
+            tintColorClassName="accent-foreground-muted"
+          />
+          {hasStatus ? null : (
+            <Text className="font-t3-medium text-xs" numberOfLines={1}>
+              Workflow
+            </Text>
+          )}
+        </Pressable>
+      ) : null}
       {hasQueue ? (
         <Pressable
           accessibilityRole="button"
@@ -257,7 +287,7 @@ export function FloatingWorkingControl(props: {
           style={{ maxWidth: Math.min(overlayWidth, windowWidth) * 0.45 }}
           className="h-11 flex-row items-center gap-2 px-3 active:opacity-70"
         >
-          {hasStatus || hasPreview || hasAgents ? (
+          {hasStatus || hasPreview || hasAgents || hasWorkflow ? (
             <View className="mr-1 h-4 w-px bg-border" />
           ) : null}
           <SymbolView name="list.number" size={13} tintColorClassName="accent-foreground-muted" />

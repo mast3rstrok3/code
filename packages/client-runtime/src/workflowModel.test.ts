@@ -37,7 +37,7 @@ import {
   workflowStepCanRetryImplementationFailure,
   type WorkflowModelThread,
   type WorkflowTimelineStep,
-} from "./workflowModel";
+} from "./workflowModel.ts";
 
 const planningTicket = (
   id: string,

@@ -15,7 +15,7 @@ import {
   setWorkflowStepModelDefault,
   setWorkflowStepModelDefaults,
   standingWorkflowStepModel,
-} from "../settings/workflowStepModelDefaults";
+} from "@t3tools/client-runtime/workflow-step-models";
 import { WorkflowCatalogContent } from "../settings/WorkflowCatalogContent";
 import { Button } from "../ui/button";
 import {
@@ -30,9 +30,11 @@ import {
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import {
-  composerModeOptionKeyDown,
   sortComposerBuildSkills,
   type ComposerBuildSkill,
+} from "@t3tools/client-runtime/workflow-composer-mode";
+import {
+  composerModeOptionKeyDown,
   type ComposerModeCatalog,
   type ComposerWorkflowDefaults,
 } from "./ComposerModePicker";

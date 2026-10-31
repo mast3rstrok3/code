@@ -23,7 +23,10 @@ import {
   WORKFLOW_PRESET_DEFINITIONS,
 } from "@t3tools/shared/workflowPresets";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import { buildWorkflowViewModel, selectWorkflowRootForThread } from "~/workflowModel";
+import {
+  buildWorkflowViewModel,
+  selectWorkflowRootForThread,
+} from "@t3tools/client-runtime/workflow-model";
 import { useWorkflowSnapshot, useWorkflowThread, workflowEnvironment } from "~/state/workflows";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams, buildWorkflowRouteUrl } from "~/threadRoutes";

@@ -12,6 +12,7 @@ import type {
   ProviderOptionSelection,
   RuntimeMode,
   ServerProvider,
+  WorkflowPreset,
 } from "@t3tools/contracts";
 import {
   CommandId,
@@ -118,6 +119,16 @@ import {
   resolveProviderInteractionMode,
 } from "../../state/legacy-plan-mode";
 import { useLegacyPlanModeState } from "./use-legacy-plan-mode-enabled";
+import { isPlanningWorkflowAvailableForProvider } from "@t3tools/client-runtime/workflow-composer-mode";
+import { workflowPresetStartsInDedicatedWorkspace } from "@t3tools/shared/orchestrationImplementation";
+import {
+  applyComposerModeChoice,
+  composerWorkflowSendForQueue,
+  draftWorkflowFromQueued,
+  resolveComposerWorkflowSend,
+  type ComposerModeChoice,
+} from "../../state/composer-workflow";
+import { workflowSettingsValueAtom } from "../../state/workflows";
 import {
   filterNewTaskBranches,
   resolveNewTaskBranchWorktreePath,
@@ -195,6 +206,10 @@ type NewTaskFlowContextValue = {
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
   readonly planModeEnabled: boolean;
+  /** The workflow the task starts, or null for a Build or Plan turn. */
+  readonly workflowPreset: WorkflowPreset | null;
+  readonly lastWorkflowPreset: WorkflowPreset | null;
+  readonly workflowAvailable: boolean;
   readonly expandedProvider: string | null;
   readonly environments: ReadonlyArray<{
     readonly environmentId: EnvironmentId;
@@ -250,6 +265,7 @@ type NewTaskFlowContextValue = {
   readonly loadMoreBranches: () => void;
   readonly setRuntimeMode: (value: RuntimeMode) => void;
   readonly setInteractionMode: (value: ProviderInteractionMode) => void;
+  readonly setComposerMode: (choice: ComposerModeChoice) => void;
   readonly setSelectedModelOptions: (
     value: ReadonlyArray<ProviderOptionSelection> | undefined,
   ) => void;
@@ -593,9 +609,12 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     ) ?? null;
   const planModeEnabled =
     legacyPlanModeEnabled && selectedProviderStatus?.showInteractionModeToggle !== false;
-  const interactionMode = planModeEnabled
-    ? (selectedProjectDraft.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE)
-    : DEFAULT_PROVIDER_INTERACTION_MODE;
+  const workflowAvailable = isPlanningWorkflowAvailableForProvider(selectedProviderStatus?.driver);
+  const workflowPreset = workflowAvailable ? (selectedProjectDraft.workflow?.preset ?? null) : null;
+  const interactionMode =
+    workflowPreset !== null || planModeEnabled
+      ? (selectedProjectDraft.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE)
+      : DEFAULT_PROVIDER_INTERACTION_MODE;
   const setSelectedModelKey = (
     key: string | null,
     options?: ReadonlyArray<ProviderOptionSelection>,
@@ -613,11 +632,16 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     const provider = selectedEnvironmentServerConfig?.providers.find(
       (candidate) => candidate.instanceId === selection.instanceId,
     );
+    // A provider without workflows cannot keep one the draft chose for another.
+    const dropsWorkflow =
+      !isPlanningWorkflowAvailableForProvider(provider?.driver) &&
+      (getComposerDraftSnapshot(selectedProjectDraftKey).workflow?.preset ?? null) !== null;
     updateComposerDraftSettings(selectedProjectDraftKey, {
       modelSelection: selection,
-      ...(provider?.showInteractionModeToggle === false
+      ...(provider?.showInteractionModeToggle === false || dropsWorkflow
         ? { interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE }
         : {}),
+      ...(dropsWorkflow ? { workflow: undefined } : {}),
     });
     setStickyComposerModelSelection(selection);
   };
@@ -933,6 +957,33 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       });
     }
   };
+  const setComposerMode = (choice: ComposerModeChoice) => {
+    if (!selectedProjectDraftKey || !selectedProject) {
+      return;
+    }
+    const next = applyComposerModeChoice({
+      choice,
+      current: getComposerDraftSnapshot(selectedProjectDraftKey).workflow,
+      threadPreset: null,
+      standingImplementation: appAtomRegistry.get(
+        workflowSettingsValueAtom(selectedProject.environmentId),
+      ).implementation,
+    });
+    updateComposerDraftSettings(selectedProjectDraftKey, {
+      interactionMode: resolveProviderInteractionMode(selectedProviderStatus, next.interactionMode),
+      workflow: next.workflow,
+    });
+    // Like the web composer, a workflow that owns its workspace starts in a worktree.
+    if (
+      choice.kind === "workflow" &&
+      workflowPresetStartsInDedicatedWorkspace(choice.preset) &&
+      canChooseWorkspace &&
+      isGitRepo &&
+      workspaceMode === "local"
+    ) {
+      setWorkspaceMode("worktree");
+    }
+  };
 
   const beginEditingPendingTask = (messageId: string): boolean => {
     const message = findQueuedPendingTask(messageId);
@@ -948,6 +999,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         modelSelection: message.modelSelection,
         runtimeMode: message.runtimeMode,
         interactionMode: message.interactionMode,
+        ...(message.workflow ? { workflow: draftWorkflowFromQueued(message.workflow) } : {}),
         workspaceSelection: {
           mode: message.creation.workspaceMode,
           branch: message.creation.branch,
@@ -1000,6 +1052,19 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       isGitRepo,
     });
     const mode = workspaceSelection.mode;
+    const draftProvider = selectedEnvironmentServerConfig?.providers.find(
+      (candidate) => candidate.instanceId === draftModelSelection.instanceId,
+    );
+    const workflow = composerWorkflowSendForQueue(
+      resolveComposerWorkflowSend({
+        draftWorkflow: draft.workflow,
+        threadPreset: null,
+        provider: draftProvider?.driver,
+        standingImplementation: appAtomRegistry.get(
+          workflowSettingsValueAtom(selectedProject.environmentId),
+        ).implementation,
+      }),
+    );
     // When the selection is the stand-in built from the queued snapshot,
     // persist the original (possibly absent) snapshot values — the
     // stand-in's placeholder title/workspaceRoot must never be written back
@@ -1026,10 +1091,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         planModeEnabled: legacyPlanModeEnabled,
         draftInteractionMode: draft.interactionMode,
         queuedInteractionMode: editingPendingTask?.interactionMode,
-        provider: selectedEnvironmentServerConfig?.providers.find(
-          (candidate) => candidate.instanceId === draftModelSelection.instanceId,
-        ),
+        provider: draftProvider,
       }),
+      ...(workflow === undefined ? {} : { workflow }),
       creation: {
         projectId: selectedProject.id,
         // Editing a queued task in its own project keeps the owner it was queued for.
@@ -1186,6 +1250,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     runtimeMode,
     interactionMode,
     planModeEnabled,
+    workflowPreset,
+    lastWorkflowPreset: selectedProjectDraft.workflow?.lastPreset ?? null,
+    workflowAvailable,
     expandedProvider,
     environments,
     selectedProject,
@@ -1221,6 +1288,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     loadMoreBranches,
     setRuntimeMode,
     setInteractionMode,
+    setComposerMode,
     setSelectedModelOptions,
     setExpandedProvider,
   } satisfies NewTaskFlowContextValue;

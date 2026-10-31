@@ -1,11 +1,10 @@
 import type { ModelSelection, WorkflowPreset } from "@t3tools/contracts";
 
+import { WorkflowModelPinControls, type WorkflowModelChoices } from "./WorkflowModelPins";
 import {
-  WorkflowModelPinControls,
   type SetWorkflowStepModel,
-  type WorkflowModelChoices,
   type WorkflowModelPinKey,
-} from "./WorkflowModelPins";
+} from "@t3tools/client-runtime/workflow-step-models";
 import {
   resolveWorkflowModelQuickActionSelection,
   workflowModelQuickActions,

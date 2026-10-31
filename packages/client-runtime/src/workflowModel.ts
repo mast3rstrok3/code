@@ -132,11 +132,11 @@ export function buildTicketWaves(
       .filter((ticket) =>
         ticket.dependencies.every((dependency) => !remaining.has(dependency.ticketId)),
       )
-      .toSorted((left, right) => left.ordinal - right.ordinal);
+      .sort((left, right) => left.ordinal - right.ordinal);
     const wave =
       ready.length > 0
         ? ready
-        : [[...remaining.values()].toSorted((a, b) => a.ordinal - b.ordinal)[0]!];
+        : [[...remaining.values()].sort((a, b) => a.ordinal - b.ordinal)[0]!];
     waves.push(wave);
     for (const ticket of wave) remaining.delete(ticket.id);
   }
@@ -390,7 +390,7 @@ export function buildWorkflowTimeline<TThread extends WorkflowModelThread>(
       row,
     })),
     ...nestedEntries,
-  ].toSorted(
+  ].sort(
     (left, right) =>
       timestampMs(left.createdAt) - timestampMs(right.createdAt) || left.id.localeCompare(right.id),
   );
@@ -567,7 +567,7 @@ function newestImplementationRun<TRun extends WorkflowModelImplementationRun>(
   runs: readonly TRun[],
 ): TRun | null {
   return (
-    runs.toSorted(
+    [...runs].sort(
       (left, right) =>
         right.createdAt.localeCompare(left.createdAt) ||
         right.updatedAt.localeCompare(left.updatedAt) ||
@@ -724,7 +724,7 @@ export function resolveWorkflowCurrentPath<TThread extends WorkflowModelThread>(
     };
     const focusedState = run.ticketStates
       .filter((state) => ticketPriority(state) < 9)
-      .toSorted((left, right) => {
+      .sort((left, right) => {
         const priority = ticketPriority(left) - ticketPriority(right);
         if (priority !== 0) return priority;
         const leftOrder = order.get(left.ticketId) ?? { waveIndex: Number.MAX_VALUE, ordinal: 0 };
@@ -875,7 +875,7 @@ export function resolveWorkflowCurrentPath<TThread extends WorkflowModelThread>(
                 candidate.caller.implementationRunId === run.id &&
                 candidate.caller.ticketId === undefined,
             )
-            .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null)
+            .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null)
         : null;
     const combinedAppReviewCycle = combinedAppReview?.cycles.at(-1) ?? null;
     const cycleNumber = finalValidation
@@ -1447,7 +1447,7 @@ function resolveOwner<TThread extends WorkflowModelThread>(
     const currentKey = workflowThreadKey(current);
     const cycleIndex = indexByKey.get(currentKey);
     if (cycleIndex !== undefined) {
-      return path.slice(cycleIndex).toSorted((left, right) => left.id.localeCompare(right.id))[0]!;
+      return path.slice(cycleIndex).sort((left, right) => left.id.localeCompare(right.id))[0]!;
     }
     indexByKey.set(currentKey, path.length);
     path.push(current);
@@ -1534,7 +1534,7 @@ function buildGroupRows<TThread extends WorkflowModelThread>(threads: readonly T
   };
   const roots = threads
     .filter((thread) => parentByKey.get(workflowThreadKey(thread)) === null)
-    .toSorted(sortOldestFirst);
+    .sort(sortOldestFirst);
   for (const root of roots) emit(root, 0);
   for (const thread of [...threads].sort(sortOldestFirst)) emit(thread, 0);
   return rows;

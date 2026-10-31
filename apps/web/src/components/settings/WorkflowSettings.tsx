@@ -35,10 +35,12 @@ import { EngineeringWorkflowSettings } from "../EngineeringWorkflowSettings";
 import {
   useWorkflowModelChoices,
   WorkflowModelPinControls,
-  type SetWorkflowStepModel,
   type WorkflowModelChoices,
-  type WorkflowModelPinKey,
 } from "../WorkflowModelPins";
+import {
+  type SetWorkflowStepModel,
+  type WorkflowModelPinKey,
+} from "@t3tools/client-runtime/workflow-step-models";
 import type { SetWorkflowStepCycles } from "../WorkflowStepCycles";
 import type { SetWorkflowStepReviewParts } from "../WorkflowStepReviewParts";
 import { Badge } from "../ui/badge";
@@ -48,7 +50,7 @@ import {
   setWorkflowStepModelDefault,
   setWorkflowStepModelDefaults,
   standingWorkflowStepModel,
-} from "./workflowStepModelDefaults";
+} from "@t3tools/client-runtime/workflow-step-models";
 import { setWorkflowStepCycleOverride } from "@t3tools/shared/workflowStepCycles";
 
 function PageIntro({ title, description }: { title: string; description: string }) {

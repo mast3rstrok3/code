@@ -28,13 +28,12 @@ import {
   WorkflowStepReviewPartPins,
   type SetWorkflowStepReviewParts,
 } from "./WorkflowStepReviewParts";
-import { standingWorkflowStepModel } from "./settings/workflowStepModelDefaults";
+import { standingWorkflowStepModel } from "@t3tools/client-runtime/workflow-step-models";
+import { useWorkflowModelChoices, WorkflowStepModelPins } from "./WorkflowModelPins";
 import {
-  useWorkflowModelChoices,
-  WorkflowStepModelPins,
   type SetWorkflowStepModel,
   type WorkflowModelPinKey,
-} from "./WorkflowModelPins";
+} from "@t3tools/client-runtime/workflow-step-models";
 import {
   setWorkflowStepModelsOneAtATime,
   WorkflowModelQuickPins,

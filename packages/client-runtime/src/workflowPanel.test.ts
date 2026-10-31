@@ -1,5 +1,9 @@
-import type { AppReviewWorkflowRun } from "@t3tools/contracts";
-import type { EnvironmentWorkflowThreadShell } from "@t3tools/client-runtime/state/models";
+import type {
+  AppReviewWorkflowRun,
+  OrchestrationImplementationRun,
+  OrchestrationPlanningTicket,
+} from "@t3tools/contracts";
+import type { EnvironmentWorkflowThreadShell } from "./state/models.ts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -8,7 +12,8 @@ import {
   restartablePlanningStage,
   runningThreadIdsOf,
   workflowPauseOf,
-} from "./WorkflowsPanel";
+  workflowTicketStatuses,
+} from "./workflowPanel.ts";
 
 const PAUSED_AT = "2026-08-19T20:07:42.541Z";
 
@@ -161,5 +166,77 @@ describe("implementationRunWorkflowIds", () => {
       "ticket-app-review-current",
       "ticket-app-review-history",
     ]);
+  });
+});
+
+describe("workflowTicketStatuses", () => {
+  const ticket = (id: string) => ({ id }) as unknown as OrchestrationPlanningTicket;
+  const run = (
+    id: string,
+    createdAt: string,
+    ticketStates: readonly { readonly ticketId: string; readonly status: string }[],
+    skippedTicketIds: readonly string[] = [],
+  ) =>
+    ({
+      id,
+      createdAt,
+      planningTicketIds: ticketStates.map((state) => state.ticketId),
+      ticketStates,
+      skips: skippedTicketIds.map((ticketId) => ({ kind: "ticket", ticketId })),
+      appReviewWorkflowRunIds: [],
+    }) as unknown as OrchestrationImplementationRun;
+  const waitingThread = (id: string, workflowId: string, ticketId: string) =>
+    ({
+      id,
+      parentThreadId: null,
+      workflowPausedAt: null,
+      archivedAt: null,
+      hasPendingApprovals: false,
+      hasPendingUserInput: true,
+      session: null,
+      latestTurn: null,
+      workflowContext: { workflowId, ticketScope: [ticketId] },
+    }) as unknown as EnvironmentWorkflowThreadShell;
+
+  it("counts a ticket once, under the newest run that holds it", () => {
+    expect(
+      workflowTicketStatuses({
+        runs: [
+          run("run-old", "2026-09-01T00:00:00.000Z", [
+            { ticketId: "ticket-1", status: "failed" },
+            { ticketId: "ticket-2", status: "succeeded" },
+          ]),
+          run("run-new", "2026-09-02T00:00:00.000Z", [{ ticketId: "ticket-1", status: "ready" }]),
+        ],
+        tickets: [ticket("ticket-1"), ticket("ticket-2"), ticket("ticket-3")],
+        threads: [],
+        appReviewWorkflowRuns: [],
+      }),
+    ).toEqual(["pending", "done"]);
+  });
+
+  it("reads waiting threads from the ticket's own run only", () => {
+    expect(
+      workflowTicketStatuses({
+        runs: [
+          run(
+            "run-1",
+            "2026-09-01T00:00:00.000Z",
+            [
+              { ticketId: "ticket-1", status: "running" },
+              { ticketId: "ticket-2", status: "blocked" },
+              { ticketId: "ticket-3", status: "ready" },
+            ],
+            ["ticket-3"],
+          ),
+        ],
+        tickets: [ticket("ticket-1"), ticket("ticket-2"), ticket("ticket-3")],
+        threads: [
+          waitingThread("worker-1", "run-1", "ticket-1"),
+          waitingThread("stray", "other-run", "ticket-2"),
+        ],
+        appReviewWorkflowRuns: [],
+      }),
+    ).toEqual(["awaiting", "queued", "skipped"]);
   });
 });

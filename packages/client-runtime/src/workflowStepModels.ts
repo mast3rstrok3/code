@@ -10,7 +10,24 @@ import {
   workflowPresetStepCanPinModel,
 } from "@t3tools/shared/workflowPresets";
 
-import type { WorkflowModelPinKey } from "../WorkflowModelPins";
+/**
+ * A pin is identified by the step it belongs to and, for a sub-step, the agent
+ * within it. `stepWorkflowPromptId` is undefined for a step's own pin.
+ */
+export interface WorkflowModelPinKey {
+  readonly workflowPromptId: string;
+  readonly stepWorkflowPromptId?: string | undefined;
+}
+
+export type SetWorkflowStepModel = (
+  key: WorkflowModelPinKey,
+  selection: ModelSelection | null,
+) => void;
+
+export function workflowModelPinKey(key: WorkflowModelPinKey): string {
+  // NUL separates the two ids so no prompt id can forge another pair's key.
+  return `${key.stepWorkflowPromptId ?? ""}\u0000${key.workflowPromptId}`;
+}
 
 /**
  * One ordered step in the Engineering Workflow settings view.

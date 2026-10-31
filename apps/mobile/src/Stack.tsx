@@ -71,6 +71,8 @@ import { GitConfirmSheet } from "./features/threads/git/GitConfirmSheet";
 import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
 import { ThreadPullRequestsSheet } from "./features/threads/ThreadPullRequestsSheet";
 import { ThreadAgentsSheet } from "./features/threads/ThreadAgentsSheet";
+import { WorkflowRunSettingsSheet } from "./features/workflows/WorkflowRunSettingsSheet";
+import { WorkflowSheet } from "./features/workflows/WorkflowSheet";
 import { ThreadBackgroundWorkSheet } from "./features/threads/ThreadBackgroundWorkSheet";
 import { AppStackListSheet } from "./features/app-stacks/AppStackListSheet";
 import { AppStackLogsScreen } from "./features/app-stacks/AppStackLogsScreen";
@@ -141,6 +143,7 @@ import {
   SettingsUserRouteScreen,
   SettingsUsersRouteScreen,
 } from "./features/settings/SettingsUsersRouteScreen";
+import { SettingsWorkflowsRouteScreen } from "./features/settings/SettingsWorkflowsRouteScreen";
 import { SettingsEnvironmentFilterProvider } from "./features/settings/settings-environment-filter";
 import { ShowcaseCaptureCoordinator } from "./features/showcase/ShowcaseCaptureCoordinator";
 import {
@@ -296,6 +299,11 @@ const SettingsContentStack = createV5SheetStackNavigator({
       screen: SettingsThreadsRouteScreen,
       linking: "thread-preferences",
       options: { title: "Thread behavior" },
+    }),
+    SettingsWorkflows: createNativeStackScreen({
+      screen: SettingsWorkflowsRouteScreen,
+      linking: "workflows",
+      options: { title: "Workflows" },
     }),
     SettingsAbout: createNativeStackScreen({
       screen: SettingsAboutRouteScreen,
@@ -586,6 +594,8 @@ const WORKSPACE_OVERLAY_ROUTES = new Set([
   "ThreadAppStackLogs",
   "ThreadAppStacks",
   "ThreadBackgroundWork",
+  "ThreadWorkflow",
+  "ThreadWorkflowSettings",
   "ThreadPullRequests",
   "ThreadQueue",
   "ThreadReviewComment",
@@ -912,6 +922,24 @@ const RootStackConfig = createWorkspaceStackNavigator({
         ...FORM_SHEET_PRESENTATION_OPTIONS,
         headerShown: false,
         sheetAllowedDetents: [0.5, 0.9],
+        sheetGrabberVisible: true,
+      },
+    }),
+    ThreadWorkflow: createNativeStackScreen({
+      screen: WorkflowSheet,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: [0.6, 0.95],
+        sheetGrabberVisible: true,
+      },
+    }),
+    ThreadWorkflowSettings: createNativeStackScreen({
+      screen: WorkflowRunSettingsSheet,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: [0.7, 0.95],
         sheetGrabberVisible: true,
       },
     }),

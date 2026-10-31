@@ -18,13 +18,12 @@ import {
   engineeringWorkflowDefaultSteps,
   skippableImplementationSettingForStep,
   type EngineeringWorkflowDefaultStep,
-} from "./settings/workflowStepModelDefaults";
+} from "@t3tools/client-runtime/workflow-step-models";
+import { WorkflowModelPinControls, type WorkflowModelChoices } from "./WorkflowModelPins";
 import {
-  WorkflowModelPinControls,
   type SetWorkflowStepModel,
-  type WorkflowModelChoices,
   type WorkflowModelPinKey,
-} from "./WorkflowModelPins";
+} from "@t3tools/client-runtime/workflow-step-models";
 import { WorkflowModelQuickPins, type SetWorkflowStepModels } from "./WorkflowModelQuickPins";
 import { WorkflowStepCyclePins, type SetWorkflowStepCycles } from "./WorkflowStepCycles";
 import type { SetWorkflowStepReviewParts } from "./WorkflowStepReviewParts";

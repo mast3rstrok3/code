@@ -1,4 +1,3 @@
-import type { OrchestrationThreadWorkflowRole } from "@t3tools/contracts";
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
@@ -1347,44 +1346,6 @@ export function sortScopedProjectsForSidebar<
       left.environmentId.localeCompare(right.environmentId) ||
       left.id.localeCompare(right.id),
   );
-}
-
-export function workflowRoleShortLabel(
-  role: OrchestrationThreadWorkflowRole | null | undefined,
-): string | null {
-  switch (role) {
-    case "planning-orchestrator":
-      return "Planning";
-    case "planning-reviewer":
-      return "Ticket review";
-    case "planning-grill-judge":
-      return "Grill judge";
-    case "implementation-orchestrator":
-      return "Build";
-    case "implementation-worker":
-      return "Worker";
-    case "implementation-validator":
-      return "Merge gate";
-    case "implementation-qa-reviewer":
-      return "App review";
-    case "app-review-orchestrator":
-      return "App Review";
-    case "app-review-reviewer":
-      return "Browser review";
-    case "app-review-planner":
-      return "Gap analysis";
-    case "app-review-fixer":
-      return "Implement";
-    case "implementation-fixer":
-    case "product-fix-implementer":
-      return "Fix";
-    case "implementation-code-reviewer":
-      return "Code review";
-    case "fast-feature-implementer":
-      return "Build";
-    default:
-      return null;
-  }
 }
 
 export function getThreadDeleteConfirmationText(title: string): string {

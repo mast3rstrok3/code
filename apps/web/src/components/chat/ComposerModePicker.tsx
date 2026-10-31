@@ -4,16 +4,16 @@ import type {
   ModelSelection,
   ProviderInteractionMode,
   WorkflowPreset,
-  WorkflowSkillContract,
   WorkflowStepCycleOverride,
   WorkflowStepModelOverride,
   WorkflowStepReviewPartsOverride,
 } from "@t3tools/contracts";
 import {
-  inferDisplayedWorkflowPreset,
-  WORKFLOW_PRESET_DEFINITION_BY_ID,
-  WORKFLOW_PRESET_DEFINITIONS,
-} from "@t3tools/shared/workflowPresets";
+  describeComposerMode,
+  resolveComposerPrimaryMode,
+  type ComposerBuildSkill,
+  type ComposerPrimaryMode,
+} from "@t3tools/client-runtime/workflow-composer-mode";
 import {
   BotIcon,
   CheckIcon,
@@ -27,13 +27,7 @@ import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
 import { useComposerMenuState } from "./useComposerMenuState";
 import { ComposerControl, ComposerControlChevron, ComposerControlIcon } from "./ComposerControl";
 
-export type ComposerPrimaryMode = "build" | "plan" | "workflow";
 export type ComposerModeCatalog = "skills" | "workflows";
-
-export type ComposerBuildSkill = Pick<
-  WorkflowSkillContract,
-  "id" | "title" | "description" | "promptText" | "workflowIds"
->;
 
 export interface ComposerWorkflowDefaults {
   readonly environmentId: EnvironmentId;
@@ -67,66 +61,16 @@ export type ComposerModeControls = {
   readonly onBuildSkillChange: (skillId: string | null) => void;
 };
 
-export function sortComposerBuildSkills(
-  skills: ReadonlyArray<ComposerBuildSkill>,
-): ComposerBuildSkill[] {
-  return skills.toSorted(
-    (left, right) => left.title.localeCompare(right.title) || left.id.localeCompare(right.id),
-  );
-}
+const COMPOSER_MODE_ICON = {
+  build: BotIcon,
+  plan: PencilRulerIcon,
+  workflow: WorkflowIcon,
+  skill: SparklesIcon,
+} as const;
 
-export function resolveComposerPrimaryMode(input: {
-  readonly interactionMode: ProviderInteractionMode;
-  readonly workflowPreset: WorkflowPreset | null;
-}): ComposerPrimaryMode {
-  if (input.workflowPreset !== null || input.interactionMode.endsWith("-workflow")) {
-    return "workflow";
-  }
-  return input.interactionMode === "plan" ? "plan" : "build";
-}
-
-/**
- * Label and icon for the control that opens the mode section. `shortLabel` is
- * null for plain Build, which keeps the default from taking space beside the
- * model traits.
- */
-export function buildComposerModeTriggerDisplay(input: {
-  readonly interactionMode: ProviderInteractionMode;
-  readonly workflowPreset: WorkflowPreset | null;
-  readonly lastWorkflowPreset: WorkflowPreset | null;
-  readonly buildSkills: ReadonlyArray<ComposerBuildSkill>;
-  readonly selectedBuildSkillId: string | null;
-}): { label: string; shortLabel: string | null; icon: typeof BotIcon } {
-  const activeMode = resolveComposerPrimaryMode(input);
-  if (activeMode === "workflow") {
-    const presetLabel =
-      WORKFLOW_PRESET_DEFINITION_BY_ID[resolveWorkflowPresetForPicker(input)].label;
-    return { label: `Workflow · ${presetLabel}`, shortLabel: presetLabel, icon: WorkflowIcon };
-  }
-  if (activeMode === "plan") {
-    return { label: "Plan", shortLabel: "Plan", icon: PencilRulerIcon };
-  }
-  if (input.selectedBuildSkillId !== null) {
-    const skillTitle =
-      input.buildSkills.find((skill) => skill.id === input.selectedBuildSkillId)?.title ?? "Skill";
-    return { label: `Build · ${skillTitle}`, shortLabel: skillTitle, icon: SparklesIcon };
-  }
-  return { label: "Build", shortLabel: null, icon: BotIcon };
-}
-
-export function resolveWorkflowPresetForPicker(input: {
-  readonly interactionMode: ProviderInteractionMode;
-  readonly workflowPreset: WorkflowPreset | null;
-  readonly lastWorkflowPreset: WorkflowPreset | null;
-}): WorkflowPreset {
-  const activePreset = inferDisplayedWorkflowPreset(input);
-  if (activePreset !== null) return activePreset;
-  const rememberedPreset = WORKFLOW_PRESET_DEFINITIONS.some(
-    (definition) => definition.id === input.lastWorkflowPreset,
-  )
-    ? input.lastWorkflowPreset
-    : null;
-  return rememberedPreset ?? ("fast-plan" as const);
+function buildComposerModeTriggerDisplay(input: Parameters<typeof describeComposerMode>[0]) {
+  const display = describeComposerMode(input);
+  return { ...display, icon: COMPOSER_MODE_ICON[display.kind] };
 }
 
 function focusRelativeOption(container: HTMLElement, direction: 1 | -1) {
