@@ -53,7 +53,10 @@ export function useWorkflowRun(environmentId: EnvironmentId, threadId: ThreadId)
   return {
     workflow,
     rootId,
+    threads,
     rootDetail: rootDetail.data,
+    /** Null for a thread outside any workflow: the server refuses its artifacts. */
+    artifacts: artifacts.data,
     settings,
     implementationRuns:
       artifacts.data?.implementationRuns ?? snapshot.data?.implementationRuns ?? [],

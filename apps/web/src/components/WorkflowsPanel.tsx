@@ -9,7 +9,6 @@ import {
 import { NativeVerificationPanel } from "./NativeVerificationPanel";
 import type { EnvironmentWorkflowThreadShell } from "@t3tools/client-runtime/state/models";
 import type {
-  AppReviewWorkflowCycle,
   AppReviewWorkflowPhase,
   AppReviewWorkflowRun,
   EnvironmentId,
@@ -73,6 +72,7 @@ import {
   type WorkflowTimelineStep,
   type WorkflowThreadStatus,
 } from "@t3tools/client-runtime/workflow-model";
+import { appReviewPhaseRerunDisabledReason } from "@t3tools/client-runtime/app-review";
 import {
   appReviewRunActiveThreadIsBusy,
   collectRunningStepThreadIds,
@@ -538,46 +538,6 @@ const APP_REVIEW_PHASE_PIN = {
     stepWorkflowPromptId: "implementation.browser-app-review.codex",
   },
 } as const satisfies Record<AppReviewWorkflowPhase, WorkflowModelPinKey>;
-
-/**
- * Why an App Review phase cannot start again yet, if it cannot.
- *
- * Mirrors the server's rules so the panel never offers an action the decider
- * refuses: only the current cycle can be redone, the phases need what the
- * phases before them produced, and nothing starts under a live agent.
- */
-function appReviewPhaseRerunDisabledReason(input: {
-  readonly phaseLabel: string;
-  readonly phase: AppReviewWorkflowPhase;
-  readonly cycle: AppReviewWorkflowCycle;
-  readonly isCurrentCycle: boolean;
-  readonly callerBusyReason: string | null;
-  readonly cyclesUsed: number;
-  readonly cycleBudget: number;
-  readonly activeThread: EnvironmentWorkflowThreadShell | undefined;
-}): string | null {
-  if (!input.isCurrentCycle) return "Only the newest cycle can start again.";
-  if (input.callerBusyReason !== null) return input.callerBusyReason;
-  const session = input.activeThread?.session?.status;
-  if (session === "starting" || session === "running") {
-    return "This App Review is still running. Stop it before starting a phase again.";
-  }
-  // A browser review redo runs a new cycle rather than overwriting this one, so
-  // it needs a cycle left to run in.
-  if (
-    (input.phase === "e2e" || input.phase === "review") &&
-    input.cyclesUsed >= input.cycleBudget
-  ) {
-    return `Every one of the ${String(input.cycleBudget)} review cycles has been used.`;
-  }
-  if (input.phase === "planning" && input.cycle.actionableFindingsMarkdown === null) {
-    return "Gap analysis needs findings from this cycle's review sections.";
-  }
-  if (input.phase === "fixing" && (input.cycle.repairTickets?.length ?? 0) === 0) {
-    return "The repair needs the tickets gap analysis writes.";
-  }
-  return null;
-}
 
 export function TicketAppReviewCycles(props: {
   readonly groupId: string;

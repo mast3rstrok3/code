@@ -1,4 +1,3 @@
-import { normalizePreviewUrl } from "@t3tools/shared/preview";
 import * as Option from "effect/Option";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
@@ -1289,12 +1288,6 @@ export function restorePlanFollowUpComposer(input: {
   });
 }
 
-export interface AppReviewWorkflowLaunchRequest {
-  readonly brief: string;
-  readonly cycleBudget: number;
-  readonly reviewUrl: string;
-  readonly reviewOnly: boolean;
-}
 export interface BrowserAppReviewSourceContext {
   readonly turnId: import("@t3tools/contracts").TurnId | null;
   readonly messages: ReadonlyArray<{
@@ -1302,14 +1295,6 @@ export interface BrowserAppReviewSourceContext {
     readonly text: string;
     readonly createdAt: string;
   }>;
-}
-export function normalizeAppReviewPreviewTarget(value: string): string | null {
-  if (value.trim().length === 0) return null;
-  try {
-    return normalizePreviewUrl(value);
-  } catch {
-    return null;
-  }
 }
 
 /**

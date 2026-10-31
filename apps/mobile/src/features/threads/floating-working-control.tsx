@@ -84,6 +84,8 @@ export function FloatingWorkingControl(props: {
   readonly onOpenQueue: () => void;
   /** Present on a workflow's root or member threads; opens the Workflow sheet. */
   readonly onOpenWorkflow?: (() => void) | null;
+  /** Present on threads an App Review started; opens the App Review sheet. */
+  readonly appReview?: { readonly label: string; readonly onPress: () => void } | null;
   readonly lift?: SharedValue<number>;
 }) {
   const { width: windowWidth } = useWindowDimensions();
@@ -98,6 +100,9 @@ export function FloatingWorkingControl(props: {
   const [workflowWidth, setWorkflowWidth] = useState(0);
   const onOpenWorkflow = props.onOpenWorkflow ?? null;
   const hasWorkflow = onOpenWorkflow !== null;
+  const [appReviewWidth, setAppReviewWidth] = useState(0);
+  const appReview = props.appReview ?? null;
+  const hasAppReview = appReview !== null;
   const hasQueue = props.queuedCount > 0;
   const previewCount =
     (props.devicePreview !== null ? 1 : 0) +
@@ -116,6 +121,7 @@ export function FloatingWorkingControl(props: {
       (hasQueue ? queueWidth : 0) -
       (hasAgents ? agentsWidth : 0) -
       (hasWorkflow ? workflowWidth : 0) -
+      (hasAppReview ? appReviewWidth : 0) -
       (hasPreview ? previewWidth : 0),
   );
   const separationProgress = useSharedValue(props.showScrollToEnd ? 1 : 0);
@@ -151,7 +157,8 @@ export function FloatingWorkingControl(props: {
     capsuleWidth.value = first ? width : withTiming(width, CONTROL_TIMING);
   };
   const hasStatus = props.status !== null;
-  const hasCapsule = hasStatus || hasQueue || hasAgents || hasWorkflow || hasPreview;
+  const hasCapsule =
+    hasStatus || hasQueue || hasAgents || hasWorkflow || hasAppReview || hasPreview;
   useEffect(() => {
     if (!hasStatus) {
       measuredWidthRef.current = null;
@@ -169,13 +176,20 @@ export function FloatingWorkingControl(props: {
     return null;
   }
 
-  const previewCompact = hasStatus || hasAgents || hasWorkflow || hasQueue || previewCount > 1;
+  const previewCompact =
+    hasStatus || hasAgents || hasWorkflow || hasAppReview || hasQueue || previewCount > 1;
   const statusInteractive =
     props.status?.kind === "connection" ||
     props.status?.kind === "child-input" ||
     props.status?.kind === "background";
   const capsuleInteractive =
-    statusInteractive || action !== null || hasQueue || hasAgents || hasWorkflow || hasPreview;
+    statusInteractive ||
+    action !== null ||
+    hasQueue ||
+    hasAgents ||
+    hasWorkflow ||
+    hasAppReview ||
+    hasPreview;
   const statusContent =
     props.status !== null ? (
       <View
@@ -277,6 +291,30 @@ export function FloatingWorkingControl(props: {
           )}
         </Pressable>
       ) : null}
+      {appReview !== null ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Open App Review, ${appReview.label}`}
+          accessibilityHint="Opens the App Review's cycles, results, and controls"
+          onPress={appReview.onPress}
+          onLayout={(event) => setAppReviewWidth(settleWidth(event.nativeEvent.layout.width))}
+          className="h-11 flex-row items-center gap-1.5 px-3 active:opacity-70"
+        >
+          {hasStatus || hasPreview || hasAgents || hasWorkflow ? (
+            <View className="mr-1 h-4 w-px bg-border" />
+          ) : null}
+          <SymbolView
+            name="checkmark.circle"
+            size={13}
+            tintColorClassName="accent-foreground-muted"
+          />
+          {hasStatus ? null : (
+            <Text className="font-t3-medium text-xs" numberOfLines={1}>
+              {appReview.label}
+            </Text>
+          )}
+        </Pressable>
+      ) : null}
       {hasQueue ? (
         <Pressable
           accessibilityRole="button"
@@ -287,7 +325,7 @@ export function FloatingWorkingControl(props: {
           style={{ maxWidth: Math.min(overlayWidth, windowWidth) * 0.45 }}
           className="h-11 flex-row items-center gap-2 px-3 active:opacity-70"
         >
-          {hasStatus || hasPreview || hasAgents || hasWorkflow ? (
+          {hasStatus || hasPreview || hasAgents || hasWorkflow || hasAppReview ? (
             <View className="mr-1 h-4 w-px bg-border" />
           ) : null}
           <SymbolView name="list.number" size={13} tintColorClassName="accent-foreground-muted" />

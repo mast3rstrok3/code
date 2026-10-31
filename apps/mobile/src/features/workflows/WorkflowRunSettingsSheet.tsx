@@ -7,10 +7,15 @@ import {
   type GrillAnswerer,
   type ThreadId,
 } from "@t3tools/contracts";
-import { workflowModelPinKey } from "@t3tools/client-runtime/workflow-step-models";
+import {
+  workflowModelPinKey,
+  type WorkflowModelPinKey,
+} from "@t3tools/client-runtime/workflow-step-models";
+import { resolveLayeredAppReviewStepParts } from "@t3tools/shared/appReviewParts";
 import {
   resolveWorkflowStepCycleBudget,
   workflowStepCycleKeysEqual,
+  type WorkflowStepCycleKey,
 } from "@t3tools/shared/workflowStepCycles";
 import { Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -22,7 +27,12 @@ import { ListSection } from "../../components/ui/ListSection";
 import { NumberField } from "../../components/ui/NumberField";
 import { runSettingsCommand, useWorkflowCommands, useWorkflowRun } from "./useWorkflowRun";
 import { WorkflowSheetFrame } from "./WorkflowSheetFrame";
-import { WorkflowStepTuningSections, workflowTuningSteps } from "./WorkflowTuning";
+import {
+  WorkflowReviewModelsSection,
+  WorkflowStepTuningSections,
+  workflowTuningSteps,
+  type WorkflowTuningBinding,
+} from "./WorkflowTuning";
 
 type WorkflowSettingsTarget = {
   readonly environmentId: EnvironmentId;
@@ -61,6 +71,68 @@ export function WorkflowRunSettingsSheet({ route }: StaticScreenProps<WorkflowSe
       }),
     );
   };
+  const keyFields = (key: WorkflowModelPinKey | WorkflowStepCycleKey) => ({
+    workflowPromptId: key.workflowPromptId,
+    ...(key.stepWorkflowPromptId === undefined
+      ? {}
+      : { stepWorkflowPromptId: key.stepWorkflowPromptId }),
+  });
+  const setPin: WorkflowTuningBinding["onSetPin"] = (key, modelSelection) =>
+    void commands.send({
+      type: "thread.workflow.step-model.set",
+      ...commands.base(),
+      ...keyFields(key),
+      modelSelection,
+    });
+  const binding: WorkflowTuningBinding | null =
+    root === null
+      ? null
+      : {
+          environmentId: target.environmentId,
+          disabled,
+          inheritedModelLabel: "Workflow default",
+          pinFor: (key) =>
+            (root.workflowStepModels ?? []).find(
+              (entry) => workflowModelPinKey(entry) === workflowModelPinKey(key),
+            )?.modelSelection ?? null,
+          onSetPin: setPin,
+          // Each pin is its own command; the server applies them in order.
+          onSetPins: (keys, selection) => {
+            for (const key of keys) setPin(key, selection);
+          },
+          cyclesFor: (key) =>
+            (root.workflowStepCycles ?? []).find((entry) => workflowStepCycleKeysEqual(entry, key))
+              ?.maxCycles ?? null,
+          inheritedCycles: (key) =>
+            resolveWorkflowStepCycleBudget({
+              key,
+              settingsOverrides: run.settings.workflowStepCycles,
+            }),
+          onSetCycles: (key, maxCycles) =>
+            void commands.send({
+              type: "thread.workflow.step-cycles.set",
+              ...commands.base(),
+              ...keyFields(key),
+              maxCycles,
+            }),
+          reviewPartsFor: (key) =>
+            resolveLayeredAppReviewStepParts({
+              threadOverrides: root.workflowStepReviewParts,
+              settingsOverrides: run.settings.workflowStepReviewParts,
+              key,
+            }),
+          hasReviewPartsOverride: (key) =>
+            (root.workflowStepReviewParts ?? []).some((entry) =>
+              workflowStepCycleKeysEqual(entry, key),
+            ),
+          onSetReviewParts: (key, parts) =>
+            void commands.send({
+              type: "thread.workflow.step-review-parts.set",
+              ...commands.base(),
+              ...keyFields(key),
+              parts,
+            }),
+        };
   const title =
     target.stepWorkflowPromptId === undefined
       ? "Models and cycles"
@@ -120,49 +192,10 @@ export function WorkflowRunSettingsSheet({ route }: StaticScreenProps<WorkflowSe
             />
           </>
         ) : null}
-        {root !== null ? (
-          <WorkflowStepTuningSections
-            steps={steps}
-            binding={{
-              environmentId: target.environmentId,
-              disabled,
-              inheritedModelLabel: "Workflow default",
-              pinFor: (key) =>
-                (root.workflowStepModels ?? []).find(
-                  (entry) => workflowModelPinKey(entry) === workflowModelPinKey(key),
-                )?.modelSelection ?? null,
-              onSetPin: (key, modelSelection) =>
-                void commands.send({
-                  type: "thread.workflow.step-model.set",
-                  ...commands.base(),
-                  workflowPromptId: key.workflowPromptId,
-                  ...(key.stepWorkflowPromptId === undefined
-                    ? {}
-                    : { stepWorkflowPromptId: key.stepWorkflowPromptId }),
-                  modelSelection,
-                }),
-              cyclesFor: (key) =>
-                (root.workflowStepCycles ?? []).find((entry) =>
-                  workflowStepCycleKeysEqual(entry, key),
-                )?.maxCycles ?? null,
-              inheritedCycles: (key) =>
-                resolveWorkflowStepCycleBudget({
-                  key,
-                  settingsOverrides: run.settings.workflowStepCycles,
-                }),
-              onSetCycles: (key, maxCycles) =>
-                void commands.send({
-                  type: "thread.workflow.step-cycles.set",
-                  ...commands.base(),
-                  workflowPromptId: key.workflowPromptId,
-                  ...(key.stepWorkflowPromptId === undefined
-                    ? {}
-                    : { stepWorkflowPromptId: key.stepWorkflowPromptId }),
-                  maxCycles,
-                }),
-            }}
-          />
+        {binding !== null && target.stepWorkflowPromptId === undefined ? (
+          <WorkflowReviewModelsSection preset={preset} binding={binding} />
         ) : null}
+        {binding !== null ? <WorkflowStepTuningSections steps={steps} binding={binding} /> : null}
         {root !== null && steps.length === 0 ? (
           <Text className="text-sm text-foreground-muted">
             This step shares the workflow's main thread, so it uses the model selected in that

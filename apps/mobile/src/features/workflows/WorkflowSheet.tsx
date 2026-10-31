@@ -61,6 +61,12 @@ export function WorkflowSheet({ route }: StaticScreenProps<WorkflowSheetTarget>)
             StackActions.replace("Thread", { environmentId: target.environmentId, threadId }),
           );
         }}
+        onOpenAppReview={() =>
+          navigation.navigate("ThreadAppReview", {
+            environmentId: target.environmentId,
+            threadId: run.rootId,
+          })
+        }
         onOpenStepSettings={(stepWorkflowPromptId) =>
           navigation.navigate("ThreadWorkflowSettings", {
             environmentId: target.environmentId,
@@ -88,6 +94,7 @@ function WorkflowSheetContent(props: {
   readonly onOpenThread: (threadId: ThreadId) => void;
   readonly onOpenDocument: (document: { title: string; markdown: string }) => void;
   readonly onOpenStepSettings: (stepWorkflowPromptId: string | null) => void;
+  readonly onOpenAppReview: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const { run, commands } = props;
@@ -202,6 +209,7 @@ function WorkflowSheetContent(props: {
           commands={commands}
           onOpenRoot={() => props.onOpenThread(workflow.root.id)}
           onOpenSettings={() => props.onOpenStepSettings(null)}
+          onOpenAppReview={props.onOpenAppReview}
         />
       ) : null}
       {run.pendingQuestions.map((request) => (
@@ -275,11 +283,14 @@ function WorkflowRootHeader(props: {
   readonly commands: WorkflowCommands;
   readonly onOpenRoot: () => void;
   readonly onOpenSettings: () => void;
+  readonly onOpenAppReview: () => void;
 }) {
   const root = props.run.workflow!.root;
   const paused = root.workflowPausedAt != null;
   const preset = root.workflowPreset ?? null;
   const disabled = !props.commands.canDispatch || props.commands.busy;
+  // Only the artifacts are scoped to this workflow; the snapshot holds every run.
+  const appReviewCount = props.run.artifacts?.appReviewWorkflowRuns.length ?? 0;
   return (
     <View className="gap-3">
       <Pressable
@@ -342,6 +353,16 @@ function WorkflowRootHeader(props: {
             />
           </View>
         </View>
+      ) : null}
+      {appReviewCount > 0 ? (
+        <Button
+          label={`App Reviews · ${String(appReviewCount)}`}
+          icon="checkmark.circle"
+          tone="secondary"
+          fullWidth
+          accessibilityHint="Opens this workflow's App Review runs and results"
+          onPress={props.onOpenAppReview}
+        />
       ) : null}
     </View>
   );
