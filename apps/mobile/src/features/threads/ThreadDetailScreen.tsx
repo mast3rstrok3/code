@@ -530,6 +530,12 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
   });
   const composerError = useAtomValue(threadComposerErrorsAtom)[selectedThreadKey]?.message ?? null;
   const queuedCount = useThreadQueuedCount(props.selectedThreadDetailRef);
+  // The shell already says whether this thread belongs to a workflow, so the
+  // chip costs no subscription; the sheet subscribes only while it is open.
+  const isWorkflowThread =
+    props.selectedThread.workflowRole != null ||
+    props.selectedThread.workflowContext != null ||
+    props.selectedThread.workflowPreset != null;
   const turnSubagents = useThreadTurnSubagents(props.selectedThreadDetailRef);
   const agentsSegment = resolveSubagentPillSegment(turnSubagents);
   const composerEditorRef = useRef<ComposerEditorHandle>(null);
@@ -783,6 +789,7 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
     showWorkingControl ||
     queuedCount > 0 ||
     agentsSegment !== null ||
+    isWorkflowThread ||
     devicePreviews.length > 0 ||
     browserTabs.tabs.length > 0 ||
     appStackChip !== null ||
@@ -1428,6 +1435,17 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
                       threadId: props.selectedThread.id,
                     });
                   }}
+                  onOpenWorkflow={
+                    isWorkflowThread
+                      ? () => {
+                          Keyboard.dismiss();
+                          navigation.navigate("ThreadWorkflow", {
+                            environmentId: props.environmentId,
+                            threadId: props.selectedThread.id,
+                          });
+                        }
+                      : null
+                  }
                   queuedCount={queuedCount}
                   onOpenQueue={() => {
                     Keyboard.dismiss();
