@@ -15,11 +15,13 @@ import {
   type OrchestrationThreadWorkflowRole,
   type ThreadId,
   type WorkflowPreset,
+  type WorkflowStepCycleOverride,
 } from "@t3tools/contracts";
 import {
   WORKFLOW_PRESET_DEFINITION_BY_ID,
   type WorkflowPresetSubStep,
 } from "@t3tools/shared/workflowPresets";
+import { resolveWorkflowStepCycleBudget } from "@t3tools/shared/workflowStepCycles";
 
 import type { EnvironmentWorkflowThreadShell } from "./state/models.ts";
 import {
@@ -27,6 +29,7 @@ import {
   implementationRunCurrentStage,
   implementationRunPublicationStageProgress,
   resolveGroupImplementationRun,
+  resolveWorkflowCurrentPath,
   resolveWorkflowGroupTimeRange,
   resolveWorkflowHeaderStatus,
   resolveWorkflowStepRollup,
@@ -38,6 +41,7 @@ import {
   workflowStepMatchesImplementationFailure,
   type WorkflowCurrentPath,
   type WorkflowGroup,
+  type WorkflowRoot,
   type WorkflowStepStatus,
   type WorkflowThreadStatus,
   type WorkflowTimelineStep,
@@ -660,7 +664,49 @@ export function appReviewRunPresentation(run: AppReviewWorkflowRun | null): {
     case "exhausted":
       return { status: "failed", label: "Exhausted" };
   }
-} /**
+} /** Where a top-level group's run is right now, for its chip and card header. */
+export function resolveWorkflowGroupCurrentPath(input: {
+  readonly group: WorkflowGroup<EnvironmentWorkflowThreadShell>;
+  readonly groups: readonly WorkflowGroup<EnvironmentWorkflowThreadShell>[];
+  readonly workflow: WorkflowRoot<EnvironmentWorkflowThreadShell>;
+  readonly run: OrchestrationImplementationRun | null;
+  readonly appReviewWorkflowRuns: readonly AppReviewWorkflowRun[];
+  readonly tickets: readonly OrchestrationPlanningTicket[];
+  readonly defaultStepCycles: ReadonlyArray<WorkflowStepCycleOverride> | undefined;
+}): WorkflowCurrentPath {
+  const { group, workflow } = input;
+  const steps = buildWorkflowSteps(group, input.groups, workflow.root, {
+    flattenNestedWorkflows: true,
+  });
+  const ticketCodeReviewBudget = resolveWorkflowStepCycleBudget({
+    key: {
+      workflowPromptId: "implementation.code-review.codex",
+      stepWorkflowPromptId: "implementation.tdd.codex",
+    },
+    threadOverrides: workflow.root.workflowStepCycles,
+    settingsOverrides: input.defaultStepCycles,
+  });
+  const finalCodeReviewBudget = resolveWorkflowStepCycleBudget({
+    key: { workflowPromptId: "implementation.code-review.codex" },
+    threadOverrides: workflow.root.workflowStepCycles,
+    settingsOverrides: input.defaultStepCycles,
+  });
+  return resolveWorkflowCurrentPath({
+    groupId: group.id,
+    workflowLabel: groupTitle(group),
+    steps,
+    run: input.run,
+    appReviewWorkflowRuns: input.appReviewWorkflowRuns,
+    tickets: input.tickets,
+    threads: [workflow.root, ...workflow.members],
+    planningStage: workflow.root.planningWorkflowSummary?.stage ?? null,
+    workflowPaused: workflow.root.workflowPausedAt != null,
+    ticketCodeReviewBudget,
+    finalCodeReviewBudget,
+  });
+}
+
+/**
  * Everything a workflow group's card derives from the run: its linked runs,
  * steps and their statuses, the live step, and the header's status and label.
  */

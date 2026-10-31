@@ -53,7 +53,6 @@ import {
 import { cn } from "~/lib/utils";
 import { formatChatTimestampTooltip, formatShortTimestamp } from "~/timestampFormat";
 import {
-  buildWorkflowSteps,
   buildTicketWaves,
   implementationTicketStageDetails,
   resolveGroupImplementationRun,
@@ -64,7 +63,6 @@ import {
   resolveWorkflowThreadTimeRange,
   resolveWorkflowThreadStatus,
   resolveWorkflowTicketStatus,
-  resolveWorkflowCurrentPath,
   workflowCurrentPathScrollTarget,
   workflowStepCanRetryImplementationFailure,
   workflowThreadKey,
@@ -86,6 +84,7 @@ import {
   planningStepTimeRange,
   rerunRunStageForStep,
   resolveStepRestart,
+  resolveWorkflowGroupCurrentPath,
   resolveWorkflowGroupState,
   type RestartablePlanningStage,
   restartablePlanningStage,
@@ -2933,41 +2932,21 @@ export function WorkflowsPanel(props: {
     appReviewWorkflowRuns: props.appReviewWorkflowRuns,
   });
   const currentPathByGroupId = new Map(
-    topLevelGroups.map((group) => {
-      const run = implementationRunByGroupId.get(group.id) ?? null;
-      const steps = buildWorkflowSteps(group, groups, workflow.root, {
-        flattenNestedWorkflows: true,
-      });
-      const ticketCodeReviewBudget = resolveWorkflowStepCycleBudget({
-        key: {
-          workflowPromptId: "implementation.code-review.codex",
-          stepWorkflowPromptId: "implementation.tdd.codex",
-        },
-        threadOverrides: workflow.root.workflowStepCycles,
-        settingsOverrides: props.defaultStepCycles,
-      });
-      const finalCodeReviewBudget = resolveWorkflowStepCycleBudget({
-        key: { workflowPromptId: "implementation.code-review.codex" },
-        threadOverrides: workflow.root.workflowStepCycles,
-        settingsOverrides: props.defaultStepCycles,
-      });
-      return [
-        group.id,
-        resolveWorkflowCurrentPath({
-          groupId: group.id,
-          workflowLabel: groupTitle(group),
-          steps,
-          run,
-          appReviewWorkflowRuns: props.appReviewWorkflowRuns,
-          tickets: props.tickets,
-          threads: [workflow.root, ...workflow.members],
-          planningStage: workflow.root.planningWorkflowSummary?.stage ?? null,
-          workflowPaused: workflow.root.workflowPausedAt != null,
-          ticketCodeReviewBudget,
-          finalCodeReviewBudget,
-        }),
-      ] as const;
-    }),
+    topLevelGroups.map(
+      (group) =>
+        [
+          group.id,
+          resolveWorkflowGroupCurrentPath({
+            group,
+            groups,
+            workflow,
+            run: implementationRunByGroupId.get(group.id) ?? null,
+            appReviewWorkflowRuns: props.appReviewWorkflowRuns,
+            tickets: props.tickets,
+            defaultStepCycles: props.defaultStepCycles,
+          }),
+        ] as const,
+    ),
   );
 
   return (
