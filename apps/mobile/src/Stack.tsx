@@ -143,6 +143,7 @@ import {
   SettingsUserRouteScreen,
   SettingsUsersRouteScreen,
 } from "./features/settings/SettingsUsersRouteScreen";
+import { SettingsWorkflowsRouteScreen } from "./features/settings/SettingsWorkflowsRouteScreen";
 import { SettingsEnvironmentFilterProvider } from "./features/settings/settings-environment-filter";
 import { ShowcaseCaptureCoordinator } from "./features/showcase/ShowcaseCaptureCoordinator";
 import {
@@ -298,6 +299,11 @@ const SettingsContentStack = createV5SheetStackNavigator({
       screen: SettingsThreadsRouteScreen,
       linking: "thread-preferences",
       options: { title: "Thread behavior" },
+    }),
+    SettingsWorkflows: createNativeStackScreen({
+      screen: SettingsWorkflowsRouteScreen,
+      linking: "workflows",
+      options: { title: "Workflows" },
     }),
     SettingsAbout: createNativeStackScreen({
       screen: SettingsAboutRouteScreen,

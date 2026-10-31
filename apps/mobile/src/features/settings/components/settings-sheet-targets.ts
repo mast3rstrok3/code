@@ -2,6 +2,7 @@ export type SettingsSheetTarget =
   | "SettingsEnvironments"
   | "SettingsNotifications"
   | "SettingsThreads"
+  | "SettingsWorkflows"
   | "SettingsAbout"
   | "SettingsArchive"
   | "SettingsAppearance"
