@@ -203,7 +203,8 @@ vi.mock("./useSettings", () => ({
 }));
 // The toast module reaches the clipboard schema through the mocked contracts.
 vi.mock("../components/ui/toast", () => ({ toastManager: { add: vi.fn() } }));
-vi.mock("../lib/workspaceUsers", () => ({
+vi.mock("@t3tools/shared/workspaceUsers", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@t3tools/shared/workspaceUsers")>()),
   resolveDefaultThreadOwnerUserId: () => "default",
 }));
 

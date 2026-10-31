@@ -15,15 +15,16 @@ import {
   clearWorkspaceUserGithubPersonalAccessToken,
   createWorkspaceUser,
   githubFineGrainedTokenUrl,
-  type GithubOwnerTokenValidation,
+  githubOwnerTokenValidationMessage,
   removeWorkspaceUserGithubOwnerToken,
   renameWorkspaceUser,
   replaceWorkspaceUserGithubOwnerToken,
   validateAddGithubOwnerToken,
   validateAddWorkspaceUser,
   validateRenameWorkspaceUser,
-  type WorkspaceUserDisplayNameValidation,
-} from "./UsersSettings.logic";
+  workspaceUserDisplayNameMessage,
+  workspaceUserGithubTokenCount,
+} from "@t3tools/shared/workspaceUserSettings";
 
 function GithubTokenLink({ owner, children }: { owner?: string; children: string }) {
   return (
@@ -37,29 +38,6 @@ function GithubTokenLink({ owner, children }: { owner?: string; children: string
       <ExternalLinkIcon className="size-3 shrink-0" aria-hidden />
     </a>
   );
-}
-
-function validationMessage(validation: WorkspaceUserDisplayNameValidation): string | null {
-  if (validation.valid || validation.reason === "unchanged") {
-    return null;
-  }
-  if (validation.reason === "blank") {
-    return "Display name is required.";
-  }
-  return "Display name already exists.";
-}
-
-function ownerTokenValidationMessage(validation: GithubOwnerTokenValidation): string | null {
-  if (validation.valid || validation.reason === "blank-owner") {
-    return null;
-  }
-  if (validation.reason === "invalid-owner") {
-    return "Enter a GitHub user or organization name.";
-  }
-  if (validation.reason === "duplicate-owner") {
-    return "That owner already has a token.";
-  }
-  return null;
 }
 
 /** Asks the server to check an owner token with GitHub before it is saved. */
@@ -103,9 +81,9 @@ function WorkspaceUserSettingsRow({
   const [displayName, setDisplayName] = useState(user.displayName);
   const hasOwnerlessToken = Boolean(user.github.personalAccessTokenRedacted);
   const ownerTokens = user.github.ownerTokens ?? [];
-  const tokenCount = ownerTokens.length + (hasOwnerlessToken ? 1 : 0);
+  const tokenCount = workspaceUserGithubTokenCount(user);
   const renameValidation = validateRenameWorkspaceUser({ user, displayName, workspaceUsers });
-  const renameMessage = validationMessage(renameValidation);
+  const renameMessage = workspaceUserDisplayNameMessage(renameValidation);
 
   useEffect(() => {
     setDisplayName(user.displayName);
@@ -305,7 +283,7 @@ function AddGithubOwnerTokenForm({
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const verifyToken = useVerifyGithubOwnerToken();
   const validation = validateAddGithubOwnerToken(user, owner, tokenDraft);
-  const message = ownerTokenValidationMessage(validation) ?? verificationError;
+  const message = githubOwnerTokenValidationMessage(validation) ?? verificationError;
 
   const handleAdd = async (candidate: { owner: string; personalAccessToken: string }) => {
     setChecking(true);
@@ -398,7 +376,7 @@ function AddWorkspaceUserRow({
 }) {
   const [displayName, setDisplayName] = useState("");
   const validation = validateAddWorkspaceUser(displayName, workspaceUsers);
-  const message = displayName.length > 0 ? validationMessage(validation) : null;
+  const message = displayName.length > 0 ? workspaceUserDisplayNameMessage(validation) : null;
 
   const handleAddUser = () => {
     const user = createWorkspaceUser(displayName, workspaceUsers);

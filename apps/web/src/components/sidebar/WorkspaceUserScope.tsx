@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import {
   resolveWorkspaceUserView,
+  workspaceUserScopePatch,
   workspaceUserViewCacheKey,
 } from "@t3tools/shared/workspaceUsers";
 import {
@@ -8,7 +9,6 @@ import {
   usePrimarySettings,
   updateClientSettings,
 } from "../../hooks/useSettings";
-import { workspaceUserScopePatch } from "../../lib/workspaceUsers";
 import { setActiveWorkspaceUserView } from "../../state/shell";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 

@@ -1,7 +1,6 @@
 import {
   ORCHESTRATION_V2_WS_METHODS,
   type EnvironmentId,
-  DEFAULT_WORKSPACE_USER_ID,
   type WorkspaceUserView,
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ShellStreamItem,
@@ -20,6 +19,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom } from "effect/reactivity";
+import { isOwnedByWorkspaceUserView } from "@t3tools/shared/workspaceUsers";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import { connectionProjectionPhase } from "../connection/model.ts";
@@ -553,7 +553,10 @@ export function createEnvironmentShellAtoms<R, E>(
     | R,
     E
   >,
-  options?: { readonly userViewAtom: Atom.Atom<WorkspaceUserView> },
+  options?: {
+    /** Each environment has its own users, so each can carry its own view. */
+    readonly userViewAtom: (environmentId: EnvironmentId) => Atom.Atom<WorkspaceUserView>;
+  },
 ) {
   const sourceAtom = Atom.family((environmentId: EnvironmentId) =>
     runtime.atom(shellStateChanges(environmentId), {
@@ -566,7 +569,7 @@ export function createEnvironmentShellAtoms<R, E>(
       ? sourceAtom
       : Atom.family((environmentId: EnvironmentId) =>
           Atom.make((get) => {
-            const view = get(options.userViewAtom);
+            const view = get(options.userViewAtom(environmentId));
             return AsyncResult.map(get(sourceAtom(environmentId)), (state) =>
               view.kind === "all"
                 ? state
@@ -574,13 +577,11 @@ export function createEnvironmentShellAtoms<R, E>(
                     ...state,
                     snapshot: Option.map(state.snapshot, (snapshot) => ({
                       ...snapshot,
-                      projects: snapshot.projects.filter(
-                        (project) =>
-                          (project.ownerUserId ?? DEFAULT_WORKSPACE_USER_ID) === view.userId,
+                      projects: snapshot.projects.filter((project) =>
+                        isOwnedByWorkspaceUserView(project, view),
                       ),
-                      threads: snapshot.threads.filter(
-                        (thread) =>
-                          (thread.ownerUserId ?? DEFAULT_WORKSPACE_USER_ID) === view.userId,
+                      threads: snapshot.threads.filter((thread) =>
+                        isOwnedByWorkspaceUserView(thread, view),
                       ),
                     })),
                   },

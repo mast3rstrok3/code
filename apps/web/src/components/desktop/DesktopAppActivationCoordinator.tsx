@@ -7,7 +7,7 @@ import { useClientSettings, usePrimarySettings } from "../../hooks/useSettings";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { findProjectByPath, inferProjectTitleFromPath } from "../../lib/projectPaths";
 import { newProjectId } from "../../lib/utils";
-import { resolveDefaultThreadOwnerUserId } from "../../lib/workspaceUsers";
+import { resolveDefaultThreadOwnerUserId } from "@t3tools/shared/workspaceUsers";
 import { readProjects, waitForProject } from "../../state/entities";
 import { usePrimaryEnvironment } from "../../state/environments";
 import { projectEnvironment } from "../../state/projects";

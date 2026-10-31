@@ -34,7 +34,7 @@ export function setActiveWorkspaceUserView(userView: WorkspaceUserView): void {
 }
 
 export const environmentShell = createEnvironmentShellAtoms(connectionAtomRuntime, {
-  userViewAtom: activeWorkspaceUserViewAtom,
+  userViewAtom: () => activeWorkspaceUserViewAtom,
 });
 export const environmentSnapshotAtom = createEnvironmentSnapshotAtom(environmentShell.stateAtom);
 
