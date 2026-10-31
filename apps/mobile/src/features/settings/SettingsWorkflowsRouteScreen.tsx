@@ -15,6 +15,10 @@ import {
   standingWorkflowStepModel,
   type SkippableImplementationSetting,
 } from "@t3tools/client-runtime/workflow-step-models";
+import {
+  resolveAppReviewStepParts,
+  setWorkflowStepReviewPartsOverride,
+} from "@t3tools/shared/appReviewParts";
 import { workflowStartModel } from "@t3tools/shared/projectSettings";
 import { normalizeImplementationWorkflowSettings } from "@t3tools/shared/workflowPresets";
 import {
@@ -34,6 +38,7 @@ import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/sess
 import { GrillAnswererSection } from "../workflows/WorkflowRunSettingsSheet";
 import {
   WorkflowModelPinRow,
+  WorkflowReviewModelsSection,
   WorkflowStepTuningSections,
   workflowTuningSteps,
   type WorkflowTuningBinding,
@@ -140,6 +145,16 @@ function WorkflowDefaults() {
     inheritedModelLabel: "Workflow model",
     pinFor: (key) => standingWorkflowStepModel(settings.workflowStepModels, key, "engineering"),
     onSetPin: setStepModel("engineering"),
+    // One write for every pin, so later pins are not patched from stale settings.
+    onSetPins: (keys, selection) =>
+      write((current) => ({
+        workflowStepModels: [
+          ...keys.reduce(
+            (models, key) => setWorkflowStepModelDefault(models, key, selection, "engineering"),
+            current.workflowStepModels,
+          ),
+        ],
+      })),
     cyclesFor: (key) =>
       settings.workflowStepCycles.find((entry) => workflowStepCycleKeysEqual(entry, key))
         ?.maxCycles ?? null,
@@ -148,6 +163,16 @@ function WorkflowDefaults() {
       write((current) => ({
         workflowStepCycles: [
           ...setWorkflowStepCycleOverride(current.workflowStepCycles, key, maxCycles),
+        ],
+      })),
+    reviewPartsFor: (key) =>
+      resolveAppReviewStepParts({ overrides: settings.workflowStepReviewParts, key }),
+    hasReviewPartsOverride: (key) =>
+      settings.workflowStepReviewParts.some((entry) => workflowStepCycleKeysEqual(entry, key)),
+    onSetReviewParts: (key, parts) =>
+      write((current) => ({
+        workflowStepReviewParts: [
+          ...setWorkflowStepReviewPartsOverride(current.workflowStepReviewParts, key, parts),
         ],
       })),
   };
@@ -248,6 +273,7 @@ function WorkflowDefaults() {
           </View>
         ))}
       </ListSection>
+      <WorkflowReviewModelsSection preset="planning" binding={engineeringBinding} />
       <WorkflowStepTuningSections
         steps={workflowTuningSteps("planning")}
         binding={engineeringBinding}

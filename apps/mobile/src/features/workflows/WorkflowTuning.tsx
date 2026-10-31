@@ -1,9 +1,22 @@
 import type { MenuAction } from "@react-native-menu/menu";
 import type { EnvironmentId, ModelSelection, WorkflowPreset } from "@t3tools/contracts";
 import {
+  resolveWorkflowModelQuickActionSelection,
+  workflowModelQuickActions,
+} from "@t3tools/client-runtime/workflow-model-quick-actions";
+import {
   engineeringWorkflowDefaultSteps,
   type WorkflowModelPinKey,
 } from "@t3tools/client-runtime/workflow-step-models";
+import {
+  APP_REVIEW_PARTS_TARGETS,
+  describeAppReviewParts,
+  REVIEW_TEST_PLATFORM_LABELS,
+  REVIEW_TEST_PLATFORMS,
+  resolveReviewTestPlatforms,
+  type AppReviewParts,
+  type AppReviewPartsTarget,
+} from "@t3tools/shared/appReviewParts";
 import {
   WORKFLOW_PRESET_DEFINITION_BY_ID,
   workflowPresetStepCanPinModel,
@@ -12,6 +25,7 @@ import {
 import {
   findWorkflowStepCycleTarget,
   workflowStepCycleKeyId,
+  workflowStepCycleKeysEqual,
   type WorkflowStepCycleKey,
   type WorkflowStepCycleTarget,
 } from "@t3tools/shared/workflowStepCycles";
@@ -21,6 +35,7 @@ import { Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { ListSection } from "../../components/ui/ListSection";
+import { ListToggleRow } from "../../components/ui/ListToggleRow";
 import { Menu } from "../../components/ui/Menu";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
 import { useEnvironmentServerConfig } from "../../state/entities";
@@ -62,10 +77,37 @@ export interface WorkflowTuningBinding {
   readonly pinFor: (key: WorkflowModelPinKey) => ModelSelection | null;
   readonly inheritedModelLabel: string;
   readonly onSetPin: (key: WorkflowModelPinKey, selection: ModelSelection | null) => void;
+  /** One choice for several pins, written together so no write overtakes another. */
+  readonly onSetPins: (
+    keys: ReadonlyArray<WorkflowModelPinKey>,
+    selection: ModelSelection | null,
+  ) => void;
   /** The budget this surface stores for a key; null means it inherits. */
   readonly cyclesFor: (key: WorkflowStepCycleKey) => number | null;
   readonly inheritedCycles: (key: WorkflowStepCycleKey) => number;
   readonly onSetCycles: (key: WorkflowStepCycleKey, maxCycles: number | null) => void;
+  /** The parts a review runs for a key, after this surface's layers. */
+  readonly reviewPartsFor: (key: WorkflowStepCycleKey) => AppReviewParts;
+  /** Whether this surface stores its own parts for a key. */
+  readonly hasReviewPartsOverride: (key: WorkflowStepCycleKey) => boolean;
+  /** Null clears this surface's entry so the key inherits again. */
+  readonly onSetReviewParts: (key: WorkflowStepCycleKey, parts: AppReviewParts | null) => void;
+}
+
+/** The App Review targets one step or its sub-steps start. */
+function reviewPartsTargets(step: WorkflowTuningStep): readonly AppReviewPartsTarget[] {
+  const promptId = step.workflowPromptId;
+  if (promptId === null) return [];
+  return APP_REVIEW_PARTS_TARGETS.filter(
+    (target) =>
+      workflowStepCycleKeysEqual(target.key, { workflowPromptId: promptId }) ||
+      step.subSteps.some((subStep) =>
+        workflowStepCycleKeysEqual(target.key, {
+          workflowPromptId: subStep.workflowPromptId,
+          stepWorkflowPromptId: promptId,
+        }),
+      ),
+  );
 }
 
 /** Each step's model pins and cycle budgets, as grouped Settings rows with native menus. */
@@ -104,7 +146,10 @@ export function WorkflowStepTuningSections(props: {
                   }),
                 ),
               ].filter((target): target is WorkflowStepCycleTarget => target !== undefined);
-        if (pinKeys.length === 0 && cycleTargets.length === 0) return null;
+        const partsTargets = reviewPartsTargets(step);
+        if (pinKeys.length === 0 && cycleTargets.length === 0 && partsTargets.length === 0) {
+          return null;
+        }
         return (
           <ListSection
             key={`${step.phase ?? ""}:${step.label}:${step.workflowPromptId ?? ""}`}
@@ -133,9 +178,122 @@ export function WorkflowStepTuningSections(props: {
                 onSelect={(maxCycles) => props.binding.onSetCycles(target.key, maxCycles)}
               />
             ))}
+            {partsTargets.map((target) => (
+              <ReviewPartsRows
+                key={workflowStepCycleKeyId(target.key)}
+                target={target}
+                binding={props.binding}
+              />
+            ))}
           </ListSection>
         );
       })}
+    </>
+  );
+}
+
+/**
+ * The models the review roles run on wherever a workflow starts them, one
+ * choice per role. A role with differing pins across its steps reads Mixed
+ * until one choice overwrites them all.
+ */
+export function WorkflowReviewModelsSection(props: {
+  /** Undefined lists the roles of every selectable workflow. */
+  readonly preset: WorkflowPreset | null | undefined;
+  readonly binding: WorkflowTuningBinding;
+}) {
+  const actions = workflowModelQuickActions(props.preset);
+  const config = useEnvironmentServerConfig(props.binding.environmentId);
+  if (actions.length === 0) return null;
+  const providerGroups = groupByProvider(buildModelOptions(config, null, undefined, null));
+  return (
+    <ListSection
+      title="Review models"
+      footer="These reviews use the chosen model whatever model started the workflow. Tune single phases in the steps below."
+    >
+      {actions.map((action, index) => {
+        const state = resolveWorkflowModelQuickActionSelection(
+          action.pinKeys,
+          props.binding.pinFor,
+        );
+        return (
+          <ModelPinRow
+            key={action.id}
+            label={action.label}
+            description={action.description}
+            separated={index > 0}
+            pinned={state.mixed ? null : state.selection}
+            mixed={state.mixed}
+            inheritedLabel={props.binding.inheritedModelLabel}
+            providerGroups={providerGroups}
+            disabled={props.binding.disabled}
+            onSelect={(selection) => props.binding.onSetPins(action.pinKeys, selection)}
+          />
+        );
+      })}
+    </ListSection>
+  );
+}
+
+/**
+ * Whether a review runs its E2E tests and on which platforms. Turning E2E off
+ * is a prohibition the server enforces: the review step is skipped.
+ */
+function ReviewPartsRows(props: {
+  readonly target: AppReviewPartsTarget;
+  readonly binding: WorkflowTuningBinding;
+}) {
+  const { target, binding } = props;
+  const parts = binding.reviewPartsFor(target.key);
+  const platforms = resolveReviewTestPlatforms(parts);
+  const hasOverride = binding.hasReviewPartsOverride(target.key);
+  return (
+    <>
+      <View className="border-t border-border-subtle">
+        <ListToggleRow
+          label={`${target.label} · E2E tests`}
+          description={`${describeAppReviewParts(parts)}${parts.e2e ? "" : ". This review step is skipped"} · ${target.description}`}
+          value={parts.e2e}
+          disabled={binding.disabled}
+          onValueChange={(e2e) => binding.onSetReviewParts(target.key, { ...parts, e2e })}
+        />
+      </View>
+      <MenuRow
+        label="E2E test platforms"
+        description="Windows and Android can use configured runners from Linux. iOS and macOS need a Mac."
+        value={platforms.map((platform) => REVIEW_TEST_PLATFORM_LABELS[platform]).join(", ")}
+        separated
+        disabled={binding.disabled}
+        actions={[
+          ...REVIEW_TEST_PLATFORMS.map((platform) => {
+            const selected = platforms.includes(platform);
+            return {
+              id: `platform:${platform}`,
+              title: REVIEW_TEST_PLATFORM_LABELS[platform],
+              state: selected ? ("on" as const) : ("off" as const),
+              // At least one platform stays selected.
+              ...(selected && platforms.length === 1 ? { attributes: { disabled: true } } : {}),
+            };
+          }),
+          ...(hasOverride
+            ? [{ id: "auto", title: "Use the default parts", image: "arrow.uturn.backward" }]
+            : []),
+        ]}
+        onAction={(id) => {
+          if (id === "auto") {
+            binding.onSetReviewParts(target.key, null);
+            return;
+          }
+          const toggled = id.slice("platform:".length);
+          const next = REVIEW_TEST_PLATFORMS.filter((platform) =>
+            platform === toggled ? !platforms.includes(platform) : platforms.includes(platform),
+          );
+          const [first, ...rest] = next;
+          if (first !== undefined) {
+            binding.onSetReviewParts(target.key, { ...parts, testPlatforms: [first, ...rest] });
+          }
+        }}
+      />
     </>
   );
 }
@@ -207,6 +365,9 @@ export function WorkflowModelPinRow(
 
 function ModelPinRow(props: {
   readonly label: string;
+  readonly description?: string;
+  /** The pins behind this row disagree, so no single model is selected. */
+  readonly mixed?: boolean;
   readonly separated: boolean;
   readonly pinned: ModelSelection | null;
   readonly inheritedLabel: string;
@@ -224,7 +385,11 @@ function ModelPinRow(props: {
             option.selection.model === props.pinned.model,
         );
   const actions: MenuAction[] = [
-    { id: "inherit", title: props.inheritedLabel, state: props.pinned === null ? "on" : "off" },
+    {
+      id: "inherit",
+      title: props.inheritedLabel,
+      state: props.pinned === null && !props.mixed ? "on" : "off",
+    },
     ...props.providerGroups.map((group) => ({
       id: `provider:${group.providerKey}`,
       title: group.providerLabel,
@@ -238,8 +403,13 @@ function ModelPinRow(props: {
   return (
     <MenuRow
       label={props.label}
+      {...(props.description === undefined ? {} : { description: props.description })}
       value={
-        props.pinned === null ? props.inheritedLabel : (pinnedOption?.label ?? props.pinned.model)
+        props.mixed
+          ? "Mixed"
+          : props.pinned === null
+            ? props.inheritedLabel
+            : (pinnedOption?.label ?? props.pinned.model)
       }
       separated={props.separated}
       disabled={props.disabled}
