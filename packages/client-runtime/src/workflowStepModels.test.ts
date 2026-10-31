@@ -7,7 +7,7 @@ import {
   engineeringWorkflowDefaultSteps,
   skippableImplementationSettingForStep,
   standingWorkflowStepModel,
-} from "./workflowStepModelDefaults.ts";
+} from "./workflowStepModels.ts";
 
 const selection: ModelSelection = {
   instanceId: ProviderInstanceId.make("codex"),

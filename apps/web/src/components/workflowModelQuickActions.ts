@@ -5,7 +5,7 @@ import {
   type WorkflowPresetDefinition,
 } from "@t3tools/shared/workflowPresets";
 
-import type { WorkflowModelPinKey } from "./WorkflowModelPins";
+import type { WorkflowModelPinKey } from "@t3tools/client-runtime/workflow-step-models";
 
 const APP_REVIEW_PROMPT_ID = "implementation.browser-app-review.codex";
 const CODE_REVIEW_PROMPT_ID = "implementation.code-review.codex";

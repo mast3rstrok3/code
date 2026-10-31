@@ -462,6 +462,22 @@
     "./model-traits": {
       "types": "./src/modelTraits.ts",
       "default": "./src/modelTraits.ts"
+    },
+    "./workflow-model": {
+      "types": "./src/workflowModel.ts",
+      "default": "./src/workflowModel.ts"
+    },
+    "./workflow-panel": {
+      "types": "./src/workflowPanel.ts",
+      "default": "./src/workflowPanel.ts"
+    },
+    "./workflow-composer-mode": {
+      "types": "./src/workflowComposerMode.ts",
+      "default": "./src/workflowComposerMode.ts"
+    },
+    "./workflow-step-models": {
+      "types": "./src/workflowStepModels.ts",
+      "default": "./src/workflowStepModels.ts"
     }
   },
   "scripts": {

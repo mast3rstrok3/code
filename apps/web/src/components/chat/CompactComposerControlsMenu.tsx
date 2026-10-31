@@ -1,8 +1,5 @@
-import {
-  ComposerModePickerContent,
-  resolveComposerPrimaryMode,
-  type ComposerModeControls,
-} from "./ComposerModePicker";
+import { resolveComposerPrimaryMode } from "@t3tools/client-runtime/workflow-composer-mode";
+import { ComposerModePickerContent, type ComposerModeControls } from "./ComposerModePicker";
 import { ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
 import { memo, type ReactNode } from "react";
 import { EllipsisIcon } from "lucide-react";
