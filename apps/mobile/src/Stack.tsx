@@ -72,6 +72,9 @@ import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
 import { ThreadPullRequestsSheet } from "./features/threads/ThreadPullRequestsSheet";
 import { ThreadAgentsSheet } from "./features/threads/ThreadAgentsSheet";
 import { ThreadBackgroundWorkSheet } from "./features/threads/ThreadBackgroundWorkSheet";
+import { AppStackListSheet } from "./features/app-stacks/AppStackListSheet";
+import { AppStackLogsScreen } from "./features/app-stacks/AppStackLogsScreen";
+import { AppStackSheet } from "./features/app-stacks/AppStackSheet";
 import { ThreadQueueSheet } from "./features/threads/ThreadQueueControl";
 import { ThreadRouteScreen } from "./features/threads/ThreadRouteScreen";
 import { McpAppFullscreenScreen } from "./features/threads/McpAppFullscreenScreen";
@@ -579,6 +582,9 @@ const WORKSPACE_OVERLAY_ROUTES = new Set([
   "SettingsLegal",
   "SettingsSheet",
   "ThreadAgents",
+  "ThreadAppStack",
+  "ThreadAppStackLogs",
+  "ThreadAppStacks",
   "ThreadBackgroundWork",
   "ThreadPullRequests",
   "ThreadQueue",
@@ -925,6 +931,42 @@ const RootStackConfig = createWorkspaceStackNavigator({
         ...FORM_SHEET_PRESENTATION_OPTIONS,
         sheetAllowedDetents: [0.55, 0.92],
         sheetGrabberVisible: true,
+      },
+    }),
+    ThreadAppStack: createNativeStackScreen({
+      screen: AppStackSheet,
+      linking: `${THREAD_LINKING_PREFIX}/app-stack`,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: [0.55, 0.92],
+        sheetGrabberVisible: true,
+      },
+    }),
+    ThreadAppStacks: createNativeStackScreen({
+      screen: AppStackListSheet,
+      linking: `${THREAD_LINKING_PREFIX}/app-stacks`,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: [0.92],
+        sheetGrabberVisible: true,
+      },
+    }),
+    ThreadAppStackLogs: createNativeStackScreen({
+      screen: AppStackLogsScreen,
+      linking: `${THREAD_LINKING_PREFIX}/app-stack/logs/:stackId`,
+      options: {
+        headerShown: false,
+        gestureEnabled: true,
+        // The log filter needs the keyboard, which an Android formSheet cannot host.
+        ...(Platform.OS === "android"
+          ? { presentation: "card" as const }
+          : {
+              ...FORM_SHEET_PRESENTATION_OPTIONS,
+              sheetAllowedDetents: [0.92],
+              sheetGrabberVisible: true,
+            }),
       },
     }),
     GitCommit: createNativeStackScreen({

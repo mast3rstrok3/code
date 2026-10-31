@@ -116,6 +116,8 @@ import { deviceEnvironment } from "../../state/device";
 import { useEnvironmentQuery } from "../../state/query";
 import { threadDevicePreviews } from "../devices/threadDevicePreviews";
 import { ThreadBrowserFloat } from "../browser/ThreadBrowserFloat";
+import { showThreadAppStackChip } from "../app-stacks/appStackPresentation";
+import { threadAppStackPath, useThreadAppStack } from "../app-stacks/useAppStackQueries";
 import { useThreadServerBrowserTabs } from "../../state/preview";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { scopedThreadKey } from "../../lib/scopedEntities";
@@ -450,6 +452,26 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
     threadId: props.selectedThread.id,
     enabled: props.serverConfig?.environment.capabilities.serverBrowser === true,
   });
+  const threadAppStack = useThreadAppStack({
+    environmentId: props.environmentId,
+    worktreePath: threadAppStackPath({
+      worktreePath: props.selectedThread.worktreePath,
+      workspaceRoot: props.projectWorkspaceRoot,
+    }),
+  });
+  const appStackChip =
+    threadAppStack.stack !== null && showThreadAppStackChip(threadAppStack.stack)
+      ? {
+          status: threadAppStack.stack.status,
+          onPress: () => {
+            Keyboard.dismiss();
+            navigation.navigate("ThreadAppStack", {
+              environmentId: props.environmentId,
+              threadId: props.selectedThread.id,
+            });
+          },
+        }
+      : null;
   const openBrowserPreview = (tabId?: string) => {
     Keyboard.dismiss();
     navigation.navigate("ThreadBrowserPreview", {
@@ -761,6 +783,7 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
     agentsSegment !== null ||
     devicePreviews.length > 0 ||
     browserTabs.tabs.length > 0 ||
+    appStackChip !== null ||
     props.connectionStateLabel !== "connected" ||
     props.queuedMessages.length > 0 ||
     props.selectedThreadFeed.some(
@@ -1392,6 +1415,7 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
                       ? { count: browserTabs.tabs.length, onPress: () => openBrowserPreview() }
                       : null
                   }
+                  appStack={appStackChip}
                   showScrollToEnd={showScrollToEndButton}
                   onScrollToEnd={handleScrollToEnd}
                   agents={agentsSegment}
