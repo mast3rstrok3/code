@@ -5,7 +5,7 @@ import {
   type WorkflowPresetDefinition,
 } from "@t3tools/shared/workflowPresets";
 
-import type { WorkflowModelPinKey } from "@t3tools/client-runtime/workflow-step-models";
+import { workflowModelPinKey, type WorkflowModelPinKey } from "./workflowStepModels.ts";
 
 const APP_REVIEW_PROMPT_ID = "implementation.browser-app-review.codex";
 const CODE_REVIEW_PROMPT_ID = "implementation.code-review.codex";
@@ -36,10 +36,6 @@ const QUICK_ACTION_DEFINITIONS = [
   },
 ] as const;
 
-function pinKeyId(key: WorkflowModelPinKey): string {
-  return `${key.stepWorkflowPromptId ?? ""}\u0000${key.workflowPromptId}`;
-}
-
 function pinKeysForPrompt(
   definitions: ReadonlyArray<WorkflowPresetDefinition>,
   workflowPromptId: string,
@@ -50,12 +46,12 @@ function pinKeysForPrompt(
       if (step.skillId === undefined) continue;
       if (step.skillId === workflowPromptId) {
         const key = { workflowPromptId };
-        byId.set(pinKeyId(key), key);
+        byId.set(workflowModelPinKey(key), key);
       }
       for (const subStep of step.subSteps ?? []) {
         if (subStep.workflowPromptId !== workflowPromptId) continue;
         const key = { workflowPromptId, stepWorkflowPromptId: step.skillId };
-        byId.set(pinKeyId(key), key);
+        byId.set(workflowModelPinKey(key), key);
       }
     }
   }

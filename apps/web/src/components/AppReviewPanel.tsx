@@ -12,19 +12,19 @@ import {
   useThreadAppReviews,
   useThreadPlanningWorkflow,
 } from "~/state/entities";
-import type {
-  BrowserAppReviewSourceContext,
-  AppReviewWorkflowLaunchRequest,
-} from "./ChatView.logic";
 import {
+  APP_REVIEW_CYCLE_STEP_STATUS_LABELS,
   appReviewCycleReplayCount,
-  appReviewCycleStepStatuses,
+  appReviewCycleSteps,
   appReviewRunReplayCount,
   appReviewRunStatusLabel,
   appReviewRunTicketLabel,
   selectAppReviewRunsForPanel,
   selectHeadlineAppReviewRun,
-} from "./AppReviewPanel.logic";
+  type AppReviewCycleStepStatus,
+  type AppReviewWorkflowLaunchRequest,
+} from "@t3tools/client-runtime/app-review";
+import type { BrowserAppReviewSourceContext } from "./ChatView.logic";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
@@ -270,8 +270,6 @@ function RunDetails(props: {
               const cycleOpen =
                 expandedCycles[cycle.cycleNumber] ?? cycle.cycleNumber === newestCycleNumber;
               const cycleReplayCount = appReviewCycleReplayCount(cycle);
-              const [e2eStatus, reviewStatus, planningStatus, implementationStatus] =
-                appReviewCycleStepStatuses(cycle);
               return (
                 <article key={cycle.cycleNumber} className="overflow-hidden rounded-lg border">
                   <button
@@ -305,55 +303,19 @@ function RunDetails(props: {
                   {cycleOpen ? (
                     <>
                       <ol className="space-y-2 border-b border-t px-3 py-3">
-                        <CycleStep
-                          number={1}
-                          title="End-to-end test"
-                          description="Run the configured E2E suite and publish its checks and replay links."
-                          status={e2eStatus}
-                          actionLabel="E2E thread"
-                          {...(cycle.e2eThreadId
-                            ? { onOpen: () => props.onOpenThread(cycle.e2eThreadId!) }
-                            : {})}
-                        />
-                        {cycle.appReviewScope !== "e2e" ? (
+                        {appReviewCycleSteps(cycle).map((step) => (
                           <CycleStep
-                            number={2}
-                            title="Human-style UI review"
-                            description="Use the app UI, test the acceptance brief, and save evidence."
-                            status={reviewStatus}
-                            actionLabel="Review thread"
-                            onOpen={() => props.onOpenThread(cycle.reviewerThreadId)}
+                            key={step.number}
+                            number={step.number}
+                            title={step.title}
+                            description={step.description}
+                            status={step.status}
+                            actionLabel={step.actionLabel}
+                            {...(step.threadId
+                              ? { onOpen: () => props.onOpenThread(step.threadId!) }
+                              : {})}
                           />
-                        ) : null}
-                        <CycleStep
-                          number={cycle.appReviewScope === "e2e" ? 2 : 3}
-                          title="Gap analysis & repair tickets"
-                          description="Turn actionable findings into repair tickets in a separate planning thread."
-                          status={planningStatus}
-                          actionLabel={
-                            cycle.repairTickets?.length
-                              ? `${cycle.repairTickets.length} repair ticket${cycle.repairTickets.length === 1 ? "" : "s"}`
-                              : "Review thread"
-                          }
-                          onOpen={() =>
-                            props.onOpenThread(
-                              cycle.plannerThreadId ??
-                                (cycle.appReviewScope === "e2e"
-                                  ? (cycle.e2eThreadId ?? cycle.reviewerThreadId)
-                                  : cycle.reviewerThreadId),
-                            )
-                          }
-                        />
-                        <CycleStep
-                          number={cycle.appReviewScope === "e2e" ? 3 : 4}
-                          title="Implement the repair tickets"
-                          description="Use the Implement skill in a fresh thread and validate every child ticket."
-                          status={implementationStatus}
-                          actionLabel="Implementation thread"
-                          {...(cycle.fixerThreadId
-                            ? { onOpen: () => props.onOpenThread(cycle.fixerThreadId!) }
-                            : {})}
-                        />
+                        ))}
                       </ol>
                       {cycle.failure ? (
                         <p className="whitespace-pre-wrap border-b px-3 py-2 text-xs text-destructive">
@@ -391,20 +353,11 @@ function CycleStep(props: {
   readonly number: number;
   readonly title: string;
   readonly description: string;
-  readonly status: ReturnType<typeof appReviewCycleStepStatuses>[number];
+  readonly status: AppReviewCycleStepStatus;
   readonly actionLabel: string;
   readonly onOpen?: () => void;
 }) {
-  const statusLabel =
-    props.status === "not-needed"
-      ? "Not needed"
-      : props.status === "complete"
-        ? "Complete"
-        : props.status === "current"
-          ? "In progress"
-          : props.status === "failed"
-            ? "Failed"
-            : "Pending";
+  const statusLabel = APP_REVIEW_CYCLE_STEP_STATUS_LABELS[props.status];
   return (
     <li className="flex items-start justify-between gap-3">
       <div className="min-w-0">

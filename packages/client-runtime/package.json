@@ -478,6 +478,14 @@
     "./workflow-step-models": {
       "types": "./src/workflowStepModels.ts",
       "default": "./src/workflowStepModels.ts"
+    },
+    "./workflow-model-quick-actions": {
+      "types": "./src/workflowModelQuickActions.ts",
+      "default": "./src/workflowModelQuickActions.ts"
+    },
+    "./app-review": {
+      "types": "./src/appReview.ts",
+      "default": "./src/appReview.ts"
     }
   },
   "scripts": {

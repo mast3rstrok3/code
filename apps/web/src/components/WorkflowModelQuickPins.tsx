@@ -8,7 +8,7 @@ import {
 import {
   resolveWorkflowModelQuickActionSelection,
   workflowModelQuickActions,
-} from "./workflowModelQuickActions";
+} from "@t3tools/client-runtime/workflow-model-quick-actions";
 
 export type SetWorkflowStepModels = (
   keys: ReadonlyArray<WorkflowModelPinKey>,

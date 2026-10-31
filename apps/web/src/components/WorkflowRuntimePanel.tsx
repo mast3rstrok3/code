@@ -22,6 +22,7 @@ import {
   WORKFLOW_PRESET_DEFINITION_BY_ID,
   WORKFLOW_PRESET_DEFINITIONS,
 } from "@t3tools/shared/workflowPresets";
+import { appReviewWorkflowLaunchCommand } from "@t3tools/client-runtime/app-review";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   buildWorkflowViewModel,
@@ -379,24 +380,20 @@ export function WorkflowRuntimePanel({
           onLaunch={(request) => {
             const source = nativeThread ?? detail.data;
             if (!source || !sourceSettled) return;
-            void send({
-              type: "thread.app-review-workflow.launch",
-              commandId: CommandId.make(randomUUID()),
-              targetThreadId: threadRef.threadId,
-              controllerThreadId: ThreadId.make(randomUUID()),
-              caller: { type: "standalone", sourceThreadId: threadRef.threadId },
-              briefMarkdown: request.brief,
-              supportingContextMarkdown:
-                sourceContext?.messages
-                  .map((message) => `${message.role}: ${message.text}`)
-                  .join("\n\n") ?? null,
-              previewTargets: request.reviewUrl ? [request.reviewUrl] : [],
-              previewTargetsPinned: Boolean(request.reviewUrl),
-              reviewOnly: request.reviewOnly,
-              cycleBudget: request.reviewOnly ? 1 : request.cycleBudget,
-              modelSelection: source.modelSelection,
-              createdAt: new Date().toISOString(),
-            });
+            void send(
+              appReviewWorkflowLaunchCommand({
+                request,
+                commandId: CommandId.make(randomUUID()),
+                targetThreadId: threadRef.threadId,
+                controllerThreadId: ThreadId.make(randomUUID()),
+                supportingContextMarkdown:
+                  sourceContext?.messages
+                    .map((message) => `${message.role}: ${message.text}`)
+                    .join("\n\n") ?? null,
+                modelSelection: source.modelSelection,
+                createdAt: new Date().toISOString(),
+              }),
+            );
           }}
           onStop={(run) =>
             void send({

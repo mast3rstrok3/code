@@ -2,10 +2,89 @@ import {
   APP_REVIEW_WORKFLOW_MAX_CYCLES,
   type AppReviewRecord,
   type AppReviewWorkflowCycle,
+  type AppReviewWorkflowPhase,
   type AppReviewWorkflowRun,
+  type ClientOrchestrationCommand,
+  type CommandId,
+  type ModelSelection,
   type OrchestrationPlanningTicket,
   type ThreadId,
 } from "@t3tools/contracts";
+import { normalizePreviewUrl } from "@t3tools/shared/preview";
+
+export interface AppReviewWorkflowLaunchRequest {
+  readonly brief: string;
+  readonly cycleBudget: number;
+  readonly reviewUrl: string;
+  readonly reviewOnly: boolean;
+}
+
+/** The URL a launch pins, or null when it should resolve the worktree's App Stack. */
+export function normalizeAppReviewPreviewTarget(value: string): string | null {
+  if (value.trim().length === 0) return null;
+  try {
+    return normalizePreviewUrl(value);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * How a launch names its target: the host the run will drive, or the App
+ * Stack it resolves from the worktree when the user named nothing.
+ */
+export function appReviewTargetLabel(reviewUrl: string): string {
+  const normalized = normalizeAppReviewPreviewTarget(reviewUrl);
+  if (normalized === null) return "App Stack";
+  try {
+    return new URL(normalized).host;
+  } catch {
+    return normalized;
+  }
+}
+
+/** What the next launch will do, in one line. */
+export function appReviewLaunchSummary(input: {
+  readonly cycleBudget: number;
+  readonly reviewUrl: string;
+  readonly reviewOnly: boolean;
+}): string {
+  const target = appReviewTargetLabel(input.reviewUrl);
+  if (input.reviewOnly) return `Review only · ${target}`;
+  return `${input.cycleBudget} ${input.cycleBudget === 1 ? "cycle" : "cycles"} · ${target}`;
+}
+
+/**
+ * The standalone launch command for a thread. A review URL pins the target;
+ * without one the server resolves the worktree's App Stack. Review only spends
+ * exactly one cycle.
+ */
+export function appReviewWorkflowLaunchCommand(input: {
+  readonly request: AppReviewWorkflowLaunchRequest;
+  readonly commandId: CommandId;
+  readonly targetThreadId: ThreadId;
+  readonly controllerThreadId: ThreadId;
+  readonly supportingContextMarkdown: string | null;
+  readonly modelSelection: ModelSelection;
+  readonly createdAt: string;
+}): Extract<ClientOrchestrationCommand, { type: "thread.app-review-workflow.launch" }> {
+  const { request } = input;
+  return {
+    type: "thread.app-review-workflow.launch",
+    commandId: input.commandId,
+    targetThreadId: input.targetThreadId,
+    controllerThreadId: input.controllerThreadId,
+    caller: { type: "standalone", sourceThreadId: input.targetThreadId },
+    briefMarkdown: request.brief,
+    supportingContextMarkdown: input.supportingContextMarkdown,
+    previewTargets: request.reviewUrl ? [request.reviewUrl] : [],
+    previewTargetsPinned: Boolean(request.reviewUrl),
+    reviewOnly: request.reviewOnly,
+    cycleBudget: request.reviewOnly ? 1 : request.cycleBudget,
+    modelSelection: input.modelSelection,
+    createdAt: input.createdAt,
+  };
+}
 
 export function selectActiveAppReviewRecord(
   records: readonly AppReviewRecord[],
@@ -89,9 +168,10 @@ export function selectAppReviewRunsForPanel(input: {
     if (ticketId === null) return Number.MAX_SAFE_INTEGER;
     return ordinalByTicketId.get(ticketId) ?? Number.MAX_SAFE_INTEGER - 1;
   };
+  // `filter` already copies, and Hermes has no Array#toSorted.
   return input.runs
     .filter((run) => input.workflowScoped || appReviewRunContainsThread(run, input.openedThreadId))
-    .toSorted(
+    .sort(
       (left, right) =>
         rank(left) - rank(right) ||
         left.createdAt.localeCompare(right.createdAt) ||
@@ -200,6 +280,121 @@ export function appReviewCycleStepStatuses(
             ? "current"
             : "pending",
   ];
+}
+
+export const APP_REVIEW_CYCLE_STEP_STATUS_LABELS: Record<AppReviewCycleStepStatus, string> = {
+  "not-needed": "Not needed",
+  complete: "Complete",
+  current: "In progress",
+  failed: "Failed",
+  pending: "Pending",
+};
+
+/** One step of a cycle as the panel lists it, with the thread its action opens. */
+export interface AppReviewCycleStep {
+  readonly number: number;
+  readonly title: string;
+  readonly description: string;
+  readonly status: AppReviewCycleStepStatus;
+  readonly actionLabel: string;
+  readonly threadId: ThreadId | null;
+}
+
+/**
+ * The steps a cycle shows. An E2E-only cycle has no browser review, so its
+ * later steps renumber and its planning falls back to the E2E thread.
+ */
+export function appReviewCycleSteps(cycle: AppReviewWorkflowCycle): readonly AppReviewCycleStep[] {
+  const [e2eStatus, reviewStatus, planningStatus, implementationStatus] =
+    appReviewCycleStepStatuses(cycle);
+  const e2eOnly = cycle.appReviewScope === "e2e";
+  const repairTicketCount = cycle.repairTickets?.length ?? 0;
+  const steps: AppReviewCycleStep[] = [
+    {
+      number: 1,
+      title: "End-to-end test",
+      description: "Run the configured E2E suite and publish its checks and replay links.",
+      status: e2eStatus,
+      actionLabel: "E2E thread",
+      threadId: cycle.e2eThreadId ?? null,
+    },
+  ];
+  if (!e2eOnly) {
+    steps.push({
+      number: 2,
+      title: "Human-style UI review",
+      description: "Use the app UI, test the acceptance brief, and save evidence.",
+      status: reviewStatus,
+      actionLabel: "Review thread",
+      threadId: cycle.reviewerThreadId,
+    });
+  }
+  steps.push(
+    {
+      number: e2eOnly ? 2 : 3,
+      title: "Gap analysis & repair tickets",
+      description: "Turn actionable findings into repair tickets in a separate planning thread.",
+      status: planningStatus,
+      actionLabel:
+        repairTicketCount > 0
+          ? `${repairTicketCount} repair ticket${repairTicketCount === 1 ? "" : "s"}`
+          : "Review thread",
+      threadId:
+        cycle.plannerThreadId ??
+        (e2eOnly ? (cycle.e2eThreadId ?? cycle.reviewerThreadId) : cycle.reviewerThreadId),
+    },
+    {
+      number: e2eOnly ? 3 : 4,
+      title: "Implement the repair tickets",
+      description: "Use the Implement skill in a fresh thread and validate every child ticket.",
+      status: implementationStatus,
+      actionLabel: "Implementation thread",
+      threadId: cycle.fixerThreadId ?? null,
+    },
+  );
+  return steps;
+}
+
+/**
+ * Why an App Review phase cannot start again yet, if it cannot.
+ *
+ * Mirrors the server's rules so the panel never offers an action the decider
+ * refuses: only the current cycle can be redone, the phases need what the
+ * phases before them produced, and nothing starts under a live agent.
+ */
+export function appReviewPhaseRerunDisabledReason(input: {
+  readonly phaseLabel: string;
+  readonly phase: AppReviewWorkflowPhase;
+  readonly cycle: AppReviewWorkflowCycle;
+  readonly isCurrentCycle: boolean;
+  readonly callerBusyReason: string | null;
+  readonly cyclesUsed: number;
+  readonly cycleBudget: number;
+  readonly activeThread:
+    | { readonly session?: { readonly status: string } | null | undefined }
+    | undefined;
+}): string | null {
+  if (!input.isCurrentCycle) return "Only the newest cycle can start again.";
+  if (input.callerBusyReason !== null) return input.callerBusyReason;
+  const session = input.activeThread?.session?.status;
+  if (session === "starting" || session === "running") {
+    return "This App Review is still running. Stop it before starting a phase again.";
+  }
+  // A browser review redo runs a new cycle rather than overwriting this one, so
+  // it needs a cycle left to run in.
+  if (
+    (input.phase === "e2e" || input.phase === "review") &&
+    input.cyclesUsed >= input.cycleBudget
+  ) {
+    return `Every one of the ${String(input.cycleBudget)} review cycles has been used.`;
+  }
+  if (input.phase === "planning" && input.cycle.actionableFindingsMarkdown === null) {
+    return "Gap analysis needs findings from this cycle's review sections.";
+  }
+  if (input.phase === "fixing" && (input.cycle.repairTickets?.length ?? 0) === 0) {
+    return "The repair needs the tickets gap analysis writes.";
+  }
+  return null;
 }
 
 export function selectLatestAppReviewControllerRun(

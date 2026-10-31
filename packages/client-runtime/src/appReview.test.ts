@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   AppReviewId,
+  CommandId,
+  ProviderInstanceId,
   AppReviewWorkflowRunId,
   EMPTY_APP_REVIEW_EVIDENCE,
   ThreadId,
@@ -11,17 +13,22 @@ import {
 import {
   appReviewRunContainsThread,
   appReviewCycleReplayCount,
+  appReviewCycleSteps,
   appReviewCycleStepStatuses,
+  appReviewLaunchSummary,
+  appReviewPhaseRerunDisabledReason,
   appReviewRunFailureSummary,
   appReviewRunReplayCount,
   appReviewRunStatusLabel,
   appReviewRunTicketLabel,
+  appReviewTargetLabel,
+  appReviewWorkflowLaunchCommand,
   isValidAppReviewWorkflowLaunch,
   selectActiveAppReviewRecord,
   selectAppReviewRunsForPanel,
   selectHeadlineAppReviewRun,
   selectLatestAppReviewControllerRun,
-} from "./AppReviewPanel.logic";
+} from "./appReview.ts";
 
 describe("selectActiveAppReviewRecord", () => {
   it("prefers the record whose review thread is open", () => {
@@ -413,6 +420,143 @@ describe("App Review workflow panel logic", () => {
     expect(appReviewCycleReplayCount(run.cycles[0]!)).toBe(0);
     expect(appReviewRunReplayCount({ cycles: [firstCycle, secondCycle] })).toBe(3);
     expect(appReviewRunReplayCount(run)).toBe(0);
+  });
+});
+
+describe("appReviewTargetLabel", () => {
+  it("names the host a launch will drive", () => {
+    expect(appReviewTargetLabel("localhost:5173")).toBe("localhost:5173");
+    expect(appReviewTargetLabel("https://staging.example.test/app")).toBe("staging.example.test");
+  });
+
+  it("falls back to the worktree's App Stack without a usable URL", () => {
+    expect(appReviewTargetLabel("")).toBe("App Stack");
+    expect(appReviewTargetLabel("not a url")).toBe("App Stack");
+  });
+});
+
+describe("appReviewLaunchSummary", () => {
+  it("counts cycles for a run that repairs", () => {
+    expect(appReviewLaunchSummary({ cycleBudget: 10, reviewUrl: "", reviewOnly: false })).toBe(
+      "10 cycles · App Stack",
+    );
+    expect(appReviewLaunchSummary({ cycleBudget: 1, reviewUrl: "", reviewOnly: false })).toBe(
+      "1 cycle · App Stack",
+    );
+  });
+
+  it("drops the count when nothing will be repaired", () => {
+    expect(
+      appReviewLaunchSummary({ cycleBudget: 10, reviewUrl: "localhost:5173", reviewOnly: true }),
+    ).toBe("Review only · localhost:5173");
+  });
+});
+
+describe("appReviewWorkflowLaunchCommand", () => {
+  const base = {
+    commandId: CommandId.make("command-1"),
+    targetThreadId: ThreadId.make("thread-target"),
+    controllerThreadId: ThreadId.make("thread-controller"),
+    supportingContextMarkdown: null,
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" },
+    createdAt: "2026-08-11T00:00:00.000Z",
+  };
+
+  it("pins a named review URL and resolves the App Stack without one", () => {
+    const pinned = appReviewWorkflowLaunchCommand({
+      ...base,
+      request: {
+        brief: "Check login",
+        cycleBudget: 3,
+        reviewUrl: "localhost:5173",
+        reviewOnly: false,
+      },
+    });
+    expect(pinned).toMatchObject({
+      caller: { type: "standalone", sourceThreadId: "thread-target" },
+      previewTargets: ["localhost:5173"],
+      previewTargetsPinned: true,
+      cycleBudget: 3,
+    });
+    const resolved = appReviewWorkflowLaunchCommand({
+      ...base,
+      request: { brief: "Check login", cycleBudget: 3, reviewUrl: "", reviewOnly: false },
+    });
+    expect(resolved).toMatchObject({ previewTargets: [], previewTargetsPinned: false });
+  });
+
+  it("spends exactly one cycle when it only reviews", () => {
+    const command = appReviewWorkflowLaunchCommand({
+      ...base,
+      request: { brief: "Check login", cycleBudget: 8, reviewUrl: "", reviewOnly: true },
+    });
+    expect(command).toMatchObject({ reviewOnly: true, cycleBudget: 1 });
+  });
+});
+
+describe("appReviewCycleSteps", () => {
+  it("lists all four steps for a browser cycle", () => {
+    const cycle = makeAppReviewWorkflowRun().cycles[0]!;
+    expect(appReviewCycleSteps(cycle).map((step) => [step.number, step.title])).toEqual([
+      [1, "End-to-end test"],
+      [2, "Human-style UI review"],
+      [3, "Gap analysis & repair tickets"],
+      [4, "Implement the repair tickets"],
+    ]);
+  });
+
+  it("renumbers an E2E-only cycle and sends planning to the E2E thread", () => {
+    const cycle = {
+      ...makeAppReviewWorkflowRun().cycles[0]!,
+      appReviewScope: "e2e" as const,
+      e2eThreadId: ThreadId.make("thread-e2e"),
+      plannerThreadId: null,
+    };
+    const steps = appReviewCycleSteps(cycle);
+    expect(steps.map((step) => step.number)).toEqual([1, 2, 3]);
+    expect(steps[1]).toMatchObject({
+      title: "Gap analysis & repair tickets",
+      threadId: "thread-e2e",
+    });
+  });
+});
+
+describe("appReviewPhaseRerunDisabledReason", () => {
+  const run = makeAppReviewWorkflowRun();
+  const input = {
+    phaseLabel: "Gap analysis",
+    phase: "planning" as const,
+    cycle: run.cycles[0]!,
+    isCurrentCycle: true,
+    callerBusyReason: null,
+    cyclesUsed: 1,
+    cycleBudget: 10,
+    activeThread: undefined,
+  };
+
+  it("allows the current cycle's phase once what it needs exists", () => {
+    expect(appReviewPhaseRerunDisabledReason(input)).toBeNull();
+  });
+
+  it("refuses older cycles, live agents, and spent budgets", () => {
+    expect(appReviewPhaseRerunDisabledReason({ ...input, isCurrentCycle: false })).toBe(
+      "Only the newest cycle can start again.",
+    );
+    expect(
+      appReviewPhaseRerunDisabledReason({
+        ...input,
+        activeThread: { session: { status: "running" } },
+      }),
+    ).toBe("This App Review is still running. Stop it before starting a phase again.");
+    expect(appReviewPhaseRerunDisabledReason({ ...input, phase: "review", cyclesUsed: 10 })).toBe(
+      "Every one of the 10 review cycles has been used.",
+    );
+  });
+
+  it("needs repair tickets before the repair can run again", () => {
+    expect(appReviewPhaseRerunDisabledReason({ ...input, phase: "fixing" })).toBe(
+      "The repair needs the tickets gap analysis writes.",
+    );
   });
 });
 
