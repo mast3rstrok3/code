@@ -781,7 +781,7 @@ describe("ThreadPullRequestReactor", () => {
               canonicalKey: "ssh.dev.azure.com/v3/org/project/repository",
               displayName: "v3/org/project/repository",
               name: "repository",
-              provider: "azure-devops",
+              provider: SourceControlProviderKind.make("azure-devops"),
               rootPath: project.workspaceRoot,
               locator: {
                 source: "git-remote",

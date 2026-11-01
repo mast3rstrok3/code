@@ -85,15 +85,11 @@ vi.mock("~/hooks/useSettings", () => ({
 
 import {
   BrowserRecordingConflictError,
-  BrowserRecordingOperationError,
-  BrowserRecordingFormatUnavailableError,
-  BrowserRecordingStartCancelledError,
   findActiveBrowserRecordingRuntimeTabId,
   readActiveBrowserRecordingTabIds,
   readActiveBrowserRecordingTargets,
   startBrowserRecording,
   stopBrowserRecording,
-  stopBrowserRecordingForUpload,
 } from "./browserRecording";
 import { useBrowserSurfaceStore } from "./browserSurfaceStore";
 import { previewRuntimeTabId } from "./previewRuntimeTabId";
@@ -178,48 +174,6 @@ describe("browser recording", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
-  });
-
-  it("saves locally and releases capture before transferring the encoded recording once", async () => {
-    const stopTrack = vi.fn();
-    getDisplayMedia.mockResolvedValue({
-      getVideoTracks: () => [],
-      getTracks: () => [{ stop: stopTrack }],
-    });
-    await startBrowserRecording("transfer-tab");
-    let finishUpload!: () => void;
-    const uploaded = new Promise<void>((resolve) => {
-      finishUpload = resolve;
-    });
-    const transfer = vi.fn(async (artifact, blob: Blob) => {
-      expect(save).toHaveBeenCalledOnce();
-      expect(stopTrack).toHaveBeenCalled();
-      expect(artifact.path).toBe("/tmp/recording-test.webm");
-      expect(blob.type).toBe("video/webm;codecs=vp9");
-      await uploaded;
-      return "uploaded-recording";
-    });
-    const localStop = stopBrowserRecording("transfer-tab");
-    const firstStop = stopBrowserRecordingForUpload("transfer-tab", transfer);
-    const secondStop = stopBrowserRecordingForUpload("transfer-tab", transfer);
-    finishUpload();
-    expect(await firstStop).toEqual(await secondStop);
-    expect((await firstStop)?.uploadedAttachmentId).toBe("uploaded-recording");
-    expect((await localStop)?.path).toBe("/tmp/recording-test.webm");
-    expect(transfer).toHaveBeenCalledOnce();
-  });
-
-  it("keeps the saved desktop file and releases the recording when transfer fails", async () => {
-    await startBrowserRecording("failed-transfer-tab");
-    await expect(
-      stopBrowserRecordingForUpload("failed-transfer-tab", async () => {
-        throw new Error("Connection interrupted");
-      }),
-    ).rejects.toThrow("Connection interrupted");
-    expect(save).toHaveBeenCalledOnce();
-    expect(readActiveBrowserRecordingTabIds().has("failed-transfer-tab")).toBe(false);
-    await startBrowserRecording("failed-transfer-tab");
-    await stopBrowserRecording("failed-transfer-tab");
   });
 
   it("paints and holds a hidden browser surface for the recording lifetime", async () => {

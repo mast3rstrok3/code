@@ -298,22 +298,20 @@ export async function resolveFfmpegExecutablePromise(
   });
 }
 
-export const resolveFfmpegExecutable = (
-  input: FfmpegExecutableResolverInput,
-  adapter?: BrowserExecutableResolverAdapter,
-) =>
-  Effect.gen(function* () {
-    const hostPlatform = yield* HostProcess.Platform;
-    return yield* Effect.tryPromise({
-      try: () => resolveFfmpegExecutablePromise({ ...input, hostPlatform }, adapter),
-      catch: (cause) =>
-        isBrowserExecutableUnavailableError(cause)
-          ? cause
-          : new BrowserExecutableUnavailableError({
-              message: cause instanceof Error ? cause.message : String(cause),
-            }),
-    });
+export const resolveFfmpegExecutable = Effect.fn(
+  "BrowserExecutableResolver.resolveFfmpegExecutable",
+)(function* (input: FfmpegExecutableResolverInput, adapter?: BrowserExecutableResolverAdapter) {
+  const hostPlatform = yield* HostProcess.Platform;
+  return yield* Effect.tryPromise({
+    try: () => resolveFfmpegExecutablePromise({ ...input, hostPlatform }, adapter),
+    catch: (cause) =>
+      isBrowserExecutableUnavailableError(cause)
+        ? cause
+        : new BrowserExecutableUnavailableError({
+            message: cause instanceof Error ? cause.message : String(cause),
+          }),
   });
+});
 
 export const resolveFfmpegAvailability = (
   input: FfmpegExecutableResolverInput,

@@ -1,5 +1,12 @@
 import { threadHasQueuedTurnStart as shellHasQueuedTurnStart } from "./ThreadSettlementPolicy.ts";
 import { projectEvent } from "./projector.ts";
+import {
+  legacyThreadPullRequestKey,
+  normalizeThreadPullRequestKey,
+  threadPullRequestKeysEqual,
+} from "../sourceControl/threadPullRequests.ts";
+import { compareDateTimeStrings } from "./dateTime.ts";
+import { legacyLinkedPullRequestOf } from "./legacyLinkedPullRequest.ts";
 import { nativeVerificationIsOpen, transitionNativeVerification } from "./nativeVerification.ts";
 import {
   type AppReviewDocument,
@@ -37,13 +44,6 @@ import {
   type ThreadPullRequestLink,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
-import {
-  legacyLinkedPullRequestOf,
-  legacyThreadPullRequestKey,
-  normalizeThreadPullRequestKey,
-  threadPullRequestKeysEqual,
-} from "@t3tools/shared/threadPullRequests";
-import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -1010,11 +1010,6 @@ function liveAppReviewCallerThreadId(input: {
   }
   return null;
 }
-
-// Session adoption takes seconds; a user message still unadopted after this
-// window is a failed/stale start, not pending work. Mirrors the client's
-// QUEUED_TURN_START_GRACE_MS in client-runtime threadSettled.ts.
-const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
 
 /**
  * Blocked-on-you work derived from the thread's retained activities: an

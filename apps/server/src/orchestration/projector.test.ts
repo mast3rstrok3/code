@@ -4,12 +4,13 @@ import {
   EventId,
   ProjectId,
   ProviderDriverKind,
+  SourceControlProviderKind,
   ThreadId,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { it as effectIt } from "@effect/vitest";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect } from "vite-plus/test";
 
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
 
@@ -1163,7 +1164,7 @@ describe("orchestration projector", () => {
               deletedAt: null,
               repositoryIdentity: {
                 canonicalKey: "github.com/pingdotgg/t3code",
-                provider: "github",
+                provider: SourceControlProviderKind.make("github"),
                 displayName: "pingdotgg/t3code",
                 locator: {
                   source: "git-remote",

@@ -70,8 +70,8 @@ it.effect("keeps invalid payload values only in the exact schema cause", () =>
     assert.equal(error.method, "thread/start");
     assert.equal(error.operation, "decode-payload");
     assert.equal(error.maximumPathDepth, 2);
-    assert.isAbove(error.ticketCount ?? 0, 0);
-    assert.include(error.ticketKinds ?? [], "Pointer");
+    assert.isAbove(error.issueCount ?? 0, 0);
+    assert.include(error.issueKinds ?? [], "Pointer");
     assert.notInclude(error.message, secret);
     assert.notInclude(encodeUnknownJson(directDiagnostics), secret);
     assert.notInclude(encodeUnknownJson(error.toProtocolError()), secret);

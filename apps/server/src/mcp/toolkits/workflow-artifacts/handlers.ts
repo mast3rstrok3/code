@@ -22,44 +22,41 @@ export const handlers = {
     resolve().pipe(Effect.map((snapshot) => ({ wayfinderMap: snapshot.wayfinderMap }))),
   workflow_tickets_list: () =>
     resolve().pipe(Effect.map((snapshot) => ({ tickets: snapshot.tickets }))),
-  workflow_ticket_get: (input) =>
-    Effect.gen(function* () {
-      const snapshot = yield* resolve();
-      const ticket = snapshot.tickets.find((candidate) => candidate.id === input.ticketId);
-      if (ticket === undefined) {
-        return yield* notFound(
-          snapshot.context.rootThreadId,
-          `Planning Ticket '${input.ticketId}' is not in this workflow.`,
-        );
-      }
-      return ticket;
-    }),
+  workflow_ticket_get: Effect.fn("WorkflowArtifactsToolkit.ticketGet")(function* (input) {
+    const snapshot = yield* resolve();
+    const ticket = snapshot.tickets.find((candidate) => candidate.id === input.ticketId);
+    if (ticket === undefined) {
+      return yield* notFound(
+        snapshot.context.rootThreadId,
+        `Planning Ticket '${input.ticketId}' is not in this workflow.`,
+      );
+    }
+    return ticket;
+  }),
   workflow_app_reviews_list: () =>
     resolve().pipe(Effect.map((snapshot) => ({ appReviews: snapshot.appReviews }))),
-  workflow_app_review_get: (input) =>
-    Effect.gen(function* () {
-      const snapshot = yield* resolve();
-      const review = snapshot.appReviews.find((candidate) => candidate.id === input.reviewId);
-      if (review === undefined) {
-        return yield* notFound(
-          snapshot.context.rootThreadId,
-          `App Review '${input.reviewId}' is not in this workflow.`,
-        );
-      }
-      return review;
-    }),
-  workflow_doc_get: (input) =>
-    Effect.gen(function* () {
-      const scope = yield* McpInvocationContext.requireThreadMcpCapability("workflow-artifacts");
-      const doc = resolveWorkflowDoc(input.docId);
-      if (doc === undefined) {
-        return yield* notFound(
-          scope.thread.threadId,
-          `Workflow document '${input.docId}' was not found.`,
-        );
-      }
-      return doc;
-    }),
+  workflow_app_review_get: Effect.fn("WorkflowArtifactsToolkit.appReviewGet")(function* (input) {
+    const snapshot = yield* resolve();
+    const review = snapshot.appReviews.find((candidate) => candidate.id === input.reviewId);
+    if (review === undefined) {
+      return yield* notFound(
+        snapshot.context.rootThreadId,
+        `App Review '${input.reviewId}' is not in this workflow.`,
+      );
+    }
+    return review;
+  }),
+  workflow_doc_get: Effect.fn("WorkflowArtifactsToolkit.docGet")(function* (input) {
+    const scope = yield* McpInvocationContext.requireThreadMcpCapability("workflow-artifacts");
+    const doc = resolveWorkflowDoc(input.docId);
+    if (doc === undefined) {
+      return yield* notFound(
+        scope.thread.threadId,
+        `Workflow document '${input.docId}' was not found.`,
+      );
+    }
+    return doc;
+  }),
 } satisfies Parameters<typeof WorkflowArtifactsToolkit.toLayer>[0];
 
 export const layer = McpToolAccess.toLayer(WorkflowArtifactsToolkit, {

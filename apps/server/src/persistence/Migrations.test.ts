@@ -1,10 +1,13 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import { migrationManifest, runMigrations } from "./Migrations.ts";
+import { migrationEntries, migrationManifest, runMigrations } from "./Migrations.ts";
 
 const v2Migrations = migrationManifest.filter(([id]) => id >= 102);
 const newerMigrationId = Math.max(...migrationManifest.map(([id]) => id)) + 1;
@@ -123,3 +126,37 @@ describe("runMigrations", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });
+
+// The fork registers upstream migration files at its own ids and re-runs some at
+// compatibility ids, so file prefixes cannot match registered ids. What must hold is
+// that no migration file is left out and nothing unregistered sneaks in.
+it.effect("registers every migration file", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const dir = path.join(import.meta.dirname, "Migrations");
+    const files = (yield* fs.readDirectory(dir)).filter((name) => /^\d+_\w+\.ts$/.test(name));
+    const registered = new Set<unknown>(migrationEntries.map(([, , migration]) => migration));
+    const fromFiles = new Set<unknown>();
+    const unregisteredFiles: Array<string> = [];
+    for (const file of files) {
+      const module = yield* Effect.promise(
+        (): Promise<{ readonly default: unknown }> => import(path.join(dir, file)),
+      );
+      fromFiles.add(module.default);
+      if (!registered.has(module.default)) unregisteredFiles.push(file);
+    }
+
+    assert.deepStrictEqual(unregisteredFiles, []);
+    assert.equal(
+      [...registered].filter((migration) => !fromFiles.has(migration)).length,
+      0,
+      "every registered migration comes from a file in Migrations/",
+    );
+    const ids = migrationManifest.map(([id]) => id);
+    assert.deepStrictEqual(
+      ids,
+      [...new Set(ids)].toSorted((a, b) => a - b),
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
+);

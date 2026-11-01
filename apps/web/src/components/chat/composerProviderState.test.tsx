@@ -1,9 +1,5 @@
 import { getProviderOptionDescriptors } from "@t3tools/shared/model";
 import { getProviderModelCapabilities } from "../../providerModels";
-import {
-  renderProviderTraitsMenuContent,
-  renderProviderTraitsPicker,
-} from "./composerProviderState";
 import { describe, expect, it } from "vite-plus/test";
 import {
   ProviderDriverKind,
@@ -15,9 +11,11 @@ import {
 import {
   getComposerProviderState,
   getComposerReasoningStep,
+  resolveComposerTraitsInput,
   withImplicitFastModeDefault,
 } from "./composerProviderState";
 import { DraftId } from "../../composerDraftStore";
+import { readPromptUltrathink } from "./TraitsPicker";
 
 const PROVIDER: ProviderDriverKind = ProviderDriverKind.make("codex");
 const MODEL = "test-model";
@@ -272,38 +270,36 @@ describe("trait controls fastMode display", () => {
   });
 });
 
-describe("provider traits render guards", () => {
-  it("returns null when no thread target is provided", () => {
-    const models = modelWith([
+describe("composer traits input", () => {
+  const args = {
+    provider: PROVIDER,
+    instanceId: ProviderInstanceId.make("codex"),
+    model: MODEL,
+    models: modelWith([
       selectDescriptor("effort", [{ id: "high", label: "High", isDefault: true }]),
-    ]);
-    const args = {
-      provider: PROVIDER,
-      model: MODEL,
-      models,
-      modelOptions: undefined,
-      prompt: "",
-      onPromptChange: () => {},
-      planModeEnabled: true,
-    };
+    ]),
+    modelOptions: undefined,
+    promptUltrathink: "none" as const,
+    onPromptEdit: () => {},
+    planModeEnabled: true,
+  };
 
-    expect(renderProviderTraitsPicker(args)).toBeNull();
-    expect(renderProviderTraitsMenuContent(args)).toBeNull();
+  it("has nothing to persist to without a thread or draft", () => {
+    expect(resolveComposerTraitsInput(args)).toBeNull();
   });
 
-  it("returns null for a traitless model", () => {
-    const args = {
-      provider: PROVIDER,
-      draftId: DraftId.make("draft-1"),
-      model: MODEL,
-      models: modelWith([]),
-      modelOptions: undefined,
-      prompt: "",
-      onPromptChange: () => {},
-    };
+  it("persists to the draft it was given", () => {
+    const draftId = DraftId.make("draft-1");
+    expect(resolveComposerTraitsInput({ ...args, draftId })).toMatchObject({ draftId });
+  });
+});
 
-    expect(renderProviderTraitsPicker(args)).toBeNull();
-    expect(renderProviderTraitsMenuContent(args)).toBeNull();
+describe("readPromptUltrathink", () => {
+  it("tells the Ultrathink prefix apart from the word in the body", () => {
+    expect(readPromptUltrathink("Fix the bug")).toBe("none");
+    expect(readPromptUltrathink("Ultrathink: Fix the bug")).toBe("prefix");
+    expect(readPromptUltrathink("ultrathink about the bug")).toBe("body");
+    expect(readPromptUltrathink("Ultrathink: ultrathink harder")).toBe("body");
   });
 });
 
@@ -374,50 +370,40 @@ describe("getComposerReasoningStep", () => {
     }
   });
 
-  it("adds and strips the Ultrathink prefix while the caret stays on the same character", () => {
-    for (const { prompt, modelOptions, direction, expected } of [
-      {
-        prompt: "  Fix the bug \n",
-        modelOptions: selections(["effort", "high"]),
-        direction: 1,
-        expected: { prompt: "Ultrathink:\nFix the bug", cursor: 20 },
-      },
-      {
-        // The prefix, not the draft's Medium, is the current level.
-        prompt: "Ultrathink:\n  Fix the bug",
-        modelOptions: selections(["effort", "medium"]),
-        direction: -1,
-        expected: {
-          prompt: "Fix the bug",
-          cursor: 8,
-          modelOptions: selections(["effort", "high"]),
-        },
-      },
+  it("steps Antigravity's thinking_level like other effort controls", () => {
+    expect(
+      step({
+        provider: ProviderDriverKind.make("antigravity"),
+        models: modelWith([selectDescriptor("thinking_level", LEVELS)]),
+      })?.modelOptions,
+    ).toStrictEqual(selections(["thinking_level", "high"]));
+  });
+
+  it("never steps into Ultrathink and strips a typed prefix with the caret on the same character", () => {
+    expect(step({ ...CLAUDE, modelOptions: selections(["effort", "high"]) })).toStrictEqual({
+      prompt: "Fix the bug",
+      cursor: 0,
+      modelOptions: selections(["effort", "medium"]),
+    });
+    const prompt = "Ultrathink:\n  Fix the bug";
+    // A typed Ultrathink sits above the pickable levels, so up wraps and down lands on the top level.
+    for (const [direction, to] of [
+      [-1, "high"],
+      [1, "medium"],
     ] as const) {
       const result = step({
         ...CLAUDE,
         prompt,
         cursor: prompt.indexOf("bug"),
-        modelOptions,
+        modelOptions: selections(["effort", "medium"]),
         direction,
       });
-      expect(result).toStrictEqual(expected);
-      expect(result?.prompt.slice(result.cursor)).toMatch(/^bug/);
+      expect(result, `by ${direction}`).toStrictEqual({
+        prompt: "Fix the bug",
+        cursor: 8,
+        modelOptions: selections(["effort", to]),
+      });
     }
-    // A caret in leading whitespace must not land inside the new prefix.
-    expect(
-      step({ ...CLAUDE, prompt: "   Fix", modelOptions: selections(["effort", "high"]) })?.cursor,
-    ).toBe("Ultrathink:\n".length);
-  });
-
-  it("skips Ultrathink for slash commands and does nothing when the prompt locks it", () => {
-    expect(
-      step({ ...CLAUDE, prompt: "/review", modelOptions: selections(["effort", "high"]) }),
-    ).toStrictEqual({
-      prompt: "/review",
-      cursor: 0,
-      modelOptions: selections(["effort", "medium"]),
-    });
     for (const [prompt, direction] of [
       ["Please ultrathink harder", 1],
       ["Ultrathink:\nPlease ultrathink harder", -1],

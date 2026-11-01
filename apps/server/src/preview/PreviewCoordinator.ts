@@ -8,10 +8,8 @@ import {
   type PreviewInputEvent,
   type PreviewListInput,
   type PreviewListResult,
-  type PreviewNavigateInput,
   type PreviewOpenInput,
   type PreviewPickElementInput,
-  type PreviewRefreshInput,
   type PreviewResizeInput,
   type PreviewScreenshotArtifact,
   type PreviewSessionSnapshot,
@@ -51,13 +49,9 @@ export class PreviewCoordinator extends Context.Service<
   PreviewCoordinator,
   {
     readonly open: (input: PreviewOpenInput) => Effect.Effect<PreviewSessionSnapshot, PreviewError>;
-    readonly navigate: (
-      input: PreviewNavigateInput,
-    ) => Effect.Effect<PreviewSessionSnapshot, PreviewError>;
     readonly resize: (
       input: PreviewResizeInput,
     ) => Effect.Effect<PreviewSessionSnapshot, PreviewError>;
-    readonly refresh: (input: PreviewRefreshInput) => Effect.Effect<void, PreviewError>;
     readonly close: (
       input: PreviewCloseInput & { readonly reason?: "workflow-cleanup" },
     ) => Effect.Effect<void, PreviewError>;
@@ -112,19 +106,6 @@ const make = Effect.gen(function* PreviewCoordinatorMake() {
     },
   );
 
-  const navigate: PreviewCoordinator["Service"]["navigate"] = Effect.fn(
-    "PreviewCoordinator.navigate",
-  )(function* (input) {
-    const snapshot = yield* manager.navigate(input);
-    if (!(yield* useServerBrowser)) {
-      return yield* completeMetadataNavigation(manager, snapshot);
-    }
-    if (snapshot.navStatus._tag !== "Idle") {
-      yield* browser.navigate({ ...input, url: snapshot.navStatus.url });
-    }
-    return snapshot;
-  });
-
   const resize: PreviewCoordinator["Service"]["resize"] = Effect.fn("PreviewCoordinator.resize")(
     function* (input) {
       const snapshot = yield* manager.resize(input);
@@ -132,15 +113,6 @@ const make = Effect.gen(function* PreviewCoordinatorMake() {
         yield* browser.resize(input);
       }
       return snapshot;
-    },
-  );
-
-  const refresh: PreviewCoordinator["Service"]["refresh"] = Effect.fn("PreviewCoordinator.refresh")(
-    function* (input) {
-      yield* manager.refresh(input);
-      if (yield* useServerBrowser) {
-        yield* browser.refresh(input);
-      }
     },
   );
 
@@ -170,20 +142,34 @@ const make = Effect.gen(function* PreviewCoordinatorMake() {
 
   return PreviewCoordinator.of({
     open,
-    navigate,
     resize,
-    refresh,
     close,
     list: manager.list,
     reportStatus: manager.reportStatus,
-    subscribeFrames: (input) => requireServerBrowser(browser.frames(input)),
-    input: (input) => requireServerBrowser(browser.input(input)),
-    goBack: (input) => requireServerBrowser(browser.goBack(input)),
-    goForward: (input) => requireServerBrowser(browser.goForward(input)),
-    zoom: (input) => requireServerBrowser(browser.zoom(input)),
-    captureScreenshot: (input) => requireServerBrowser(browser.captureScreenshot(input)),
-    pickElementAt: (input) => requireServerBrowser(browser.pickElementAt(input)),
-    clearBrowserData: (input) => requireServerBrowser(browser.clearBrowserData(input.data)),
+    subscribeFrames: Effect.fn("PreviewCoordinator.subscribeFrames")((input) =>
+      requireServerBrowser(browser.frames(input)),
+    ),
+    input: Effect.fn("PreviewCoordinator.input")((input) =>
+      requireServerBrowser(browser.input(input)),
+    ),
+    goBack: Effect.fn("PreviewCoordinator.goBack")((input) =>
+      requireServerBrowser(browser.goBack(input)),
+    ),
+    goForward: Effect.fn("PreviewCoordinator.goForward")((input) =>
+      requireServerBrowser(browser.goForward(input)),
+    ),
+    zoom: Effect.fn("PreviewCoordinator.zoom")((input) =>
+      requireServerBrowser(browser.zoom(input)),
+    ),
+    captureScreenshot: Effect.fn("PreviewCoordinator.captureScreenshot")((input) =>
+      requireServerBrowser(browser.captureScreenshot(input)),
+    ),
+    pickElementAt: Effect.fn("PreviewCoordinator.pickElementAt")((input) =>
+      requireServerBrowser(browser.pickElementAt(input)),
+    ),
+    clearBrowserData: Effect.fn("PreviewCoordinator.clearBrowserData")((input) =>
+      requireServerBrowser(browser.clearBrowserData(input.data)),
+    ),
   });
 });
 
@@ -201,10 +187,10 @@ export const layerNative = Layer.effect(
         }),
       );
     return PreviewCoordinator.of({
-      open: (input) => manager.open({ ...input, runtime: "server" }),
-      navigate: manager.navigate,
+      open: Effect.fn("PreviewCoordinator.open")((input) =>
+        manager.open({ ...input, runtime: "server" }),
+      ),
       resize: manager.resize,
-      refresh: manager.refresh,
       close: manager.close,
       list: manager.list,
       reportStatus: manager.reportStatus,

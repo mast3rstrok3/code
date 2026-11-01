@@ -1,6 +1,7 @@
 import { Pressable, ScrollView } from "react-native";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { ListFilterMenu } from "../workspace/ListFilterMenu";
+import { workspaceUserMenuIsCustomized } from "../workspace-users/workspaceUserMenu";
 import type { HomeHeaderProps } from "./HomeHeader.types";
 
 export function ThreadListFilters(
@@ -10,9 +11,14 @@ export function ThreadListFilters(
     | "projects"
     | "selectedEnvironmentId"
     | "selectedProjectKey"
+    | "userScopes"
     | "onEnvironmentChange"
     | "onProjectChange"
-  >,
+    | "onUserScopeChange"
+  > & {
+    /** List padding the scroller bleeds through so pills start where row content does. */
+    readonly gutter: number;
+  },
 ) {
   const selectedEnvironment = props.environments.find(
     (environment) => environment.environmentId === props.selectedEnvironmentId,
@@ -24,7 +30,8 @@ export function ThreadListFilters(
     <ScrollView
       horizontal
       showsHorizontalScrollIndicator={false}
-      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 2, paddingBottom: 10, gap: 8 }}
+      style={{ marginHorizontal: -props.gutter }}
+      contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 2, paddingBottom: 10, gap: 8 }}
     >
       <ListFilterMenu
         label={selectedEnvironment?.label ?? "All environments"}
@@ -81,7 +88,26 @@ export function ThreadListFilters(
           }
         }}
       />
-      {props.selectedEnvironmentId !== null || props.selectedProjectKey !== null ? (
+      {props.userScopes.map((scope) => {
+        const selected = scope.options.find((option) => option.selected && option.key !== "all");
+        return (
+          <ListFilterMenu
+            key={scope.environmentId}
+            label={selected?.title ?? scope.title}
+            accessibilityLabel={`Filter threads by ${scope.title.toLowerCase()}`}
+            active={selected !== undefined}
+            actions={scope.options.map((option) => ({
+              id: option.key,
+              title: option.title,
+              state: option.selected ? ("on" as const) : ("off" as const),
+            }))}
+            onSelect={(key) => props.onUserScopeChange(scope.environmentId, key)}
+          />
+        );
+      })}
+      {props.selectedEnvironmentId !== null ||
+      props.selectedProjectKey !== null ||
+      workspaceUserMenuIsCustomized(props.userScopes) ? (
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Reset thread filters"
@@ -89,6 +115,11 @@ export function ThreadListFilters(
           onPress={() => {
             props.onEnvironmentChange(null);
             props.onProjectChange(null);
+            for (const scope of props.userScopes) {
+              if (workspaceUserMenuIsCustomized([scope])) {
+                props.onUserScopeChange(scope.environmentId, "all");
+              }
+            }
           }}
         >
           <SymbolView name="xmark.circle.fill" size={18} tintColorClassName="accent-icon-muted" />

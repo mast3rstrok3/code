@@ -193,18 +193,27 @@ export class AppStackManager extends Context.Service<
         );
         return AppStackManager.of({
           ...native,
-          autoCreate: (input) =>
+          autoCreate: Effect.fn("AppStackManager.autoCreate")((input: AppStackAutoCreateInput) =>
             bundlesApps(input.bundle)
               ? unavailable("autoCreate", "Bundled app stacks")
               : omitsServices(input.omitServices)
                 ? unavailable("autoCreate", "Omitted app stack services")
                 : native.autoCreate(input),
-          bundlePlan: () => unavailable("bundlePlan", "Bundled app stacks"),
-          createBundleWorktrees: () => unavailable("createBundleWorktrees", "Bundled app stacks"),
-          startDevice: () => unavailable("startDevice"),
-          stopDevice: () => unavailable("stopDevice"),
-          getDeviceLease: () => unavailable("getDeviceLease"),
-          getDeviceStatus: () => unavailable("getDeviceStatus"),
+          ),
+          bundlePlan: Effect.fn("AppStackManager.bundlePlan")(() =>
+            unavailable("bundlePlan", "Bundled app stacks"),
+          ),
+          createBundleWorktrees: Effect.fn("AppStackManager.createBundleWorktrees")(() =>
+            unavailable("createBundleWorktrees", "Bundled app stacks"),
+          ),
+          startDevice: Effect.fn("AppStackManager.startDevice")(() => unavailable("startDevice")),
+          stopDevice: Effect.fn("AppStackManager.stopDevice")(() => unavailable("stopDevice")),
+          getDeviceLease: Effect.fn("AppStackManager.getDeviceLease")(() =>
+            unavailable("getDeviceLease"),
+          ),
+          getDeviceStatus: Effect.fn("AppStackManager.getDeviceStatus")(() =>
+            unavailable("getDeviceStatus"),
+          ),
         });
       }
 

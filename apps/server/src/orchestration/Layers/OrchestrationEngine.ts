@@ -658,8 +658,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       aggregateId: threadId,
     });
 
-  const dispatch: OrchestrationEngineShape["dispatch"] = (command, options) =>
-    Effect.gen(function* () {
+  const dispatch: OrchestrationEngineShape["dispatch"] = Effect.fn("OrchestrationEngine.dispatch")(
+    function* (command, options) {
       const result = yield* Deferred.make<DispatchResultType, OrchestrationDispatchError>();
       const queueSequence = yield* Ref.getAndUpdate(nextQueueSequence, (current) => current + 1);
       const envelope: CommandEnvelope = {
@@ -673,7 +673,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       };
       yield* TxPriorityQueue.offer(commandQueue, envelope);
       return yield* Deferred.await(result);
-    });
+    },
+  );
 
   return {
     readEvents,

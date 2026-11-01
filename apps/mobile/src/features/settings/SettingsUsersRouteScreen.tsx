@@ -39,7 +39,7 @@ import { serverEnvironment } from "../../state/server";
 import { useEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useWorkspaceUsers } from "../../state/workspace-users";
-import { SettingsActionRow } from "./components/SettingsActionRow";
+import { ListActionRow } from "../../components/ui/ListActionRow";
 import {
   AndroidSettingsEnvironmentFilter,
   SettingsEnvironmentFilterHeader,
@@ -69,20 +69,12 @@ function useSettingsUserNavigation() {
     openUser: (params: {
       readonly environmentId: EnvironmentId;
       readonly userId: WorkspaceUserId;
-    }) =>
-      navigation.navigate("SettingsSheet", {
-        screen: "SettingsContent",
-        params: { screen: "SettingsUser", params },
-      }),
+    }) => navigation.navigate("SettingsUser", params),
     openToken: (params: {
       readonly environmentId: EnvironmentId;
       readonly userId: WorkspaceUserId;
       readonly owner?: string;
-    }) =>
-      navigation.navigate("SettingsSheet", {
-        screen: "SettingsContent",
-        params: { screen: "SettingsUserGithubToken", params },
-      }),
+    }) => navigation.navigate("SettingsUserGithubToken", params),
   };
 }
 
@@ -224,7 +216,7 @@ function EnvironmentUsersSection(props: {
         ))
       )}
       <View className="border-t border-border-subtle">
-        <SettingsActionRow
+        <ListActionRow
           icon="person.badge.plus"
           label="Add user"
           loading={saving}
@@ -317,7 +309,7 @@ export function SettingsUserRouteScreen({
               />
             ) : null}
             <SettingsSection title="Name" footer={`Stable user id ${user.id}`}>
-              <SettingsActionRow
+              <ListActionRow
                 icon="pencil"
                 label={user.displayName}
                 description="Rename"
@@ -345,7 +337,7 @@ export function SettingsUserRouteScreen({
                 <View
                   className={ownerTokens.length === 0 ? undefined : "border-t border-border-subtle"}
                 >
-                  <SettingsActionRow
+                  <ListActionRow
                     icon="trash"
                     tone="danger"
                     label="Older token without an owner"
@@ -363,7 +355,7 @@ export function SettingsUserRouteScreen({
                     : "border-t border-border-subtle"
                 }
               >
-                <SettingsActionRow
+                <ListActionRow
                   icon="plus"
                   label="Add token"
                   disabled={disabled}
@@ -523,7 +515,7 @@ export function SettingsUserGithubTokenRouteScreen({
               onPress={() => void submit()}
             />
             <SettingsSection footer={TOKEN_PERMISSIONS_HELP}>
-              <SettingsActionRow
+              <ListActionRow
                 icon="safari"
                 label={
                   linkOwner
@@ -537,7 +529,7 @@ export function SettingsUserGithubTokenRouteScreen({
             </SettingsSection>
             {replacingOwner !== null ? (
               <SettingsSection>
-                <SettingsActionRow
+                <ListActionRow
                   icon="trash"
                   tone="danger"
                   label="Remove token"

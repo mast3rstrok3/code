@@ -38,11 +38,11 @@ export function useWorkflowModelChoices(environmentId: EnvironmentId) {
     const option = modelOptionsByInstance
       .get(selection.instanceId)
       ?.find((candidate) => candidate.slug === selection.model);
-    const modelName = option ? getTriggerDisplayModelName(option) : selection.model;
-    const instanceName = instanceEntries.find(
-      (entry) => entry.instanceId === selection.instanceId,
-    )?.displayName;
-    return instanceName === undefined ? modelName : `${instanceName} · ${modelName}`;
+    const instance = instanceEntries.find((entry) => entry.instanceId === selection.instanceId);
+    const modelName = option
+      ? getTriggerDisplayModelName(option, instance?.driverKind)
+      : selection.model;
+    return instance === undefined ? modelName : `${instance.displayName} · ${modelName}`;
   };
 
   return { environmentId, instanceEntries, modelOptionsByInstance, describeSelection };

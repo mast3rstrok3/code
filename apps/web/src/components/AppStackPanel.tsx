@@ -41,7 +41,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { OpenPreviewMutation } from "~/browser/openFileInPreview";
 import { openUrlInPreview } from "~/browser/openFileInPreview";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
-import { ensureBrowseDirectoryPath, getBrowseParentPath } from "~/lib/projectPaths";
+import {
+  ensureBrowseDirectoryPath,
+  getBrowseParentPath,
+} from "@t3tools/client-runtime/state/projects";
 import { cn } from "~/lib/utils";
 import { isPreviewSupportedInRuntime } from "~/previewStateStore";
 import { appStackEnvironment } from "~/state/appStacks";

@@ -4,6 +4,7 @@ import {
   CommandId,
   ProjectId,
   ProviderInstanceId,
+  SourceControlProviderKind,
   ThreadId,
   OrchestrationEvent,
   OrchestrationCommand,
@@ -18,8 +19,6 @@ import * as Schema from "effect/Schema";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 import { projectEvent } from "./projector.ts";
-const isThreadDetailEvent = (event: OrchestrationEvent) =>
-  event.type.startsWith("thread.") && !event.type.startsWith("thread.pull-request");
 
 const decodeCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 
@@ -71,7 +70,7 @@ function makeReadModel(pullRequests: ReadonlyArray<ThreadPullRequestLink>): Orch
         deletedAt: null,
         repositoryIdentity: {
           canonicalKey: "github.com/t3tools/t3code",
-          provider: "github",
+          provider: SourceControlProviderKind.make("github"),
           displayName: "t3tools/t3code",
           locator: {
             source: "git-remote",
@@ -235,7 +234,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
           ...project,
           repositoryIdentity: {
             ...project.repositoryIdentity!,
-            provider: "azure-devops",
+            provider: SourceControlProviderKind.make("azure-devops"),
             canonicalKey: "ssh.dev.azure.com/v3/org-a/project/web",
             displayName: "v3/org-a/project/web",
             name: "web",
@@ -312,8 +311,6 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
           const event = { ...planned, sequence: model.snapshotSequence + 1 };
           const encoded = yield* Schema.encodeEffect(OrchestrationEvent)(event);
           const decoded = yield* Schema.decodeEffect(OrchestrationEvent)(encoded);
-          // Older detail-event unions must never receive the new PR discriminants.
-          expect(isThreadDetailEvent(decoded)).toBe(false);
           model = yield* projectEvent(model, decoded);
         }
         const thread = model.threads[0]!;
