@@ -1,4 +1,3 @@
-import { normalizeThreadPullRequestKey } from "@t3tools/shared/threadPullRequests";
 import {
   IsoDateTime,
   PositiveInt,
@@ -13,6 +12,7 @@ import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 
+import { normalizeThreadPullRequestKey } from "../sourceControl/threadPullRequests.ts";
 import { toPersistenceSqlError, type ProjectionRepositoryError } from "./Errors.ts";
 
 import * as Layer from "effect/Layer";

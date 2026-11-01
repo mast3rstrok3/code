@@ -9,12 +9,13 @@ export type OrphanWorkflowThreadRow = typeof OrphanWorkflowThreadRow.Type;
  * Select empty workflow shells. Every durable content or ownership relation
  * disqualifies a thread from automatic cleanup.
  */
-export const selectOrphanWorkflowThreads = (workflowRole?: string) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const rows =
-      workflowRole === undefined
-        ? yield* sql`
+export const selectOrphanWorkflowThreads = Effect.fn("selectOrphanWorkflowThreads")(function* (
+  workflowRole?: string,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const rows =
+    workflowRole === undefined
+      ? yield* sql`
           SELECT t.thread_id AS "threadId"
           FROM projection_threads t
           WHERE t.workflow_role IS NOT NULL
@@ -49,7 +50,7 @@ export const selectOrphanWorkflowThreads = (workflowRole?: string) =>
             )
           ORDER BY t.created_at ASC
         `
-        : yield* sql`
+      : yield* sql`
           SELECT t.thread_id AS "threadId"
           FROM projection_threads t
           WHERE t.workflow_role = ${workflowRole}
@@ -84,5 +85,5 @@ export const selectOrphanWorkflowThreads = (workflowRole?: string) =>
             )
           ORDER BY t.created_at ASC
         `;
-    return yield* Schema.decodeUnknownEffect(Schema.Array(OrphanWorkflowThreadRow))(rows);
-  });
+  return yield* Schema.decodeUnknownEffect(Schema.Array(OrphanWorkflowThreadRow))(rows);
+});

@@ -33,14 +33,18 @@ const makePreviewRecordingPolicy = Effect.gen(function* () {
   const threads = yield* ProjectionThreadRepository;
   const projects = yield* ProjectionProjectRepository;
 
-  const modeForThread: PreviewRecordingPolicyShape["modeForThread"] = (threadId) =>
-    Effect.gen(function* () {
+  const modeForThread: PreviewRecordingPolicyShape["modeForThread"] = Effect.fn(
+    "PreviewRecordingPolicy.modeForThread",
+  )(
+    function* (threadId) {
       const thread = yield* threads.getById({ threadId });
       if (Option.isNone(thread)) return config.previewRecordingMode;
       const project = yield* projects.getById({ projectId: thread.value.projectId });
       if (Option.isNone(project)) return config.previewRecordingMode;
       return project.value.previewRecordingMode ?? config.previewRecordingMode;
-    }).pipe(Effect.orElseSucceed(() => config.previewRecordingMode));
+    },
+    Effect.orElseSucceed(() => config.previewRecordingMode),
+  );
 
   return { modeForThread } satisfies PreviewRecordingPolicyShape;
 });

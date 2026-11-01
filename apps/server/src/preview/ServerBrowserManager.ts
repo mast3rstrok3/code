@@ -1091,10 +1091,8 @@ function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
         ),
       catch: browserError,
     }).pipe(
-      Effect.catch((error) =>
-        reportStatus(tab, { _tag: "LoadFailed", url: input.url, cause: error }).pipe(
-          Effect.andThen(Effect.fail(error)),
-        ),
+      Effect.tapError((error) =>
+        reportStatus(tab, { _tag: "LoadFailed", url: input.url, cause: error }),
       ),
     );
     yield* reportStatus(tab, "Success");

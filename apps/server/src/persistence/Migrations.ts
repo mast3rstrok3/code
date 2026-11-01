@@ -115,6 +115,15 @@ import Migration0114 from "./Migrations/066_RepairClientSettlementTimestamps.ts"
 import Migration0115 from "./Migrations/067_WebhookDedupe.ts";
 import Migration0116 from "./Migrations/116_ScheduledTaskWorkflow.ts";
 import Migration0117 from "./Migrations/117_ScheduledTaskWorkflowDefaultModel.ts";
+import Migration0118 from "./Migrations/068_ShellStopRequestIndex.ts";
+import Migration0119 from "./Migrations/069_ThreadMessageSearch.ts";
+import Migration0120 from "./Migrations/070_PeerLinks.ts";
+import Migration0121 from "./Migrations/071_PeerLinkFence.ts";
+import Migration0122 from "./Migrations/072_WaitingLinkRequestIndex.ts";
+import Migration0123 from "./Migrations/073_ActiveTurnItemIndexes.ts";
+import Migration0124 from "./Migrations/074_ExcludeAttachmentPlaceholdersFromSearch.ts";
+import Migration0125 from "./Migrations/075_SubagentDeliveryState.ts";
+import Migration0126 from "./Migrations/076_ProjectionProjectsPinArchive.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -250,6 +259,16 @@ export const migrationEntries = [
   [115, "WebhookDedupe", Migration0115],
   [116, "ScheduledTaskWorkflow", Migration0116],
   [117, "ScheduledTaskWorkflowDefaultModel", Migration0117],
+  // Upstream 68 through 76 overlap the fork's existing migration ledger.
+  [118, "ShellStopRequestIndex", Migration0118],
+  [119, "ThreadMessageSearch", Migration0119],
+  [120, "PeerLinks", Migration0120],
+  [121, "PeerLinkFence", Migration0121],
+  [122, "WaitingLinkRequestIndex", Migration0122],
+  [123, "ActiveTurnItemIndexes", Migration0123],
+  [124, "ExcludeAttachmentPlaceholdersFromSearch", Migration0124],
+  [125, "SubagentDeliveryState", Migration0125],
+  [126, "ProjectionProjectsPinArchive", Migration0126],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -266,12 +285,7 @@ const makeMigrationLoader = (throughId?: number) =>
 // The fork runs upstream's V2 migration (upstream id 55) at id 102.
 const FIRST_V2_MIGRATION_ID = 102;
 
-/**
- * Fail before migrating when the migrator would skip one of V2's own
- * migrations. It skips every id up to the highest recorded one, whatever name
- * was recorded, so a database that took a V2 id for another migration would
- * start without V2's schema and fail on first use.
- */
+// Migrators skip ids up to the highest recorded; reject collisions that would skip V2 schema.
 const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function* (
   throughId?: number,
 ) {

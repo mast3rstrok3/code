@@ -118,14 +118,14 @@ export const make = Effect.gen(function* () {
     readonly run: OrchestrationImplementationRun;
   }) =>
     reportUnsafe(input).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
-          : Effect.logWarning("Scheduled workflow report failed", {
-              threadId: input.rootThreadId,
-              runId: input.run.id,
-              cause: Cause.pretty(cause),
-            }),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) =>
+          Effect.logWarning("Scheduled workflow report failed", {
+            threadId: input.rootThreadId,
+            runId: input.run.id,
+            cause: Cause.pretty(cause),
+          }),
       ),
     );
 

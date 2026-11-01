@@ -4307,8 +4307,10 @@ const make = Effect.gen(function* () {
    * checkout fails partway, for example on files an App Stack container wrote as
    * root. Git then no longer answers for the directory, so it needs a plain delete.
    */
-  const isUnregisteredWorktreeLeftover = (worktreePath: string) =>
-    Effect.gen(function* () {
+  const isUnregisteredWorktreeLeftover = Effect.fn(
+    "ImplementationWorkflowReactor.isUnregisteredWorktreeLeftover",
+  )(
+    function* (worktreePath: string) {
       if (!(yield* fileSystem.exists(worktreePath))) return false;
       const dotGit = path.join(worktreePath, ".git");
       if (!(yield* fileSystem.exists(dotGit))) return true;
@@ -4316,7 +4318,9 @@ const make = Effect.gen(function* () {
       const gitdir = /^gitdir:\s*(.+)$/m.exec(yield* fileSystem.readFileString(dotGit))?.[1];
       if (gitdir === undefined) return false;
       return !(yield* fileSystem.exists(path.resolve(worktreePath, gitdir.trim())));
-    }).pipe(Effect.orElseSucceed(() => false));
+    },
+    Effect.orElseSucceed(() => false),
+  );
 
   const leftoverRemovalWarnings = new Set<string>();
 
@@ -7841,55 +7845,56 @@ const make = Effect.gen(function* () {
     }
     // A failed publication leaves the run for a human, keeping every pull
     // request already filed so a retry files only the rest.
-    const recordPublicationFailure = (run: OrchestrationImplementationRun, failure: unknown) =>
-      Effect.gen(function* () {
-        yield* updateRun({
-          sourceThreadId: input.sourceThreadId,
-          run: {
-            ...run,
-            status: "needs-human-attention",
-            changeRequestFailure: changeRequestFailure({
-              detail: errorDetail(failure),
-              failedAt: input.createdAt,
-            }),
-            retryableFailure: {
-              stage: "change-request",
-              detail: errorDetail(failure),
-              failedAt: input.createdAt,
-              attemptCount:
-                run.retryableFailure?.stage === "change-request"
-                  ? run.retryableFailure.attemptCount + 1
-                  : 1,
-              maxAttempts: 3,
-              humanBlocked: false,
-            },
-            updatedAt: input.createdAt,
-          },
-          createdAt: input.createdAt,
-          expectedChangeRequestClaim: {
-            status: "publishing-change-request",
-            changeRequestNumber: null,
-            activeBabysitterThreadId: null,
-          },
-        });
-        yield* appendActivity({
-          threadId: run.orchestratorThreadId,
-          tone: "error",
-          kind: "implementation-change-request-filed",
-          summary: "Change request publication failed",
-          payload: {
-            runId: run.id,
-            status: "failed",
+    const recordPublicationFailure = Effect.fn(
+      "ImplementationWorkflowReactor.recordPublicationFailure",
+    )(function* (run: OrchestrationImplementationRun, failure: unknown) {
+      yield* updateRun({
+        sourceThreadId: input.sourceThreadId,
+        run: {
+          ...run,
+          status: "needs-human-attention",
+          changeRequestFailure: changeRequestFailure({
             detail: errorDetail(failure),
+            failedAt: input.createdAt,
+          }),
+          retryableFailure: {
+            stage: "change-request",
+            detail: errorDetail(failure),
+            failedAt: input.createdAt,
+            attemptCount:
+              run.retryableFailure?.stage === "change-request"
+                ? run.retryableFailure.attemptCount + 1
+                : 1,
+            maxAttempts: 3,
+            humanBlocked: false,
           },
-          createdAt: input.createdAt,
-        });
+          updatedAt: input.createdAt,
+        },
+        createdAt: input.createdAt,
+        expectedChangeRequestClaim: {
+          status: "publishing-change-request",
+          changeRequestNumber: null,
+          activeBabysitterThreadId: null,
+        },
       });
-    const recordFiled = (
-      run: OrchestrationImplementationRun,
-      changeRequest: NonNullable<OrchestrationImplementationRun["changeRequest"]>,
-    ) =>
-      Effect.gen(function* () {
+      yield* appendActivity({
+        threadId: run.orchestratorThreadId,
+        tone: "error",
+        kind: "implementation-change-request-filed",
+        summary: "Change request publication failed",
+        payload: {
+          runId: run.id,
+          status: "failed",
+          detail: errorDetail(failure),
+        },
+        createdAt: input.createdAt,
+      });
+    });
+    const recordFiled = Effect.fn("ImplementationWorkflowReactor.recordChangeRequestFiled")(
+      function* (
+        run: OrchestrationImplementationRun,
+        changeRequest: NonNullable<OrchestrationImplementationRun["changeRequest"]>,
+      ) {
         yield* updateRun({
           sourceThreadId: input.sourceThreadId,
           run,
@@ -7914,7 +7919,8 @@ const make = Effect.gen(function* () {
           },
           createdAt: input.createdAt,
         });
-      });
+      },
+    );
 
     // Every other repository with changes gets its own pull request first, so
     // the orchestrator's can name them all.
@@ -8204,24 +8210,24 @@ const make = Effect.gen(function* () {
         createdAt: event.occurredAt,
       });
     }).pipe(
-      Effect.catchCause((cause) => {
-        if (Cause.hasInterruptsOnly(cause)) {
-          return Effect.failCause(cause);
-        }
-        return Effect.logWarning("implementation run launch failed; blocking run", {
-          runId: event.payload.run.id,
-          cause: Cause.pretty(cause),
-        }).pipe(
-          Effect.andThen(
-            blockRun({
-              sourceThreadId: event.payload.sourceThreadId,
-              run: runningRun,
-              reasonMarkdown: `Implementation run launch failed before workers could start.\n\n\`\`\`\n${Cause.pretty(cause)}\n\`\`\``,
-              updatedAt: event.occurredAt,
-            }),
-          ),
-        );
-      }),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) => {
+          return Effect.logWarning("implementation run launch failed; blocking run", {
+            runId: event.payload.run.id,
+            cause: Cause.pretty(cause),
+          }).pipe(
+            Effect.andThen(
+              blockRun({
+                sourceThreadId: event.payload.sourceThreadId,
+                run: runningRun,
+                reasonMarkdown: `Implementation run launch failed before workers could start.\n\n\`\`\`\n${Cause.pretty(cause)}\n\`\`\``,
+                updatedAt: event.occurredAt,
+              }),
+            ),
+          );
+        },
+      ),
     );
   });
 
@@ -10793,16 +10799,16 @@ const make = Effect.gen(function* () {
     const sourceThreadId = findRunSourceThreadId({ readModel, run });
     if (sourceThreadId === null || run.retryableFailure === null) return;
     yield* resumeRetryableRun({ sourceThreadId, run, createdAt: event.occurredAt }).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
-          : blockRun({
-              sourceThreadId,
-              run,
-              retryableStage: run.retryableFailure?.stage ?? "worktree-setup",
-              reasonMarkdown: `Fast feature retry failed.\n\n\`\`\`\n${Cause.pretty(cause)}\n\`\`\``,
-              updatedAt: event.occurredAt,
-            }),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) =>
+          blockRun({
+            sourceThreadId,
+            run,
+            retryableStage: run.retryableFailure?.stage ?? "worktree-setup",
+            reasonMarkdown: `Fast feature retry failed.\n\n\`\`\`\n${Cause.pretty(cause)}\n\`\`\``,
+            updatedAt: event.occurredAt,
+          }),
       ),
     );
   });
@@ -12283,15 +12289,15 @@ const make = Effect.gen(function* () {
 
   const processEventSafely = (event: ImplementationWorkflowEvent) =>
     processEvent(event).pipe(
-      Effect.catchCause((cause) => {
-        if (Cause.hasInterruptsOnly(cause)) {
-          return Effect.failCause(cause);
-        }
-        return Effect.logWarning("implementation workflow reactor failed to process event", {
-          eventType: event.type,
-          cause: Cause.pretty(cause),
-        });
-      }),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) => {
+          return Effect.logWarning("implementation workflow reactor failed to process event", {
+            eventType: event.type,
+            cause: Cause.pretty(cause),
+          });
+        },
+      ),
     );
 
   const worker = yield* makeDrainableWorker(processEventSafely);
@@ -12482,16 +12488,18 @@ const make = Effect.gen(function* () {
         },
         createdAt,
       }).pipe(
-        Effect.catchCause((cause) => {
-          if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
-          return blockRun({
-            sourceThreadId,
-            run: { ...run, status: "integrating" },
-            retryableStage: "integration",
-            reasonMarkdown: `Final branch integration recovery failed.\n\n\`\`\`\n${Cause.pretty(cause)}\n\`\`\``,
-            updatedAt: createdAt,
-          });
-        }),
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) => {
+            return blockRun({
+              sourceThreadId,
+              run: { ...run, status: "integrating" },
+              retryableStage: "integration",
+              reasonMarkdown: `Final branch integration recovery failed.\n\n\`\`\`\n${Cause.pretty(cause)}\n\`\`\``,
+              updatedAt: createdAt,
+            });
+          },
+        ),
       );
     }
   });

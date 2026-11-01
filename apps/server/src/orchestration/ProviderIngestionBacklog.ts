@@ -32,17 +32,20 @@ export class ProviderIngestionBacklog extends Context.Service<
 
 const make = Effect.sync(() => {
   const pending = new Map<string, number>();
+  // Untraced: track and settle run once per ingested provider runtime event.
   return ProviderIngestionBacklog.of({
-    track: (threadId) =>
-      Effect.sync(() => {
+    track: Effect.fnUntraced(function* (threadId: string) {
+      yield* Effect.sync(() => {
         pending.set(threadId, (pending.get(threadId) ?? 0) + 1);
-      }),
-    settle: (threadId) =>
-      Effect.sync(() => {
+      });
+    }),
+    settle: Effect.fnUntraced(function* (threadId: string) {
+      yield* Effect.sync(() => {
         const count = (pending.get(threadId) ?? 0) - 1;
         if (count > 0) pending.set(threadId, count);
         else pending.delete(threadId);
-      }),
+      });
+    }),
     pendingThreadIds: Effect.sync(() => new Set(pending.keys())),
   });
 });

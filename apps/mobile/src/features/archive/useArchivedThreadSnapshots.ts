@@ -7,7 +7,7 @@ import {
 import { DEFAULT_WORKSPACE_USER_VIEW, type EnvironmentId } from "@t3tools/contracts";
 import { isOwnedByWorkspaceUserView } from "@t3tools/shared/workspaceUsers";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useCallback, useMemo } from "react";
+import { useMemo } from "react";
 
 import { appAtomRegistry } from "../../state/atom-registry";
 import { orchestrationEnvironment } from "../../state/orchestration";
@@ -55,11 +55,11 @@ export function useArchivedThreadSnapshots(environmentIds: ReadonlyArray<Environ
     [environmentIds],
   );
   const result = useAtomValue(archivedSnapshotsAtom(environmentKey));
-  const refresh = useCallback(() => {
+  const refresh = () => {
     for (const environmentId of environmentIds) {
       appAtomRegistry.refresh(archivedSourceAtom(environmentId));
     }
-  }, [environmentIds]);
+  };
 
   return { ...result, refresh };
 }

@@ -1,8 +1,4 @@
 import {
-  canonicalRepositoryKey,
-  sourceControlRepositorySelector,
-} from "@t3tools/shared/sourceControl";
-import {
   CommandId,
   type OrchestrationEvent,
   type OrchestrationProjectShell,
@@ -27,6 +23,7 @@ import type { ProjectionRepositoryError } from "../persistence/Errors.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import { forkParked } from "../serverActivation.ts";
+import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
 
@@ -67,8 +64,8 @@ export function pullRequestMatchesProject(
   return (
     pullRequest.repositoryKey !== null &&
     project.repositoryIdentity != null &&
-    canonicalRepositoryKey(pullRequest.repositoryKey) ===
-      canonicalRepositoryKey(project.repositoryIdentity.canonicalKey)
+    sourceControlDefinitions.canonicalRepositoryKey(pullRequest.repositoryKey) ===
+      sourceControlDefinitions.canonicalRepositoryKey(project.repositoryIdentity.canonicalKey)
   );
 }
 
@@ -187,7 +184,9 @@ export const make = Effect.gen(function* () {
                   })) ?? snapshotProject.repositoryIdentity,
               }
             : snapshotProject;
-          const repository = sourceControlRepositorySelector(project.repositoryIdentity);
+          const repository = sourceControlDefinitions.repositorySelector(
+            project.repositoryIdentity,
+          );
           if (first.branch !== null && repository === null) return finishBackfill(group);
           const worktreeExists =
             first.worktreePath !== null && (yield* fileSystem.exists(first.worktreePath));

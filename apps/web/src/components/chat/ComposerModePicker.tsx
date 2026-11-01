@@ -25,7 +25,7 @@ import {
 import { memo, type KeyboardEvent } from "react";
 import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
 import { useComposerMenuState } from "./useComposerMenuState";
-import { ComposerControl, ComposerControlChevron, ComposerControlIcon } from "./ComposerControl";
+import { ComposerControl, ComposerControlIcon } from "./ComposerControl";
 
 export type ComposerModeCatalog = "skills" | "workflows";
 
@@ -207,7 +207,6 @@ export const ComposerModeControl = memo(function ComposerModeControl(props: {
       >
         <ComposerControlIcon icon={display.icon} size={props.size ?? "sm"} />
         <span className="min-w-0 truncate">{display.label}</span>
-        <ComposerControlChevron />
       </MenuTrigger>
       <MenuPopup align="start">
         <ComposerModePickerContent

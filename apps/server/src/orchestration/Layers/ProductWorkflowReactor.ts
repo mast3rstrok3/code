@@ -1161,15 +1161,15 @@ const make = Effect.gen(function* () {
 
   const processEventSafely = (event: ProductWorkflowEvent) =>
     processEvent(event).pipe(
-      Effect.catchCause((cause) => {
-        if (Cause.hasInterruptsOnly(cause)) {
-          return Effect.failCause(cause);
-        }
-        return Effect.logWarning("product workflow reactor failed to process event", {
-          eventType: event.type,
-          cause: Cause.pretty(cause),
-        });
-      }),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) => {
+          return Effect.logWarning("product workflow reactor failed to process event", {
+            eventType: event.type,
+            cause: Cause.pretty(cause),
+          });
+        },
+      ),
     );
 
   const worker = yield* makeDrainableWorker(processEventSafely);

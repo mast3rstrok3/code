@@ -1,7 +1,7 @@
 import * as Deferred from "effect/Deferred";
 import { WorkflowRuntimeIngestionError } from "../Services/ProviderRuntimeIngestion.ts";
 import { WorkflowProviderEvents } from "../WorkflowProviderEvents.ts";
-import type { OrchestrationThread, OrchestrationProposedPlan } from "@t3tools/contracts";
+import type { OrchestrationThread } from "@t3tools/contracts";
 import {
   ApprovalRequestId,
   CommandId,
@@ -1796,76 +1796,68 @@ const make = Effect.gen(function* () {
     );
   };
 
-  const getOrCreateAssistantMessageId = (input: {
+  // Untraced: resolved for every streamed assistant text delta.
+  const getOrCreateAssistantMessageId = Effect.fnUntraced(function* (input: {
     threadId: ThreadId;
     event: ProviderRuntimeEvent;
     turnId?: TurnId;
-  }) =>
-    Effect.gen(function* () {
-      if (!input.turnId) {
-        return assistantSegmentMessageId(assistantSegmentBaseKeyFromEvent(input.event), 0);
-      }
+  }) {
+    if (!input.turnId) {
+      return assistantSegmentMessageId(assistantSegmentBaseKeyFromEvent(input.event), 0);
+    }
 
-      const activeMessageId = yield* getActiveAssistantMessageIdForTurn(
-        input.threadId,
-        input.turnId,
-      );
-      if (Option.isSome(activeMessageId)) {
-        return activeMessageId.value;
-      }
+    const activeMessageId = yield* getActiveAssistantMessageIdForTurn(input.threadId, input.turnId);
+    if (Option.isSome(activeMessageId)) {
+      return activeMessageId.value;
+    }
 
-      return yield* startAssistantSegmentForTurn({
-        threadId: input.threadId,
-        turnId: input.turnId,
-        baseKey: assistantSegmentBaseKeyFromEvent(input.event),
-      });
+    return yield* startAssistantSegmentForTurn({
+      threadId: input.threadId,
+      turnId: input.turnId,
+      baseKey: assistantSegmentBaseKeyFromEvent(input.event),
     });
+  });
 
   /**
    * Unlike assistant text, reasoning has no reliable per-block item id on every
    * provider, so a turn's blocks can share a base key. Switching base key (a new
    * reasoning item, or summary vs raw) closes the open block instead of
-   * appending to it.
+   * appending to it. Untraced because it runs for every streamed reasoning delta.
    */
-  const getOrCreateReasoningMessageId = (input: {
+  const getOrCreateReasoningMessageId = Effect.fnUntraced(function* (input: {
     threadId: ThreadId;
     event: ProviderRuntimeEvent;
     baseKey: string;
     createdAt: string;
     turnId: TurnId;
-  }) =>
-    Effect.gen(function* () {
-      const state = yield* getAssistantSegmentStateForTurn(
-        input.threadId,
-        input.turnId,
-        "reasoning",
-      );
-      const activeMessageId = Option.flatMap(state, (entry) =>
-        entry.activeMessageId ? Option.some(entry.activeMessageId) : Option.none(),
-      );
-      if (Option.isSome(activeMessageId)) {
-        if (Option.getOrUndefined(state)?.baseKey === input.baseKey) {
-          return activeMessageId.value;
-        }
-        yield* finalizeActiveSegmentForTurn({
-          event: input.event,
-          threadId: input.threadId,
-          turnId: input.turnId,
-          createdAt: input.createdAt,
-          commandTag: "reasoning-complete-on-new-block",
-          finalDeltaCommandTag: "reasoning-delta-finalize-on-new-block",
-          hasProjectedMessage: false,
-          role: "reasoning",
-        });
+  }) {
+    const state = yield* getAssistantSegmentStateForTurn(input.threadId, input.turnId, "reasoning");
+    const activeMessageId = Option.flatMap(state, (entry) =>
+      entry.activeMessageId ? Option.some(entry.activeMessageId) : Option.none(),
+    );
+    if (Option.isSome(activeMessageId)) {
+      if (Option.getOrUndefined(state)?.baseKey === input.baseKey) {
+        return activeMessageId.value;
       }
-
-      return yield* startAssistantSegmentForTurn({
+      yield* finalizeActiveSegmentForTurn({
+        event: input.event,
         threadId: input.threadId,
         turnId: input.turnId,
-        baseKey: input.baseKey,
+        createdAt: input.createdAt,
+        commandTag: "reasoning-complete-on-new-block",
+        finalDeltaCommandTag: "reasoning-delta-finalize-on-new-block",
+        hasProjectedMessage: false,
         role: "reasoning",
       });
+    }
+
+    return yield* startAssistantSegmentForTurn({
+      threadId: input.threadId,
+      turnId: input.turnId,
+      baseKey: input.baseKey,
+      role: "reasoning",
     });
+  });
 
   const resolveResponseStreamingMode = (projectId: ProjectId) =>
     Effect.map(
@@ -2327,14 +2319,14 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const dispatchWorkflowDirective = (input: {
-    event: ProviderRuntimeEvent;
-    threadId: ThreadId;
-    messageId: MessageId;
-    directive: WorkflowDirective;
-    createdAt: string;
-  }) =>
-    Effect.gen(function* () {
+  const dispatchWorkflowDirective = Effect.fn("ProviderRuntimeIngestion.dispatchWorkflowDirective")(
+    function* (input: {
+      event: ProviderRuntimeEvent;
+      threadId: ThreadId;
+      messageId: MessageId;
+      directive: WorkflowDirective;
+      createdAt: string;
+    }) {
       const thread = yield* resolveThreadDetail(input.threadId);
       if (!thread) {
         return;
@@ -2923,7 +2915,8 @@ const make = Effect.gen(function* () {
           return;
         }
       }
-    });
+    },
+  );
 
   const consumePlanningReviewerFailure = Effect.fn(
     "ProviderRuntimeIngestion.consumePlanningReviewerFailure",
@@ -3204,7 +3197,9 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const maybeProcessWorkflowDirective = (input: {
+  const maybeProcessWorkflowDirective = Effect.fn(
+    "ProviderRuntimeIngestion.maybeProcessWorkflowDirective",
+  )(function* (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
     messageId: MessageId;
@@ -3217,208 +3212,205 @@ const make = Effect.gen(function* () {
      * as blocked — and burns its whole retry budget in the first minute.
      */
     synthesizeMissingDirectiveFailure?: boolean;
-  }) =>
-    Effect.gen(function* () {
-      const parseResult = parseWorkflowDirectiveFromMarkdown(input.markdown);
-      const shell = Option.getOrUndefined(
-        yield* projectionSnapshotQuery.getThreadShellById(input.threadId),
+  }) {
+    const parseResult = parseWorkflowDirectiveFromMarkdown(input.markdown);
+    const shell = Option.getOrUndefined(
+      yield* projectionSnapshotQuery.getThreadShellById(input.threadId),
+    );
+    if (
+      !shell ||
+      (parseResult.kind === "none" &&
+        shell.workflowRole === null &&
+        shell.interactionMode !== "planning-workflow")
+    )
+      return;
+    const thread = yield* resolveThreadDetail(input.threadId);
+    if (!thread) return;
+    // Providers can finish a turn while a background build or subagent still runs.
+    // Its completion starts another turn that can supply the workflow result.
+    const synthesizeFailure =
+      input.synthesizeMissingDirectiveFailure === true &&
+      threadBackgroundLiveness.getThreadBackgroundLiveness(input.threadId) === null;
+    const failureInput = { ...input, dedupeScope: input.turnId ?? input.messageId };
+
+    if (parseResult.kind === "none") {
+      if (synthesizeFailure) {
+        yield* consumePlanningReviewerFailure({
+          ...failureInput,
+          detail: "Reviewer completed without the required planning-reviewer-verdict directive.",
+        });
+        yield* consumeImplementationFixerFailure({
+          ...failureInput,
+          detail: "QA fixer completed without the required implementation-fix-result directive.",
+        });
+        yield* consumeAppReviewFixerFailure({
+          ...failureInput,
+          detail:
+            "App Review fixer completed without the required app-review-fix-result directive.",
+        });
+      }
+      return;
+    }
+    if (parseResult.kind === "error") {
+      yield* Effect.logWarning("provider workflow directive parse failed", {
+        threadId: input.threadId,
+        messageId: input.messageId,
+        detail: parseResult.message,
+      });
+      if (synthesizeFailure) {
+        yield* consumePlanningArtifactFailure({
+          ...failureInput,
+          detail: parseResult.message,
+        });
+        yield* consumePlanningReviewerFailure({
+          ...failureInput,
+          detail: `Reviewer directive was rejected: ${parseResult.message}`,
+        });
+        yield* consumeImplementationFixerFailure({
+          ...failureInput,
+          detail: `QA fixer directive was rejected: ${parseResult.message}`,
+        });
+        yield* consumeAppReviewFixerFailure({
+          ...failureInput,
+          detail: `App Review fixer directive was rejected: ${parseResult.message}`,
+        });
+      }
+      return;
+    }
+
+    if (thread.workflowRole === "implementation-fixer") {
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const run = readModel.implementationRuns.find(
+        (candidate) =>
+          (candidate.status === "fixing" || candidate.status === "code-review-fixing") &&
+          candidate.activeFixerThreadId === thread.id,
       );
       if (
-        !shell ||
-        (parseResult.kind === "none" &&
-          shell.workflowRole === null &&
-          shell.interactionMode !== "planning-workflow")
-      )
-        return;
-      const thread = yield* resolveThreadDetail(input.threadId);
-      if (!thread) return;
-      // Providers can finish a turn while a background build or subagent still runs.
-      // Its completion starts another turn that can supply the workflow result.
-      const synthesizeFailure =
-        input.synthesizeMissingDirectiveFailure === true &&
-        threadBackgroundLiveness.getThreadBackgroundLiveness(input.threadId) === null;
-      const failureInput = { ...input, dedupeScope: input.turnId ?? input.messageId };
-
-      if (parseResult.kind === "none") {
+        parseResult.directive.type !== "implementation-fix-result" ||
+        run === undefined ||
+        parseResult.directive.runId !== run.id
+      ) {
         if (synthesizeFailure) {
-          yield* consumePlanningReviewerFailure({
-            ...failureInput,
-            detail: "Reviewer completed without the required planning-reviewer-verdict directive.",
-          });
           yield* consumeImplementationFixerFailure({
             ...failureInput,
-            detail: "QA fixer completed without the required implementation-fix-result directive.",
+            detail:
+              "QA fixer completed with a directive for the wrong workflow stage or active run.",
           });
+        }
+        return;
+      }
+    }
+
+    if (thread.workflowRole === "app-review-fixer") {
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const run = (readModel.appReviewWorkflowRuns ?? []).find(
+        (candidate) =>
+          candidate.status === "running" &&
+          candidate.activePhase === "fixing" &&
+          candidate.activeThreadId === thread.id,
+      );
+      const cycle = run?.cycles.at(-1);
+      if (
+        parseResult.directive.type !== "app-review-fix-result" ||
+        run === undefined ||
+        cycle?.planId === null ||
+        cycle?.planId === undefined ||
+        parseResult.directive.runId !== run.id ||
+        parseResult.directive.planId !== cycle.planId
+      ) {
+        if (synthesizeFailure) {
           yield* consumeAppReviewFixerFailure({
             ...failureInput,
             detail:
-              "App Review fixer completed without the required app-review-fix-result directive.",
+              "App Review fixer completed with a directive for the wrong run or proposed plan.",
           });
         }
         return;
       }
-      if (parseResult.kind === "error") {
-        yield* Effect.logWarning("provider workflow directive parse failed", {
-          threadId: input.threadId,
-          messageId: input.messageId,
-          detail: parseResult.message,
-        });
-        if (synthesizeFailure) {
-          yield* consumePlanningArtifactFailure({
-            ...failureInput,
-            detail: parseResult.message,
-          });
-          yield* consumePlanningReviewerFailure({
-            ...failureInput,
-            detail: `Reviewer directive was rejected: ${parseResult.message}`,
-          });
-          yield* consumeImplementationFixerFailure({
-            ...failureInput,
-            detail: `QA fixer directive was rejected: ${parseResult.message}`,
-          });
-          yield* consumeAppReviewFixerFailure({
-            ...failureInput,
-            detail: `App Review fixer directive was rejected: ${parseResult.message}`,
-          });
-        }
-        return;
-      }
+    }
 
-      if (thread.workflowRole === "implementation-fixer") {
-        const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-        const run = readModel.implementationRuns.find(
-          (candidate) =>
-            (candidate.status === "fixing" || candidate.status === "code-review-fixing") &&
-            candidate.activeFixerThreadId === thread.id,
-        );
-        if (
-          parseResult.directive.type !== "implementation-fix-result" ||
-          run === undefined ||
-          parseResult.directive.runId !== run.id
-        ) {
-          if (synthesizeFailure) {
-            yield* consumeImplementationFixerFailure({
-              ...failureInput,
-              detail:
-                "QA fixer completed with a directive for the wrong workflow stage or active run.",
-            });
-          }
-          return;
-        }
-      }
+    const directiveKey = `${input.threadId}:${input.messageId}:${parseResult.directive.type}`;
+    const existing = yield* Cache.getOption(processedWorkflowDirectiveKeys, directiveKey);
+    if (Option.getOrElse(existing, () => false)) {
+      return;
+    }
+    yield* Cache.set(processedWorkflowDirectiveKeys, directiveKey, true);
 
-      if (thread.workflowRole === "app-review-fixer") {
-        const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-        const run = (readModel.appReviewWorkflowRuns ?? []).find(
-          (candidate) =>
-            candidate.status === "running" &&
-            candidate.activePhase === "fixing" &&
-            candidate.activeThreadId === thread.id,
-        );
-        const cycle = run?.cycles.at(-1);
-        if (
-          parseResult.directive.type !== "app-review-fix-result" ||
-          run === undefined ||
-          cycle?.planId === null ||
-          cycle?.planId === undefined ||
-          parseResult.directive.runId !== run.id ||
-          parseResult.directive.planId !== cycle.planId
-        ) {
-          if (synthesizeFailure) {
-            yield* consumeAppReviewFixerFailure({
-              ...failureInput,
-              detail:
-                "App Review fixer completed with a directive for the wrong run or proposed plan.",
-            });
-          }
-          return;
-        }
-      }
-
-      const directiveKey = `${input.threadId}:${input.messageId}:${parseResult.directive.type}`;
-      const existing = yield* Cache.getOption(processedWorkflowDirectiveKeys, directiveKey);
-      if (Option.getOrElse(existing, () => false)) {
-        return;
-      }
-      yield* Cache.set(processedWorkflowDirectiveKeys, directiveKey, true);
-
-      const dispatchExit = yield* Effect.exit(
-        dispatchWorkflowDirective({
-          event: input.event,
-          threadId: input.threadId,
-          messageId: input.messageId,
-          directive: parseResult.directive,
-          createdAt: input.createdAt,
-        }),
-      );
-      if (dispatchExit._tag === "Failure") {
-        const detail = workflowDispatchErrorDetail(dispatchExit.cause);
-        yield* Effect.logWarning("provider workflow directive dispatch failed", {
-          threadId: input.threadId,
-          messageId: input.messageId,
-          directiveType: parseResult.directive.type,
-          detail,
-          cause: Cause.pretty(dispatchExit.cause),
-        });
-        yield* consumePlanningReviewerFailure({
-          ...input,
-          detail: `Reviewer directive was rejected: ${detail}`,
-          retryable: false,
-        });
-        yield* consumeImplementationFixerFailure({
-          ...input,
-          detail: `QA fixer directive was rejected: ${detail}`,
-        });
-        yield* consumeAppReviewFixerFailure({
-          ...input,
-          detail: `App Review fixer directive was rejected: ${detail}`,
-        });
-        return;
-      }
-
-      const provenance = thread.workflowSubagentBatchProvenance;
-      if (provenance == null) {
-        return;
-      }
-      const parent = thread.parentThreadId
-        ? yield* resolveThreadDetail(thread.parentThreadId)
-        : undefined;
-      const batch = parent?.workflowSubagentBatches?.find(
-        (entry) => entry.id === provenance.batchId,
-      );
-      const child = batch?.children.find((entry) => entry.index === provenance.childIndex);
-      if (!parent || !batch || !child || child.status !== "running") {
-        return;
-      }
-      if (child.appReviewMode === "full") {
-        return;
-      }
-      if (parseResult.directive.type !== child.expectedResult) {
-        return;
-      }
-      const blocked =
-        parseResult.directive.type === "workflow-subagent-result"
-          ? parseResult.directive.status === "blocked"
-          : parseResult.directive.type === "implementation-fix-result" ||
-              parseResult.directive.type === "app-review-fix-result" ||
-              parseResult.directive.type === "implementation-code-review-result"
-            ? parseResult.directive.status === "blocked"
-            : false;
-      yield* orchestrationEngine.dispatch({
-        type: "thread.workflow-subagent-batch.child.complete",
-        commandId: workflowCommandId(batch.id, `result:${input.messageId}`, child.index),
-        threadId: parent.id,
-        batchId: batch.id,
-        childIndex: child.index,
-        status: blocked ? "blocked" : "completed",
-        resultMarkdown:
-          parseResult.directive.type === "workflow-subagent-result"
-            ? parseResult.directive.resultMarkdown
-            : input.markdown,
-        completedAt: input.createdAt,
+    const dispatchExit = yield* Effect.exit(
+      dispatchWorkflowDirective({
+        event: input.event,
+        threadId: input.threadId,
+        messageId: input.messageId,
+        directive: parseResult.directive,
         createdAt: input.createdAt,
+      }),
+    );
+    if (dispatchExit._tag === "Failure") {
+      const detail = workflowDispatchErrorDetail(dispatchExit.cause);
+      yield* Effect.logWarning("provider workflow directive dispatch failed", {
+        threadId: input.threadId,
+        messageId: input.messageId,
+        directiveType: parseResult.directive.type,
+        detail,
+        cause: Cause.pretty(dispatchExit.cause),
       });
+      yield* consumePlanningReviewerFailure({
+        ...input,
+        detail: `Reviewer directive was rejected: ${detail}`,
+        retryable: false,
+      });
+      yield* consumeImplementationFixerFailure({
+        ...input,
+        detail: `QA fixer directive was rejected: ${detail}`,
+      });
+      yield* consumeAppReviewFixerFailure({
+        ...input,
+        detail: `App Review fixer directive was rejected: ${detail}`,
+      });
+      return;
+    }
+
+    const provenance = thread.workflowSubagentBatchProvenance;
+    if (provenance == null) {
+      return;
+    }
+    const parent = thread.parentThreadId
+      ? yield* resolveThreadDetail(thread.parentThreadId)
+      : undefined;
+    const batch = parent?.workflowSubagentBatches?.find((entry) => entry.id === provenance.batchId);
+    const child = batch?.children.find((entry) => entry.index === provenance.childIndex);
+    if (!parent || !batch || !child || child.status !== "running") {
+      return;
+    }
+    if (child.appReviewMode === "full") {
+      return;
+    }
+    if (parseResult.directive.type !== child.expectedResult) {
+      return;
+    }
+    const blocked =
+      parseResult.directive.type === "workflow-subagent-result"
+        ? parseResult.directive.status === "blocked"
+        : parseResult.directive.type === "implementation-fix-result" ||
+            parseResult.directive.type === "app-review-fix-result" ||
+            parseResult.directive.type === "implementation-code-review-result"
+          ? parseResult.directive.status === "blocked"
+          : false;
+    yield* orchestrationEngine.dispatch({
+      type: "thread.workflow-subagent-batch.child.complete",
+      commandId: workflowCommandId(batch.id, `result:${input.messageId}`, child.index),
+      threadId: parent.id,
+      batchId: batch.id,
+      childIndex: child.index,
+      status: blocked ? "blocked" : "completed",
+      resultMarkdown:
+        parseResult.directive.type === "workflow-subagent-result"
+          ? parseResult.directive.resultMarkdown
+          : input.markdown,
+      completedAt: input.createdAt,
+      createdAt: input.createdAt,
     });
+  });
 
   /**
    * Settles a workflow turn that ended without the directive its role owes. Message finalization
@@ -3499,81 +3491,80 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const flushBufferedAssistantMessage = (input: {
+  const flushBufferedAssistantMessage = Effect.fn(
+    "ProviderRuntimeIngestion.flushBufferedAssistantMessage",
+  )(function* (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
     messageId: MessageId;
     turnId?: TurnId;
     createdAt: string;
     commandTag: string;
-  }) =>
-    Effect.gen(function* () {
-      const bufferedText = yield* takeBufferedAssistantText(input.messageId);
-      if (!hasRenderableAssistantText(bufferedText)) {
-        return false;
-      }
+  }) {
+    const bufferedText = yield* takeBufferedAssistantText(input.messageId);
+    if (!hasRenderableAssistantText(bufferedText)) {
+      return false;
+    }
 
-      const isReasoning = messageStreamRoleOf(input.messageId) === "reasoning";
-      yield* orchestrationEngine.dispatch({
-        type: isReasoning ? "thread.message.reasoning.delta" : "thread.message.assistant.delta",
-        commandId: yield* providerCommandId(input.event, input.commandTag),
-        threadId: input.threadId,
-        messageId: input.messageId,
-        delta: bufferedText,
-        ...(input.turnId ? { turnId: input.turnId } : {}),
-        createdAt: yield* messageStartedAt(input.messageId, input.createdAt),
-      });
-      return true;
+    const isReasoning = messageStreamRoleOf(input.messageId) === "reasoning";
+    yield* orchestrationEngine.dispatch({
+      type: isReasoning ? "thread.message.reasoning.delta" : "thread.message.assistant.delta",
+      commandId: yield* providerCommandId(input.event, input.commandTag),
+      threadId: input.threadId,
+      messageId: input.messageId,
+      delta: bufferedText,
+      ...(input.turnId ? { turnId: input.turnId } : {}),
+      createdAt: yield* messageStartedAt(input.messageId, input.createdAt),
     });
+    return true;
+  });
 
-  const flushBufferedAssistantMessagesForTurn = (input: {
+  const flushBufferedAssistantMessagesForTurn = Effect.fn(
+    "ProviderRuntimeIngestion.flushBufferedAssistantMessagesForTurn",
+  )(function* (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
     turnId: TurnId;
     createdAt: string;
     commandTag: string;
-  }) =>
-    Effect.gen(function* () {
-      const assistantMessageIds = yield* getAssistantMessageIdsForTurn(
-        input.threadId,
-        input.turnId,
-      );
-      const flushedMessageIds = new Set<MessageId>();
-      yield* Effect.forEach(
-        assistantMessageIds,
-        (messageId) =>
-          flushBufferedAssistantMessage({
-            event: input.event,
-            threadId: input.threadId,
-            messageId,
-            turnId: input.turnId,
-            createdAt: input.createdAt,
-            commandTag: input.commandTag,
-          }).pipe(
-            Effect.tap((flushed) =>
-              flushed ? Effect.sync(() => flushedMessageIds.add(messageId)) : Effect.void,
-            ),
+  }) {
+    const assistantMessageIds = yield* getAssistantMessageIdsForTurn(input.threadId, input.turnId);
+    const flushedMessageIds = new Set<MessageId>();
+    yield* Effect.forEach(
+      assistantMessageIds,
+      (messageId) =>
+        flushBufferedAssistantMessage({
+          event: input.event,
+          threadId: input.threadId,
+          messageId,
+          turnId: input.turnId,
+          createdAt: input.createdAt,
+          commandTag: input.commandTag,
+        }).pipe(
+          Effect.tap((flushed) =>
+            flushed ? Effect.sync(() => flushedMessageIds.add(messageId)) : Effect.void,
           ),
-        { concurrency: 1 },
-      ).pipe(Effect.asVoid);
-      return flushedMessageIds;
-    });
+        ),
+      { concurrency: 1 },
+    ).pipe(Effect.asVoid);
+    return flushedMessageIds;
+  });
 
-  const finalizeAssistantMessage = (input: {
-    event: ProviderRuntimeEvent;
-    threadId: ThreadId;
-    messageId: MessageId;
-    turnId?: TurnId;
-    createdAt: string;
-    commandTag: string;
-    finalDeltaCommandTag: string;
-    fallbackText?: string;
-    existingText?: string;
-    hasProjectedMessage?: boolean;
-    processWorkflowDirective?: boolean;
-    synthesizeMissingDirectiveFailure?: boolean;
-  }) =>
-    Effect.gen(function* () {
+  const finalizeAssistantMessage = Effect.fn("ProviderRuntimeIngestion.finalizeAssistantMessage")(
+    function* (input: {
+      event: ProviderRuntimeEvent;
+      threadId: ThreadId;
+      messageId: MessageId;
+      turnId?: TurnId;
+      createdAt: string;
+      commandTag: string;
+      finalDeltaCommandTag: string;
+      fallbackText?: string;
+      existingText?: string;
+      hasProjectedMessage?: boolean;
+      processWorkflowDirective?: boolean;
+      synthesizeMissingDirectiveFailure?: boolean;
+    }) {
       const bufferedText = yield* takeBufferedAssistantText(input.messageId);
       const text =
         bufferedText.length > 0
@@ -3627,9 +3618,12 @@ const make = Effect.gen(function* () {
         }
       }
       yield* clearAssistantMessageState(input.messageId);
-    });
+    },
+  );
 
-  const finalizeActiveSegmentForTurn = (input: {
+  const finalizeActiveSegmentForTurn = Effect.fn(
+    "ProviderRuntimeIngestion.finalizeActiveSegmentForTurn",
+  )(function* (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
     turnId: TurnId;
@@ -3640,52 +3634,51 @@ const make = Effect.gen(function* () {
     flushedMessageIds?: ReadonlySet<MessageId>;
     role?: MessageStreamRole;
     fallbackText?: string;
-  }) =>
-    Effect.gen(function* () {
-      const role = input.role ?? "assistant";
-      const activeMessageId = yield* getActiveAssistantMessageIdForTurn(
+  }) {
+    const role = input.role ?? "assistant";
+    const activeMessageId = yield* getActiveAssistantMessageIdForTurn(
+      input.threadId,
+      input.turnId,
+      role,
+    );
+    if (Option.isNone(activeMessageId)) {
+      return;
+    }
+
+    // A block whose deltas already reached the projection must still be
+    // completed, or it stays flagged as streaming forever.
+    const alreadyProjected =
+      input.hasProjectedMessage ||
+      (input.flushedMessageIds?.has(activeMessageId.value) ?? false) ||
+      (role === "reasoning"
+        ? (yield* getThreadMessageById(input.threadId, activeMessageId.value)) !== undefined
+        : false);
+
+    yield* finalizeAssistantMessage({
+      event: input.event,
+      threadId: input.threadId,
+      messageId: activeMessageId.value,
+      turnId: input.turnId,
+      createdAt: input.createdAt,
+      commandTag: input.commandTag,
+      finalDeltaCommandTag: input.finalDeltaCommandTag,
+      hasProjectedMessage: alreadyProjected,
+      ...(input.fallbackText !== undefined ? { fallbackText: input.fallbackText } : {}),
+    });
+    yield* forgetAssistantMessageId(input.threadId, input.turnId, activeMessageId.value);
+
+    // The segment index is deliberately preserved: reasoning blocks in one
+    // turn can share a base key, so resetting it would reopen a closed block.
+    const state = yield* getAssistantSegmentStateForTurn(input.threadId, input.turnId, role);
+    if (Option.isSome(state)) {
+      yield* setAssistantSegmentStateForTurn(
         input.threadId,
         input.turnId,
+        { ...state.value, activeMessageId: null },
         role,
       );
-      if (Option.isNone(activeMessageId)) {
-        return;
-      }
-
-      // A block whose deltas already reached the projection must still be
-      // completed, or it stays flagged as streaming forever.
-      const alreadyProjected =
-        input.hasProjectedMessage ||
-        (input.flushedMessageIds?.has(activeMessageId.value) ?? false) ||
-        (role === "reasoning"
-          ? (yield* getThreadMessageById(input.threadId, activeMessageId.value)) !== undefined
-          : false);
-
-      yield* finalizeAssistantMessage({
-        event: input.event,
-        threadId: input.threadId,
-        messageId: activeMessageId.value,
-        turnId: input.turnId,
-        createdAt: input.createdAt,
-        commandTag: input.commandTag,
-        finalDeltaCommandTag: input.finalDeltaCommandTag,
-        hasProjectedMessage: alreadyProjected,
-        ...(input.fallbackText !== undefined ? { fallbackText: input.fallbackText } : {}),
-      });
-      yield* forgetAssistantMessageId(input.threadId, input.turnId, activeMessageId.value);
-
-      // The segment index is deliberately preserved: reasoning blocks in one
-      // turn can share a base key, so resetting it would reopen a closed block.
-      const state = yield* getAssistantSegmentStateForTurn(input.threadId, input.turnId, role);
-      if (Option.isSome(state)) {
-        yield* setAssistantSegmentStateForTurn(
-          input.threadId,
-          input.turnId,
-          { ...state.value, activeMessageId: null },
-          role,
-        );
-      }
-    });
+    }
+  });
 
   const finalizeBufferedProposedPlan = Effect.fn("finalizeBufferedProposedPlan")(function* (input: {
     event: ProviderRuntimeEvent;
@@ -3727,8 +3720,8 @@ const make = Effect.gen(function* () {
     yield* clearBufferedProposedPlan(input.planId);
   });
 
-  const clearTurnStateForSession = (threadId: ThreadId) =>
-    Effect.gen(function* () {
+  const clearTurnStateForSession = Effect.fn("ProviderRuntimeIngestion.clearTurnStateForSession")(
+    function* (threadId: ThreadId) {
       const prefix = `${threadId}:`;
       const proposedPlanPrefix = `plan:${threadId}:`;
       const turnKeys = Array.from(yield* Cache.keys(turnMessageIdsByTurnKey));
@@ -3776,7 +3769,8 @@ const make = Effect.gen(function* () {
           key.startsWith(prefix) ? Cache.invalidate(taskDescriptionByTaskKey, key) : Effect.void,
         { concurrency: 1 },
       ).pipe(Effect.asVoid);
-    });
+    },
+  );
 
   const getSourceProposedPlanReferenceForPendingTurnStart = Effect.fn(
     "getSourceProposedPlanReferenceForPendingTurnStart",
@@ -3862,1027 +3856,1019 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
-    Effect.gen(function* () {
-      if (
-        event.type === "content.delta" &&
-        event.payload.streamKind !== "assistant_text" &&
-        event.payload.streamKind !== "reasoning_text" &&
-        event.payload.streamKind !== "reasoning_summary_text"
-      ) {
-        return;
+  // Untraced: runs once per provider runtime event, including every streamed delta.
+  const processRuntimeEvent = Effect.fnUntraced(function* (event: ProviderRuntimeEvent) {
+    if (
+      event.type === "content.delta" &&
+      event.payload.streamKind !== "assistant_text" &&
+      event.payload.streamKind !== "reasoning_text" &&
+      event.payload.streamKind !== "reasoning_summary_text"
+    ) {
+      return;
+    }
+
+    const thread = yield* resolveThreadRuntimeContext(event.threadId);
+    if (!thread) return;
+
+    const loadedThreadShell = yield* Effect.cached(
+      projectionSnapshotQuery.getThreadShellById(thread.id).pipe(Effect.map(Option.getOrUndefined)),
+    );
+    const getLoadedThreadShell = () => loadedThreadShell;
+    const now = event.createdAt;
+    const eventTurnId = toTurnId(event.turnId);
+    const activeTurnId = thread.session?.activeTurnId ?? null;
+    const isTerminalTurn = event.type === "turn.completed" || event.type === "turn.aborted";
+    const isCompactedThreadState =
+      event.type === "thread.state.changed" && event.payload.state === "compacted";
+    const pendingTurnStart =
+      event.type === "session.started" ||
+      event.type === "session.state.changed" ||
+      event.type === "session.exited" ||
+      event.type === "thread.started" ||
+      event.type === "turn.started" ||
+      isTerminalTurn ||
+      isCompactedThreadState
+        ? yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+            threadId: thread.id,
+          })
+        : Option.none();
+    const hasPendingTurnStart =
+      Option.isSome(pendingTurnStart) && thread.session?.status === "starting";
+
+    const conflictsWithActiveTurn =
+      activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
+    const missingTurnForActiveTurn = activeTurnId !== null && eventTurnId === undefined;
+
+    // A turn.started that conflicts with the active turn is legitimate when
+    // the server itself has a turn start pending for this thread AND the
+    // provider session already tracks the event's turn as its active turn:
+    // steering a running turn makes some providers (e.g. opencode) open a
+    // new turn without ever completing the superseded one. A stale
+    // turn.started for some other turn id still gets rejected.
+    const conflictingTurnStartIsPendingTurnStart =
+      event.type === "turn.started" && conflictsWithActiveTurn
+        ? sameId(yield* getExpectedProviderTurnIdForThread(thread.id), eventTurnId) &&
+          Option.isSome(pendingTurnStart)
+        : false;
+
+    const shouldApplyThreadLifecycle = (() => {
+      if (!STRICT_PROVIDER_LIFECYCLE_GUARD) {
+        return true;
       }
-
-      const thread = yield* resolveThreadRuntimeContext(event.threadId);
-      if (!thread) return;
-
-      const loadedThreadShell = yield* Effect.cached(
-        projectionSnapshotQuery
-          .getThreadShellById(thread.id)
-          .pipe(Effect.map(Option.getOrUndefined)),
-      );
-      const getLoadedThreadShell = () => loadedThreadShell;
-      const now = event.createdAt;
-      const eventTurnId = toTurnId(event.turnId);
-      const activeTurnId = thread.session?.activeTurnId ?? null;
-      const isTerminalTurn = event.type === "turn.completed" || event.type === "turn.aborted";
-      const isCompactedThreadState =
-        event.type === "thread.state.changed" && event.payload.state === "compacted";
-      const pendingTurnStart =
-        event.type === "session.started" ||
-        event.type === "session.state.changed" ||
-        event.type === "session.exited" ||
-        event.type === "thread.started" ||
-        event.type === "turn.started" ||
-        isTerminalTurn ||
-        isCompactedThreadState
-          ? yield* projectionTurnRepository.getPendingTurnStartByThreadId({
-              threadId: thread.id,
-            })
-          : Option.none();
-      const hasPendingTurnStart =
-        Option.isSome(pendingTurnStart) && thread.session?.status === "starting";
-
-      const conflictsWithActiveTurn =
-        activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
-      const missingTurnForActiveTurn = activeTurnId !== null && eventTurnId === undefined;
-
-      // A turn.started that conflicts with the active turn is legitimate when
-      // the server itself has a turn start pending for this thread AND the
-      // provider session already tracks the event's turn as its active turn:
-      // steering a running turn makes some providers (e.g. opencode) open a
-      // new turn without ever completing the superseded one. A stale
-      // turn.started for some other turn id still gets rejected.
-      const conflictingTurnStartIsPendingTurnStart =
-        event.type === "turn.started" && conflictsWithActiveTurn
-          ? sameId(yield* getExpectedProviderTurnIdForThread(thread.id), eventTurnId) &&
-            Option.isSome(pendingTurnStart)
-          : false;
-
-      const shouldApplyThreadLifecycle = (() => {
-        if (!STRICT_PROVIDER_LIFECYCLE_GUARD) {
+      switch (event.type) {
+        case "session.exited":
           return true;
-        }
+        case "session.started":
+        case "thread.started":
+          return true;
+        case "turn.started":
+          return !conflictsWithActiveTurn || conflictingTurnStartIsPendingTurnStart;
+        case "turn.completed":
+        case "turn.aborted":
+          if (conflictsWithActiveTurn || missingTurnForActiveTurn) {
+            return false;
+          }
+          // Only the active turn may close the lifecycle state.
+          if (activeTurnId !== null && eventTurnId !== undefined) {
+            return sameId(activeTurnId, eventTurnId);
+          }
+          // A named completion can recover a lost turn.started event.
+          // An abort needs an active turn so a delayed stop cannot replace
+          // a ready session or clear a newer pending start.
+          return event.type === "turn.completed" && eventTurnId !== undefined;
+        default:
+          return true;
+      }
+    })();
+    const acceptedTurnStartedSourcePlan =
+      event.type === "turn.started" && shouldApplyThreadLifecycle
+        ? yield* getSourceProposedPlanReferenceForAcceptedTurnStart(thread.id, eventTurnId)
+        : null;
+
+    if (
+      event.type === "session.started" ||
+      event.type === "session.state.changed" ||
+      event.type === "session.exited" ||
+      event.type === "thread.started" ||
+      event.type === "turn.started" ||
+      isTerminalTurn
+    ) {
+      const status = (() => {
         switch (event.type) {
+          case "session.state.changed": {
+            const runtimeStatus = orchestrationSessionStatusFromRuntimeState(event.payload.state);
+            return hasPendingTurnStart && runtimeStatus === "ready" ? "starting" : runtimeStatus;
+          }
+          case "turn.started":
+            return "running";
           case "session.exited":
-            return true;
+            return "stopped";
+          case "turn.aborted":
+            return "interrupted";
+          case "turn.completed":
+            return normalizeRuntimeTurnState(event.payload.state) === "failed" ? "error" : "ready";
           case "session.started":
           case "thread.started":
-            return true;
-          case "turn.started":
-            return !conflictsWithActiveTurn || conflictingTurnStartIsPendingTurnStart;
-          case "turn.completed":
-          case "turn.aborted":
-            if (conflictsWithActiveTurn || missingTurnForActiveTurn) {
-              return false;
-            }
-            // Only the active turn may close the lifecycle state.
-            if (activeTurnId !== null && eventTurnId !== undefined) {
-              return sameId(activeTurnId, eventTurnId);
-            }
-            // A named completion can recover a lost turn.started event.
-            // An abort needs an active turn so a delayed stop cannot replace
-            // a ready session or clear a newer pending start.
-            return event.type === "turn.completed" && eventTurnId !== undefined;
-          default:
-            return true;
+            // Provider thread/session start notifications can arrive during an
+            // active or pending turn; preserve that lifecycle state.
+            return activeTurnId !== null ? "running" : hasPendingTurnStart ? "starting" : "ready";
         }
       })();
-      const acceptedTurnStartedSourcePlan =
-        event.type === "turn.started" && shouldApplyThreadLifecycle
-          ? yield* getSourceProposedPlanReferenceForAcceptedTurnStart(thread.id, eventTurnId)
-          : null;
-
-      if (
-        event.type === "session.started" ||
-        event.type === "session.state.changed" ||
-        event.type === "session.exited" ||
-        event.type === "thread.started" ||
-        event.type === "turn.started" ||
-        isTerminalTurn
-      ) {
-        const status = (() => {
-          switch (event.type) {
-            case "session.state.changed": {
-              const runtimeStatus = orchestrationSessionStatusFromRuntimeState(event.payload.state);
-              return hasPendingTurnStart && runtimeStatus === "ready" ? "starting" : runtimeStatus;
-            }
-            case "turn.started":
-              return "running";
-            case "session.exited":
-              return "stopped";
-            case "turn.aborted":
-              return "interrupted";
-            case "turn.completed":
-              return normalizeRuntimeTurnState(event.payload.state) === "failed"
-                ? "error"
-                : "ready";
-            case "session.started":
-            case "thread.started":
-              // Provider thread/session start notifications can arrive during an
-              // active or pending turn; preserve that lifecycle state.
-              return activeTurnId !== null ? "running" : hasPendingTurnStart ? "starting" : "ready";
-          }
-        })();
-        const nextActiveTurnId =
-          event.type === "turn.started"
-            ? (eventTurnId ?? null)
-            : isTerminalTurn || event.type === "session.exited"
+      const nextActiveTurnId =
+        event.type === "turn.started"
+          ? (eventTurnId ?? null)
+          : isTerminalTurn || event.type === "session.exited"
+            ? null
+            : event.type === "session.state.changed" &&
+                !sessionStatusAllowsActiveTurn(
+                  orchestrationSessionStatusFromRuntimeState(event.payload.state),
+                )
               ? null
-              : event.type === "session.state.changed" &&
-                  !sessionStatusAllowsActiveTurn(
-                    orchestrationSessionStatusFromRuntimeState(event.payload.state),
-                  )
-                ? null
-                : activeTurnId;
-        const lastError =
-          event.type === "session.state.changed" && event.payload.state === "error"
-            ? (event.payload.reason ?? thread.session?.lastError ?? "Provider session error")
-            : event.type === "turn.completed" &&
-                normalizeRuntimeTurnState(event.payload.state) === "failed"
-              ? (event.payload.errorMessage ?? thread.session?.lastError ?? "Turn failed")
-              : status === "ready" || status === "interrupted"
-                ? null
-                : (thread.session?.lastError ?? null);
+              : activeTurnId;
+      const lastError =
+        event.type === "session.state.changed" && event.payload.state === "error"
+          ? (event.payload.reason ?? thread.session?.lastError ?? "Provider session error")
+          : event.type === "turn.completed" &&
+              normalizeRuntimeTurnState(event.payload.state) === "failed"
+            ? (event.payload.errorMessage ?? thread.session?.lastError ?? "Turn failed")
+            : status === "ready" || status === "interrupted"
+              ? null
+              : (thread.session?.lastError ?? null);
 
-        if (shouldApplyThreadLifecycle) {
-          if (event.type === "turn.started" && acceptedTurnStartedSourcePlan !== null) {
-            yield* markSourceProposedPlanImplemented(
-              acceptedTurnStartedSourcePlan.sourceThreadId,
-              acceptedTurnStartedSourcePlan.sourcePlanId,
-              thread.id,
-              now,
-            ).pipe(
-              Effect.catchCause((cause) =>
-                Effect.logWarning(
-                  "provider runtime ingestion failed to mark source proposed plan",
-                  {
-                    eventId: event.eventId,
-                    eventType: event.type,
-                    cause: Cause.pretty(cause),
-                  },
-                ),
-              ),
-            );
-          }
+      if (shouldApplyThreadLifecycle) {
+        if (event.type === "turn.started" && acceptedTurnStartedSourcePlan !== null) {
+          yield* markSourceProposedPlanImplemented(
+            acceptedTurnStartedSourcePlan.sourceThreadId,
+            acceptedTurnStartedSourcePlan.sourcePlanId,
+            thread.id,
+            now,
+          ).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("provider runtime ingestion failed to mark source proposed plan", {
+                eventId: event.eventId,
+                eventType: event.type,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          );
+        }
 
-          yield* orchestrationEngine.dispatch({
-            type: "thread.session.set",
-            commandId: yield* providerCommandId(event, "thread-session-set"),
+        yield* orchestrationEngine.dispatch({
+          type: "thread.session.set",
+          commandId: yield* providerCommandId(event, "thread-session-set"),
+          threadId: thread.id,
+          session: {
             threadId: thread.id,
-            session: {
-              threadId: thread.id,
-              status,
-              providerName: event.provider,
-              ...(event.providerInstanceId !== undefined
-                ? { providerInstanceId: event.providerInstanceId }
-                : {}),
-              runtimeMode: thread.session?.runtimeMode ?? "full-access",
-              activeTurnId: nextActiveTurnId,
-              lastError,
-              updatedAt: now,
+            status,
+            providerName: event.provider,
+            ...(event.providerInstanceId !== undefined
+              ? { providerInstanceId: event.providerInstanceId }
+              : {}),
+            runtimeMode: thread.session?.runtimeMode ?? "full-access",
+            activeTurnId: nextActiveTurnId,
+            lastError,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+
+        if (
+          event.type === "turn.completed" &&
+          normalizeRuntimeTurnState(event.payload.state) === "failed" &&
+          eventTurnId !== undefined
+        ) {
+          const recovery = event.payload.recovery ?? {
+            disposition: "unknown" as const,
+            reason: "unknown" as const,
+          };
+          yield* orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId: yield* providerCommandId(event, "provider-turn-failed"),
+            threadId: thread.id,
+            activity: {
+              id: EventId.make(yield* crypto.randomUUIDv4()),
+              tone: "error",
+              kind: "provider.turn.failed",
+              summary: `Provider turn failed: ${recovery.reason}`,
+              payload: {
+                turnId: eventTurnId,
+                provider: event.provider,
+                providerInstanceId:
+                  event.providerInstanceId ?? thread.session?.providerInstanceId ?? null,
+                model: (yield* getLoadedThreadShell())?.modelSelection.model ?? null,
+                recovery,
+                errorMessage: event.payload.errorMessage ?? null,
+              },
+              turnId: eventTurnId,
+              createdAt: now,
             },
             createdAt: now,
           });
-
-          if (
-            event.type === "turn.completed" &&
-            normalizeRuntimeTurnState(event.payload.state) === "failed" &&
-            eventTurnId !== undefined
-          ) {
-            const recovery = event.payload.recovery ?? {
-              disposition: "unknown" as const,
-              reason: "unknown" as const,
-            };
-            yield* orchestrationEngine.dispatch({
-              type: "thread.activity.append",
-              commandId: yield* providerCommandId(event, "provider-turn-failed"),
-              threadId: thread.id,
-              activity: {
-                id: EventId.make(yield* crypto.randomUUIDv4()),
-                tone: "error",
-                kind: "provider.turn.failed",
-                summary: `Provider turn failed: ${recovery.reason}`,
-                payload: {
-                  turnId: eventTurnId,
-                  provider: event.provider,
-                  providerInstanceId:
-                    event.providerInstanceId ?? thread.session?.providerInstanceId ?? null,
-                  model: (yield* getLoadedThreadShell())?.modelSelection.model ?? null,
-                  recovery,
-                  errorMessage: event.payload.errorMessage ?? null,
-                },
-                turnId: eventTurnId,
-                createdAt: now,
-              },
-              createdAt: now,
-            });
-          }
         }
       }
+    }
 
-      const assistantDelta =
-        event.type === "content.delta" && event.payload.streamKind === "assistant_text"
-          ? event.payload.delta
-          : undefined;
-      const assistantItemId =
-        assistantDelta !== undefined ||
-        ((event.type === "item.started" || event.type === "item.completed") &&
-          event.payload.itemType === "assistant_message")
-          ? event.itemId
-          : undefined;
-      const assistantTurnId = toTurnId(event.turnId);
-      if (assistantItemId !== undefined && assistantTurnId !== undefined) {
-        const segment = Option.getOrUndefined(
-          yield* getAssistantSegmentStateForTurn(thread.id, assistantTurnId),
+    const assistantDelta =
+      event.type === "content.delta" && event.payload.streamKind === "assistant_text"
+        ? event.payload.delta
+        : undefined;
+    const assistantItemId =
+      assistantDelta !== undefined ||
+      ((event.type === "item.started" || event.type === "item.completed") &&
+        event.payload.itemType === "assistant_message")
+        ? event.itemId
+        : undefined;
+    const assistantTurnId = toTurnId(event.turnId);
+    if (assistantItemId !== undefined && assistantTurnId !== undefined) {
+      const segment = Option.getOrUndefined(
+        yield* getAssistantSegmentStateForTurn(thread.id, assistantTurnId),
+      );
+      if (segment?.activeMessageId && segment.baseKey !== String(assistantItemId)) {
+        const completedMessage =
+          event.type === "item.completed"
+            ? yield* getThreadMessageById(
+                thread.id,
+                assistantSegmentMessageId(String(assistantItemId), 0),
+              )
+            : undefined;
+        // A new item can replace an unfinished response. A late completion
+        // of the old item must not close the replacement in progress.
+        if (completedMessage === undefined) {
+          yield* finalizeActiveSegmentForTurn({
+            event,
+            threadId: thread.id,
+            turnId: assistantTurnId,
+            createdAt: now,
+            commandTag: "assistant-complete-on-new-item",
+            finalDeltaCommandTag: "assistant-delta-finalize-on-new-item",
+            hasProjectedMessage:
+              (yield* getThreadMessageById(thread.id, segment.activeMessageId)) !== undefined,
+          });
+        }
+      }
+    }
+    const reasoningDelta =
+      event.type === "content.delta" &&
+      (event.payload.streamKind === "reasoning_text" ||
+        event.payload.streamKind === "reasoning_summary_text")
+        ? {
+            streamKind: event.payload.streamKind,
+            delta: event.payload.delta,
+            summaryIndex: event.payload.summaryIndex,
+            contentIndex: event.payload.contentIndex,
+          }
+        : undefined;
+    const proposedPlanDelta =
+      event.type === "turn.proposed.delta" ? event.payload.delta : undefined;
+
+    const reasoningTurnId = toTurnId(event.turnId);
+    // Every close path for a thinking block is keyed by turn. Without one the
+    // block could never be completed, and a row stuck mid-thought is worse
+    // than no row at all.
+    if (reasoningDelta && reasoningDelta.delta.length > 0 && reasoningTurnId) {
+      const turnId = reasoningTurnId;
+      const reasoningMessageId = yield* getOrCreateReasoningMessageId({
+        threadId: thread.id,
+        event,
+        baseKey: reasoningSegmentBaseKeyFromEvent(event, reasoningDelta.streamKind),
+        createdAt: now,
+        turnId,
+      });
+      yield* rememberAssistantMessageId(thread.id, turnId, reasoningMessageId);
+
+      if (
+        Option.getOrElse(
+          yield* Cache.getOption(messageStartedAtByMessageId, reasoningMessageId),
+          () => "",
+        ) === ""
+      ) {
+        yield* Cache.set(messageStartedAtByMessageId, reasoningMessageId, now);
+      }
+
+      let delta = reasoningDelta.delta;
+      const partIndex = reasoningDelta.summaryIndex ?? reasoningDelta.contentIndex;
+      if (partIndex !== undefined) {
+        const lastIndex = Option.getOrElse(
+          yield* Cache.getOption(reasoningPartIndexByMessageId, reasoningMessageId),
+          () => -1,
         );
-        if (segment?.activeMessageId && segment.baseKey !== String(assistantItemId)) {
-          const completedMessage =
-            event.type === "item.completed"
-              ? yield* getThreadMessageById(
-                  thread.id,
-                  assistantSegmentMessageId(String(assistantItemId), 0),
-                )
-              : undefined;
-          // A new item can replace an unfinished response. A late completion
-          // of the old item must not close the replacement in progress.
-          if (completedMessage === undefined) {
-            yield* finalizeActiveSegmentForTurn({
-              event,
-              threadId: thread.id,
-              turnId: assistantTurnId,
-              createdAt: now,
-              commandTag: "assistant-complete-on-new-item",
-              finalDeltaCommandTag: "assistant-delta-finalize-on-new-item",
-              hasProjectedMessage:
-                (yield* getThreadMessageById(thread.id, segment.activeMessageId)) !== undefined,
-            });
-          }
+        if (lastIndex >= 0 && lastIndex !== partIndex) {
+          delta = `\n\n${delta}`;
         }
+        yield* Cache.set(reasoningPartIndexByMessageId, reasoningMessageId, partIndex);
       }
-      const reasoningDelta =
-        event.type === "content.delta" &&
-        (event.payload.streamKind === "reasoning_text" ||
-          event.payload.streamKind === "reasoning_summary_text")
-          ? {
-              streamKind: event.payload.streamKind,
-              delta: event.payload.delta,
-              summaryIndex: event.payload.summaryIndex,
-              contentIndex: event.payload.contentIndex,
-            }
-          : undefined;
-      const proposedPlanDelta =
-        event.type === "turn.proposed.delta" ? event.payload.delta : undefined;
 
-      const reasoningTurnId = toTurnId(event.turnId);
-      // Every close path for a thinking block is keyed by turn. Without one the
-      // block could never be completed, and a row stuck mid-thought is worse
-      // than no row at all.
-      if (reasoningDelta && reasoningDelta.delta.length > 0 && reasoningTurnId) {
-        const turnId = reasoningTurnId;
-        const reasoningMessageId = yield* getOrCreateReasoningMessageId({
+      // Reasoning is never delivered token by token, even when the project
+      // asks for it: the block is collapsed by default, so a command, an
+      // event-store write and a fan-out per token would buy nothing. Traces
+      // are longer than the answers they precede.
+      const streamingMode = yield* resolveResponseStreamingMode(thread.projectId);
+      const reasoningMode = streamingMode === "token" ? "paragraph" : streamingMode;
+      const spillChunk = yield* appendBufferedAssistantText(
+        reasoningMessageId,
+        delta,
+        reasoningMode,
+        yield* Clock.currentTimeMillis,
+      );
+      if (spillChunk.length > 0) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.message.reasoning.delta",
+          commandId: yield* providerCommandId(event, "reasoning-delta-buffer-spill"),
           threadId: thread.id,
-          event,
-          baseKey: reasoningSegmentBaseKeyFromEvent(event, reasoningDelta.streamKind),
-          createdAt: now,
+          messageId: reasoningMessageId,
+          delta: spillChunk,
           turnId,
+          createdAt: yield* messageStartedAt(reasoningMessageId, now),
         });
-        yield* rememberAssistantMessageId(thread.id, turnId, reasoningMessageId);
+      }
+    }
 
+    if (assistantDelta && assistantDelta.length > 0) {
+      const turnId = toTurnId(event.turnId);
+      // Visible text ends the thinking block that preceded it, so the next
+      // block does not swallow this answer.
+      if (turnId) {
+        yield* finalizeActiveSegmentForTurn({
+          event,
+          threadId: thread.id,
+          turnId,
+          createdAt: now,
+          commandTag: "reasoning-complete-on-assistant-text",
+          finalDeltaCommandTag: "reasoning-delta-finalize-on-assistant-text",
+          hasProjectedMessage: false,
+          role: "reasoning",
+        });
+      }
+      const assistantMessageId = yield* getOrCreateAssistantMessageId({
+        threadId: thread.id,
+        event,
+        ...(turnId ? { turnId } : {}),
+      });
+      if (turnId) {
+        yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
+      }
+
+      const streamingMode = yield* resolveResponseStreamingMode(thread.projectId);
+      if (streamingMode !== "token") {
         if (
           Option.getOrElse(
-            yield* Cache.getOption(messageStartedAtByMessageId, reasoningMessageId),
+            yield* Cache.getOption(messageStartedAtByMessageId, assistantMessageId),
             () => "",
           ) === ""
         ) {
-          yield* Cache.set(messageStartedAtByMessageId, reasoningMessageId, now);
+          yield* Cache.set(messageStartedAtByMessageId, assistantMessageId, now);
         }
 
-        let delta = reasoningDelta.delta;
-        const partIndex = reasoningDelta.summaryIndex ?? reasoningDelta.contentIndex;
-        if (partIndex !== undefined) {
-          const lastIndex = Option.getOrElse(
-            yield* Cache.getOption(reasoningPartIndexByMessageId, reasoningMessageId),
-            () => -1,
-          );
-          if (lastIndex >= 0 && lastIndex !== partIndex) {
-            delta = `\n\n${delta}`;
-          }
-          yield* Cache.set(reasoningPartIndexByMessageId, reasoningMessageId, partIndex);
-        }
-
-        // Reasoning is never delivered token by token, even when the project
-        // asks for it: the block is collapsed by default, so a command, an
-        // event-store write and a fan-out per token would buy nothing. Traces
-        // are longer than the answers they precede.
-        const streamingMode = yield* resolveResponseStreamingMode(thread.projectId);
-        const reasoningMode = streamingMode === "token" ? "paragraph" : streamingMode;
+        // Pace on the server clock. OpenCode stamps every delta of a part
+        // with the part's start time, so the event time cannot measure gaps.
         const spillChunk = yield* appendBufferedAssistantText(
-          reasoningMessageId,
-          delta,
-          reasoningMode,
+          assistantMessageId,
+          assistantDelta,
+          streamingMode,
           yield* Clock.currentTimeMillis,
         );
         if (spillChunk.length > 0) {
           yield* orchestrationEngine.dispatch({
-            type: "thread.message.reasoning.delta",
-            commandId: yield* providerCommandId(event, "reasoning-delta-buffer-spill"),
+            type: "thread.message.assistant.delta",
+            commandId: yield* providerCommandId(event, "assistant-delta-buffer-spill"),
             threadId: thread.id,
-            messageId: reasoningMessageId,
+            messageId: assistantMessageId,
             delta: spillChunk,
-            turnId,
-            createdAt: yield* messageStartedAt(reasoningMessageId, now),
+            ...(turnId ? { turnId } : {}),
+            createdAt: yield* messageStartedAt(assistantMessageId, now),
           });
         }
+      } else {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.message.assistant.delta",
+          commandId: yield* providerCommandId(event, "assistant-delta"),
+          threadId: thread.id,
+          messageId: assistantMessageId,
+          delta: assistantDelta,
+          ...(turnId ? { turnId } : {}),
+          createdAt: now,
+        });
       }
+    }
 
-      if (assistantDelta && assistantDelta.length > 0) {
-        const turnId = toTurnId(event.turnId);
-        // Visible text ends the thinking block that preceded it, so the next
-        // block does not swallow this answer.
-        if (turnId) {
+    const pauseForUserTurnId =
+      event.type === "request.opened" ||
+      (event.type === "user-input.requested" && event.payload.responseMode !== "message")
+        ? toTurnId(event.turnId)
+        : undefined;
+    if (pauseForUserTurnId) {
+      const hasProjectedMessage = yield* projectionThreadMessages.hasAssistantMessageForTurn({
+        threadId: thread.id,
+        turnId: pauseForUserTurnId,
+        streamingOnly: true,
+      });
+      const streamingMode = yield* resolveResponseStreamingMode(thread.projectId);
+      const flushedMessageIds =
+        streamingMode !== "token"
+          ? yield* flushBufferedAssistantMessagesForTurn({
+              event,
+              threadId: thread.id,
+              turnId: pauseForUserTurnId,
+              createdAt: now,
+              commandTag:
+                event.type === "request.opened"
+                  ? "assistant-delta-flush-on-request-opened"
+                  : "assistant-delta-flush-on-user-input-requested",
+            })
+          : new Set<MessageId>();
+      yield* finalizeActiveSegmentForTurn({
+        event,
+        threadId: thread.id,
+        turnId: pauseForUserTurnId,
+        createdAt: now,
+        commandTag: "reasoning-complete-on-pause",
+        finalDeltaCommandTag: "reasoning-delta-finalize-on-pause",
+        hasProjectedMessage: false,
+        role: "reasoning",
+        flushedMessageIds,
+      });
+      yield* finalizeActiveSegmentForTurn({
+        event,
+        threadId: thread.id,
+        turnId: pauseForUserTurnId,
+        createdAt: now,
+        commandTag:
+          event.type === "request.opened"
+            ? "assistant-complete-on-request-opened"
+            : "assistant-complete-on-user-input-requested",
+        finalDeltaCommandTag:
+          event.type === "request.opened"
+            ? "assistant-delta-finalize-on-request-opened"
+            : "assistant-delta-finalize-on-user-input-requested",
+        hasProjectedMessage,
+        flushedMessageIds,
+      });
+    }
+
+    if (proposedPlanDelta && proposedPlanDelta.length > 0) {
+      const planId = proposedPlanIdFromEvent(event, thread.id);
+      yield* appendBufferedProposedPlan(planId, proposedPlanDelta, now);
+    }
+
+    // Tool work ends the thinking block that led to it. Without this a
+    // provider that reuses one reasoning stream across a turn (Claude has no
+    // per-block id) would append post-tool thinking to a block that already
+    // sits above the tool row.
+    if (event.type === "item.started" && isToolLifecycleItemType(event.payload.itemType)) {
+      const toolTurnId = toTurnId(event.turnId);
+      if (toolTurnId) {
+        yield* finalizeActiveSegmentForTurn({
+          event,
+          threadId: thread.id,
+          turnId: toolTurnId,
+          createdAt: now,
+          commandTag: "reasoning-complete-on-tool-start",
+          finalDeltaCommandTag: "reasoning-delta-finalize-on-tool-start",
+          hasProjectedMessage: false,
+          role: "reasoning",
+        });
+      }
+    }
+
+    if (event.type === "item.completed" && event.payload.itemType === "reasoning") {
+      const turnId = toTurnId(event.turnId);
+      if (turnId) {
+        const activeReasoningMessageId = yield* getActiveAssistantMessageIdForTurn(
+          thread.id,
+          turnId,
+          "reasoning",
+        );
+        // The item detail is a whole-block snapshot, so it may only stand in
+        // for deltas that never arrived. Appending it to a streamed block
+        // would print the reasoning twice.
+        const existingReasoningMessage = Option.isSome(activeReasoningMessageId)
+          ? yield* getThreadMessageById(thread.id, activeReasoningMessageId.value)
+          : undefined;
+        const fallbackText =
+          event.payload.detail !== undefined &&
+          event.payload.detail.trim().length > 0 &&
+          (existingReasoningMessage === undefined || existingReasoningMessage.text.length === 0)
+            ? event.payload.detail
+            : undefined;
+
+        if (Option.isNone(activeReasoningMessageId)) {
+          // Segment state outlives a closed block, so its presence means this
+          // turn already streamed a trace and the snapshot would duplicate it.
+          const turnAlreadyStreamedReasoning = Option.isSome(
+            yield* getAssistantSegmentStateForTurn(thread.id, turnId, "reasoning"),
+          );
+          // A provider can report a whole block at once without streaming it.
+          // The id is derived from the item rather than the segment counter so
+          // a repeated completion rewrites that row instead of adding a copy.
+          if (fallbackText !== undefined && !turnAlreadyStreamedReasoning) {
+            const snapshotMessageId = assistantSegmentMessageId(
+              `snapshot:${event.itemId ?? event.eventId}`,
+              0,
+              "reasoning",
+            );
+            const existingSnapshot = yield* getThreadMessageById(thread.id, snapshotMessageId);
+            if (existingSnapshot === undefined) {
+              yield* orchestrationEngine.dispatch({
+                type: "thread.message.reasoning.delta",
+                commandId: yield* providerCommandId(event, "reasoning-delta-snapshot"),
+                threadId: thread.id,
+                messageId: snapshotMessageId,
+                delta: fallbackText,
+                turnId,
+                createdAt: now,
+              });
+              yield* orchestrationEngine.dispatch({
+                type: "thread.message.reasoning.complete",
+                commandId: yield* providerCommandId(event, "reasoning-complete-snapshot"),
+                threadId: thread.id,
+                messageId: snapshotMessageId,
+                turnId,
+                createdAt: now,
+              });
+            }
+          }
+        } else {
           yield* finalizeActiveSegmentForTurn({
             event,
             threadId: thread.id,
             turnId,
             createdAt: now,
-            commandTag: "reasoning-complete-on-assistant-text",
-            finalDeltaCommandTag: "reasoning-delta-finalize-on-assistant-text",
-            hasProjectedMessage: false,
+            commandTag: "reasoning-complete",
+            finalDeltaCommandTag: "reasoning-delta-finalize",
+            hasProjectedMessage: existingReasoningMessage !== undefined,
             role: "reasoning",
+            ...(fallbackText !== undefined ? { fallbackText } : {}),
           });
         }
-        const assistantMessageId = yield* getOrCreateAssistantMessageId({
-          threadId: thread.id,
+      }
+    }
+
+    const assistantCompletion =
+      event.type === "item.completed" && event.payload.itemType === "assistant_message"
+        ? {
+            messageId: MessageId.make(`assistant:${event.itemId ?? event.turnId ?? event.eventId}`),
+            fallbackText: event.payload.detail,
+          }
+        : undefined;
+    const proposedPlanCompletion =
+      event.type === "turn.proposed.completed"
+        ? {
+            planId: proposedPlanIdFromEvent(event, thread.id),
+            turnId: toTurnId(event.turnId),
+            planMarkdown: event.payload.planMarkdown,
+          }
+        : undefined;
+
+    if (assistantCompletion) {
+      const turnId = toTurnId(event.turnId);
+      if (turnId) {
+        yield* finalizeActiveSegmentForTurn({
           event,
-          ...(turnId ? { turnId } : {}),
+          threadId: thread.id,
+          turnId,
+          createdAt: now,
+          commandTag: "reasoning-complete-on-assistant-completion",
+          finalDeltaCommandTag: "reasoning-delta-finalize-on-assistant-completion",
+          hasProjectedMessage: false,
+          role: "reasoning",
         });
-        if (turnId) {
+      }
+      const activeSegment = turnId
+        ? Option.getOrUndefined(yield* getAssistantSegmentStateForTurn(thread.id, turnId))
+        : undefined;
+      const completionTargetsActive =
+        event.itemId === undefined ||
+        !activeSegment?.activeMessageId ||
+        activeSegment.baseKey === String(event.itemId);
+      const activeAssistantMessageId =
+        completionTargetsActive && activeSegment?.activeMessageId
+          ? Option.some(activeSegment.activeMessageId)
+          : Option.none<MessageId>();
+      const assistantMessageId = Option.getOrElse(
+        activeAssistantMessageId,
+        () => assistantCompletion.messageId,
+      );
+      const [existingAssistantMessage, hasAssistantMessagesForTurn] = yield* Effect.all([
+        getThreadMessageById(thread.id, assistantMessageId),
+        turnId === undefined
+          ? Effect.succeed(false)
+          : projectionThreadMessages.hasAssistantMessageForTurn({
+              threadId: thread.id,
+              turnId,
+              streamingOnly: false,
+            }),
+      ]);
+      const shouldApplyFallbackCompletionText =
+        !existingAssistantMessage || existingAssistantMessage.text.length === 0;
+
+      const shouldSkipRedundantCompletion =
+        Option.isNone(activeAssistantMessageId) &&
+        turnId !== undefined &&
+        hasAssistantMessagesForTurn &&
+        (assistantCompletion.fallbackText?.trim().length ?? 0) === 0;
+
+      if (!shouldSkipRedundantCompletion) {
+        if (turnId && Option.isNone(activeAssistantMessageId)) {
           yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
         }
 
-        const streamingMode = yield* resolveResponseStreamingMode(thread.projectId);
-        if (streamingMode !== "token") {
+        yield* finalizeAssistantMessage({
+          event,
+          threadId: thread.id,
+          messageId: assistantMessageId,
+          ...(turnId ? { turnId } : {}),
+          createdAt: now,
+          commandTag: "assistant-complete",
+          finalDeltaCommandTag: "assistant-delta-finalize",
+          hasProjectedMessage: existingAssistantMessage !== undefined,
+          processWorkflowDirective: true,
+          // One assistant item is a segment of a turn, not the end of it.
+          synthesizeMissingDirectiveFailure: false,
+          ...(existingAssistantMessage?.text !== undefined
+            ? { existingText: existingAssistantMessage.text }
+            : {}),
+          ...(assistantCompletion.fallbackText !== undefined && shouldApplyFallbackCompletionText
+            ? { fallbackText: assistantCompletion.fallbackText }
+            : {}),
+        });
+
+        if (turnId) {
+          yield* forgetAssistantMessageId(thread.id, turnId, assistantMessageId);
+        }
+      }
+
+      if (turnId && completionTargetsActive) {
+        yield* clearAssistantSegmentStateForTurn(thread.id, turnId);
+      }
+    }
+
+    if (proposedPlanCompletion) {
+      yield* finalizeBufferedProposedPlan({
+        event,
+        threadId: thread.id,
+        planId: proposedPlanCompletion.planId,
+        ...(proposedPlanCompletion.turnId ? { turnId: proposedPlanCompletion.turnId } : {}),
+        fallbackMarkdown: proposedPlanCompletion.planMarkdown,
+        updatedAt: now,
+      });
+    }
+
+    if (isTerminalTurn) {
+      const turnId = toTurnId(event.turnId);
+      const turnCompletedSuccessfully = turnOwesWorkflowDirective(event);
+      if (turnId) {
+        const userInputActivities =
+          yield* projectionThreadActivityRepository.listUserInputLifecycleByThreadId({
+            threadId: thread.id,
+          });
+        const pendingRequestIds = new Set<string>();
+        for (const activity of userInputActivities) {
+          const payload =
+            typeof activity.payload === "object" && activity.payload !== null
+              ? (activity.payload as Record<string, unknown>)
+              : null;
+          const requestId = payload?.requestId;
+          if (typeof requestId !== "string") continue;
           if (
-            Option.getOrElse(
-              yield* Cache.getOption(messageStartedAtByMessageId, assistantMessageId),
-              () => "",
-            ) === ""
+            activity.kind === "user-input.requested" &&
+            activity.turnId === turnId &&
+            payload?.responseMode !== "message"
           ) {
-            yield* Cache.set(messageStartedAtByMessageId, assistantMessageId, now);
+            pendingRequestIds.add(requestId);
+          } else if (activity.kind === "user-input.resolved") {
+            pendingRequestIds.delete(requestId);
           }
-
-          // Pace on the server clock. OpenCode stamps every delta of a part
-          // with the part's start time, so the event time cannot measure gaps.
-          const spillChunk = yield* appendBufferedAssistantText(
-            assistantMessageId,
-            assistantDelta,
-            streamingMode,
-            yield* Clock.currentTimeMillis,
-          );
-          if (spillChunk.length > 0) {
-            yield* orchestrationEngine.dispatch({
-              type: "thread.message.assistant.delta",
-              commandId: yield* providerCommandId(event, "assistant-delta-buffer-spill"),
-              threadId: thread.id,
-              messageId: assistantMessageId,
-              delta: spillChunk,
-              ...(turnId ? { turnId } : {}),
-              createdAt: yield* messageStartedAt(assistantMessageId, now),
-            });
-          }
-        } else {
+        }
+        // A terminal turn cannot accept native callback answers. Message-mode
+        // questions may outlive that turn and still accept a later user message.
+        for (const requestId of pendingRequestIds) {
           yield* orchestrationEngine.dispatch({
-            type: "thread.message.assistant.delta",
-            commandId: yield* providerCommandId(event, "assistant-delta"),
+            type: "thread.activity.append",
+            commandId: yield* providerCommandId(event, "terminal-user-input-resolved"),
             threadId: thread.id,
-            messageId: assistantMessageId,
-            delta: assistantDelta,
-            ...(turnId ? { turnId } : {}),
-            createdAt: now,
-          });
-        }
-      }
-
-      const pauseForUserTurnId =
-        event.type === "request.opened" ||
-        (event.type === "user-input.requested" && event.payload.responseMode !== "message")
-          ? toTurnId(event.turnId)
-          : undefined;
-      if (pauseForUserTurnId) {
-        const hasProjectedMessage = yield* projectionThreadMessages.hasAssistantMessageForTurn({
-          threadId: thread.id,
-          turnId: pauseForUserTurnId,
-          streamingOnly: true,
-        });
-        const streamingMode = yield* resolveResponseStreamingMode(thread.projectId);
-        const flushedMessageIds =
-          streamingMode !== "token"
-            ? yield* flushBufferedAssistantMessagesForTurn({
-                event,
-                threadId: thread.id,
-                turnId: pauseForUserTurnId,
-                createdAt: now,
-                commandTag:
-                  event.type === "request.opened"
-                    ? "assistant-delta-flush-on-request-opened"
-                    : "assistant-delta-flush-on-user-input-requested",
-              })
-            : new Set<MessageId>();
-        yield* finalizeActiveSegmentForTurn({
-          event,
-          threadId: thread.id,
-          turnId: pauseForUserTurnId,
-          createdAt: now,
-          commandTag: "reasoning-complete-on-pause",
-          finalDeltaCommandTag: "reasoning-delta-finalize-on-pause",
-          hasProjectedMessage: false,
-          role: "reasoning",
-          flushedMessageIds,
-        });
-        yield* finalizeActiveSegmentForTurn({
-          event,
-          threadId: thread.id,
-          turnId: pauseForUserTurnId,
-          createdAt: now,
-          commandTag:
-            event.type === "request.opened"
-              ? "assistant-complete-on-request-opened"
-              : "assistant-complete-on-user-input-requested",
-          finalDeltaCommandTag:
-            event.type === "request.opened"
-              ? "assistant-delta-finalize-on-request-opened"
-              : "assistant-delta-finalize-on-user-input-requested",
-          hasProjectedMessage,
-          flushedMessageIds,
-        });
-      }
-
-      if (proposedPlanDelta && proposedPlanDelta.length > 0) {
-        const planId = proposedPlanIdFromEvent(event, thread.id);
-        yield* appendBufferedProposedPlan(planId, proposedPlanDelta, now);
-      }
-
-      // Tool work ends the thinking block that led to it. Without this a
-      // provider that reuses one reasoning stream across a turn (Claude has no
-      // per-block id) would append post-tool thinking to a block that already
-      // sits above the tool row.
-      if (event.type === "item.started" && isToolLifecycleItemType(event.payload.itemType)) {
-        const toolTurnId = toTurnId(event.turnId);
-        if (toolTurnId) {
-          yield* finalizeActiveSegmentForTurn({
-            event,
-            threadId: thread.id,
-            turnId: toolTurnId,
-            createdAt: now,
-            commandTag: "reasoning-complete-on-tool-start",
-            finalDeltaCommandTag: "reasoning-delta-finalize-on-tool-start",
-            hasProjectedMessage: false,
-            role: "reasoning",
-          });
-        }
-      }
-
-      if (event.type === "item.completed" && event.payload.itemType === "reasoning") {
-        const turnId = toTurnId(event.turnId);
-        if (turnId) {
-          const activeReasoningMessageId = yield* getActiveAssistantMessageIdForTurn(
-            thread.id,
-            turnId,
-            "reasoning",
-          );
-          // The item detail is a whole-block snapshot, so it may only stand in
-          // for deltas that never arrived. Appending it to a streamed block
-          // would print the reasoning twice.
-          const existingReasoningMessage = Option.isSome(activeReasoningMessageId)
-            ? yield* getThreadMessageById(thread.id, activeReasoningMessageId.value)
-            : undefined;
-          const fallbackText =
-            event.payload.detail !== undefined &&
-            event.payload.detail.trim().length > 0 &&
-            (existingReasoningMessage === undefined || existingReasoningMessage.text.length === 0)
-              ? event.payload.detail
-              : undefined;
-
-          if (Option.isNone(activeReasoningMessageId)) {
-            // Segment state outlives a closed block, so its presence means this
-            // turn already streamed a trace and the snapshot would duplicate it.
-            const turnAlreadyStreamedReasoning = Option.isSome(
-              yield* getAssistantSegmentStateForTurn(thread.id, turnId, "reasoning"),
-            );
-            // A provider can report a whole block at once without streaming it.
-            // The id is derived from the item rather than the segment counter so
-            // a repeated completion rewrites that row instead of adding a copy.
-            if (fallbackText !== undefined && !turnAlreadyStreamedReasoning) {
-              const snapshotMessageId = assistantSegmentMessageId(
-                `snapshot:${event.itemId ?? event.eventId}`,
-                0,
-                "reasoning",
-              );
-              const existingSnapshot = yield* getThreadMessageById(thread.id, snapshotMessageId);
-              if (existingSnapshot === undefined) {
-                yield* orchestrationEngine.dispatch({
-                  type: "thread.message.reasoning.delta",
-                  commandId: yield* providerCommandId(event, "reasoning-delta-snapshot"),
-                  threadId: thread.id,
-                  messageId: snapshotMessageId,
-                  delta: fallbackText,
-                  turnId,
-                  createdAt: now,
-                });
-                yield* orchestrationEngine.dispatch({
-                  type: "thread.message.reasoning.complete",
-                  commandId: yield* providerCommandId(event, "reasoning-complete-snapshot"),
-                  threadId: thread.id,
-                  messageId: snapshotMessageId,
-                  turnId,
-                  createdAt: now,
-                });
-              }
-            }
-          } else {
-            yield* finalizeActiveSegmentForTurn({
-              event,
-              threadId: thread.id,
-              turnId,
+            activity: {
+              id: EventId.make(`${event.eventId}:user-input-resolved:${requestId}`),
               createdAt: now,
-              commandTag: "reasoning-complete",
-              finalDeltaCommandTag: "reasoning-delta-finalize",
-              hasProjectedMessage: existingReasoningMessage !== undefined,
-              role: "reasoning",
-              ...(fallbackText !== undefined ? { fallbackText } : {}),
-            });
-          }
+              tone: "info",
+              kind: "user-input.resolved",
+              summary: "User input dismissed",
+              payload: { requestId },
+              turnId,
+            },
+            createdAt: now,
+          });
         }
-      }
-
-      const assistantCompletion =
-        event.type === "item.completed" && event.payload.itemType === "assistant_message"
-          ? {
-              messageId: MessageId.make(
-                `assistant:${event.itemId ?? event.turnId ?? event.eventId}`,
+        const assistantMessageIds = yield* getAssistantMessageIdsForTurn(thread.id, turnId);
+        yield* Effect.forEach(
+          assistantMessageIds,
+          (assistantMessageId) =>
+            getThreadMessageById(thread.id, assistantMessageId).pipe(
+              Effect.flatMap((existingMessage) =>
+                finalizeAssistantMessage({
+                  event,
+                  threadId: thread.id,
+                  messageId: assistantMessageId,
+                  turnId,
+                  createdAt: now,
+                  commandTag: "assistant-complete-finalize",
+                  finalDeltaCommandTag: "assistant-delta-finalize-fallback",
+                  hasProjectedMessage: existingMessage !== undefined,
+                  processWorkflowDirective: true,
+                  synthesizeMissingDirectiveFailure: turnCompletedSuccessfully,
+                  ...(existingMessage?.text !== undefined
+                    ? { existingText: existingMessage.text }
+                    : {}),
+                }),
               ),
-              fallbackText: event.payload.detail,
-            }
-          : undefined;
-      const proposedPlanCompletion =
-        event.type === "turn.proposed.completed"
-          ? {
-              planId: proposedPlanIdFromEvent(event, thread.id),
-              turnId: toTurnId(event.turnId),
-              planMarkdown: event.payload.planMarkdown,
-            }
-          : undefined;
+            ),
+          { concurrency: 1 },
+        ).pipe(Effect.asVoid);
+        yield* clearAssistantMessageIdsForTurn(thread.id, turnId);
+        yield* clearAssistantSegmentStateForTurn(thread.id, turnId);
+        yield* clearAssistantSegmentStateForTurn(thread.id, turnId, "reasoning");
 
-      if (assistantCompletion) {
-        const turnId = toTurnId(event.turnId);
-        if (turnId) {
-          yield* finalizeActiveSegmentForTurn({
-            event,
-            threadId: thread.id,
-            turnId,
-            createdAt: now,
-            commandTag: "reasoning-complete-on-assistant-completion",
-            finalDeltaCommandTag: "reasoning-delta-finalize-on-assistant-completion",
-            hasProjectedMessage: false,
-            role: "reasoning",
-          });
-        }
-        const activeSegment = turnId
-          ? Option.getOrUndefined(yield* getAssistantSegmentStateForTurn(thread.id, turnId))
-          : undefined;
-        const completionTargetsActive =
-          event.itemId === undefined ||
-          !activeSegment?.activeMessageId ||
-          activeSegment.baseKey === String(event.itemId);
-        const activeAssistantMessageId =
-          completionTargetsActive && activeSegment?.activeMessageId
-            ? Option.some(activeSegment.activeMessageId)
-            : Option.none<MessageId>();
-        const assistantMessageId = Option.getOrElse(
-          activeAssistantMessageId,
-          () => assistantCompletion.messageId,
-        );
-        const [existingAssistantMessage, hasAssistantMessagesForTurn] = yield* Effect.all([
-          getThreadMessageById(thread.id, assistantMessageId),
-          turnId === undefined
-            ? Effect.succeed(false)
-            : projectionThreadMessages.hasAssistantMessageForTurn({
-                threadId: thread.id,
-                turnId,
-                streamingOnly: false,
-              }),
-        ]);
-        const shouldApplyFallbackCompletionText =
-          !existingAssistantMessage || existingAssistantMessage.text.length === 0;
-
-        const shouldSkipRedundantCompletion =
-          Option.isNone(activeAssistantMessageId) &&
-          turnId !== undefined &&
-          hasAssistantMessagesForTurn &&
-          (assistantCompletion.fallbackText?.trim().length ?? 0) === 0;
-
-        if (!shouldSkipRedundantCompletion) {
-          if (turnId && Option.isNone(activeAssistantMessageId)) {
-            yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
-          }
-
-          yield* finalizeAssistantMessage({
-            event,
-            threadId: thread.id,
-            messageId: assistantMessageId,
-            ...(turnId ? { turnId } : {}),
-            createdAt: now,
-            commandTag: "assistant-complete",
-            finalDeltaCommandTag: "assistant-delta-finalize",
-            hasProjectedMessage: existingAssistantMessage !== undefined,
-            processWorkflowDirective: true,
-            // One assistant item is a segment of a turn, not the end of it.
-            synthesizeMissingDirectiveFailure: false,
-            ...(existingAssistantMessage?.text !== undefined
-              ? { existingText: existingAssistantMessage.text }
-              : {}),
-            ...(assistantCompletion.fallbackText !== undefined && shouldApplyFallbackCompletionText
-              ? { fallbackText: assistantCompletion.fallbackText }
-              : {}),
-          });
-
-          if (turnId) {
-            yield* forgetAssistantMessageId(thread.id, turnId, assistantMessageId);
-          }
-        }
-
-        if (turnId && completionTargetsActive) {
-          yield* clearAssistantSegmentStateForTurn(thread.id, turnId);
-        }
-      }
-
-      if (proposedPlanCompletion) {
         yield* finalizeBufferedProposedPlan({
           event,
           threadId: thread.id,
-          planId: proposedPlanCompletion.planId,
-          ...(proposedPlanCompletion.turnId ? { turnId: proposedPlanCompletion.turnId } : {}),
-          fallbackMarkdown: proposedPlanCompletion.planMarkdown,
+          planId: proposedPlanIdForTurn(thread.id, turnId),
+          turnId,
           updatedAt: now,
         });
-      }
 
-      if (isTerminalTurn) {
-        const turnId = toTurnId(event.turnId);
-        const turnCompletedSuccessfully = turnOwesWorkflowDirective(event);
-        if (turnId) {
-          const userInputActivities =
-            yield* projectionThreadActivityRepository.listUserInputLifecycleByThreadId({
-              threadId: thread.id,
-            });
-          const pendingRequestIds = new Set<string>();
-          for (const activity of userInputActivities) {
-            const payload =
-              typeof activity.payload === "object" && activity.payload !== null
-                ? (activity.payload as Record<string, unknown>)
-                : null;
-            const requestId = payload?.requestId;
-            if (typeof requestId !== "string") continue;
-            if (
-              activity.kind === "user-input.requested" &&
-              activity.turnId === turnId &&
-              payload?.responseMode !== "message"
-            ) {
-              pendingRequestIds.add(requestId);
-            } else if (activity.kind === "user-input.resolved") {
-              pendingRequestIds.delete(requestId);
-            }
-          }
-          // A terminal turn cannot accept native callback answers. Message-mode
-          // questions may outlive that turn and still accept a later user message.
-          for (const requestId of pendingRequestIds) {
-            yield* orchestrationEngine.dispatch({
-              type: "thread.activity.append",
-              commandId: yield* providerCommandId(event, "terminal-user-input-resolved"),
-              threadId: thread.id,
-              activity: {
-                id: EventId.make(`${event.eventId}:user-input-resolved:${requestId}`),
-                createdAt: now,
-                tone: "info",
-                kind: "user-input.resolved",
-                summary: "User input dismissed",
-                payload: { requestId },
-                turnId,
-              },
-              createdAt: now,
-            });
-          }
-          const assistantMessageIds = yield* getAssistantMessageIdsForTurn(thread.id, turnId);
-          yield* Effect.forEach(
-            assistantMessageIds,
-            (assistantMessageId) =>
-              getThreadMessageById(thread.id, assistantMessageId).pipe(
-                Effect.flatMap((existingMessage) =>
-                  finalizeAssistantMessage({
-                    event,
-                    threadId: thread.id,
-                    messageId: assistantMessageId,
-                    turnId,
-                    createdAt: now,
-                    commandTag: "assistant-complete-finalize",
-                    finalDeltaCommandTag: "assistant-delta-finalize-fallback",
-                    hasProjectedMessage: existingMessage !== undefined,
-                    processWorkflowDirective: true,
-                    synthesizeMissingDirectiveFailure: turnCompletedSuccessfully,
-                    ...(existingMessage?.text !== undefined
-                      ? { existingText: existingMessage.text }
-                      : {}),
-                  }),
-                ),
-              ),
-            { concurrency: 1 },
-          ).pipe(Effect.asVoid);
-          yield* clearAssistantMessageIdsForTurn(thread.id, turnId);
-          yield* clearAssistantSegmentStateForTurn(thread.id, turnId);
-          yield* clearAssistantSegmentStateForTurn(thread.id, turnId, "reasoning");
-
-          yield* finalizeBufferedProposedPlan({
+        if (turnCompletedSuccessfully) {
+          yield* consumeMissingWorkflowDirectiveForTurn({
             event,
             threadId: thread.id,
-            planId: proposedPlanIdForTurn(thread.id, turnId),
             turnId,
-            updatedAt: now,
-          });
-
-          if (turnCompletedSuccessfully) {
-            yield* consumeMissingWorkflowDirectiveForTurn({
-              event,
-              threadId: thread.id,
-              turnId,
-              createdAt: now,
-            });
-          }
-        }
-      }
-
-      if (event.type === "session.exited") {
-        yield* clearTurnStateForSession(thread.id);
-      }
-
-      if (event.type === "runtime.error") {
-        const runtimeErrorMessage = event.payload.message;
-
-        const shouldApplyRuntimeError = !STRICT_PROVIDER_LIFECYCLE_GUARD
-          ? true
-          : activeTurnId === null || eventTurnId === undefined || sameId(activeTurnId, eventTurnId);
-
-        if (shouldApplyRuntimeError) {
-          yield* orchestrationEngine.dispatch({
-            type: "thread.session.set",
-            commandId: yield* providerCommandId(event, "runtime-error-session-set"),
-            threadId: thread.id,
-            session: {
-              threadId: thread.id,
-              status: "error",
-              providerName: event.provider,
-              ...(event.providerInstanceId !== undefined
-                ? { providerInstanceId: event.providerInstanceId }
-                : {}),
-              runtimeMode: thread.session?.runtimeMode ?? "full-access",
-              activeTurnId: eventTurnId ?? null,
-              lastError: runtimeErrorMessage,
-              updatedAt: now,
-            },
             createdAt: now,
           });
         }
       }
+    }
 
-      if (event.type === "thread.metadata.updated" && event.payload.name) {
-        if (thread.titleState?.source !== "manual" && canReplaceThreadTitle(thread.title)) {
-          yield* orchestrationEngine.dispatch({
-            type: "thread.title.generate.complete",
-            commandId: yield* providerCommandId(event, "thread-meta-update"),
-            threadId: thread.id,
-            title: event.payload.name,
-            expectedTitle: thread.title,
-            expectedVersion: thread.titleState?.version ?? null,
-            needsRefinement: false,
-          });
-        }
-      }
+    if (event.type === "session.exited") {
+      yield* clearTurnStateForSession(thread.id);
+    }
 
-      const terminationThread =
-        event.type === "turn.completed" ||
-        event.type === "session.exited" ||
-        event.type === "runtime.error"
-          ? yield* getLoadedThreadShell()
-          : null;
-      if (
-        terminationThread &&
-        event.type === "turn.completed" &&
-        activeTurnId !== null &&
-        eventTurnId !== undefined &&
-        sameId(activeTurnId, eventTurnId)
-      ) {
-        yield* settleRunningBatchChildAfterTermination(
-          terminationThread,
-          now,
-          "failed",
-          normalizeRuntimeTurnState(event.payload.state) === "failed"
-            ? (event.payload.errorMessage ?? "Workflow sub-agent turn failed.")
-            : "Workflow sub-agent turn completed without its required result directive.",
-        );
-        yield* settleCanonicalAppReviewAfterTermination({
-          event,
-          thread: terminationThread,
-          completedAt: now,
-        });
-      } else if (terminationThread && event.type === "session.exited") {
-        yield* settleRunningBatchChildAfterTermination(
-          terminationThread,
-          now,
-          "canceled",
-          "Workflow sub-agent session exited before producing its required result.",
-        );
-        yield* settleCanonicalAppReviewAfterTermination({
-          event,
-          thread: terminationThread,
-          completedAt: now,
-        });
-      } else if (terminationThread && event.type === "runtime.error") {
-        yield* settleRunningBatchChildAfterTermination(
-          terminationThread,
-          now,
-          "failed",
-          event.payload.message,
-        );
-        yield* settleCanonicalAppReviewAfterTermination({
-          event,
-          thread: terminationThread,
-          completedAt: now,
-        });
-      }
+    if (event.type === "runtime.error") {
+      const runtimeErrorMessage = event.payload.message;
 
-      if (event.type === "task.started" || event.type === "task.progress") {
-        const description = event.payload.description?.trim();
-        if (description) {
-          yield* rememberTaskDescription(thread.id, event.payload.taskId, description);
-        }
-      }
-      // Working-indicator plan progress: current step while the turn runs,
-      // cleared on settle so a finished plan never lingers as stale UI.
-      // Events carrying a turn id that conflicts with the active turn are
-      // stale (superseded turn) and must neither overwrite nor clear the
-      // active turn's progress; session.exited always clears.
-      if (event.type === "session.exited") {
-        threadPlanProgress.clearThreadPlanProgress(thread.id);
-      } else if (!conflictsWithActiveTurn) {
-        if (event.type === "turn.plan.updated") {
-          threadPlanProgress.recordPlanProgress(thread.id, event.payload.plan);
-        } else if (isTerminalTurn && shouldApplyThreadLifecycle) {
-          threadPlanProgress.clearThreadPlanProgress(thread.id);
-        }
-      }
+      const shouldApplyRuntimeError = !STRICT_PROVIDER_LIFECYCLE_GUARD
+        ? true
+        : activeTurnId === null || eventTurnId === undefined || sameId(activeTurnId, eventTurnId);
 
-      // Sidebar background liveness: fed from the same lifecycle stream,
-      // read by the shell query at mapping time (no persistence).
-      switch (event.type) {
-        case "task.started":
-        case "task.progress":
-        case "task.updated":
-        case "task.completed": {
-          const payload = event.payload as {
-            taskId: string;
-            taskType?: string;
-            status?: string;
-            agentId?: string;
-          };
-          threadBackgroundLiveness.recordTaskLiveness({
-            threadId: thread.id,
-            taskId: payload.taskId,
-            taskType: payload.taskType,
-            status: payload.status,
-            agentId: payload.agentId,
-            kind:
-              event.type === "task.started"
-                ? "started"
-                : event.type === "task.progress"
-                  ? "progress"
-                  : event.type === "task.updated"
-                    ? "updated"
-                    : "completed",
-          });
-          break;
-        }
-        case "session.exited":
-          threadBackgroundLiveness.clearThreadLiveness(thread.id);
-          break;
-        default:
-          break;
-      }
-
-      let taskTitle: string | undefined;
-      if (event.type === "task.completed") {
-        taskTitle = yield* lookupTaskDescription(thread.id, event.payload.taskId);
-        if (!taskTitle) {
-          const taskActivity = yield* projectionThreadActivityRepository.getLatestTaskActivity({
-            threadId: thread.id,
-            taskId: event.payload.taskId,
-          });
-          taskTitle = findTaskTitleInActivities(
-            Option.match(taskActivity, {
-              onNone: () => undefined,
-              onSome: (activity) => [activity],
-            }),
-            event.payload.taskId,
-          );
-        }
-      }
-
-      let activityEvent = event;
-      if (
-        isCompactedThreadState &&
-        event.requestId === undefined &&
-        Option.isSome(pendingTurnStart) &&
-        thread.session?.status === "starting" &&
-        activeTurnId === null &&
-        sameId(thread.session.providerName, event.provider) &&
-        sameId(thread.session.providerInstanceId, event.providerInstanceId) &&
-        DateTime.isGreaterThanOrEqualTo(
-          DateTime.makeUnsafe(event.createdAt),
-          DateTime.makeUnsafe(pendingTurnStart.value.requestedAt),
-        )
-      ) {
-        const pendingMessage = yield* getThreadMessageById(
-          thread.id,
-          pendingTurnStart.value.messageId,
-        );
-        if (
-          pendingMessage?.role === "user" &&
-          (pendingMessage.attachments?.length ?? 0) === 0 &&
-          pendingMessage.text.trim().toLowerCase() === "/compact"
-        ) {
-          activityEvent = {
-            ...event,
-            requestId: RuntimeRequestId.make(String(pendingTurnStart.value.messageId)),
-          };
-        }
-      }
-      if (
-        activityEvent.type === "thread.state.changed" &&
-        activityEvent.payload.state === "compacted" &&
-        (activityEvent.payload.beforeTokens === undefined ||
-          activityEvent.payload.afterTokens === undefined)
-      ) {
-        const activities = yield* projectionThreadActivityRepository.listByThreadId({
+      if (shouldApplyRuntimeError) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.session.set",
+          commandId: yield* providerCommandId(event, "runtime-error-session-set"),
           threadId: thread.id,
-          activityKinds: ["context-window.updated", "context-compaction"],
-          // Preserve the previous thread-detail read's context-history bound.
-          limit: 500,
+          session: {
+            threadId: thread.id,
+            status: "error",
+            providerName: event.provider,
+            ...(event.providerInstanceId !== undefined
+              ? { providerInstanceId: event.providerInstanceId }
+              : {}),
+            runtimeMode: thread.session?.runtimeMode ?? "full-access",
+            activeTurnId: eventTurnId ?? null,
+            lastError: runtimeErrorMessage,
+            updatedAt: now,
+          },
+          createdAt: now,
         });
-        const tokenCounts = compactedTokenCountsFromActivities(activities);
-        if (tokenCounts) {
-          activityEvent = {
-            ...activityEvent,
-            payload: {
-              ...activityEvent.payload,
-              beforeTokens: activityEvent.payload.beforeTokens ?? tokenCounts.beforeTokens,
-              afterTokens: activityEvent.payload.afterTokens ?? tokenCounts.afterTokens,
-            },
-          };
-        }
       }
+    }
 
-      const activities = runtimeEventToActivities(activityEvent, taskTitle);
-      yield* Effect.forEach(activities, (activity) =>
-        providerCommandId(event, "thread-activity-append").pipe(
-          Effect.flatMap((commandId) =>
-            orchestrationEngine.dispatch({
-              type: "thread.activity.append",
-              commandId,
-              threadId: thread.id,
-              activity,
-              createdAt: activity.createdAt,
-            }),
-          ),
-        ),
-      ).pipe(Effect.asVoid);
-    });
+    if (event.type === "thread.metadata.updated" && event.payload.name) {
+      if (thread.titleState?.source !== "manual" && canReplaceThreadTitle(thread.title)) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.title.generate.complete",
+          commandId: yield* providerCommandId(event, "thread-meta-update"),
+          threadId: thread.id,
+          title: event.payload.name,
+          expectedTitle: thread.title,
+          expectedVersion: thread.titleState?.version ?? null,
+          needsRefinement: false,
+        });
+      }
+    }
 
-  const processDomainEvent = (event: IngestionDomainEvent) =>
-    Effect.gen(function* () {
-      if (event.type === "thread.workflow-subagent-batch-child-updated") {
-        yield* maybeCompleteWorkflowSubagentBatch(
-          event.payload.threadId,
-          event.payload.batchId,
-          event.occurredAt,
+    const terminationThread =
+      event.type === "turn.completed" ||
+      event.type === "session.exited" ||
+      event.type === "runtime.error"
+        ? yield* getLoadedThreadShell()
+        : null;
+    if (
+      terminationThread &&
+      event.type === "turn.completed" &&
+      activeTurnId !== null &&
+      eventTurnId !== undefined &&
+      sameId(activeTurnId, eventTurnId)
+    ) {
+      yield* settleRunningBatchChildAfterTermination(
+        terminationThread,
+        now,
+        "failed",
+        normalizeRuntimeTurnState(event.payload.state) === "failed"
+          ? (event.payload.errorMessage ?? "Workflow sub-agent turn failed.")
+          : "Workflow sub-agent turn completed without its required result directive.",
+      );
+      yield* settleCanonicalAppReviewAfterTermination({
+        event,
+        thread: terminationThread,
+        completedAt: now,
+      });
+    } else if (terminationThread && event.type === "session.exited") {
+      yield* settleRunningBatchChildAfterTermination(
+        terminationThread,
+        now,
+        "canceled",
+        "Workflow sub-agent session exited before producing its required result.",
+      );
+      yield* settleCanonicalAppReviewAfterTermination({
+        event,
+        thread: terminationThread,
+        completedAt: now,
+      });
+    } else if (terminationThread && event.type === "runtime.error") {
+      yield* settleRunningBatchChildAfterTermination(
+        terminationThread,
+        now,
+        "failed",
+        event.payload.message,
+      );
+      yield* settleCanonicalAppReviewAfterTermination({
+        event,
+        thread: terminationThread,
+        completedAt: now,
+      });
+    }
+
+    if (event.type === "task.started" || event.type === "task.progress") {
+      const description = event.payload.description?.trim();
+      if (description) {
+        yield* rememberTaskDescription(thread.id, event.payload.taskId, description);
+      }
+    }
+    // Working-indicator plan progress: current step while the turn runs,
+    // cleared on settle so a finished plan never lingers as stale UI.
+    // Events carrying a turn id that conflicts with the active turn are
+    // stale (superseded turn) and must neither overwrite nor clear the
+    // active turn's progress; session.exited always clears.
+    if (event.type === "session.exited") {
+      threadPlanProgress.clearThreadPlanProgress(thread.id);
+    } else if (!conflictsWithActiveTurn) {
+      if (event.type === "turn.plan.updated") {
+        threadPlanProgress.recordPlanProgress(thread.id, event.payload.plan);
+      } else if (isTerminalTurn && shouldApplyThreadLifecycle) {
+        threadPlanProgress.clearThreadPlanProgress(thread.id);
+      }
+    }
+
+    // Sidebar background liveness: fed from the same lifecycle stream,
+    // read by the shell query at mapping time (no persistence).
+    switch (event.type) {
+      case "task.started":
+      case "task.progress":
+      case "task.updated":
+      case "task.completed": {
+        const payload = event.payload as {
+          taskId: string;
+          taskType?: string;
+          status?: string;
+          agentId?: string;
+        };
+        threadBackgroundLiveness.recordTaskLiveness({
+          threadId: thread.id,
+          taskId: payload.taskId,
+          taskType: payload.taskType,
+          status: payload.status,
+          agentId: payload.agentId,
+          kind:
+            event.type === "task.started"
+              ? "started"
+              : event.type === "task.progress"
+                ? "progress"
+                : event.type === "task.updated"
+                  ? "updated"
+                  : "completed",
+        });
+        break;
+      }
+      case "session.exited":
+        threadBackgroundLiveness.clearThreadLiveness(thread.id);
+        break;
+      default:
+        break;
+    }
+
+    let taskTitle: string | undefined;
+    if (event.type === "task.completed") {
+      taskTitle = yield* lookupTaskDescription(thread.id, event.payload.taskId);
+      if (!taskTitle) {
+        const taskActivity = yield* projectionThreadActivityRepository.getLatestTaskActivity({
+          threadId: thread.id,
+          taskId: event.payload.taskId,
+        });
+        taskTitle = findTaskTitleInActivities(
+          Option.match(taskActivity, {
+            onNone: () => undefined,
+            onSome: (activity) => [activity],
+          }),
+          event.payload.taskId,
         );
+      }
+    }
+
+    let activityEvent = event;
+    if (
+      isCompactedThreadState &&
+      event.requestId === undefined &&
+      Option.isSome(pendingTurnStart) &&
+      thread.session?.status === "starting" &&
+      activeTurnId === null &&
+      sameId(thread.session.providerName, event.provider) &&
+      sameId(thread.session.providerInstanceId, event.providerInstanceId) &&
+      DateTime.isGreaterThanOrEqualTo(
+        DateTime.makeUnsafe(event.createdAt),
+        DateTime.makeUnsafe(pendingTurnStart.value.requestedAt),
+      )
+    ) {
+      const pendingMessage = yield* getThreadMessageById(
+        thread.id,
+        pendingTurnStart.value.messageId,
+      );
+      if (
+        pendingMessage?.role === "user" &&
+        (pendingMessage.attachments?.length ?? 0) === 0 &&
+        pendingMessage.text.trim().toLowerCase() === "/compact"
+      ) {
+        activityEvent = {
+          ...event,
+          requestId: RuntimeRequestId.make(String(pendingTurnStart.value.messageId)),
+        };
+      }
+    }
+    if (
+      activityEvent.type === "thread.state.changed" &&
+      activityEvent.payload.state === "compacted" &&
+      (activityEvent.payload.beforeTokens === undefined ||
+        activityEvent.payload.afterTokens === undefined)
+    ) {
+      const activities = yield* projectionThreadActivityRepository.listByThreadId({
+        threadId: thread.id,
+        activityKinds: ["context-window.updated", "context-compaction"],
+        // Preserve the previous thread-detail read's context-history bound.
+        limit: 500,
+      });
+      const tokenCounts = compactedTokenCountsFromActivities(activities);
+      if (tokenCounts) {
+        activityEvent = {
+          ...activityEvent,
+          payload: {
+            ...activityEvent.payload,
+            beforeTokens: activityEvent.payload.beforeTokens ?? tokenCounts.beforeTokens,
+            afterTokens: activityEvent.payload.afterTokens ?? tokenCounts.afterTokens,
+          },
+        };
+      }
+    }
+
+    const activities = runtimeEventToActivities(activityEvent, taskTitle);
+    yield* Effect.forEach(activities, (activity) =>
+      providerCommandId(event, "thread-activity-append").pipe(
+        Effect.flatMap((commandId) =>
+          orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId,
+            threadId: thread.id,
+            activity,
+            createdAt: activity.createdAt,
+          }),
+        ),
+      ),
+    ).pipe(Effect.asVoid);
+  });
+
+  const processDomainEvent = Effect.fn("ProviderRuntimeIngestion.processDomainEvent")(function* (
+    event: IngestionDomainEvent,
+  ) {
+    if (event.type === "thread.workflow-subagent-batch-child-updated") {
+      yield* maybeCompleteWorkflowSubagentBatch(
+        event.payload.threadId,
+        event.payload.batchId,
+        event.occurredAt,
+      );
+      return;
+    }
+    if (event.type === "thread.app-review-updated") {
+      if (event.payload.status !== "passed" && event.payload.status !== "failed") {
         return;
       }
-      if (event.type === "thread.app-review-updated") {
-        if (event.payload.status !== "passed" && event.payload.status !== "failed") {
-          return;
-        }
-        yield* completeFullAppReviewBatchChild(event.payload.reviewId, event.occurredAt);
-      }
-    });
+      yield* completeFullAppReviewBatchChild(event.payload.reviewId, event.occurredAt);
+    }
+  });
 
   // Records a mid-turn placeholder checkpoint for a provider diff. Runs on the
   // lifecycle worker, after repository detection, so the running-turn check
@@ -5049,8 +5035,8 @@ const make = Effect.gen(function* () {
     detectProviderDiffRepository(event).pipe(logIngestionFailure("diff", event)),
   );
 
-  const start: ProviderRuntimeIngestionShape["start"] = () =>
-    Effect.gen(function* () {
+  const start: ProviderRuntimeIngestionShape["start"] = Effect.fn("ProviderRuntimeIngestion.start")(
+    function* () {
       // These streams are hot and do not replay. Startup reconciliation may launch provider turns
       // before server activation, so acquire both subscriptions synchronously before forking.
       const runtimeEvents =
@@ -5077,16 +5063,17 @@ const make = Effect.gen(function* () {
           return worker.enqueue({ source: "domain", event });
         }),
       );
-    });
+    },
+  );
 
   return {
     start,
-    ingest: (event: ProviderRuntimeEvent) =>
-      Effect.gen(function* () {
-        const completed = yield* Deferred.make<void, WorkflowRuntimeIngestionError>();
-        yield* worker.enqueue({ source: "native", event, completed });
-        yield* Deferred.await(completed);
-      }),
+    // Untraced: runs once per natively ingested provider runtime event.
+    ingest: Effect.fnUntraced(function* (event: ProviderRuntimeEvent) {
+      const completed = yield* Deferred.make<void, WorkflowRuntimeIngestionError>();
+      yield* worker.enqueue({ source: "native", event, completed });
+      yield* Deferred.await(completed);
+    }),
     // The diff worker feeds the lifecycle worker, so drain it first.
     drain: diffWorker.drain.pipe(Effect.andThen(worker.drain)),
   } satisfies ProviderRuntimeIngestionShape;

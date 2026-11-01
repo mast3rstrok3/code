@@ -3669,8 +3669,7 @@ for (const verdict of ["passed", "failed", "rejected", "draining"] as const) {
             getSettings: Effect.succeed(decodeServerSettings({})),
           }),
           Layer.mock(T3ProjectFileLoader)({
-            loadStrict: () =>
-              Effect.succeed(Option.some({ e2eCommands: ["pytest tests/drafts.py"] })),
+            loadStrict: () => Effect.succeedSome({ e2eCommands: ["pytest tests/drafts.py"] }),
           }),
         ),
       ),
@@ -4511,7 +4510,7 @@ for (const testExit of [0, 1] as const)
                     getSettings: Effect.succeed(decodeServerSettings({})),
                   }),
                   Layer.mock(T3ProjectFileLoader)({
-                    loadStrict: () => Effect.succeed(Option.some({ e2eCommands: ["all-apps"] })),
+                    loadStrict: () => Effect.succeedSome({ e2eCommands: ["all-apps"] }),
                   }),
                 ),
               ),
@@ -4689,7 +4688,7 @@ for (const change of ["suite-writes-tracked-file", "head-moves"] as const) {
               getSettings: Effect.succeed(decodeServerSettings({})),
             }),
             Layer.mock(T3ProjectFileLoader)({
-              loadStrict: () => Effect.succeed(Option.some({ e2eCommands: ["pnpm e2e"] })),
+              loadStrict: () => Effect.succeedSome({ e2eCommands: ["pnpm e2e"] }),
             }),
           ),
         ),
@@ -5227,22 +5226,20 @@ for (const scenario of [
             }),
             Layer.mock(T3ProjectFileLoader)({
               loadStrict: () =>
-                Effect.succeed(
-                  Option.some({
-                    e2eCommands: ["suite-a", "suite-b"],
-                    e2eConcurrency: 4,
-                    ...(scenario === "combined" || preparation ? { e2eTimeoutMinutes: 120 } : {}),
-                    ...(preparation
-                      ? {
-                          e2ePrepare: { command: "prepare-fleet", timeoutMinutes: 90 },
-                          e2ePreflight: {
-                            command: "check-fleet",
-                            blockedReason: "The fleet owner must prepare live targets.",
-                          },
-                        }
-                      : {}),
-                  }),
-                ),
+                Effect.succeedSome({
+                  e2eCommands: ["suite-a", "suite-b"],
+                  e2eConcurrency: 4,
+                  ...(scenario === "combined" || preparation ? { e2eTimeoutMinutes: 120 } : {}),
+                  ...(preparation
+                    ? {
+                        e2ePrepare: { command: "prepare-fleet", timeoutMinutes: 90 },
+                        e2ePreflight: {
+                          command: "check-fleet",
+                          blockedReason: "The fleet owner must prepare live targets.",
+                        },
+                      }
+                    : {}),
+                }),
             }),
           ),
         ),
