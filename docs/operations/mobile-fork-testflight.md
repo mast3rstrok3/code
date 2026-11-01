@@ -11,32 +11,24 @@ Only `eas build` applies a profile's env, so a bare `eas submit` or
 the fingerprint runtime policy, a macOS build computes a fingerprint that
 doesn't match the EAS worker's.
 
-Load the App Store Connect API key for the team before running EAS. With the key
-loaded, signing and uploads run without an Apple ID prompt:
+## Building for TestFlight
+
+The App Store Connect app is "Code by Ivelion" (`ascAppId` 6829406701), and
+signing credentials for the app and its two extensions are stored on EAS. Load
+the team's App Store Connect API key, then build and submit in one step:
 
 ```sh
 set -a; . ~/.config/rudi-expo/asc/env; set +a
-```
-
-## First build
-
-1. Run `pnpm eas:fork build --platform ios --profile fork`.
-   It registers the app and its widget and share-extension bundle IDs, creates
-   signing credentials and builds in the cloud.
-2. In App Store Connect, create a new iOS app for `com.nightingaleai.code`. The
-   name "T3 Code" is taken; the submit profile uses "Nightingale Code". Copy the
-   app's numeric Apple ID into `submit.fork.ios.ascAppId` in `eas.json`.
-3. Run `pnpm eas:fork submit --platform ios --profile fork --latest`.
-4. In App Store Connect, add yourself to an internal TestFlight group, then
-   install the build with the TestFlight app.
-
-## Later builds
-
-```sh
 pnpm testflight:fork
 ```
 
-This builds and submits in one step. The build number increments on EAS.
+The build number increments on EAS. Install builds through an internal
+TestFlight group.
+
+When a change adds an iOS capability or entitlement, run that build without the
+API key and log in with an Apple ID when EAS asks. Apple rejects capability
+changes made with an API key ("Failed to sync capabilities"), but accepts them
+from an Apple ID session.
 
 ## Connecting the app
 

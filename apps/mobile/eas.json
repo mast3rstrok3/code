@@ -92,8 +92,8 @@
     },
     "fork": {
       "ios": {
+        "ascAppId": "6829406701",
         "appleTeamId": "7V8BA67W22",
-        "appName": "Nightingale Code",
         "ascApiKeyPath": "$EXPO_ASC_API_KEY_PATH",
         "ascApiKeyId": "$EXPO_ASC_KEY_ID",
         "ascApiKeyIssuerId": "$EXPO_ASC_ISSUER_ID"
