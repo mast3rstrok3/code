@@ -172,7 +172,7 @@ function makeSystem(world: FakeWorld) {
     ),
     Layer.provide(
       Layer.mock(ProjectionSnapshotQuery)({
-        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadShellById: () => Effect.succeedNone,
         getAppReviewWorkflowRun: (input) => {
           const run = "runId" in input ? world.e2eRuns?.[input.runId] : undefined;
           return Effect.succeed(

@@ -3,7 +3,6 @@ import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
-import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { runMigrations } from "../persistence/Migrations.ts";
@@ -277,7 +276,7 @@ effectIt.effect("replays native completions once even when a crash loses the cur
           readEvents: () => Stream.empty,
         }),
         Layer.mock(ProjectionSnapshotQuery)({
-          getThreadShellById: () => Effect.succeed(Option.none()),
+          getThreadShellById: () => Effect.succeedNone,
         }),
         Layer.mock(OrchestratorV2)({
           getThreadProjection: () => Effect.succeed(projection),
@@ -289,7 +288,7 @@ effectIt.effect("replays native completions once even when a crash loses the cur
         }),
         Layer.mock(ProjectService)({}),
         Layer.mock(ServerSettingsService)({ getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS) }),
-        Layer.mock(ProviderInstanceRegistry)({ getInstance: () => Effect.succeed(undefined) }),
+        Layer.mock(ProviderInstanceRegistry)({ getInstance: () => Effect.undefined }),
         Layer.mock(WorkflowUserInputBroker)({
           respond: () => Effect.succeed(false),
           cancelThread: () => Effect.void,
@@ -352,7 +351,7 @@ effectIt.effect("reopens archived workflow metadata without recreating its threa
             }),
         }),
         Layer.mock(ProjectionSnapshotQuery)({
-          getThreadShellById: () => Effect.succeed(Option.none()),
+          getThreadShellById: () => Effect.succeedNone,
         }),
         Layer.mock(OrchestratorV2)({ streamStoredEventsFrom: () => Stream.never }),
         Layer.mock(EventStoreV2)({
@@ -473,20 +472,18 @@ effectIt.effect("imports a newly launched native thread before applying its work
         Layer.mock(EventStoreV2)({}),
         Layer.mock(ProjectService)({
           getById: () =>
-            Effect.succeed(
-              Option.some({
-                id: ProjectId.make("project"),
-                title: "Project",
-                workspaceRoot: "/workspace",
-                repositoryIdentity: null,
-                faviconPath: null,
-                defaultModelSelection: null,
-                scripts: [],
-                createdAt: at,
-                updatedAt: at,
-                deletedAt: null,
-              }),
-            ),
+            Effect.succeedSome({
+              id: ProjectId.make("project"),
+              title: "Project",
+              workspaceRoot: "/workspace",
+              repositoryIdentity: null,
+              faviconPath: null,
+              defaultModelSelection: null,
+              scripts: [],
+              createdAt: at,
+              updatedAt: at,
+              deletedAt: null,
+            }),
         }),
         Layer.mock(ServerSettingsService)({}),
         Layer.mock(ProviderInstanceRegistry)({}),

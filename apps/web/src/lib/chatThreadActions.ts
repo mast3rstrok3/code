@@ -7,7 +7,7 @@ import type {
   WorkspaceUserId,
 } from "@t3tools/contracts";
 import type { ComposerThreadDraftState, DraftThreadEnvMode } from "../composerDraftStore";
-import type { DraftProjectScope } from "../logicalProject";
+import type { DraftProjectScope } from "@t3tools/client-runtime/state/project-grouping";
 
 type ComposerModelSelectionState = Pick<
   ComposerThreadDraftState,

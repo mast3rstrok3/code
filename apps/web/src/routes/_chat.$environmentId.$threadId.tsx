@@ -2,8 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import { resolveThreadRouteSearch } from "../threadRoutes";
 
-// The view lives in the `_chat` layout (see ThreadRouteView) so a draft's
-// promotion onto this route keeps the same ChatView mounted.
+// The _chat layout owns ChatView so draft promotion keeps it mounted.
 export const Route = createFileRoute("/_chat/$environmentId/$threadId")({
   component: () => null,
   validateSearch: resolveThreadRouteSearch,

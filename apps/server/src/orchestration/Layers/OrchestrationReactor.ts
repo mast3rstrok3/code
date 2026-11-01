@@ -34,18 +34,17 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* bridge.drain;
   });
   return {
-    start: () =>
-      Effect.gen(function* () {
-        yield* bridge.start;
-        yield* product.start();
-        yield* implementation.start();
-        yield* appReview.start();
-        yield* preview.start();
-        yield* appStacks.start();
-        yield* feature.start();
-        yield* grillJudge.start();
-        yield* scheduledReports.start();
-      }),
+    start: Effect.fn("OrchestrationReactor.start")(function* () {
+      yield* bridge.start;
+      yield* product.start();
+      yield* implementation.start();
+      yield* appReview.start();
+      yield* preview.start();
+      yield* appStacks.start();
+      yield* feature.start();
+      yield* grillJudge.start();
+      yield* scheduledReports.start();
+    }),
     drainPendingProviderCommands: bridge.drain,
     reconcilePendingProviderCommands,
     drainForShutdown: Effect.gen(function* () {

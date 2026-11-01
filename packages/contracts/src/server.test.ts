@@ -1,11 +1,12 @@
-import { ServerConfig, ServerObservability } from "./server.ts";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   OtlpEndpointCheckInput,
+  ServerConfig,
   resolveEnvironmentMachineKind,
+  ServerObservability,
   ServerProvider,
   ServerProviders,
   ServerUpsertKeybindingResult,
@@ -18,7 +19,6 @@ const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
 const decodeServerProviders = Schema.decodeUnknownSync(ServerProviders);
 const decodeWorkflowPromptContract = Schema.decodeUnknownSync(WorkflowPromptContract);
 const decodeWorkflowCatalog = Schema.decodeUnknownSync(WorkflowCatalog);
-const decodeServerObservability = Schema.decodeUnknownSync(ServerObservability);
 const decodeUpsertKeybindingResult = Schema.decodeUnknownSync(ServerUpsertKeybindingResult);
 const decodeAvailableEditors = Schema.decodeUnknownSync(ServerConfig.fields.availableEditors);
 
@@ -272,6 +272,23 @@ describe("server config forward compatibility", () => {
     expect(parsed.usageLimits?.windows).toEqual([
       { id: "primary", kind: "session", label: "Session", usedPercent: 12 },
     ]);
+  });
+});
+
+describe("ServerObservability", () => {
+  const decodeServerObservability = Schema.decodeUnknownSync(ServerObservability);
+
+  it("rejects an unknown endpoint source", () => {
+    expect(() =>
+      decodeServerObservability({
+        logsDirectoryPath: "/tmp/t3/logs",
+        localTracingEnabled: true,
+        otlpTracesUrl: "https://collector.example.com/v1/traces",
+        otlpTracesSource: "cli",
+        otlpTracesEnabled: true,
+        otlpMetricsEnabled: false,
+      }),
+    ).toThrow();
   });
 });
 

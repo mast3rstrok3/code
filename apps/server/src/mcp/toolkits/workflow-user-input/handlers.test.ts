@@ -12,7 +12,6 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
@@ -41,7 +40,7 @@ const question = (index: number) => ({
 const snapshotLayer = Layer.mock(ProjectionSnapshotQuery)({
   getThreadDetailSnapshotById: () => Effect.die("unused"),
 
-  getThreadDetailById: () => Effect.succeed(Option.some({ id: threadId, latestTurn: { turnId } })),
+  getThreadDetailById: () => Effect.succeedSome({ id: threadId, latestTurn: { turnId } }),
 } as unknown as Partial<ProjectionSnapshotQuery["Service"]>);
 
 const activitiesOf = (commands: ReadonlyArray<OrchestrationCommand>) =>

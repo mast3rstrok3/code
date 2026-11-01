@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { SETTINGS_NAV_ITEMS } from "./SettingsSidebarNav";
+import { SETTINGS_NAV_GROUPS, SETTINGS_SECTION_LABELS } from "./settingsSearch";
 import { resolveCatalogFocusId } from "./WorkflowSettings";
 import {
   detectCatalogContentKind,
@@ -12,9 +12,9 @@ import {
 describe("workflow catalog settings", () => {
   it("publishes separate workflow, skill, and doc navigation entries", () => {
     expect(
-      SETTINGS_NAV_ITEMS.filter((item) => ["Workflows", "Skills", "Docs"].includes(item.label)).map(
-        (item) => [item.label, item.to],
-      ),
+      SETTINGS_NAV_GROUPS.flatMap((group) => group.paths)
+        .filter((to) => ["Workflows", "Skills", "Docs"].includes(SETTINGS_SECTION_LABELS[to]))
+        .map((to) => [SETTINGS_SECTION_LABELS[to], to]),
     ).toEqual([
       ["Workflows", "/settings/workflows"],
       ["Skills", "/settings/skills"],

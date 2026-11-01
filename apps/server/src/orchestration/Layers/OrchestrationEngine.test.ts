@@ -19,6 +19,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
   ProviderInstanceId,
+  SourceControlProviderKind,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
@@ -1600,7 +1601,7 @@ describe("OrchestrationEngine", () => {
         resolve: (workspaceRoot) =>
           Effect.succeed({
             canonicalKey: "example.test/owner/repository",
-            provider: "github",
+            provider: SourceControlProviderKind.make("github"),
             displayName: "owner/repository",
             rootPath: workspaceRoot,
             locator: {

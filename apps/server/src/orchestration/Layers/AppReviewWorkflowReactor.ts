@@ -4556,32 +4556,32 @@ ${result.outputMarkdown}`,
 
   const processEventSafely = (event: AppReviewWorkflowEvent) =>
     processEvent(event).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
-          : Effect.gen(function* () {
-              if (yield* isDraining) return;
-              const run = yield* runForEvent(event).pipe(Effect.orElseSucceed(() => null));
-              if (run !== null && run.status === "running") {
-                const latest = yield* projectionSnapshotQuery.getCommandReadModel();
-                if (
-                  isWorkflowThreadPaused(latest.threads, run.controllerThreadId) ||
-                  appReviewWaitsForAdmission(run, latest)
-                )
-                  return;
-                yield* failRun({
-                  run,
-                  reason: "automation-unavailable",
-                  detailMarkdown: `App Review automation failed while processing ${event.type}.\n\n${Cause.pretty(cause)}`,
-                  occurredAt: event.occurredAt,
-                }).pipe(Effect.catch(() => Effect.void));
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) =>
+          Effect.gen(function* () {
+            if (yield* isDraining) return;
+            const run = yield* runForEvent(event).pipe(Effect.orElseSucceed(() => null));
+            if (run !== null && run.status === "running") {
+              const latest = yield* projectionSnapshotQuery.getCommandReadModel();
+              if (
+                isWorkflowThreadPaused(latest.threads, run.controllerThreadId) ||
+                appReviewWaitsForAdmission(run, latest)
+              )
                 return;
-              }
-              yield* Effect.logWarning("App Review workflow reactor failed to process event", {
-                eventType: event.type,
-                cause: Cause.pretty(cause),
-              });
-            }),
+              yield* failRun({
+                run,
+                reason: "automation-unavailable",
+                detailMarkdown: `App Review automation failed while processing ${event.type}.\n\n${Cause.pretty(cause)}`,
+                occurredAt: event.occurredAt,
+              }).pipe(Effect.ignore);
+              return;
+            }
+            yield* Effect.logWarning("App Review workflow reactor failed to process event", {
+              eventType: event.type,
+              cause: Cause.pretty(cause),
+            });
+          }),
       ),
     );
 
@@ -4980,24 +4980,24 @@ ${result.outputMarkdown}`,
           ? yield* renewActivePhaseLease(run, run.activeThreadId, occurredAt)
           : run;
       yield* reconcileRun(currentRun, occurredAt).pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.failCause(cause)
-            : Effect.gen(function* () {
-                if (yield* isDraining) return;
-                const latest = yield* projectionSnapshotQuery.getCommandReadModel();
-                if (
-                  isWorkflowThreadPaused(latest.threads, run.controllerThreadId) ||
-                  appReviewWaitsForAdmission(run, latest)
-                )
-                  return;
-                yield* failRun({
-                  run,
-                  reason: "automation-unavailable",
-                  detailMarkdown: `App Review automation was unavailable during restart recovery.\n\n${Cause.pretty(cause)}`,
-                  occurredAt,
-                }).pipe(Effect.catch(() => Effect.void));
-              }),
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) =>
+            Effect.gen(function* () {
+              if (yield* isDraining) return;
+              const latest = yield* projectionSnapshotQuery.getCommandReadModel();
+              if (
+                isWorkflowThreadPaused(latest.threads, run.controllerThreadId) ||
+                appReviewWaitsForAdmission(run, latest)
+              )
+                return;
+              yield* failRun({
+                run,
+                reason: "automation-unavailable",
+                detailMarkdown: `App Review automation was unavailable during restart recovery.\n\n${Cause.pretty(cause)}`,
+                occurredAt,
+              }).pipe(Effect.ignore);
+            }),
         ),
       );
     }

@@ -72,13 +72,13 @@ export const closePreviewForEvent = (
   const threadId = previewThreadIdForEvent(event);
   if (threadId === null) return Effect.void;
   return previewCoordinator.close({ threadId, reason: "workflow-cleanup" }).pipe(
-    Effect.catchCause((cause) =>
-      Cause.hasInterruptsOnly(cause)
-        ? Effect.failCause(cause)
-        : Effect.logWarning("preview lifecycle cleanup failed", {
-            eventType: event.type,
-            cause: Cause.pretty(cause),
-          }),
+    Effect.catchCauseIf(
+      (cause) => !Cause.hasInterruptsOnly(cause),
+      (cause) =>
+        Effect.logWarning("preview lifecycle cleanup failed", {
+          eventType: event.type,
+          cause: Cause.pretty(cause),
+        }),
     ),
   );
 };

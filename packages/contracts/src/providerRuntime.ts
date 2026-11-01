@@ -489,7 +489,6 @@ const UserInputQuestionOption = Schema.Struct({
   description: Schema.String,
   value: Schema.optional(Schema.String),
 });
-export type UserInputQuestionOption = typeof UserInputQuestionOption.Type;
 
 const UserInputQuestionRecommendation = Schema.Struct({
   optionLabel: TrimmedNonEmptyStringSchema,

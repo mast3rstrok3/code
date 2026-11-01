@@ -9,6 +9,8 @@ import * as Path from "effect/Path";
 import {
   VcsRepositoryDetectionError,
   VcsUnsupportedOperationError,
+  type ReviewBranchCommitsInput,
+  type ReviewBranchCommitsResult,
   type ReviewDiffFileContentsInput,
   type ReviewDiffFileContentsResult,
   type ReviewDiffPreviewError,
@@ -23,9 +25,18 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as KnownWorkspaces from "../workspace/KnownWorkspaces.ts";
 
+const WORKSPACE_BOUND_SUBJECTS = {
+  "ReviewService.getBranchCommits": "commit list",
+  "ReviewService.getDiffPreview": "diff preview",
+  "ReviewService.getDiffFileContents": "diff file contents",
+} as const;
+
 export class ReviewService extends Context.Service<
   ReviewService,
   {
+    readonly getBranchCommits: (
+      input: ReviewBranchCommitsInput,
+    ) => Effect.Effect<ReviewBranchCommitsResult, ReviewDiffPreviewError>;
     readonly getDiffPreview: (
       input: ReviewDiffPreviewInput,
     ) => Effect.Effect<ReviewDiffPreviewResult, ReviewDiffPreviewError>;
@@ -35,7 +46,7 @@ export class ReviewService extends Context.Service<
   }
 >()("t3/review/ReviewService") {}
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -66,7 +77,7 @@ export const make = Effect.gen(function* () {
   };
 
   const assertWorkspaceBoundCwd = Effect.fn("ReviewService.assertWorkspaceBoundCwd")(function* (
-    operation: "ReviewService.getDiffPreview" | "ReviewService.getDiffFileContents",
+    operation: keyof typeof WORKSPACE_BOUND_SUBJECTS,
     cwd: string,
   ) {
     const [candidate, workspaceRoot] = yield* Effect.all([
@@ -146,11 +157,25 @@ export const make = Effect.gen(function* () {
     return yield* new VcsRepositoryDetectionError({
       operation,
       cwd,
-      detail:
-        operation === "ReviewService.getDiffPreview"
-          ? "Review diff preview cwd must stay within a configured or registered workspace root."
-          : "Review diff file contents cwd must stay within a configured or registered workspace root.",
+      detail: `Review ${WORKSPACE_BOUND_SUBJECTS[operation]} cwd must stay within the configured workspace root or a registered workspace.`,
     });
+  });
+
+  const getBranchCommits: ReviewService["Service"]["getBranchCommits"] = Effect.fn(
+    "ReviewService.getBranchCommits",
+  )(function* (input) {
+    yield* assertWorkspaceBoundCwd("ReviewService.getBranchCommits", input.cwd);
+
+    const handle = yield* vcsRegistry.detect({ cwd: input.cwd, requestedKind: "auto" });
+    if (!handle) return { commits: [], truncated: false };
+    if (handle.kind !== "git") {
+      return yield* new VcsUnsupportedOperationError({
+        operation: "ReviewService.getBranchCommits",
+        kind: handle.kind,
+        detail: "Review commit lists require a Git repository.",
+      });
+    }
+    return yield* git.getReviewBranchCommits(input);
   });
 
   const getDiffPreview: ReviewService["Service"]["getDiffPreview"] = Effect.fn(
@@ -167,19 +192,7 @@ export const make = Effect.gen(function* () {
       };
     }
 
-    const getDriverDiffPreview = handle.driver.getDiffPreview;
-    if (!getDriverDiffPreview) {
-      if (handle.kind === "git") {
-        return yield* git.getReviewDiffPreview(input);
-      }
-      return yield* new VcsUnsupportedOperationError({
-        operation: "ReviewService.getDiffPreview",
-        kind: handle.kind,
-        detail: `The ${handle.kind} VCS driver does not support review diff previews.`,
-      });
-    }
-
-    return yield* getDriverDiffPreview(input);
+    return yield* git.getReviewDiffPreview(input);
   });
 
   const getDiffFileContents: ReviewService["Service"]["getDiffFileContents"] = Effect.fn(
@@ -200,6 +213,7 @@ export const make = Effect.gen(function* () {
   });
 
   return ReviewService.of({
+    getBranchCommits,
     getDiffPreview,
     getDiffFileContents,
   });

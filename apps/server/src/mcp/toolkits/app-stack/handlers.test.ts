@@ -27,7 +27,7 @@ import { AppStackToolkitRegistrationLive } from "../../McpHttpServer.ts";
 import { handlers } from "./handlers.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 
-const thread = Schema.decodeUnknownSync(OrchestrationThreadShell)({
+const thread = Schema.decodeSync(OrchestrationThreadShell)({
   ownerUserId: DEFAULT_WORKSPACE_USER_ID,
   parentThreadId: null,
   workflowRole: null,
@@ -49,7 +49,7 @@ const thread = Schema.decodeUnknownSync(OrchestrationThreadShell)({
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
 });
-const project = Schema.decodeUnknownSync(OrchestrationProjectShell)({
+const project = Schema.decodeSync(OrchestrationProjectShell)({
   id: "project-1",
   title: "Rudi",
   workspaceRoot: "/repo/rudi",
@@ -58,7 +58,7 @@ const project = Schema.decodeUnknownSync(OrchestrationProjectShell)({
   createdAt: thread.createdAt,
   updatedAt: thread.updatedAt,
 });
-const stack = Schema.decodeUnknownSync(AppStack)({
+const stack = Schema.decodeSync(AppStack)({
   id: "stack-1",
   uuid: "stack-1",
   userId: "user-1",

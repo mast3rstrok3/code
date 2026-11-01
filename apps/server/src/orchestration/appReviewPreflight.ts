@@ -53,6 +53,6 @@ export const runAppReviewPreflight = Effect.fn("runAppReviewPreflight")(function
             ? ("ready" as const)
             : ("error" as const),
       ),
-      Effect.catch(() => Effect.succeed("error" as const)),
+      Effect.orElseSucceed(() => "error" as const),
     );
 });

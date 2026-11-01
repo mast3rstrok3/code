@@ -58,65 +58,64 @@ export class OrphanCleanupDatabaseMissingError extends Schema.TaggedError<Orphan
  * that has none of them, and is not itself referenced as a run's live stage
  * thread, only ever existed as a failed attempt.
  */
-const run = (input: {
+const run = Effect.fn("deleteOrphanWorkflowThreads.run")(function* (input: {
   readonly baseDir: string;
   readonly workflowRole: string;
   readonly apply: boolean;
-}) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const databasePath = NodePath.join(input.baseDir, "userdata", "state.sqlite");
-    if (!(yield* fs.exists(databasePath))) {
-      return yield* new OrphanCleanupDatabaseMissingError({ databasePath });
-    }
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const databasePath = NodePath.join(input.baseDir, "userdata", "state.sqlite");
+  if (!(yield* fs.exists(databasePath))) {
+    return yield* new OrphanCleanupDatabaseMissingError({ databasePath });
+  }
 
-    const sqlLayer = NodeSqliteClient.layer({ filename: databasePath, readonly: false });
+  const sqlLayer = NodeSqliteClient.layer({ filename: databasePath, readonly: false });
 
-    const orphans = yield* selectOrphanWorkflowThreads(input.workflowRole).pipe(
-      Effect.provide(sqlLayer),
-    );
-    yield* Console.log(
-      `${String(orphans.length)} orphan '${input.workflowRole}' thread(s) in ${databasePath}`,
-    );
-    if (orphans.length === 0 || !input.apply) {
-      yield* Console.log(input.apply ? "Nothing to delete." : "Dry run — pass --apply to delete.");
-      return;
-    }
+  const orphans = yield* selectOrphanWorkflowThreads(input.workflowRole).pipe(
+    Effect.provide(sqlLayer),
+  );
+  yield* Console.log(
+    `${String(orphans.length)} orphan '${input.workflowRole}' thread(s) in ${databasePath}`,
+  );
+  if (orphans.length === 0 || !input.apply) {
+    yield* Console.log(input.apply ? "Nothing to delete." : "Dry run — pass --apply to delete.");
+    return;
+  }
 
-    const timestamp = DateTime.formatIso(yield* DateTime.now).replaceAll(":", "-");
-    const backupPath = `${databasePath}.backup-${timestamp}`;
-    yield* Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`VACUUM INTO ${backupPath}`;
-    }).pipe(Effect.provide(sqlLayer));
-    yield* fs.chmod(backupPath, 0o600);
-    yield* Console.log(`Backup written to ${backupPath}`);
+  const timestamp = DateTime.formatIso(yield* DateTime.now).replaceAll(":", "-");
+  const backupPath = `${databasePath}.backup-${timestamp}`;
+  yield* Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`VACUUM INTO ${backupPath}`;
+  }).pipe(Effect.provide(sqlLayer));
+  yield* fs.chmod(backupPath, 0o600);
+  yield* Console.log(`Backup written to ${backupPath}`);
 
-    yield* Effect.gen(function* () {
-      const engine = yield* OrchestrationEngineService;
-      let deleted = 0;
-      for (const orphan of orphans) {
-        yield* engine.dispatch({
-          type: "thread.delete",
-          commandId: CommandId.make(`server:orphan-cleanup-${orphan.threadId}`),
-          threadId: ThreadId.make(orphan.threadId),
-        });
-        deleted += 1;
-        if (deleted % 250 === 0) {
-          yield* Console.log(`  deleted ${String(deleted)}/${String(orphans.length)}`);
-        }
+  yield* Effect.gen(function* () {
+    const engine = yield* OrchestrationEngineService;
+    let deleted = 0;
+    for (const orphan of orphans) {
+      yield* engine.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make(`server:orphan-cleanup-${orphan.threadId}`),
+        threadId: ThreadId.make(orphan.threadId),
+      });
+      deleted += 1;
+      if (deleted % 250 === 0) {
+        yield* Console.log(`  deleted ${String(deleted)}/${String(orphans.length)}`);
       }
-      yield* Console.log(`Deleted ${String(deleted)} thread(s).`);
-    }).pipe(
-      Effect.provide(
-        OrchestrationLayerLive.pipe(
-          Layer.provide(RepositoryIdentityResolver.layer),
-          Layer.provide(sqlLayer),
-          Layer.provide(ServerConfig.layerTest(process.cwd(), input.baseDir)),
-        ),
+    }
+    yield* Console.log(`Deleted ${String(deleted)} thread(s).`);
+  }).pipe(
+    Effect.provide(
+      OrchestrationLayerLive.pipe(
+        Layer.provide(RepositoryIdentityResolver.layer),
+        Layer.provide(sqlLayer),
+        Layer.provide(ServerConfig.layerTest(process.cwd(), input.baseDir)),
       ),
-    );
-  });
+    ),
+  );
+});
 
 export const deleteOrphanWorkflowThreadsCommand = Command.make(
   "delete-orphan-workflow-threads",

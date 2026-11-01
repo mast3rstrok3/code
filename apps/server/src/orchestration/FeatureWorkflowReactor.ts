@@ -799,13 +799,13 @@ export const make = Effect.gen(function* () {
 
   const evaluate = (threadId: ThreadId) =>
     evaluateUnsafe(threadId).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
-          : Effect.logWarning("Feature workflow step failed", {
-              threadId,
-              cause: Cause.pretty(cause),
-            }),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) =>
+          Effect.logWarning("Feature workflow step failed", {
+            threadId,
+            cause: Cause.pretty(cause),
+          }),
       ),
     );
 

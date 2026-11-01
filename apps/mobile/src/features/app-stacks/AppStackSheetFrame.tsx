@@ -6,7 +6,7 @@ import { ScreenStack } from "react-native-screens";
 import { AndroidSheetHeader } from "../../components/ui/AndroidScreenHeader";
 import type { AppSymbolName } from "../../components/ui/AppSymbol";
 import { ScreenContent } from "../../components/ui/ScreenContent";
-import { NativeSheetContent } from "../../native/NativeSheetContent";
+import { NativeInspectorContent } from "../../native/NativeInspectorContent";
 import { NativeStackScreenOptions, nativeHeaderScrollEdgeEffects } from "../../native/StackHeader";
 import { NativeHeader, NativeScreen } from "../../native/ThemedScreenStack";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
@@ -50,7 +50,7 @@ export function AppStackSheetFrame(props: {
             scrollEdgeEffects={HEADER_SCROLL_EDGE_EFFECTS}
             className="flex-1 bg-sheet"
           >
-            <NativeSheetContent>{props.children}</NativeSheetContent>
+            <NativeInspectorContent>{props.children}</NativeInspectorContent>
             <NativeHeader
               backgroundColor="rgba(0,0,0,0)"
               tintColorClassName="accent-foreground"

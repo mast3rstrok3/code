@@ -17,7 +17,7 @@ import {
 
 const now = "2026-09-09T10:00:00.000Z";
 const commit = "a".repeat(40);
-const handoff = Schema.decodeUnknownSync(NativeVerificationHandoff)({
+const handoff = Schema.decodeSync(NativeVerificationHandoff)({
   id: "handoff-1",
   revision: 0,
   status: "ready",
