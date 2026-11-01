@@ -55,6 +55,15 @@
         "T3CODE_MOBILE_VERSION": "3.0.0"
       }
     },
+    "fork": {
+      "extends": "production",
+      "env": {
+        "T3CODE_EXPO_OWNER": "mast3rstrok3",
+        "T3CODE_EAS_PROJECT_ID": "66e60b43-6b66-4b66-adfb-5c8a41d32924",
+        "T3CODE_IOS_TEAM_ID": "7V8BA67W22",
+        "T3CODE_IOS_BUNDLE_ID": "com.nightingaleai.code"
+      }
+    },
     "production": {
       "corepack": true,
       "env": {
@@ -79,6 +88,15 @@
       },
       "android": {
         "track": "internal"
+      }
+    },
+    "fork": {
+      "ios": {
+        "appleTeamId": "7V8BA67W22",
+        "appName": "Nightingale Code",
+        "ascApiKeyPath": "$EXPO_ASC_API_KEY_PATH",
+        "ascApiKeyId": "$EXPO_ASC_KEY_ID",
+        "ascApiKeyIssuerId": "$EXPO_ASC_ISSUER_ID"
       }
     }
   }

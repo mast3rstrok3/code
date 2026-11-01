@@ -36,6 +36,8 @@
     "eas:preview": "eas build --profile preview",
     "eas:preview:dev": "eas build --profile preview:dev",
     "eas:prod": "eas build --profile production",
+    "eas:fork": "node scripts/eas-fork.mts",
+    "testflight:fork": "node scripts/eas-fork.mts build --platform ios --profile fork --auto-submit",
     "config:dev": "APP_VARIANT=development expo config",
     "config:preview": "APP_VARIANT=preview expo config",
     "config:prod": "APP_VARIANT=production expo config",
