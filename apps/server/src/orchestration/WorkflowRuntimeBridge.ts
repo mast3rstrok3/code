@@ -246,6 +246,28 @@ export function workflowControlCommands(
   }
 }
 
+/** App Review advances a phase only once the legacy turn it read has a checkpoint. */
+export function workflowCheckpointCommand(
+  stored: OrchestrationV2StoredEvent,
+): OrchestrationCommand | null {
+  const event = stored.event;
+  if (event.type !== "checkpoint.captured") return null;
+  const checkpoint = event.payload;
+  if (checkpoint.runId === null || checkpoint.status === "stale") return null;
+  return {
+    type: "thread.turn.diff.complete",
+    commandId: CommandId.make(`${OBSERVATION_PREFIX}${event.id}`),
+    threadId: checkpoint.threadId,
+    turnId: TurnId.make(checkpoint.runId),
+    completedAt: DateTime.formatIso(checkpoint.capturedAt),
+    checkpointRef: checkpoint.ref,
+    status: checkpoint.status,
+    files: checkpoint.files,
+    checkpointTurnCount: checkpoint.ordinalWithinScope,
+    createdAt: DateTime.formatIso(event.occurredAt),
+  };
+}
+
 /** Feed completed native messages before terminal runs so directive validation sees their text. */
 export function workflowRuntimeEvents(
   stored: OrchestrationV2StoredEvent,
@@ -367,8 +389,9 @@ export const make = Effect.gen(function* () {
     readonly archived_at: string | null;
     readonly worktree_path: string | null;
     readonly branch: string | null;
+    readonly workflow_role: string | null;
   }>`
-    SELECT deleted_at, archived_at, worktree_path, branch FROM projection_threads WHERE thread_id = ${threadId} LIMIT 1
+    SELECT deleted_at, archived_at, worktree_path, branch, workflow_role FROM projection_threads WHERE thread_id = ${threadId} LIMIT 1
   `;
   // Subscribe during layer construction, before startup recovery can emit workflow commands.
   const commands = yield* engine.subscribeDomainEvents;
@@ -538,6 +561,12 @@ export const make = Effect.gen(function* () {
           yield* mirrorNative({ type, commandId, threadId: event.threadId, reason: "user" });
         else yield* mirrorNative({ type, commandId, threadId: event.threadId });
       }
+    }
+    // Only workflow threads: every mirrored checkpoint forces a pull request refresh.
+    const checkpointCommand = workflowCheckpointCommand(stored);
+    if (checkpointCommand !== null) {
+      const [record] = yield* workflowRecord(event.threadId);
+      if (record?.workflow_role != null) yield* mirrorNative(checkpointCommand);
     }
     if (event.type === "thread.metadata-updated" && event.payload.deletedAt === null) {
       const thread = event.payload;
