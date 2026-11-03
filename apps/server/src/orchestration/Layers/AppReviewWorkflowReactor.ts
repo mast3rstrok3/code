@@ -2613,6 +2613,7 @@ const make = Effect.gen(function* () {
                 selection,
                 projectFile?.e2eTimeoutMinutes,
               ),
+              retryFailure: selection.purpose === "feature",
             }).pipe(
               Effect.flatMap((result) =>
                 restoreE2eWrites(target.cwd, before).pipe(
@@ -2901,7 +2902,6 @@ const make = Effect.gen(function* () {
     };
     const reviewingRun: AppReviewWorkflowRun = {
       ...previewRun,
-      cycleBudget: includesE2e ? Math.min(run.cycleBudget, 5) : run.cycleBudget,
       cyclesUsed: cycleNumber,
       cycles: [...run.cycles, cycle],
       activePhase: includesE2e ? "e2e" : "review",

@@ -6901,10 +6901,6 @@ const make = Effect.gen(function* () {
                 workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
               },
               orchestratorThread,
-              fallbackCycles: Math.min(
-                IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
-                Math.max(1, cycleRun.launchSummary.finalAppReview.maxCycles),
-              ),
             }),
           ),
           modelSelection: yield* modelForStep({

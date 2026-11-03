@@ -599,6 +599,61 @@ it.effect("interrupts the process scope when execution is cancelled", () =>
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
+it.effect.each([
+  { name: "a flaky failure passes on its second run", exits: [1, 0], retryFailure: true, runs: 2 },
+  { name: "a repeated failure fails", exits: [1, 1], retryFailure: true, runs: 2 },
+  { name: "a timeout is not run again", exits: ["timeout", 0], retryFailure: true, runs: 1 },
+  { name: "a command without retries runs once", exits: [1, 0], retryFailure: false, runs: 1 },
+] as const)("reruns a failed command once when asked: $name", (scenario) =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const recordingsDir = yield* fileSystem.makeTempDirectoryScoped();
+    let runs = 0;
+    const result = yield* runAppReviewTest({
+      command: "suite",
+      retryCommand: "suite",
+      cwd: "/assigned",
+      previewUrl: null,
+      executionId: "flaky",
+      recordingsDir,
+      retryFailure: scenario.retryFailure,
+    }).pipe(
+      Effect.provideService(ProcessRunner, {
+        run: (input) =>
+          Effect.gen(function* () {
+            const exit = scenario.exits[runs] ?? 1;
+            runs += 1;
+            yield* fileSystem.writeFileString(
+              path.join(input.env?.APP_REVIEW_RECORDING_DIR ?? "", `run_${runs}.rrweb.jsonl`),
+              '{"type":4}\n',
+            );
+            return {
+              code: ChildProcessSpawner.ExitCode(exit === "timeout" ? 1 : exit),
+              timedOut: exit === "timeout",
+              stdout: `run ${runs}`,
+              stderr: "",
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              stdoutInvalidUtf8: false,
+              stderrInvalidUtf8: false,
+            };
+          }).pipe(Effect.orDie),
+      }),
+    );
+    expect(runs).toBe(scenario.runs);
+    expect(result.status).toBe(scenario.exits[scenario.runs - 1] === 0 ? "passed" : "failed");
+    expect(result.recordings?.map((recording) => recording.label)).toEqual(
+      ["run_1", "run_2"].slice(0, scenario.runs),
+    );
+    if (scenario.runs === 2) {
+      expect(result.outputMarkdown).toMatch(/^The command failed(, then passed| twice)/);
+      expect(result.outputMarkdown).toContain("run 1");
+      expect(result.outputMarkdown).toContain("run 2");
+    }
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
 it.effect("collects what the suite recorded under server-chosen names", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;

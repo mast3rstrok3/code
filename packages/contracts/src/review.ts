@@ -68,7 +68,7 @@ export const AppReviewScope = Schema.Literals(["e2e", "browser", "both"]);
 export type AppReviewScope = typeof AppReviewScope.Type;
 
 /** Default and hard limit for complete review, gap-analysis, and implementation cycles. */
-export const APP_REVIEW_WORKFLOW_DEFAULT_CYCLES = 10;
+export const APP_REVIEW_WORKFLOW_DEFAULT_CYCLES = 5;
 export const APP_REVIEW_WORKFLOW_MAX_CYCLES = 10;
 
 export const AppReviewWorkflowRunId = TrimmedNonEmptyString.pipe(

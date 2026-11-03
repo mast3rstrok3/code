@@ -264,7 +264,7 @@ it.layer(NodeServices.layer)("workflow step cycles decider", (it) => {
       if (updated?.type !== "thread.app-review-workflow-updated") {
         throw new Error("Live App Review was not updated.");
       }
-      expect(updated.payload.run.cycleBudget).toBe(10);
+      expect(updated.payload.run.cycleBudget).toBe(5);
     }),
   );
 });
