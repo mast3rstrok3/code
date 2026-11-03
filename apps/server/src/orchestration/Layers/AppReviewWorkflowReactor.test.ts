@@ -4923,7 +4923,7 @@ for (const scenario of [
               ],
             }
           : {}),
-        cycleBudget: AppReviewWorkflowCycleBudget.make(5),
+        cycleBudget: AppReviewWorkflowCycleBudget.make(7),
         ...(embedded
           ? {
               caller: {
@@ -5599,6 +5599,7 @@ for (const scenario of [
               return;
             }
             expect(storedRun.cyclesUsed).toBe(cycleNumber + 1);
+            expect(storedRun.cycleBudget).toBe(7);
           }
           expect(storedRun.id).toBe(initial.id);
           expect(storedRun.status).toBe("passed");
