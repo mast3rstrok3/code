@@ -7362,7 +7362,7 @@ describe("ImplementationWorkflowReactor", () => {
             candidate.caller.implementationRunId === run.id &&
             candidate.caller.ticketId === undefined,
         );
-        expect(combinedReview?.cycleBudget).toBe(10);
+        expect(combinedReview?.cycleBudget).toBe(5);
         expect(
           snapshot.threads.filter(
             (thread) =>
@@ -10083,7 +10083,7 @@ describe("ImplementationWorkflowReactor", () => {
           // The two steps run the same agent. A budget on the run's App Review
           // must not reach the per-ticket reviews inside the ticket waves.
           const { nestedRun } = yield* launchTicketAppReview(system);
-          expect(nestedRun.cycleBudget).toBe(10);
+          expect(nestedRun.cycleBudget).toBe(5);
         }),
       {
         serverSettings: {

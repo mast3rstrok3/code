@@ -362,7 +362,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Run App Review",
         skillId: "implementation.browser-app-review.codex",
         threadBoundary: "new review thread",
-        note: "automated E2E execution, then gap analysis and repair threads; five test cycles maximum",
+        note: "automated E2E execution, then gap analysis and repair threads; five test cycles by default",
         subSteps: APP_REVIEW_SUB_STEPS,
       },
       {
@@ -459,7 +459,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Final App Review",
         skillId: "implementation.browser-app-review.codex",
         threadBoundary: "new review thread",
-        note: "automatic; tests the merged branch with all E2E suites, gap analysis and repairs; five test cycles maximum",
+        note: "automatic; tests the merged branch with all E2E suites, gap analysis and repairs; five test cycles by default",
         subSteps: APP_REVIEW_SUB_STEPS,
       },
       {

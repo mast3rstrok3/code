@@ -346,7 +346,7 @@ export const restoreAppReviewTestWrites = Effect.fn("restoreAppReviewTestWrites"
 );
 
 /** Cancellation closes ProcessRunner's scope and terminates its child process. */
-export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: {
+interface AppReviewTestInput {
   readonly command: string;
   readonly retryCommand: string;
   readonly cwd: string;
@@ -362,7 +362,34 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
   /** Extra environment the server grants every suite, such as its Stacks controller access. */
   readonly env?: Readonly<Record<string, string>> | undefined;
   readonly timeoutMinutes?: number | undefined;
-}) {
+  /** Run a failed command once more before reporting it, unless it timed out. */
+  readonly retryFailure?: boolean | undefined;
+}
+
+export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (
+  input: AppReviewTestInput,
+) {
+  const first = yield* runAppReviewTestOnce(input);
+  if (input.retryFailure !== true || first.result.status === "passed" || first.timedOut) {
+    return first.result;
+  }
+  const second = yield* runAppReviewTestOnce(input);
+  const recordings = [...(first.result.recordings ?? []), ...(second.result.recordings ?? [])];
+  return {
+    ...second.result,
+    outputMarkdown: [
+      second.result.status === "passed"
+        ? "The command failed, then passed when run again, so a test in it is flaky."
+        : "The command failed twice.",
+      `First run:\n\n${first.result.outputMarkdown}`,
+      `Second run:\n\n${second.result.outputMarkdown}`,
+    ].join("\n\n"),
+    ...(recordings.length === 0 ? {} : { recordings }),
+  } satisfies AppReviewTestResult;
+});
+
+// Untraced: runAppReviewTest's span already covers each attempt.
+const runAppReviewTestOnce = Effect.fnUntraced(function* (input: AppReviewTestInput) {
   const runner = yield* ProcessRunner;
   const platform = yield* HostProcess.Platform;
   const timeoutMinutes = input.timeoutMinutes ?? 45;
@@ -422,6 +449,7 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
       }),
     ),
     Effect.map((output) => ({
+      timedOut: output.timedOut,
       status: output.code === 0 && !output.timedOut ? ("passed" as const) : ("failed" as const),
       outputMarkdown: [
         output.timedOut
@@ -432,7 +460,7 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
       ].join("\n\n"),
     })),
     Effect.catch((error) =>
-      Effect.succeed({ status: "failed" as const, outputMarkdown: error.message }),
+      Effect.succeed({ timedOut: false, status: "failed" as const, outputMarkdown: error.message }),
     ),
   );
   const recordings =
@@ -442,10 +470,11 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
           Effect.tapError((error) => Effect.logWarning("E2E recordings not collected", error)),
           Effect.orElseSucceed(() => []),
         );
-  return {
+  const { timedOut, ...outcome } = result;
+  const testResult = {
     command: input.command,
     executedCommand: input.retryCommand,
-    ...result,
+    ...outcome,
     outputMarkdown: [
       result.outputMarkdown,
       logs?.describe() ?? "No test output logs were retained.",
@@ -456,4 +485,5 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
     ...(recordings.length === 0 ? {} : { recordings }),
     completedAt: DateTime.formatIso(yield* DateTime.now),
   } satisfies AppReviewTestResult;
+  return { result: testResult, timedOut };
 });
