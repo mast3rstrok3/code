@@ -1,9 +1,11 @@
-import { isDomReplayRecording } from "@t3tools/client-runtime/app-review";
+import {
+  groupAppReviewTestResults,
+  isDomReplayRecording,
+} from "@t3tools/client-runtime/app-review";
 import {
   APP_REVIEW_RECORDING_EVIDENCE_ID,
   type AppReviewRecord,
   type AppReviewScreenshotEvidence,
-  type AppReviewTestResult,
   type AppReviewWorkflowCycle,
   type AssetResource,
   type EnvironmentId,
@@ -94,7 +96,9 @@ export function AppReviewCycleDocument(props: {
           </Text>
         ) : null}
       </Section>
-      {props.cycle.e2eExecution ? <TestResultsSection results={testResults} /> : null}
+      {props.cycle.e2eExecution ? (
+        <TestResultsSection execution={props.cycle.e2eExecution} />
+      ) : null}
       {props.e2eRecord !== undefined ? (
         <ReviewSection
           title="Agent review · end-to-end tests"
@@ -117,12 +121,16 @@ export function AppReviewCycleDocument(props: {
  * The commands a cycle ran. Their per-test recordings are rrweb DOM captures,
  * which only the web replayer plays, so mobile lists them without a player.
  */
-function TestResultsSection(props: { readonly results: readonly AppReviewTestResult[] }) {
+function TestResultsSection(props: {
+  readonly execution: NonNullable<AppReviewWorkflowCycle["e2eExecution"]>;
+}) {
   const [open, setOpen] = useState<string | null>(null);
+  const groups = groupAppReviewTestResults(props.execution);
+  const featureCount = groups.feature.length;
   return (
     <Section title="End-to-end tests">
-      {props.results.length === 0 ? <Muted>No test command has finished.</Muted> : null}
-      {props.results.map((result, index) => {
+      {props.execution.results.length === 0 ? <Muted>No test command has finished.</Muted> : null}
+      {[...groups.feature, ...groups.other].map((result, index) => {
         const recordings = result.recordings ?? [];
         const expanded = open === result.command;
         return (
@@ -132,6 +140,7 @@ function TestResultsSection(props: { readonly results: readonly AppReviewTestRes
           >
             <View className="flex-row items-start gap-3">
               <Text selectable className="min-w-0 flex-1 font-mono text-xs text-foreground">
+                {index < featureCount ? "Feature test · " : ""}
                 {result.executedCommand}
               </Text>
               <Text

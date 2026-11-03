@@ -10,6 +10,7 @@ import { NativeVerificationPanel } from "./NativeVerificationPanel";
 import type { EnvironmentWorkflowThreadShell } from "@t3tools/client-runtime/state/models";
 import type {
   AppReviewWorkflowPhase,
+  AppReviewWorkflowCycle,
   AppReviewWorkflowRun,
   EnvironmentId,
   GrillAnswerer,
@@ -539,6 +540,34 @@ const APP_REVIEW_PHASE_PIN = {
   },
 } as const satisfies Record<AppReviewWorkflowPhase, WorkflowModelPinKey>;
 
+const E2E_PURPOSE_LABELS = { feature: "Feature test", affected: "Affected tests" } as const;
+
+/** The server runs these commands itself, so the step has commands to show instead of a thread. */
+function AutomatedE2eCommands(props: {
+  execution: NonNullable<AppReviewWorkflowCycle["e2eExecution"]>;
+}) {
+  return (
+    <div className="space-y-1 py-1 pl-5 text-3xs" aria-label="Automated E2E results">
+      {props.execution.commands.map((selection) => {
+        const result = props.execution.results.find((entry) => entry.command === selection.command);
+        return (
+          <details key={selection.command}>
+            <summary className="cursor-pointer break-all">
+              {selection.purpose === undefined ? "" : `${E2E_PURPOSE_LABELS[selection.purpose]} · `}
+              {result?.status ?? "pending"} · {selection.retryCommand}
+            </summary>
+            {result ? (
+              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all">
+                {result.outputMarkdown}
+              </pre>
+            ) : null}
+          </details>
+        );
+      })}
+    </div>
+  );
+}
+
 export function TicketAppReviewCycles(props: {
   readonly groupId: string;
   readonly run: AppReviewWorkflowRun;
@@ -701,29 +730,10 @@ export function TicketAppReviewCycles(props: {
                     className="py-1.5"
                   />
                   {cycle.e2eExecution ? (
-                    <div className="space-y-1 py-2 text-xs" aria-label="Automated E2E results">
-                      <p>
-                        Automated tests: {cycle.e2eExecution.results.length}/
-                        {cycle.e2eExecution.commands.length} finished. No agent runs during testing.
-                      </p>
-                      {cycle.e2eExecution.commands.map((selection) => {
-                        const result = cycle.e2eExecution!.results.find(
-                          (entry) => entry.command === selection.command,
-                        );
-                        return (
-                          <details key={selection.command}>
-                            <summary className="cursor-pointer break-all">
-                              {result?.status ?? "pending"} · {selection.retryCommand}
-                            </summary>
-                            {result ? (
-                              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all">
-                                {result.outputMarkdown}
-                              </pre>
-                            ) : null}
-                          </details>
-                        );
-                      })}
-                    </div>
+                    <p className="py-2 text-xs">
+                      Automated tests: {cycle.e2eExecution.results.length}/
+                      {cycle.e2eExecution.commands.length} finished. No agent runs during testing.
+                    </p>
                   ) : null}
                   <ol className="mt-2 space-y-1.5 border-l border-border/70 pl-3">
                     {steps.map((step, index) => {
@@ -827,7 +837,13 @@ export function TicketAppReviewCycles(props: {
                               />
                             )}
                           </div>
-                          {phaseOpen ? step.thread : null}
+                          {phaseOpen ? (
+                            step.phase === "e2e" && cycle.e2eExecution ? (
+                              <AutomatedE2eCommands execution={cycle.e2eExecution} />
+                            ) : (
+                              step.thread
+                            )
+                          ) : null}
                         </li>
                       );
                     })}

@@ -1,6 +1,7 @@
 import {
   APP_REVIEW_WORKFLOW_MAX_CYCLES,
   type AppReviewRecord,
+  type AppReviewTestResult,
   type AppReviewWorkflowCycle,
   type AppReviewWorkflowPhase,
   type AppReviewWorkflowRun,
@@ -220,6 +221,35 @@ export function appReviewCycleReplayCount(
     (count, result) => count + (result.recordings?.length ?? 0),
     0,
   );
+}
+
+/**
+ * A cycle's finished commands with the tickets' feature tests first. `otherLabel`
+ * names the rest: the project's affected-test selection, or its complete suites.
+ */
+export function groupAppReviewTestResults(
+  execution: NonNullable<AppReviewWorkflowCycle["e2eExecution"]>,
+): {
+  readonly feature: readonly AppReviewTestResult[];
+  readonly other: readonly AppReviewTestResult[];
+  readonly otherLabel: string;
+} {
+  const purposeByCommand = new Map(
+    execution.commands.map((entry) => [entry.command, entry.purpose] as const),
+  );
+  const feature = execution.results.filter(
+    (result) => purposeByCommand.get(result.command) === "feature",
+  );
+  const other = execution.results.filter(
+    (result) => purposeByCommand.get(result.command) !== "feature",
+  );
+  return {
+    feature,
+    other,
+    otherLabel: other.every((result) => purposeByCommand.get(result.command) === "affected")
+      ? "Affected tests"
+      : "Other end-to-end tests",
+  };
 }
 
 /** How many recorded E2E tests a run can replay across its cycles. */

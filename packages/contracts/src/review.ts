@@ -40,6 +40,12 @@ export const APP_REVIEW_STACK_ID_ENV = "APP_REVIEW_STACK_ID";
 export const APP_REVIEW_ARTIFACT_DIR_ENV = "APP_REVIEW_ARTIFACT_DIR";
 
 /**
+ * The commit an implementation run branched from, set for E2E commands of its
+ * App Reviews so `e2eAffectedCommands` can select the tests its changes affect.
+ */
+export const APP_REVIEW_BASE_REF_ENV = "APP_REVIEW_BASE_REF";
+
+/**
  * Recording contract for `e2eCommands`. The suite launches its own browsers, so
  * the server cannot attach a recorder to them. A suite that wants its tests
  * replayable adds the script at `APP_REVIEW_RECORDER_SCRIPT` to each browser
@@ -132,10 +138,19 @@ export const AppReviewWorkflowFixValidation = Schema.Struct({
 });
 export type AppReviewWorkflowFixValidation = typeof AppReviewWorkflowFixValidation.Type;
 
+/**
+ * Why a final App Review runs a command: a ticket's own feature tests, or the
+ * project's selection of tests the change affects. Absent means a complete suite.
+ */
+export const AppReviewTestPurpose = Schema.Literals(["feature", "affected"]);
+export type AppReviewTestPurpose = typeof AppReviewTestPurpose.Type;
+
 export const AppReviewRetryCommand = Schema.Struct({
   command: TrimmedNonEmptyString,
   retryCommand: TrimmedNonEmptyString,
+  purpose: Schema.optionalKey(AppReviewTestPurpose),
 });
+export type AppReviewRetryCommand = typeof AppReviewRetryCommand.Type;
 /** One test's rrweb event log, collected from the command's recording directory. */
 export const AppReviewTestRecording = Schema.Struct({
   id: TrimmedNonEmptyString,
