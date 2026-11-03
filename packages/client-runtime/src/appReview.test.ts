@@ -24,6 +24,7 @@ import {
   appReviewSupportingContext,
   appReviewTargetLabel,
   appReviewWorkflowLaunchCommand,
+  groupAppReviewTestResults,
   isValidAppReviewWorkflowLaunch,
   selectActiveAppReviewRecord,
   selectAppReviewRunsForPanel,
@@ -421,6 +422,37 @@ describe("App Review workflow panel logic", () => {
     expect(appReviewCycleReplayCount(run.cycles[0]!)).toBe(0);
     expect(appReviewRunReplayCount({ cycles: [firstCycle, secondCycle] })).toBe(3);
     expect(appReviewRunReplayCount(run)).toBe(0);
+  });
+});
+
+describe("groupAppReviewTestResults", () => {
+  const result = (command: string) => ({
+    command,
+    executedCommand: command,
+    status: "failed" as const,
+    outputMarkdown: "",
+    completedAt: "2026-11-03T00:00:00.000Z",
+  });
+
+  it("lists feature tests first and names the rest after their purpose", () => {
+    const groups = groupAppReviewTestResults({
+      id: "execution",
+      commands: [
+        { command: "affected", retryCommand: "affected", purpose: "affected" },
+        { command: "journey", retryCommand: "journey", purpose: "feature" },
+      ],
+      results: [result("affected"), result("journey")],
+    });
+    expect(groups.feature.map((entry) => entry.command)).toEqual(["journey"]);
+    expect(groups.other.map((entry) => entry.command)).toEqual(["affected"]);
+    expect(groups.otherLabel).toBe("Affected tests");
+    expect(
+      groupAppReviewTestResults({
+        id: "execution",
+        commands: [{ command: "fleet", retryCommand: "fleet" }],
+        results: [result("fleet")],
+      }).otherLabel,
+    ).toBe("Other end-to-end tests");
   });
 });
 

@@ -118,6 +118,22 @@ export const T3ProjectFile = Schema.Struct({
       })
       .check(Schema.isMinLength(1)),
   ),
+  e2eAffectedCommands: Schema.optionalKey(
+    Schema.Array(
+      trimmedNonEmpty(
+        {
+          description:
+            "End-to-end command that selects and runs the tests a branch's changes affect.",
+        },
+        T3_PROJECT_FILE_VALIDATION_COMMAND_MAX_LENGTH,
+      ),
+    )
+      .annotate({
+        description:
+          "Commands the final App Review of an Engineering workflow runs instead of e2eCommands, after the tickets' own feature tests. Each runs with APP_REVIEW_BASE_REF, the commit the workflow branched from, and should run only the tests the changes since then can affect, exiting 0 when none are.",
+      })
+      .check(Schema.isMinLength(1)),
+  ),
   e2eConcurrency: Schema.optionalKey(
     Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 2 })).annotate({
       description:

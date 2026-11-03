@@ -2,7 +2,14 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import { describe } from "vite-plus/test";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, expect } from "@effect/vitest";
-import { AppReviewWorkflowRunId, type AppReviewWorkflowCycle } from "@t3tools/contracts";
+import {
+  AppReviewWorkflowRunId,
+  OrchestrationPlanningSpecId,
+  OrchestrationPlanningTicketId,
+  ProjectId,
+  type AppReviewWorkflowCycle,
+  type OrchestrationPlanningTicket,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -20,6 +27,8 @@ import {
   appReviewRetryCommandsFailure,
   appReviewTestCommands,
   completedAppReviewTests,
+  finalAppReviewE2eSelections,
+  implementationFeatureE2eCommands,
   restoreAppReviewTestWrites,
   runAppReviewTest,
 } from "./appReviewTestRunner.ts";
@@ -278,6 +287,89 @@ it("runs the ticket's exact selection once on the first cycle", () => {
   ).toEqual([{ command: "calendar --grep booking", retryCommand: "calendar --grep booking" }]);
 });
 
+it("runs a final review's feature tests before its affected tests and keeps them labeled", () => {
+  const first = appReviewTestCommands(
+    { cycles: [] },
+    finalAppReviewE2eSelections({
+      featureCommands: ["dictation", "dictation", "journey"],
+      projectFile: { e2eCommands: ["fleet"], e2eAffectedCommands: ["affected"] },
+    }),
+  );
+  expect(first).toEqual([
+    { command: "dictation", retryCommand: "dictation", purpose: "feature" },
+    { command: "journey", retryCommand: "journey", purpose: "feature" },
+    { command: "affected", retryCommand: "affected", purpose: "affected" },
+  ]);
+  const failed = (command: string) => ({
+    command,
+    executedCommand: command,
+    status: "failed" as const,
+    outputMarkdown: "",
+    completedAt,
+  });
+  expect(
+    appReviewTestCommands(
+      {
+        cycles: [
+          {
+            e2eExecution: {
+              id: "first",
+              commands: first,
+              results: [
+                { ...failed("dictation"), status: "passed" },
+                failed("journey"),
+                failed("affected"),
+              ],
+            },
+            fixResult: null,
+          },
+        ],
+      },
+      [],
+    ),
+  ).toEqual(first.slice(1));
+  expect(
+    finalAppReviewE2eSelections({
+      featureCommands: ["dictation"],
+      projectFile: { e2eCommands: ["fleet"] },
+    }),
+  ).toEqual([{ command: "dictation", purpose: "feature" }, { command: "fleet" }]);
+});
+
+it("takes feature tests from the run's eligible tickets in this repository, in run order", () => {
+  const ticket = (
+    id: string,
+    overrides: Partial<OrchestrationPlanningTicket> = {},
+  ): OrchestrationPlanningTicket => ({
+    id: OrchestrationPlanningTicketId.make(id),
+    specId: OrchestrationPlanningSpecId.make("spec"),
+    ordinal: 0,
+    title: id,
+    bodyMarkdown: id,
+    plannedFileChanges: [],
+    dependencies: [],
+    appReviewEligible: true,
+    appReviewCommands: [`${id}-e2e`],
+    status: "open",
+    createdAt: completedAt,
+    updatedAt: completedAt,
+    ...overrides,
+  });
+  expect(
+    implementationFeatureE2eCommands({
+      planningTicketIds: ["second", "first", "desktop", "other-repo", "missing"],
+      tickets: [
+        ticket("first"),
+        ticket("second"),
+        ticket("desktop", { appReviewEligible: false }),
+        ticket("other-repo", { projectId: ProjectId.make("other") }),
+        ticket("unrelated"),
+      ],
+      projectId: "project",
+    }),
+  ).toEqual(["second-e2e", "first-e2e"]);
+});
+
 it("keeps passed suites and retries only failed or unfinished suites", () => {
   expect(
     appReviewTestCommands(
@@ -428,6 +520,7 @@ describe.each(
           previewUrl: "https://assigned.example",
           executionId: "cycle-2",
           stackId: "stack-assigned",
+          baseRef: "base-commit",
           testPlatforms: ["web", "android"],
           env: { APP_REVIEW_TEST_PLATFORMS: "ios", APP_REVIEW_TEST_TIMEOUT_MS: "1" },
           timeoutMinutes,
@@ -465,6 +558,7 @@ describe.each(
             APP_REVIEW_PREVIEW_URL: "https://assigned.example",
             APP_REVIEW_EXECUTION_ID: "cycle-2",
             APP_REVIEW_STACK_ID: "stack-assigned",
+            APP_REVIEW_BASE_REF: "base-commit",
             APP_REVIEW_TEST_PLATFORMS: "web,android",
             APP_REVIEW_TEST_TIMEOUT_MS: String((timeoutMinutes ?? 45) * 60_000),
           },
