@@ -4760,6 +4760,28 @@ it("preserves programmatic check identities across completion order and narrowed
   expect(programmaticReviewRecord(current, second).document.checks).toMatchObject([
     { id: "e2e-2", label: "lists", notes: "Executed: lists --grep search\nok" },
   ]);
+  const affectedFailed = {
+    ...second.e2eExecution,
+    commands: [
+      ...second.e2eExecution.commands,
+      { command: "affected", retryCommand: "affected", purpose: "affected" as const },
+    ],
+    results: [
+      ...second.e2eExecution.results,
+      {
+        ...results[0]!,
+        command: "affected",
+        executedCommand: "affected",
+        status: "failed" as const,
+      },
+    ],
+  };
+  expect(
+    programmaticReviewRecord(current, { ...second, e2eExecution: affectedFailed }),
+  ).toMatchObject({
+    status: "passed",
+    document: { checks: [{ status: "passed" }, { label: "affected", status: "failed" }] },
+  });
   for (const execution of [
     { ...second.e2eExecution, results: [] },
     { ...second.e2eExecution, commands: [], results: [] },
