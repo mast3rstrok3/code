@@ -930,17 +930,13 @@ const make = Effect.gen(function* () {
                       ...(input.workflowImplementationSettings === undefined
                         ? {}
                         : { workflowImplementationSettings: input.workflowImplementationSettings }),
-                      // A Feature root tags its App Stacks with this id for teardown.
-                      ...(input.workflowPreset === "fast-plan"
-                        ? {
-                            workflowContext: {
-                              workflowId: WorkflowId.make(`workflow-${candidateThreadId}`),
-                              parentWorkflowId: null,
-                              rootThreadId: candidateThreadId,
-                              ticketScope: [],
-                            },
-                          }
-                        : {}),
+                      // Every step thread and sub-run joins this id, which keeps the run one card.
+                      workflowContext: {
+                        workflowId: WorkflowId.make(`workflow-${candidateThreadId}`),
+                        parentWorkflowId: null,
+                        rootThreadId: candidateThreadId,
+                        ticketScope: [],
+                      },
                     }),
                 ...(input.linkOrigin === undefined ? {} : { linkOrigin: input.linkOrigin }),
                 ...(input.delegatedFrom === undefined
