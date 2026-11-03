@@ -1540,6 +1540,30 @@ function buildGroupRows<TThread extends WorkflowModelThread>(threads: readonly T
   return rows;
 }
 
+function isRootPlanningThread(thread: WorkflowModelThread): boolean {
+  return (
+    thread.workflowRole?.startsWith("planning-") === true &&
+    thread.workflowContext?.parentWorkflowId == null
+  );
+}
+
+/**
+ * A root launched without a workflow id still owns its planning threads and the
+ * runs it started; they take the planning run's id so they share one card.
+ */
+function resolveUntaggedRootWorkflowId(
+  owner: WorkflowModelThread,
+  descendants: readonly WorkflowModelThread[],
+): string | null {
+  if (owner.workflowContext != null || owner.workflowPreset == null) return null;
+  const planningThreads = descendants.filter(isRootPlanningThread).sort(sortOldestFirst);
+  if (planningThreads.length === 0) return null;
+  return (
+    planningThreads.find((thread) => thread.workflowContext != null)?.workflowContext?.workflowId ??
+    `workflow-${owner.id}`
+  );
+}
+
 export function buildWorkflowViewModel<TThread extends WorkflowModelThread>(
   threads: readonly TThread[],
 ): WorkflowViewModel<TThread> {
@@ -1573,8 +1597,12 @@ export function buildWorkflowViewModel<TThread extends WorkflowModelThread>(
         threads: [],
       });
     }
+    const untaggedRootWorkflowId = resolveUntaggedRootWorkflowId(owner, descendants);
     for (const thread of descendants) {
-      const contextId = thread.workflowContext?.workflowId;
+      const contextId =
+        untaggedRootWorkflowId !== null && isRootPlanningThread(thread)
+          ? untaggedRootWorkflowId
+          : thread.workflowContext?.workflowId;
       const batchId = thread.workflowSubagentBatchProvenance?.batchId;
       const kind = contextId ? "workflow" : batchId ? "batch" : "legacy";
       const sourceId = contextId ?? batchId ?? resolveLegacyBranchKey(thread, owner, byKey);
@@ -1585,6 +1613,9 @@ export function buildWorkflowViewModel<TThread extends WorkflowModelThread>(
     }
 
     const groupIdByThreadKey = new Map<string, string>();
+    if (untaggedRootWorkflowId !== null) {
+      groupIdByThreadKey.set(ownerKey, `workflow:${untaggedRootWorkflowId}`);
+    }
     const groupIdByWorkflowId = new Map<string, string>();
     for (const [groupId, group] of grouped) {
       if (group.kind === "workflow") groupIdByWorkflowId.set(group.sourceId, groupId);

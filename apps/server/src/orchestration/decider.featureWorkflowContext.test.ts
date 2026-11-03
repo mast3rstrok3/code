@@ -68,28 +68,28 @@ const setPreset = (workflowPreset: WorkflowPreset | null) =>
   }).pipe(Effect.map((events) => (Array.isArray(events) ? events[0] : events)));
 
 it.layer(NodeServices.layer)("thread.composer-mode.set decider", (it) => {
-  it.effect("gives a new Feature root the workflow id its App Stacks are tagged with", () =>
-    Effect.gen(function* () {
-      const event = yield* setPreset("fast-plan");
-      expect(event?.type).toBe("thread.composer-mode-set");
-      if (event?.type !== "thread.composer-mode-set") return;
-      expect(event.payload.workflowContext).toEqual({
-        workflowId: "workflow-thread-1",
-        parentWorkflowId: null,
-        rootThreadId: threadId,
-        ticketScope: [],
-      });
-    }),
+  it.effect.each(["fast-plan", "planning"] as const)(
+    "gives a new %s root the workflow id its step threads join",
+    (preset) =>
+      Effect.gen(function* () {
+        const event = yield* setPreset(preset);
+        expect(event?.type).toBe("thread.composer-mode-set");
+        if (event?.type !== "thread.composer-mode-set") return;
+        expect(event.payload.workflowContext).toEqual({
+          workflowId: "workflow-thread-1",
+          parentWorkflowId: null,
+          rootThreadId: threadId,
+          ticketScope: [],
+        });
+      }),
   );
 
-  it.effect("leaves other workflows to stamp their own identity", () =>
+  it.effect("gives a thread leaving workflows no identity", () =>
     Effect.gen(function* () {
-      for (const preset of ["planning", null] as const) {
-        const event = yield* setPreset(preset);
-        expect(event?.type === "thread.composer-mode-set" && event.payload.workflowContext).toBe(
-          undefined,
-        );
-      }
+      const event = yield* setPreset(null);
+      expect(event?.type === "thread.composer-mode-set" && event.payload.workflowContext).toBe(
+        undefined,
+      );
     }),
   );
 });
