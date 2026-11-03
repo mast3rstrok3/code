@@ -160,6 +160,17 @@ export function completedAppReviewTests(
   });
 }
 
+/** Affected tests are nice-to-have, so the review never waits longer than this for them. */
+export const APP_REVIEW_AFFECTED_TEST_LIMIT_MINUTES = 30;
+
+export function appReviewTestTimeoutMinutes(
+  selection: Pick<AppReviewRetryCommand, "purpose">,
+  projectTimeoutMinutes: number | undefined,
+): number | undefined {
+  if (selection.purpose !== "affected") return projectTimeoutMinutes;
+  return Math.min(projectTimeoutMinutes ?? Infinity, APP_REVIEW_AFFECTED_TEST_LIMIT_MINUTES);
+}
+
 /** Affected tests are reported, but never fail a review or start a repair. */
 export function blockingAppReviewTestFailures(
   execution: NonNullable<AppReviewWorkflowCycle["e2eExecution"]>,
