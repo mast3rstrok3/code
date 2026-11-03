@@ -26,6 +26,7 @@ import {
 import {
   appReviewRetryCommandsFailure,
   appReviewTestCommands,
+  appReviewTestTimeoutMinutes,
   blockingAppReviewTestFailures,
   completedAppReviewTests,
   finalAppReviewE2eSelections,
@@ -320,6 +321,11 @@ it("runs a final review's feature tests before its affected tests, which never b
   expect(blockingAppReviewTestFailures(execution).map(({ command }) => command)).toEqual([
     "journey",
   ]);
+  expect(first.map((selection) => appReviewTestTimeoutMinutes(selection, 180))).toEqual([
+    180, 180, 30,
+  ]);
+  expect(appReviewTestTimeoutMinutes(first[2]!, 20)).toBe(20);
+  expect(appReviewTestTimeoutMinutes(first[2]!, undefined)).toBe(30);
   expect(
     appReviewTestCommands({ cycles: [{ e2eExecution: execution, fixResult: null }] }, []),
   ).toEqual([first[1]]);

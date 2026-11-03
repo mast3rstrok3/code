@@ -2059,7 +2059,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadOverrides: boundedMaxCycles === null ? [] : [{ ...key, maxCycles: boundedMaxCycles }],
       });
       for (const run of readModel.appReviewWorkflowRuns ?? []) {
-        if (run.status !== "running" || run.cycleBudget === budget) continue;
+        if (!["running", "exhausted"].includes(run.status) || run.cycleBudget === budget) continue;
         // A review-only run is one cycle by definition, so a budget set for the
         // step it shares does not reach it.
         if (run.reviewOnly === true) continue;

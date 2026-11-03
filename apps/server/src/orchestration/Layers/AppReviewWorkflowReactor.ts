@@ -53,6 +53,7 @@ import {
   appReviewTestCommands,
   blockingAppReviewTestFailures,
   appReviewTestRecordingsDir,
+  appReviewTestTimeoutMinutes,
   appReviewBuildArtifactsDir,
   completedAppReviewTests,
   finalAppReviewE2eSelections,
@@ -2608,7 +2609,10 @@ const make = Effect.gen(function* () {
                 serverConfig === undefined
                   ? undefined
                   : appReviewTestRecordingsDir(path, serverConfig.stateDir, run.id),
-              timeoutMinutes: projectFile?.e2eTimeoutMinutes,
+              timeoutMinutes: appReviewTestTimeoutMinutes(
+                selection,
+                projectFile?.e2eTimeoutMinutes,
+              ),
             }).pipe(
               Effect.flatMap((result) =>
                 restoreE2eWrites(target.cwd, before).pipe(

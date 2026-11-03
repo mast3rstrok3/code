@@ -172,22 +172,27 @@ it.layer(NodeServices.layer)("workflow step cycles decider", (it) => {
     }),
   );
 
-  it.effect("moves the budget of the App Review the run is already spending", () =>
-    Effect.gen(function* () {
-      const decided = yield* decideOrchestrationCommand({
-        command: setCyclesCommand({ maxCycles: 20 }),
-        readModel: readModel({ appReviewWorkflowRuns: [appReviewRun({ cycleBudget: 5 })] }),
-      });
-      const events = Array.isArray(decided) ? decided : [decided];
-      const updated = events.find((event) => event.type === "thread.app-review-workflow-updated");
-      if (updated?.type !== "thread.app-review-workflow-updated") {
-        throw new Error("Live App Review was not updated.");
-      }
-      expect(updated.payload.run.cycleBudget).toBe(10);
-      // Only the budget moves: an exhausted run stays exhausted until it is
-      // asked to review again.
-      expect(updated.payload.run.cyclesUsed).toBe(2);
-    }),
+  it.effect.each(["running", "exhausted"] as const)(
+    "moves the budget of a %s App Review the run is spending",
+    (status) =>
+      Effect.gen(function* () {
+        const decided = yield* decideOrchestrationCommand({
+          command: setCyclesCommand({ maxCycles: 20 }),
+          readModel: readModel({
+            appReviewWorkflowRuns: [appReviewRun({ cycleBudget: 5, status })],
+          }),
+        });
+        const events = Array.isArray(decided) ? decided : [decided];
+        const updated = events.find((event) => event.type === "thread.app-review-workflow-updated");
+        if (updated?.type !== "thread.app-review-workflow-updated") {
+          throw new Error("Live App Review was not updated.");
+        }
+        expect(updated.payload.run.cycleBudget).toBe(10);
+        // Only the budget moves: an exhausted run stays exhausted until it is
+        // asked to review again.
+        expect(updated.payload.run.cyclesUsed).toBe(2);
+        expect(updated.payload.run.status).toBe(status);
+      }),
   );
 
   it.effect("leaves a ticket App Review alone when the run's own budget changes", () =>
