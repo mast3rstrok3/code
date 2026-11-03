@@ -26,6 +26,7 @@ import {
 import {
   appReviewRetryCommandsFailure,
   appReviewTestCommands,
+  blockingAppReviewTestFailures,
   completedAppReviewTests,
   finalAppReviewE2eSelections,
   implementationFeatureE2eCommands,
@@ -287,7 +288,7 @@ it("runs the ticket's exact selection once on the first cycle", () => {
   ).toEqual([{ command: "calendar --grep booking", retryCommand: "calendar --grep booking" }]);
 });
 
-it("runs a final review's feature tests before its affected tests and keeps them labeled", () => {
+it("runs a final review's feature tests before its affected tests, which never block it", () => {
   const first = appReviewTestCommands(
     { cycles: [] },
     finalAppReviewE2eSelections({
@@ -307,27 +308,21 @@ it("runs a final review's feature tests before its affected tests and keeps them
     outputMarkdown: "",
     completedAt,
   });
+  const execution = {
+    id: "first",
+    commands: first,
+    results: [
+      { ...failed("dictation"), status: "passed" as const },
+      failed("journey"),
+      failed("affected"),
+    ],
+  };
+  expect(blockingAppReviewTestFailures(execution).map(({ command }) => command)).toEqual([
+    "journey",
+  ]);
   expect(
-    appReviewTestCommands(
-      {
-        cycles: [
-          {
-            e2eExecution: {
-              id: "first",
-              commands: first,
-              results: [
-                { ...failed("dictation"), status: "passed" },
-                failed("journey"),
-                failed("affected"),
-              ],
-            },
-            fixResult: null,
-          },
-        ],
-      },
-      [],
-    ),
-  ).toEqual(first.slice(1));
+    appReviewTestCommands({ cycles: [{ e2eExecution: execution, fixResult: null }] }, []),
+  ).toEqual([first[1]]);
   expect(
     finalAppReviewE2eSelections({
       featureCommands: ["dictation"],

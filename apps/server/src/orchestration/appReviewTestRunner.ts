@@ -160,6 +160,20 @@ export function completedAppReviewTests(
   });
 }
 
+/** Affected tests are reported, but never fail a review or start a repair. */
+export function blockingAppReviewTestFailures(
+  execution: NonNullable<AppReviewWorkflowCycle["e2eExecution"]>,
+) {
+  const reportedOnly = new Set(
+    execution.commands.flatMap((selection) =>
+      selection.purpose === "affected" ? [selection.command] : [],
+    ),
+  );
+  return completedAppReviewTests(execution).filter(
+    (result) => result.status === "failed" && !reportedOnly.has(result.command),
+  );
+}
+
 /** A repair may narrow failed suites, but cannot reopen or replace other suites. */
 export function appReviewRetryCommandsFailure(
   cycle: Pick<AppReviewWorkflowCycle, "e2eExecution">,
@@ -211,6 +225,7 @@ export function appReviewTestCommands(
   }
   const completed = completedAppReviewTests(previous.e2eExecution);
   return previous.e2eExecution.commands.flatMap((selection) => {
+    if (selection.purpose === "affected") return [];
     const result = completed.find((entry) => entry.command === selection.command);
     if (result?.status === "passed") return [];
     const retry = previous.fixResult?.retryCommands?.find(

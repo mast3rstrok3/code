@@ -130,7 +130,7 @@ export const T3ProjectFile = Schema.Struct({
     )
       .annotate({
         description:
-          "Commands the final App Review of an Engineering workflow runs instead of e2eCommands, after the tickets' own feature tests. Each runs with APP_REVIEW_BASE_REF, the commit the workflow branched from, and should run only the tests the changes since then can affect, exiting 0 when none are.",
+          "Commands the final App Review of an Engineering workflow runs instead of e2eCommands, after the tickets' own feature tests. Each runs with APP_REVIEW_BASE_REF, the commit the workflow branched from, and should run only the tests the changes since then can affect, exiting 0 when none are. Their failures are reported but do not fail the review or start a repair.",
       })
       .check(Schema.isMinLength(1)),
   ),

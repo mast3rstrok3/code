@@ -51,6 +51,7 @@ import * as Scope from "effect/Scope";
 import {
   appReviewRetryCommandsFailure,
   appReviewTestCommands,
+  blockingAppReviewTestFailures,
   appReviewTestRecordingsDir,
   appReviewBuildArtifactsDir,
   completedAppReviewTests,
@@ -3334,7 +3335,7 @@ const make = Effect.gen(function* () {
       if (target === null) return;
       const stable = yield* assertStableRevision(run, target.cwd, occurredAt);
       if (stable === null) return;
-      const failed = results.filter((result) => result.status === "failed");
+      const failed = blockingAppReviewTestFailures(execution);
       const verdict = failed.length ? ("failed" as const) : ("passed" as const);
       const completed = {
         ...stable,
@@ -5243,9 +5244,10 @@ export const programmaticReviewRecord = (
     ),
   ];
   const failed =
+    cycle.e2eExecution === undefined ||
     results.length === 0 ||
-    results.length !== cycle.e2eExecution?.commands.length ||
-    results.some((result) => result.status === "failed");
+    results.length !== cycle.e2eExecution.commands.length ||
+    blockingAppReviewTestFailures(cycle.e2eExecution).length > 0;
   const verdict = failed ? ("failed" as const) : ("passed" as const);
   return {
     id: cycle.e2eReviewId ?? cycle.reviewId,
