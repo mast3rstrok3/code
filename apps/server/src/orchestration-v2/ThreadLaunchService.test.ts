@@ -2292,7 +2292,7 @@ it.effect.each([0, 1])("releases an async setup before its completion with exit 
   }),
 );
 
-it.effect("launches a Feature root with its workflow identity", () =>
+it.effect("launches Feature and Engineering roots with their workflow identity", () =>
   Effect.gen(function* () {
     const harness = makeHarness();
     yield* Effect.gen(function* () {
@@ -2335,6 +2335,10 @@ it.effect("launches a Feature root with its workflow identity", () =>
       assert.deepEqual(
         { ...engineering.projection.thread.workflowImplementationSettings },
         settings as Record<string, unknown>,
+      );
+      assert.equal(
+        engineering.projection.thread.workflowContext?.workflowId,
+        "workflow-thread:launch:engineering",
       );
     }).pipe(Effect.provide(harness.layer));
   }),

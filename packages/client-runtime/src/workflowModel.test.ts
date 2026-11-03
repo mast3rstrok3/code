@@ -703,6 +703,51 @@ describe("buildWorkflowViewModel", () => {
     ]);
   });
 
+  it("keeps an Engineering run launched without a workflow id on one card", () => {
+    const root = thread("root", { workflowPreset: "planning" });
+    const judge = thread("judge", { parentThreadId: "root", workflowRole: "planning-grill-judge" });
+    const reviewer = thread("reviewer", {
+      parentThreadId: "root",
+      workflowRole: "planning-reviewer",
+      workflowContext: {
+        workflowId: "workflow-spec",
+        parentWorkflowId: null,
+        rootThreadId: "root",
+      },
+    });
+    const orchestrator = thread("orchestrator", {
+      parentThreadId: "root",
+      workflowRole: "implementation-orchestrator",
+      workflowContext: { workflowId: "run", parentWorkflowId: null, rootThreadId: "root" },
+    });
+    const appReview = thread("app-review", {
+      parentThreadId: "orchestrator",
+      workflowPreset: "app-review",
+      workflowRole: "app-review-orchestrator",
+      workflowContext: { workflowId: "review", parentWorkflowId: "run", rootThreadId: "root" },
+    });
+
+    const groups = buildWorkflowViewModel([
+      root,
+      judge,
+      reviewer,
+      orchestrator,
+      appReview,
+    ]).rootsByThreadKey.get("env:root")?.groups;
+
+    expect(
+      groups?.map((group) => [
+        group.id,
+        group.parentGroupId,
+        group.rows.map((row) => row.thread.id),
+      ]),
+    ).toEqual([
+      ["workflow:workflow-spec", null, ["judge", "reviewer"]],
+      ["workflow:run", "workflow:workflow-spec", ["orchestrator"]],
+      ["workflow:review", "workflow:run", ["app-review"]],
+    ]);
+  });
+
   it("uses explicit parent workflow identity when thread ancestry is incomplete", () => {
     const root = thread("root");
     const implementation = thread("implementation", {

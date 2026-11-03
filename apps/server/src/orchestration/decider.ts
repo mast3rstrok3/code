@@ -2914,10 +2914,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     case "thread.composer-mode.set": {
       const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
       const occurredAt = yield* nowIso;
-      // A Feature root owns the App Stacks its turns start; the workflow id is what tags
-      // them for teardown once its pull request is linked.
+      // Every step thread and sub-run joins the root's workflow id, and a Feature root's
+      // App Stacks are tagged with it for teardown once its pull request is linked.
       const workflowContext =
-        command.workflowPreset === "fast-plan" &&
+        command.workflowPreset != null &&
         thread.workflowRole === null &&
         thread.workflowContext == null
           ? {
