@@ -54,8 +54,11 @@ import {
   appReviewTestRecordingsDir,
   appReviewBuildArtifactsDir,
   completedAppReviewTests,
+  finalAppReviewE2eSelections,
+  implementationFeatureE2eCommands,
   restoreAppReviewTestWrites,
   runAppReviewTest,
+  type AppReviewTestSelection,
 } from "../appReviewTestRunner.ts";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -1890,11 +1893,11 @@ const make = Effect.gen(function* () {
   });
 
   /** Load E2E configuration without hiding invalid files behind missing-command errors. */
-  const e2eCommandsForCwd = Effect.fn("AppReviewWorkflowReactor.e2eCommandsForCwd")(function* (
+  const e2eSelectionsForCwd = Effect.fn("AppReviewWorkflowReactor.e2eSelectionsForCwd")(function* (
     cwd: string | null,
     run: AppReviewWorkflowRun,
   ) {
-    if (cwd === null) return [] as ReadonlyArray<string>;
+    if (cwd === null) return [] as ReadonlyArray<AppReviewTestSelection>;
     const requiresE2e = (yield* reviewSettingsForRun(run)).scope !== "browser";
     const projectFile = yield* (
       requiresE2e ? projectFileLoader.loadStrict(cwd) : projectFileLoader.load(cwd)
@@ -1911,8 +1914,33 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
-    return resolveAppReviewE2eCommands(Option.getOrUndefined(projectFile));
+    const project = Option.getOrUndefined(projectFile);
+    if (!isImplementationAppReview(run) || isTicketAppReview(run)) {
+      return resolveAppReviewE2eCommands(project).map((command) => ({ command }));
+    }
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const implementationRun = readModel.implementationRuns.find(
+      (entry) =>
+        run.caller.type === "implementation" && entry.id === run.caller.implementationRunId,
+    );
+    const orchestrator = readModel.threads.find(
+      (thread) => thread.id === implementationRun?.orchestratorThreadId,
+    );
+    const featureCommands =
+      implementationRun === undefined || orchestrator === undefined
+        ? []
+        : implementationFeatureE2eCommands({
+            planningTicketIds: implementationRun.planningTicketIds,
+            tickets: readModel.threads.flatMap((thread) => thread.planningWorkflow?.tickets ?? []),
+            projectId: orchestrator.projectId,
+          });
+    return finalAppReviewE2eSelections({ featureCommands, projectFile: project });
   });
+
+  const e2eCommandsForCwd = (cwd: string | null, run: AppReviewWorkflowRun) =>
+    e2eSelectionsForCwd(cwd, run).pipe(
+      Effect.map((selections) => selections.map((selection) => selection.command)),
+    );
 
   /**
    * The scope this run's next cycle actually reviews with, or null when
@@ -2119,9 +2147,17 @@ const make = Effect.gen(function* () {
     const lookup = yield* appStackManager
       .getByWorktree({ worktreePath: cwd })
       .pipe(Effect.orElseSucceed(() => null));
+    const caller = run.caller;
+    const baseRef =
+      caller.type === "implementation"
+        ? ((yield* projectionSnapshotQuery.getCommandReadModel()).implementationRuns.find(
+            (entry) => entry.id === caller.implementationRunId,
+          )?.pinnedCommit ?? null)
+        : null;
     return {
       previewUrl,
       stackId: appReviewStackIdForTarget({ lookup, previewUrl }),
+      baseRef,
       testPlatforms: run.testPlatforms,
       env: e2eEnvironment,
       artifactsDir:
@@ -2782,11 +2818,12 @@ const make = Effect.gen(function* () {
       return;
     }
     const includesE2e = reviewScope === "e2e" || reviewScope === "both";
-    const e2eCommands = includesE2e
+    const e2eSelections: ReadonlyArray<AppReviewTestSelection> = includesE2e
       ? isTicketAppReview(run) || run.serialE2e
-        ? (run.e2eCommands ?? [])
-        : yield* e2eCommandsForCwd(cwd, run)
+        ? (run.e2eCommands ?? []).map((command) => ({ command }))
+        : yield* e2eSelectionsForCwd(cwd, run)
       : [];
+    const e2eCommands = e2eSelections.map((selection) => selection.command);
     if (includesE2e && e2eCommands.length === 0) {
       yield* failRun({
         run,
@@ -2830,8 +2867,8 @@ const make = Effect.gen(function* () {
             e2eExecution: {
               id: yield* crypto.randomUUIDv4(),
               commands: rerunAllTests
-                ? appReviewTestCommands({ cycles: [] }, e2eCommands)
-                : appReviewTestCommands(run, e2eCommands),
+                ? appReviewTestCommands({ cycles: [] }, e2eSelections)
+                : appReviewTestCommands(run, e2eSelections),
               results: [],
             },
           }

@@ -1,13 +1,18 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import type {
+  AppReviewRetryCommand,
+  AppReviewTestPurpose,
   AppReviewTestRecording,
   AppReviewTestResult,
   AppReviewWorkflowCycle,
   AppReviewWorkflowFixResult,
+  OrchestrationPlanningTicket,
   ReviewTestPlatforms,
+  T3ProjectFile,
 } from "@t3tools/contracts";
 import {
   APP_REVIEW_ARTIFACT_DIR_ENV,
+  APP_REVIEW_BASE_REF_ENV,
   APP_REVIEW_PREVIEW_URL_ENV,
   APP_REVIEW_STACK_ID_ENV,
   APP_REVIEW_TEST_PLATFORMS_ENV,
@@ -188,11 +193,21 @@ export function appReviewTestCommands(
   run: {
     readonly cycles: ReadonlyArray<Pick<AppReviewWorkflowCycle, "e2eExecution" | "fixResult">>;
   },
-  commands: readonly string[],
-) {
+  commands: ReadonlyArray<string | AppReviewTestSelection>,
+): AppReviewRetryCommand[] {
   const previous = run.cycles.at(-1);
   if (!previous?.e2eExecution) {
-    return [...new Set(commands)].map((command) => ({ command, retryCommand: command }));
+    const selections = new Map<string, AppReviewRetryCommand>();
+    for (const entry of commands) {
+      const { command, purpose } = typeof entry === "string" ? { command: entry } : entry;
+      if (selections.has(command)) continue;
+      selections.set(command, {
+        command,
+        retryCommand: command,
+        ...(purpose === undefined ? {} : { purpose }),
+      });
+    }
+    return [...selections.values()];
   }
   const completed = completedAppReviewTests(previous.e2eExecution);
   return previous.e2eExecution.commands.flatMap((selection) => {
@@ -201,10 +216,50 @@ export function appReviewTestCommands(
     const retry = previous.fixResult?.retryCommands?.find(
       (entry) => entry.command === selection.command,
     );
-    return [
-      { command: selection.command, retryCommand: retry?.retryCommand ?? selection.retryCommand },
-    ];
+    return [{ ...selection, retryCommand: retry?.retryCommand ?? selection.retryCommand }];
   });
+}
+
+export interface AppReviewTestSelection {
+  readonly command: string;
+  readonly purpose?: AppReviewTestPurpose | undefined;
+}
+
+/**
+ * The feature tests an implementation run's tickets planned, in ticket order.
+ * Commands are relative to the ticket's repository, so tickets that change
+ * another project stay with that project's review.
+ */
+export function implementationFeatureE2eCommands(input: {
+  readonly planningTicketIds: ReadonlyArray<string>;
+  readonly tickets: ReadonlyArray<OrchestrationPlanningTicket>;
+  readonly projectId: string;
+}): string[] {
+  const ticketsById = new Map(input.tickets.map((ticket) => [ticket.id as string, ticket]));
+  return input.planningTicketIds.flatMap((ticketId) => {
+    const ticket = ticketsById.get(ticketId);
+    if (ticket === undefined || ticket.appReviewEligible !== true) return [];
+    if (ticket.projectId !== undefined && ticket.projectId !== input.projectId) return [];
+    return ticket.appReviewCommands ?? [];
+  });
+}
+
+/**
+ * A final App Review runs the tickets' feature tests, then the project's
+ * affected-test commands. Without affected-test commands it keeps running the
+ * project's complete suites after the feature tests.
+ */
+export function finalAppReviewE2eSelections(input: {
+  readonly featureCommands: ReadonlyArray<string>;
+  readonly projectFile: Pick<T3ProjectFile, "e2eCommands" | "e2eAffectedCommands"> | undefined;
+}): AppReviewTestSelection[] {
+  const affected = input.projectFile?.e2eAffectedCommands;
+  return [
+    ...input.featureCommands.map((command) => ({ command, purpose: "feature" as const })),
+    ...(affected === undefined
+      ? (input.projectFile?.e2eCommands ?? []).map((command) => ({ command }))
+      : affected.map((command) => ({ command, purpose: "affected" as const }))),
+  ];
 }
 
 class AppReviewTestRestoreError extends Data.TaggedError("AppReviewTestRestoreError")<{
@@ -272,6 +327,7 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
   readonly previewUrl: string | null;
   /** The App Stack serving `previewUrl`, when the reviewed worktree has one. */
   readonly stackId?: string | null | undefined;
+  readonly baseRef?: string | null | undefined;
   readonly testPlatforms?: typeof ReviewTestPlatforms.Type | undefined;
   readonly executionId: string;
   /** Directory for this run's test recordings; omitted where the server has no state dir. */
@@ -323,6 +379,7 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
           APP_REVIEW_EXECUTION_ID: input.executionId,
           APP_REVIEW_TEST_TIMEOUT_MS: String(timeoutMinutes * 60_000),
           ...(input.stackId == null ? {} : { [APP_REVIEW_STACK_ID_ENV]: input.stackId }),
+          ...(input.baseRef == null ? {} : { [APP_REVIEW_BASE_REF_ENV]: input.baseRef }),
           ...(recording === null
             ? {}
             : {
