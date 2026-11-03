@@ -31,7 +31,11 @@ import { OrchestrationEvent, OrchestrationV2StoredEvent } from "@t3tools/contrac
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 import { emptyProjection } from "../orchestration-v2/ProjectionStore.ts";
-import { workflowControlCommands, workflowRuntimeEvents } from "./WorkflowRuntimeBridge.ts";
+import {
+  workflowCheckpointCommand,
+  workflowControlCommands,
+  workflowRuntimeEvents,
+} from "./WorkflowRuntimeBridge.ts";
 
 const at = "2026-10-07T00:00:00.000Z";
 const decodeLegacy = Schema.decodeUnknownSync(OrchestrationEvent);
@@ -237,6 +241,49 @@ it("passes complete assistant text to directive ingestion before its completion"
       }),
     ).toEqual([]);
   }
+});
+
+it("gives a native run's checkpoint to its legacy turn so App Review can advance", () => {
+  const captured = (runId: string | null, status: string) =>
+    decodeNative({
+      sequence: 3,
+      commandId: null,
+      event: {
+        id: "native:checkpoint",
+        threadId: "thread",
+        occurredAt: nativeAt,
+        type: "checkpoint.captured",
+        payload: {
+          id: "checkpoint",
+          threadId: "thread",
+          scopeId: "scope",
+          runId,
+          nodeId: "node",
+          parentCheckpointId: null,
+          ordinalWithinScope: 1,
+          appRunOrdinal: 1,
+          ref: "refs/t3/checkpoints/1",
+          status,
+          files: [{ path: "a.ts", kind: "modified", additions: 1, deletions: 0 }],
+          capturedAt: nativeAt,
+        },
+      },
+    });
+  expect(workflowCheckpointCommand(captured("run", "ready"))).toEqual({
+    type: "thread.turn.diff.complete",
+    commandId: "workflow:observe:native:checkpoint",
+    threadId: "thread",
+    turnId: "run",
+    completedAt: at,
+    checkpointRef: "refs/t3/checkpoints/1",
+    status: "ready",
+    files: [{ path: "a.ts", kind: "modified", additions: 1, deletions: 0 }],
+    checkpointTurnCount: 1,
+    createdAt: at,
+  });
+  // The thread's baseline belongs to no turn, and a stale ref is no checkpoint.
+  expect(workflowCheckpointCommand(captured(null, "ready"))).toBeNull();
+  expect(workflowCheckpointCommand(captured("run", "stale"))).toBeNull();
 });
 
 effectIt.effect("replays native completions once even when a crash loses the cursor update", () =>
