@@ -112,13 +112,11 @@ import { isHostedByThisApp } from "../sidebar/useUpdateEverything";
 
 const RESPONSE_STREAMING_MODE_LABELS: Record<ResponseStreamingMode, string> = {
   turn: "Wait for the full response",
-  token: "Show each token",
   paragraph: "Show finished paragraphs",
 };
 
 const RESPONSE_STREAMING_MODE_DESCRIPTIONS: Record<ResponseStreamingMode, string> = {
   turn: "Text appears once the agent finishes its turn.",
-  token: "Text appears as the agent sends it.",
   paragraph: "Each paragraph or code block appears as soon as it is complete.",
 };
 

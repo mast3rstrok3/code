@@ -1865,11 +1865,10 @@ const make = Effect.gen(function* () {
       (settings) => resolveProjectSettings(settings, projectId).settings.responseStreamingMode,
     );
 
-  // `mode` is "turn" or "paragraph"; token mode never buffers.
   const appendBufferedAssistantText = (
     messageId: MessageId,
     delta: string,
-    mode: Exclude<ResponseStreamingMode, "token">,
+    mode: ResponseStreamingMode,
     atMillis: number,
   ) =>
     Cache.getOption(bufferedAssistantTextByMessageId, messageId).pipe(
@@ -4158,16 +4157,10 @@ const make = Effect.gen(function* () {
         yield* Cache.set(reasoningPartIndexByMessageId, reasoningMessageId, partIndex);
       }
 
-      // Reasoning is never delivered token by token, even when the project
-      // asks for it: the block is collapsed by default, so a command, an
-      // event-store write and a fan-out per token would buy nothing. Traces
-      // are longer than the answers they precede.
-      const streamingMode = yield* resolveResponseStreamingMode(thread.projectId);
-      const reasoningMode = streamingMode === "token" ? "paragraph" : streamingMode;
       const spillChunk = yield* appendBufferedAssistantText(
         reasoningMessageId,
         delta,
-        reasoningMode,
+        yield* resolveResponseStreamingMode(thread.projectId),
         yield* Clock.currentTimeMillis,
       );
       if (spillChunk.length > 0) {
@@ -4209,44 +4202,32 @@ const make = Effect.gen(function* () {
       }
 
       const streamingMode = yield* resolveResponseStreamingMode(thread.projectId);
-      if (streamingMode !== "token") {
-        if (
-          Option.getOrElse(
-            yield* Cache.getOption(messageStartedAtByMessageId, assistantMessageId),
-            () => "",
-          ) === ""
-        ) {
-          yield* Cache.set(messageStartedAtByMessageId, assistantMessageId, now);
-        }
+      if (
+        Option.getOrElse(
+          yield* Cache.getOption(messageStartedAtByMessageId, assistantMessageId),
+          () => "",
+        ) === ""
+      ) {
+        yield* Cache.set(messageStartedAtByMessageId, assistantMessageId, now);
+      }
 
-        // Pace on the server clock. OpenCode stamps every delta of a part
-        // with the part's start time, so the event time cannot measure gaps.
-        const spillChunk = yield* appendBufferedAssistantText(
-          assistantMessageId,
-          assistantDelta,
-          streamingMode,
-          yield* Clock.currentTimeMillis,
-        );
-        if (spillChunk.length > 0) {
-          yield* orchestrationEngine.dispatch({
-            type: "thread.message.assistant.delta",
-            commandId: yield* providerCommandId(event, "assistant-delta-buffer-spill"),
-            threadId: thread.id,
-            messageId: assistantMessageId,
-            delta: spillChunk,
-            ...(turnId ? { turnId } : {}),
-            createdAt: yield* messageStartedAt(assistantMessageId, now),
-          });
-        }
-      } else {
+      // Pace on the server clock. OpenCode stamps every delta of a part
+      // with the part's start time, so the event time cannot measure gaps.
+      const spillChunk = yield* appendBufferedAssistantText(
+        assistantMessageId,
+        assistantDelta,
+        streamingMode,
+        yield* Clock.currentTimeMillis,
+      );
+      if (spillChunk.length > 0) {
         yield* orchestrationEngine.dispatch({
           type: "thread.message.assistant.delta",
-          commandId: yield* providerCommandId(event, "assistant-delta"),
+          commandId: yield* providerCommandId(event, "assistant-delta-buffer-spill"),
           threadId: thread.id,
           messageId: assistantMessageId,
-          delta: assistantDelta,
+          delta: spillChunk,
           ...(turnId ? { turnId } : {}),
-          createdAt: now,
+          createdAt: yield* messageStartedAt(assistantMessageId, now),
         });
       }
     }
@@ -4262,20 +4243,16 @@ const make = Effect.gen(function* () {
         turnId: pauseForUserTurnId,
         streamingOnly: true,
       });
-      const streamingMode = yield* resolveResponseStreamingMode(thread.projectId);
-      const flushedMessageIds =
-        streamingMode !== "token"
-          ? yield* flushBufferedAssistantMessagesForTurn({
-              event,
-              threadId: thread.id,
-              turnId: pauseForUserTurnId,
-              createdAt: now,
-              commandTag:
-                event.type === "request.opened"
-                  ? "assistant-delta-flush-on-request-opened"
-                  : "assistant-delta-flush-on-user-input-requested",
-            })
-          : new Set<MessageId>();
+      const flushedMessageIds = yield* flushBufferedAssistantMessagesForTurn({
+        event,
+        threadId: thread.id,
+        turnId: pauseForUserTurnId,
+        createdAt: now,
+        commandTag:
+          event.type === "request.opened"
+            ? "assistant-delta-flush-on-request-opened"
+            : "assistant-delta-flush-on-user-input-requested",
+      });
       yield* finalizeActiveSegmentForTurn({
         event,
         threadId: thread.id,

@@ -2202,7 +2202,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       const projectId = ProjectId.make("project-bootstrap-backlog");
 
       const sequenceRows = yield* sql<{ readonly maxSequence: number | null }>`
-        SELECT MAX(sequence) AS "maxSequence" FROM orchestration_events
+        SELECT MAX(sequence) AS "maxSequence" FROM workflow_events
       `;
       const sequenceBeforeBacklog = sequenceRows[0]?.maxSequence ?? 0;
       const appendedEvents = yield* Effect.forEach(
@@ -2436,7 +2436,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         FROM projection_state
       `;
       const maxSequenceRows = yield* sql<{ readonly maxSequence: number }>`
-        SELECT MAX(sequence) AS "maxSequence" FROM orchestration_events
+        SELECT MAX(sequence) AS "maxSequence" FROM workflow_events
       `;
       const maxSequence = maxSequenceRows[0]?.maxSequence ?? 0;
       for (const row of stateRows) {
@@ -4545,11 +4545,9 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
       const saved = yield* sql<{
         readonly icon: string | null;
       }>`SELECT project_icon_json AS icon FROM projection_projects WHERE project_id = ${projectId}`;
-      assert.deepEqual(saved, [
-        { icon: '{"kind":"lucide","name":"folder-code","color":"violet","monogramText":"T3"}' },
-      ]);
+      assert.deepEqual(saved, [{ icon: '{"kind":"monogram","text":"T3","color":"violet"}' }]);
       const persisted = yield* sql<{ readonly icon: string }>`
-        SELECT json_extract(payload_json, '$.projectIcon') AS icon FROM orchestration_events
+        SELECT json_extract(payload_json, '$.projectIcon') AS icon FROM workflow_events
         WHERE command_id = ${CommandId.make("cmd-monogram-save")}
       `;
       assert.deepEqual(persisted, saved);
@@ -4773,7 +4771,7 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
       const cursorsBeforeFailure = yield* readCursors;
       yield* sql`
         CREATE TRIGGER fail_attachment_command_receipt
-        BEFORE INSERT ON orchestration_command_receipts
+        BEFORE INSERT ON workflow_command_receipts
         WHEN NEW.command_id = 'cmd-outer-rollback-delete' AND NEW.status = 'accepted'
         BEGIN
           SELECT RAISE(FAIL, 'forced receipt failure');
@@ -4789,11 +4787,11 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
       `;
       assert.deepEqual(rolledBackThreads, [{ deletedAt: null }]);
       const rolledBackEvents = yield* sql`
-        SELECT sequence FROM orchestration_events WHERE command_id = ${commandId}
+        SELECT sequence FROM workflow_events WHERE command_id = ${commandId}
       `;
       assert.deepEqual(rolledBackEvents, []);
       const rolledBackReceipts = yield* sql`
-        SELECT status FROM orchestration_command_receipts WHERE command_id = ${commandId}
+        SELECT status FROM workflow_command_receipts WHERE command_id = ${commandId}
       `;
       assert.deepEqual(rolledBackReceipts, []);
       yield* sql`DROP TRIGGER fail_attachment_command_receipt`;
@@ -4815,7 +4813,7 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
         readonly resultSequence: number;
       }>`
         SELECT status, result_sequence AS "resultSequence"
-        FROM orchestration_command_receipts WHERE command_id = ${commandId}
+        FROM workflow_command_receipts WHERE command_id = ${commandId}
       `;
       assert.deepEqual(committedReceipts, [
         { status: "accepted", resultSequence: result.sequence },
@@ -4832,7 +4830,7 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
       });
       assert.isTrue(yield* exists(blockedAttachmentPath));
       const cleanupFailureReceipts = yield* sql<{ readonly status: string }>`
-        SELECT status FROM orchestration_command_receipts
+        SELECT status FROM workflow_command_receipts
         WHERE command_id = ${cleanupFailureCommandId}
       `;
       assert.deepEqual(cleanupFailureReceipts, [{ status: "accepted" }]);

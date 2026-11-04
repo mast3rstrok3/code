@@ -39,6 +39,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
@@ -403,8 +404,19 @@ export const layerTest = (
   managedPolicy?: ManagedPolicySummary,
 ) => Layer.effect(ServerSettingsService, makeTest(overrides, managedPolicy));
 
-// The fork keeps token delivery as a live mode, so old files need no load-time rewrite.
-const PersistedResponseStreamingMode = ResponseStreamingMode;
+// Accept retired token delivery only on load so one old value cannot reset all settings.
+const PersistedResponseStreamingMode = Schema.Union([
+  ResponseStreamingMode,
+  Schema.Literal("token"),
+]).pipe(
+  Schema.decodeTo(
+    ResponseStreamingMode,
+    SchemaTransformation.transform({
+      decode: (mode) => (mode === "token" ? "paragraph" : mode),
+      encode: (mode) => mode,
+    }),
+  ),
+);
 const PersistedServerSettings = Schema.Struct({
   ...ServerSettings.fields,
   responseStreamingMode: PersistedResponseStreamingMode.pipe(
