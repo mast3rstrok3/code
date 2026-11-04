@@ -56,6 +56,7 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
 import type * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { describe } from "vite-plus/test";
@@ -101,6 +102,7 @@ import {
   workerReportedCurrentAttempt,
   workflowIdForRun,
   workflowIdsForRun,
+  finalGateValidationCommands,
   selectPublicationBaseBranch,
   summarizeTicketAppReviewHalt,
   deferredTicketAppReviewInstructions,
@@ -956,6 +958,7 @@ function makeTestLayer(
   }> = [{ name: "origin/main", remoteName: "origin", isDefault: true }],
   projectFile?: T3ProjectFile,
   failIntegratedSetup = false,
+  failTicketSetup = false,
   failDeleteStackAttempts = 0,
   autoCreateCreatedWorktrees: ReadonlyArray<AppStackCreatedWorktree> = [],
 ) {
@@ -997,7 +1000,7 @@ function makeTestLayer(
           runForThread: (input) =>
             Ref.update(calls.setupScriptInputs, (inputs) => [...inputs, input]).pipe(
               Effect.andThen(
-                failIntegratedSetup
+                (input.worktreePath.includes("-ticket-") ? failTicketSetup : failIntegratedSetup)
                   ? Effect.fail(
                       new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
                         threadId: input.threadId,
@@ -1199,6 +1202,7 @@ function makeTestLayer(
               }
               return { commitSha: resolvedCommitSha };
             }),
+          readBranchBase: () => Effect.succeed(null),
           localStatus: (input) =>
             Effect.all([
               input.cwd.includes("-ticket-")
@@ -1616,6 +1620,7 @@ function withSystem<A, E>(
     }>;
     readonly projectFile?: T3ProjectFile;
     readonly failIntegratedSetup?: boolean;
+    readonly failTicketSetup?: boolean;
     readonly failDeleteStackAttempts?: number;
     /** Worktrees the controller's bundle plan made Code create on each auto-create. */
     readonly autoCreateCreatedWorktrees?: ReadonlyArray<AppStackCreatedWorktree>;
@@ -1757,6 +1762,7 @@ function withSystem<A, E>(
           options?.remoteRefs,
           options?.projectFile,
           options?.failIntegratedSetup,
+          options?.failTicketSetup,
           options?.failDeleteStackAttempts,
           options?.autoCreateCreatedWorktrees,
         ),
@@ -2476,6 +2482,44 @@ it("uses the remote default when a local workflow base was never published", () 
       },
     ]),
   ).toBe("dev");
+});
+
+it("publishes a local workflow base against the branch it recorded, before the default", () => {
+  const remote = (name: string, isDefault: boolean) => ({
+    name: `origin/${name}`,
+    remoteName: "origin",
+    isRemote: true,
+    current: false,
+    isDefault,
+    worktreePath: null,
+  });
+  const refs = [remote("main", true), remote("dev", false)];
+  expect(selectPublicationBaseBranch("w/local-thread", refs, "dev")).toBe("dev");
+  expect(selectPublicationBaseBranch("w/local-thread", refs, "gone")).toBe("main");
+  expect(selectPublicationBaseBranch("w/local-thread", refs)).toBe("main");
+  expect(selectPublicationBaseBranch("main", refs, "dev")).toBe("main");
+});
+
+it("runs the repository's checks at the final gate, not Code's built-ins or App Review's scope", () => {
+  const pinned = [
+    "vp check",
+    "vp run typecheck",
+    "APP_REVIEW_TEST_PLATFORMS=web pnpm check dev rudi",
+  ];
+  expect(finalGateValidationCommands(pinned, ["pnpm check dev"])).toEqual([
+    "pnpm check dev",
+    "pnpm check dev rudi",
+  ]);
+  expect(finalGateValidationCommands(["vp check", "vp run typecheck"], [])).toEqual([
+    "vp check",
+    "vp run typecheck",
+  ]);
+  expect(
+    finalGateValidationCommands(
+      ["APP_REVIEW_TEST_PLATFORMS=web pnpm check dev"],
+      ["pnpm check dev"],
+    ),
+  ).toEqual(["pnpm check dev"]);
 });
 
 it("ignores terminal updates from a superseded nested App Review", () => {
@@ -4298,14 +4342,21 @@ describe("ImplementationWorkflowReactor", () => {
             { cwd: medicalRepository.worktreePath, refName: `${workers[2]?.branch}@commit` },
           ]);
           expect(
-            (yield* Ref.get(system.setupScriptInputs)).map((input) => [
-              input.projectId,
-              input.worktreePath,
-            ]),
+            (yield* Ref.get(system.setupScriptInputs))
+              .filter((input) => !input.worktreePath?.includes("-ticket-"))
+              .map((input) => [input.projectId, input.worktreePath]),
           ).toEqual([
             [projectId, run.orchestratorWorktreePath],
             [medicalProjectId, medicalRepository.worktreePath],
           ]);
+          // Each ticket is set up with its own repository's project.
+          expect(
+            new Set(
+              (yield* Ref.get(system.setupScriptInputs))
+                .filter((input) => input.worktreePath?.includes("-ticket-"))
+                .map((input) => input.projectId),
+            ),
+          ).toEqual(new Set([projectId, medicalProjectId]));
           const snapshot = yield* system.query.getSnapshot();
           const validator = snapshot.threads.find(
             (thread) => thread.workflowRole === "implementation-validator",
@@ -7321,19 +7372,67 @@ describe("ImplementationWorkflowReactor", () => {
         const { run } = yield* launchRun(system);
         yield* appendWorkerResult(system, { run, status: "succeeded" });
 
-        expect(yield* Ref.get(system.setupScriptInputs)).toEqual([
-          {
-            threadId: run.orchestratorThreadId,
-            projectId,
-            worktreePath: run.orchestratorWorktreePath,
-            observeCompletion: {},
-          },
-        ]);
+        expect(yield* Ref.get(system.setupScriptInputs)).toContainEqual({
+          threadId: run.orchestratorThreadId,
+          projectId,
+          worktreePath: run.orchestratorWorktreePath,
+          observeCompletion: {},
+        });
         const snapshot = yield* system.query.getSnapshot();
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
         ).toHaveLength(1);
       }),
+    ),
+  );
+
+  it.effect("sets up a ticket's worktree before its worker's first turn, once", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* launchRun(system);
+        const snapshot = yield* system.query.getSnapshot();
+        const worker = snapshot.threads.find(
+          (thread) => thread.workflowRole === "implementation-worker",
+        );
+        if (worker === undefined) throw new Error("Worker missing.");
+        expect(worker.messages.at(-1)?.role).toBe("user");
+        const ticketSetups = () =>
+          Ref.get(system.setupScriptInputs).pipe(
+            Effect.map((inputs) =>
+              inputs.filter((input) => input.worktreePath?.includes("-ticket-")),
+            ),
+          );
+        expect(yield* ticketSetups()).toEqual([
+          {
+            threadId: worker.id,
+            projectId,
+            worktreePath: worker.worktreePath,
+            observeCompletion: {},
+          },
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("holds a ticket's worker when its worktree setup fails", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const snapshot = yield* system.query.getSnapshot();
+          const blocked = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(blocked?.status).toBe("needs-human-attention");
+          expect(blocked?.retryableFailure).toMatchObject({
+            stage: "worker-setup",
+            humanBlocked: false,
+          });
+          expect(blocked?.retryableFailure?.detail).toContain("Worktree setup failed");
+          const worker = snapshot.threads.find(
+            (thread) => thread.workflowRole === "implementation-worker",
+          );
+          expect(worker?.messages ?? []).toHaveLength(0);
+        }),
+      { failTicketSetup: true },
     ),
   );
 
@@ -7971,6 +8070,185 @@ describe("ImplementationWorkflowReactor", () => {
           `halt:${halted?.automationHalt?.haltedAt}`,
         );
       }),
+    ),
+  );
+
+  it.effect("continues once a stack that was still starting answers its probe", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+          yield* passMergeGate(system, run);
+          let snapshot = yield* system.query.getSnapshot();
+          expect(
+            snapshot.implementationRuns.find((entry) => entry.id === run.id)?.appDevStack.status,
+          ).toBe("ensuring");
+
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
+          snapshot = yield* system.query.getSnapshot();
+          const continued = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(continued?.appDevStack.status).toBe("ready");
+          expect(continued?.activeFixerThreadId).toBeNull();
+          expect(continued?.automationHalt).toBeNull();
+        }),
+      { backendProbeStatuses: [502, 200] },
+    ),
+  );
+
+  it.effect("waits for a stack whose probe fails instead of repairing it, then reports it", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+          yield* passMergeGate(system, run);
+
+          let snapshot = yield* system.query.getSnapshot();
+          const waiting = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(waiting?.status).toBe("qa-reviewing");
+          expect(waiting?.lastQaFailure).toBeNull();
+          expect(waiting?.retryableFailure).toBeNull();
+          expect(waiting?.appDevStack.status).toBe("ensuring");
+          const fixers = () =>
+            system.query
+              .getSnapshot()
+              .pipe(
+                Effect.map(
+                  (latest) =>
+                    latest.threads.filter(
+                      (thread) => thread.workflowRole === "implementation-fixer",
+                    ).length,
+                ),
+              );
+          expect(yield* fixers()).toBe(0);
+
+          yield* TestClock.adjust(Duration.minutes(21));
+          for (let sweep = 0; sweep < 4; sweep += 1) {
+            yield* system.reactor.recoverIncompleteStages();
+            yield* system.reactor.recoverRetryableRuns();
+            yield* system.reactor.drain;
+          }
+          snapshot = yield* system.query.getSnapshot();
+          // A stack that never answers is reported, not handed to a code repair.
+          expect(yield* fixers()).toBe(0);
+          expect(
+            snapshot.implementationRuns.find((entry) => entry.id === run.id)?.automationHalt,
+          ).toMatchObject({ stage: "app-review", category: "retry-exhausted" });
+        }),
+      { backendProbeStatus: 502 },
+    ),
+  );
+
+  it.effect("stops a fixer when the next repair replaces it", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+          yield* passMergeGate(system, run);
+          let snapshot = yield* system.query.getSnapshot();
+          const first = snapshot.implementationRuns.find(
+            (entry) => entry.id === run.id,
+          )?.activeFixerThreadId;
+          if (first == null) throw new Error("First repair missing.");
+
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId("first-repair-reported-nothing"),
+            threadId: first,
+            activity: {
+              id: eventId("first-repair-reported-nothing"),
+              tone: "error",
+              kind: "implementation-fix-result",
+              summary: "Implementation fix result was missing or malformed",
+              payload: {
+                type: "implementation-fix-result",
+                runId: run.id,
+                status: "blocked",
+                validations: [],
+                notesMarkdown: "QA fixer completed without the required directive.",
+              },
+              turnId: null,
+              createdAt: "2026-01-01T00:00:03.000Z",
+            },
+            createdAt: "2026-01-01T00:00:03.000Z",
+          });
+          yield* system.reactor.drain;
+
+          snapshot = yield* system.query.getSnapshot();
+          const second = snapshot.implementationRuns.find(
+            (entry) => entry.id === run.id,
+          )?.activeFixerThreadId;
+          expect(second).not.toBeNull();
+          expect(second).not.toBe(first);
+          const events = yield* Stream.runCollect(system.engine.readEvents(0));
+          expect(
+            [...events].some(
+              (event) =>
+                event.type === "thread.session-stop-requested" && event.aggregateId === first,
+            ),
+          ).toBe(true);
+        }),
+      { failAutoCreate: true },
+    ),
+  );
+
+  it.effect("runs the repository's own commands when a run pinned Code's built-in ones", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.update",
+            commandId: commandId("pinned-before-the-project-file-existed"),
+            threadId: sourceThreadId,
+            run: {
+              ...run,
+              status: "validating",
+              launchSummary: {
+                ...run.launchSummary,
+                validationCommands: [
+                  "vp check",
+                  "vp run typecheck",
+                  "APP_REVIEW_TEST_PLATFORMS=web pnpm check dev rudi",
+                ],
+              },
+              orchestratorBranch: "main",
+              orchestratorWorktreePath: "/tmp/implementation-reactor-review",
+              integrationHeadSha: "def456",
+              activeValidationKind: "final",
+              codeReviewedHeadSha: "def456",
+              updatedAt: now,
+            },
+            createdAt: now,
+          });
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.rerun",
+            commandId: commandId("rerun-final-gate-with-project-file"),
+            threadId: sourceThreadId,
+            runId: run.id,
+            target: { kind: "run", stage: "merge-gate" },
+            createdAt: "2026-01-01T00:00:05.000Z",
+          });
+          yield* system.reactor.drain;
+
+          const snapshot = yield* system.query.getSnapshot();
+          const gate = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(gate?.activeValidationKind).toBe("final");
+          expect(gate?.launchSummary.validationCommands).toEqual([
+            "pnpm check dev",
+            "pnpm check dev rudi",
+          ]);
+          const prompt = snapshot.threads
+            .find((thread) => thread.id === gate?.activeValidatorThreadId)
+            ?.messages.at(-1)?.text;
+          expect(prompt).toContain("- pnpm check dev\n");
+          expect(prompt).not.toContain("vp check");
+          expect(prompt).not.toContain("APP_REVIEW_TEST_PLATFORMS=web");
+        }),
+      { projectFile: { validationCommands: ["pnpm check dev"] } },
     ),
   );
 
