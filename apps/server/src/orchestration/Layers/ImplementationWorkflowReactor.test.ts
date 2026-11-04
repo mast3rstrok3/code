@@ -107,6 +107,7 @@ import {
   buildBrowserAppReviewPrompt,
   workerValidationContext,
 } from "./ImplementationWorkflowReactor.ts";
+import { scheduledWorkflowMilestone } from "../ScheduledWorkflowReporter.ts";
 import {
   ORPHANED_PROVIDER_SESSION_ERROR,
   WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
@@ -7901,6 +7902,74 @@ describe("ImplementationWorkflowReactor", () => {
             (activity) => activity.kind === "implementation-code-review-exhausted",
           ),
         ).toBe(false);
+      }),
+    ),
+  );
+
+  it.effect("halts a run whose automatic retries leave it unchanged", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+
+        let snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        if (current === undefined) throw new Error("Run missing.");
+        // App Review passed on a HEAD Code Review never accepted, with every
+        // Final Code Review cycle spent: a retry publishes, and publishing
+        // returns without touching the run.
+        const failedAt = "2026-01-01T00:00:03.000Z";
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("seed-retry-that-changes-nothing"),
+          threadId: sourceThreadId,
+          run: {
+            ...current,
+            status: "needs-human-attention",
+            appReviewedHeadSha: current.integrationHeadSha,
+            codeReviewedHeadSha: null,
+            finalCodeReviewPassCount: IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
+            retryableFailure: {
+              stage: "code-review",
+              detail: "Cannot publish a change request before Code Review accepts an exact HEAD.",
+              failedAt,
+              attemptCount: 1,
+              maxAttempts: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+              humanBlocked: false,
+            },
+            automationHalt: null,
+            updatedAt: failedAt,
+          },
+          createdAt: failedAt,
+        });
+        yield* system.reactor.drain;
+
+        yield* system.reactor.recoverRetryableRuns();
+        yield* system.reactor.drain;
+        snapshot = yield* system.query.getSnapshot();
+        const retried = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(retried?.status).toBe("needs-human-attention");
+        expect(retried?.retryableFailure?.attemptCount).toBe(1);
+        expect(retried?.automationHalt).toBeNull();
+
+        yield* TestClock.adjust(Duration.minutes(21));
+        yield* system.reactor.recoverRetryableRuns();
+        yield* system.reactor.drain;
+        snapshot = yield* system.query.getSnapshot();
+        const halted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(halted?.automationHalt).toMatchObject({
+          stage: "final-code-review",
+          category: "retry-exhausted",
+        });
+        expect(halted?.automationHalt?.detail).toContain(
+          "Automatic retries of code-review have not changed this run",
+        );
+        expect(halted?.retryableFailure?.humanBlocked).toBe(true);
+        // The halt is what the root thread is told about.
+        expect(scheduledWorkflowMilestone(halted!)?.key).toBe(
+          `halt:${halted?.automationHalt?.haltedAt}`,
+        );
       }),
     ),
   );
