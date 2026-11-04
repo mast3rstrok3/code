@@ -7,9 +7,11 @@ import {
   type OrchestrationReadModel,
   type WorkflowPreset,
 } from "@t3tools/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 
@@ -67,29 +69,32 @@ const setPreset = (workflowPreset: WorkflowPreset | null) =>
     readModel,
   }).pipe(Effect.map((events) => (Array.isArray(events) ? events[0] : events)));
 
-it.layer(NodeServices.layer)("thread.composer-mode.set decider", (it) => {
-  it.effect.each(["fast-plan", "planning"] as const)(
-    "gives a new %s root the workflow id its step threads join",
-    (preset) =>
-      Effect.gen(function* () {
-        const event = yield* setPreset(preset);
-        expect(event?.type).toBe("thread.composer-mode-set");
-        if (event?.type !== "thread.composer-mode-set") return;
-        expect(event.payload.workflowContext).toEqual({
-          workflowId: "workflow-thread-1",
-          parentWorkflowId: null,
-          rootThreadId: threadId,
-          ticketScope: [],
-        });
-      }),
-  );
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "thread.composer-mode.set decider",
+  (it) => {
+    it.effect.each(["fast-plan", "planning"] as const)(
+      "gives a new %s root the workflow id its step threads join",
+      (preset) =>
+        Effect.gen(function* () {
+          const event = yield* setPreset(preset);
+          expect(event?.type).toBe("thread.composer-mode-set");
+          if (event?.type !== "thread.composer-mode-set") return;
+          expect(event.payload.workflowContext).toEqual({
+            workflowId: "workflow-thread-1",
+            parentWorkflowId: null,
+            rootThreadId: threadId,
+            ticketScope: [],
+          });
+        }),
+    );
 
-  it.effect("gives a thread leaving workflows no identity", () =>
-    Effect.gen(function* () {
-      const event = yield* setPreset(null);
-      expect(event?.type === "thread.composer-mode-set" && event.payload.workflowContext).toBe(
-        undefined,
-      );
-    }),
-  );
-});
+    it.effect("gives a thread leaving workflows no identity", () =>
+      Effect.gen(function* () {
+        const event = yield* setPreset(null);
+        expect(event?.type === "thread.composer-mode-set" && event.payload.workflowContext).toBe(
+          undefined,
+        );
+      }),
+    );
+  },
+);

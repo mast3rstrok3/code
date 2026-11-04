@@ -80,7 +80,7 @@ import { implementationWorkflowDefaultSkips } from "@t3tools/shared/workflowStep
 import { resolveImplementationValidationCommands } from "@t3tools/shared/t3ProjectFile";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import { HttpClient } from "effect/http";
@@ -2476,7 +2476,7 @@ function errorDetail(error: unknown): string {
 }
 
 const make = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const workflowDrain = yield* Effect.serviceOption(WorkflowDrainCoordinator);
   const isDraining = Option.isSome(workflowDrain)
@@ -2603,14 +2603,14 @@ const make = Effect.gen(function* () {
     );
 
   const serverCommandId = (tag: string) =>
-    crypto.randomUUIDv4().pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
-  const serverEventId = () => crypto.randomUUIDv4().pipe(Effect.map(EventId.make));
+    random.uuidV4().pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
+  const serverEventId = () => random.uuidV4().pipe(Effect.map(EventId.make));
   const serverMessageId = (tag: string) =>
-    crypto.randomUUIDv4().pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
+    random.uuidV4().pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
   const serverThreadId = (tag: string) =>
-    crypto.randomUUIDv4().pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
+    random.uuidV4().pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
   const serverAppReviewId = () =>
-    crypto.randomUUIDv4().pipe(Effect.map((uuid) => AppReviewId.make(`app-review-${uuid}`)));
+    random.uuidV4().pipe(Effect.map((uuid) => AppReviewId.make(`app-review-${uuid}`)));
 
   // Projection updates trail command dispatch by a small window. Keep the
   // latest run written by this single-worker reactor so two queued commands
@@ -7657,7 +7657,7 @@ const make = Effect.gen(function* () {
             "",
             "Finish with exactly one fenced JSON block:",
             "```json",
-            // @effect-diagnostics-next-line preferSchemaOverJson:off - fixed directive example for the agent prompt.
+            // @effect-diagnostics-next-line globalJsonInEffect:off - fixed directive example for the agent prompt.
             JSON.stringify(
               {
                 type: "implementation-change-request-babysit-result",

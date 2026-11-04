@@ -41,8 +41,8 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { useWorkspaceUsers } from "../../state/workspace-users";
 import { ListActionRow } from "../../components/ui/ListActionRow";
 import {
-  AndroidSettingsEnvironmentFilter,
   SettingsEnvironmentFilterHeader,
+  useSettingsEnvironmentMenu,
 } from "./components/SettingsEnvironmentFilterHeader";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
@@ -122,10 +122,11 @@ export function SettingsUsersRouteScreen() {
   const insets = useSafeAreaInsets();
   const { selectedTargets } = useSettingsEnvironmentFilter();
   const writableEnvironments = useEnvironmentsWithScope(selectedTargets, AuthSettingsWriteScope);
+  const environmentMenu = useSettingsEnvironmentMenu();
   return (
     <>
       <SettingsEnvironmentFilterHeader />
-      <SettingsScreen title="Users" trailing={<AndroidSettingsEnvironmentFilter />}>
+      <SettingsScreen title="Users" menus={[environmentMenu]}>
         <ScreenScrollView
           className="flex-1"
           contentInsetAdjustmentBehavior="automatic"

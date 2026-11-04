@@ -75,6 +75,7 @@ import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ServerActivation } from "../../serverActivation.ts";
 import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { makeSqlStatementCounter } from "../../../integration/SqlStatementCounter.integration.ts";
 import {
@@ -407,7 +408,7 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(VcsProcess.layer),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
       Layer.provideMerge(Layer.succeed(ServerActivation, options?.activation)),
-      Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       Layer.provideMerge(Layer.succeed(Tracer.Tracer, sqlCounter.tracer)),
     );
     const testRuntime = ManagedRuntime.make(layer);

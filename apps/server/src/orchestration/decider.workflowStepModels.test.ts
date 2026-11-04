@@ -10,9 +10,11 @@ import {
   type OrchestrationThread,
   type WorkflowPreset,
 } from "@t3tools/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 
@@ -86,109 +88,112 @@ function makeReadModel(threads: ReadonlyArray<OrchestrationThread>): Orchestrati
   };
 }
 
-it.layer(NodeServices.layer)("workflow step model decider", (it) => {
-  it.effect("records a pin on the addressed workflow root", () =>
-    Effect.gen(function* () {
-      const decided = yield* decideOrchestrationCommand({
-        command: {
-          type: "thread.workflow.step-model.set",
-          commandId: CommandId.make("cmd-pin-step"),
-          threadId: ThreadId.make("root-1"),
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "workflow step model decider",
+  (it) => {
+    it.effect("records a pin on the addressed workflow root", () =>
+      Effect.gen(function* () {
+        const decided = yield* decideOrchestrationCommand({
+          command: {
+            type: "thread.workflow.step-model.set",
+            commandId: CommandId.make("cmd-pin-step"),
+            threadId: ThreadId.make("root-1"),
+            workflowPromptId: "implementation.code-review.codex",
+            modelSelection: PINNED_MODEL,
+            createdAt: NOW,
+          },
+          readModel: makeReadModel([makeThread({ id: "root-1" })]),
+        });
+        const events = Array.isArray(decided) ? decided : [decided];
+        expect(events).toHaveLength(1);
+        expect(events[0]?.type).toBe("thread.workflow-step-model-set");
+        expect(events[0]?.payload).toMatchObject({
+          threadId: "root-1",
           workflowPromptId: "implementation.code-review.codex",
           modelSelection: PINNED_MODEL,
-          createdAt: NOW,
-        },
-        readModel: makeReadModel([makeThread({ id: "root-1" })]),
-      });
-      const events = Array.isArray(decided) ? decided : [decided];
-      expect(events).toHaveLength(1);
-      expect(events[0]?.type).toBe("thread.workflow-step-model-set");
-      expect(events[0]?.payload).toMatchObject({
-        threadId: "root-1",
-        workflowPromptId: "implementation.code-review.codex",
-        modelSelection: PINNED_MODEL,
-      });
-    }),
-  );
+        });
+      }),
+    );
 
-  it.effect("redirects a pin sent from a child thread to the workflow root", () =>
-    Effect.gen(function* () {
-      const decided = yield* decideOrchestrationCommand({
-        command: {
-          type: "thread.workflow.step-model.set",
-          commandId: CommandId.make("cmd-pin-child"),
-          threadId: ThreadId.make("child-1"),
-          workflowPromptId: "implementation.tdd.codex",
-          modelSelection: PINNED_MODEL,
-          createdAt: NOW,
-        },
-        readModel: makeReadModel([
-          makeThread({ id: "root-1" }),
-          makeThread({ id: "child-1", rootThreadId: "root-1" }),
-        ]),
-      });
-      const events = Array.isArray(decided) ? decided : [decided];
-      expect(events).toHaveLength(1);
-      expect(events[0]?.aggregateId).toBe("root-1");
-      expect(events[0]?.payload).toMatchObject({ threadId: "root-1" });
-    }),
-  );
+    it.effect("redirects a pin sent from a child thread to the workflow root", () =>
+      Effect.gen(function* () {
+        const decided = yield* decideOrchestrationCommand({
+          command: {
+            type: "thread.workflow.step-model.set",
+            commandId: CommandId.make("cmd-pin-child"),
+            threadId: ThreadId.make("child-1"),
+            workflowPromptId: "implementation.tdd.codex",
+            modelSelection: PINNED_MODEL,
+            createdAt: NOW,
+          },
+          readModel: makeReadModel([
+            makeThread({ id: "root-1" }),
+            makeThread({ id: "child-1", rootThreadId: "root-1" }),
+          ]),
+        });
+        const events = Array.isArray(decided) ? decided : [decided];
+        expect(events).toHaveLength(1);
+        expect(events[0]?.aggregateId).toBe("root-1");
+        expect(events[0]?.payload).toMatchObject({ threadId: "root-1" });
+      }),
+    );
 
-  it.effect("clears a pin when no model is given", () =>
-    Effect.gen(function* () {
-      const decided = yield* decideOrchestrationCommand({
-        command: {
-          type: "thread.workflow.step-model.set",
-          commandId: CommandId.make("cmd-clear-step"),
-          threadId: ThreadId.make("root-1"),
-          workflowPromptId: "implementation.code-review.codex",
-          modelSelection: null,
-          createdAt: NOW,
-        },
-        readModel: makeReadModel([makeThread({ id: "root-1" })]),
-      });
-      const events = Array.isArray(decided) ? decided : [decided];
-      expect(events[0]?.payload).toMatchObject({ modelSelection: null });
-    }),
-  );
+    it.effect("clears a pin when no model is given", () =>
+      Effect.gen(function* () {
+        const decided = yield* decideOrchestrationCommand({
+          command: {
+            type: "thread.workflow.step-model.set",
+            commandId: CommandId.make("cmd-clear-step"),
+            threadId: ThreadId.make("root-1"),
+            workflowPromptId: "implementation.code-review.codex",
+            modelSelection: null,
+            createdAt: NOW,
+          },
+          readModel: makeReadModel([makeThread({ id: "root-1" })]),
+        });
+        const events = Array.isArray(decided) ? decided : [decided];
+        expect(events[0]?.payload).toMatchObject({ modelSelection: null });
+      }),
+    );
 
-  it.effect("rejects a separate model pin for a step that shares the workflow thread", () =>
-    Effect.gen(function* () {
-      const error = yield* decideOrchestrationCommand({
-        command: {
-          type: "thread.workflow.step-model.set",
-          commandId: CommandId.make("cmd-pin-shared-step"),
-          threadId: ThreadId.make("root-1"),
-          workflowPromptId: "planning.spec.codex",
-          modelSelection: PINNED_MODEL,
-          createdAt: NOW,
-        },
-        readModel: makeReadModel([makeThread({ id: "root-1", workflowPreset: "planning" })]),
-      }).pipe(Effect.flip);
+    it.effect("rejects a separate model pin for a step that shares the workflow thread", () =>
+      Effect.gen(function* () {
+        const error = yield* decideOrchestrationCommand({
+          command: {
+            type: "thread.workflow.step-model.set",
+            commandId: CommandId.make("cmd-pin-shared-step"),
+            threadId: ThreadId.make("root-1"),
+            workflowPromptId: "planning.spec.codex",
+            modelSelection: PINNED_MODEL,
+            createdAt: NOW,
+          },
+          readModel: makeReadModel([makeThread({ id: "root-1", workflowPreset: "planning" })]),
+        }).pipe(Effect.flip);
 
-      expect(error._tag).toBe("OrchestrationCommandInvariantError");
-      if (error._tag === "OrchestrationCommandInvariantError") {
-        expect(error.detail).toContain("shares the workflow's main thread");
-      }
-    }),
-  );
+        expect(error._tag).toBe("OrchestrationCommandInvariantError");
+        if (error._tag === "OrchestrationCommandInvariantError") {
+          expect(error.detail).toContain("shares the workflow's main thread");
+        }
+      }),
+    );
 
-  it.effect("still clears a stale pin for a step that shares the workflow thread", () =>
-    Effect.gen(function* () {
-      const decided = yield* decideOrchestrationCommand({
-        command: {
-          type: "thread.workflow.step-model.set",
-          commandId: CommandId.make("cmd-clear-shared-step"),
-          threadId: ThreadId.make("root-1"),
-          workflowPromptId: "planning.spec.codex",
-          modelSelection: null,
-          createdAt: NOW,
-        },
-        readModel: makeReadModel([makeThread({ id: "root-1", workflowPreset: "planning" })]),
-      });
-      const events = Array.isArray(decided) ? decided : [decided];
+    it.effect("still clears a stale pin for a step that shares the workflow thread", () =>
+      Effect.gen(function* () {
+        const decided = yield* decideOrchestrationCommand({
+          command: {
+            type: "thread.workflow.step-model.set",
+            commandId: CommandId.make("cmd-clear-shared-step"),
+            threadId: ThreadId.make("root-1"),
+            workflowPromptId: "planning.spec.codex",
+            modelSelection: null,
+            createdAt: NOW,
+          },
+          readModel: makeReadModel([makeThread({ id: "root-1", workflowPreset: "planning" })]),
+        });
+        const events = Array.isArray(decided) ? decided : [decided];
 
-      expect(events[0]?.payload).toMatchObject({ modelSelection: null });
-    }),
-  );
-});
+        expect(events[0]?.payload).toMatchObject({ modelSelection: null });
+      }),
+    );
+  },
+);

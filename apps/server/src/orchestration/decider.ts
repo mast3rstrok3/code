@@ -45,7 +45,7 @@ import {
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
@@ -1153,11 +1153,11 @@ function withEventBase(
 ): Effect.Effect<
   Omit<OrchestrationEvent, "sequence" | "type" | "payload">,
   PlatformError.PlatformError,
-  Crypto.Crypto
+  SecureRandom.SecureRandom
 > {
-  return Crypto.Crypto.pipe(
-    Effect.flatMap((crypto) =>
-      crypto.randomUUIDv4().pipe(
+  return SecureRandom.SecureRandom.pipe(
+    Effect.flatMap((random) =>
+      random.uuidV4().pipe(
         Effect.map((eventId) => ({
           eventId: EventId.make(eventId),
           aggregateKind: input.aggregateKind,
@@ -1190,7 +1190,7 @@ const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
   | OrchestrationCommandInvariantError
   | OrchestrationThreadSettleBlockedError
   | PlatformError.PlatformError,
-  Crypto.Crypto
+  SecureRandom.SecureRandom
 > {
   let nextReadModel = readModel;
   let nextSequence = readModel.snapshotSequence;
@@ -1228,7 +1228,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
   | OrchestrationCommandInvariantError
   | OrchestrationThreadSettleBlockedError
   | PlatformError.PlatformError,
-  Crypto.Crypto
+  SecureRandom.SecureRandom
 > {
   switch (command.type) {
     case "project.create": {
@@ -2988,8 +2988,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // in the conversation; the stage event stamps the workflow context the
       // planning-orchestrator child used to carry. The preset is pinned so the
       // thread still reads as a product root once its interaction mode flips.
-      const crypto = yield* Crypto.Crypto;
-      const messageUuid = yield* crypto.randomUUIDv4();
+      const random = yield* SecureRandom.SecureRandom;
+      const messageUuid = yield* random.uuidV4();
       const productContextOnly = productRootThread.workflowPreset === "product-planning";
       const messageId = MessageId.make(
         `message-product-${productContextOnly ? "context" : "engineering-grill"}-${messageUuid}`,
@@ -3118,8 +3118,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
 
-      const crypto = yield* Crypto.Crypto;
-      const messageUuid = yield* crypto.randomUUIDv4();
+      const random = yield* SecureRandom.SecureRandom;
+      const messageUuid = yield* random.uuidV4();
       const messageId = MessageId.make(`message-planning-${command.stage}-stage-${messageUuid}`);
       const stage =
         command.stage === "grill"
@@ -3305,9 +3305,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Thread '${command.threadId}' already has a Spec for this Planning Workflow.`,
         });
       }
-      const crypto = yield* Crypto.Crypto;
-      const specUuid = yield* crypto.randomUUIDv4();
-      const ticketMessageUuid = yield* crypto.randomUUIDv4();
+      const random = yield* SecureRandom.SecureRandom;
+      const specUuid = yield* random.uuidV4();
+      const ticketMessageUuid = yield* random.uuidV4();
       const spec = buildPlanningSpecFromArtifact({
         specId:
           existingArtifact?.id ??
@@ -3424,9 +3424,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             createdAt: command.createdAt,
           },
         });
-        const crypto = yield* Crypto.Crypto;
+        const random = yield* SecureRandom.SecureRandom;
         const generatedTicketIds = yield* Effect.forEach(command.tickets, () =>
-          crypto.randomUUIDv4().pipe(Effect.map((uuid) => `planning-ticket-${uuid}`)),
+          random.uuidV4().pipe(Effect.map((uuid) => `planning-ticket-${uuid}`)),
         );
         const tickets = resolvePlanningTicketProjects(
           readModel,
@@ -3491,9 +3491,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Planning Tickets artifact targets unknown planning artifact '${command.specId}'.`,
         });
       }
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
       const generatedTicketIds = yield* Effect.forEach(command.tickets, () =>
-        crypto.randomUUIDv4().pipe(Effect.map((uuid) => `planning-ticket-${uuid}`)),
+        random.uuidV4().pipe(Effect.map((uuid) => `planning-ticket-${uuid}`)),
       );
       const tickets = resolvePlanningTicketProjects(
         readModel,
@@ -3594,9 +3594,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Planning ticket review is limited to ${PLANNING_REVIEW_MAX_CYCLES} cycles.`,
         });
       }
-      const crypto = yield* Crypto.Crypto;
-      const reviewerThreadUuid = yield* crypto.randomUUIDv4();
-      const reviewerMessageUuid = yield* crypto.randomUUIDv4();
+      const random = yield* SecureRandom.SecureRandom;
+      const reviewerThreadUuid = yield* random.uuidV4();
+      const reviewerMessageUuid = yield* random.uuidV4();
       const reviewerThreadId = ThreadId.make(`thread-planning-reviewer-${reviewerThreadUuid}`);
       const reviewerMessageId = MessageId.make(`message-planning-reviewer-${reviewerMessageUuid}`);
       const { cycleNumber, mode, targetPlanningTicketIds, previousCycle } = reviewRequest;
@@ -3811,10 +3811,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: "A passing reviewer verdict cannot contain failing Planning Ticket ids.",
         });
       }
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
       const generatedTicketIds = yield* Effect.forEach(edits, (edit) =>
         edit.type === "create"
-          ? crypto.randomUUIDv4().pipe(Effect.map((uuid) => `planning-ticket-${uuid}`))
+          ? random.uuidV4().pipe(Effect.map((uuid) => `planning-ticket-${uuid}`))
           : Effect.succeed(""),
       );
       const editedTickets = resolvePlanningTicketProjects(
@@ -4026,9 +4026,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Planning Ticket '${unplacedTicket.id}' changes project '${unplacedTicket.projectId}', but the launch prepared no worktree for it.`,
         });
       }
-      const crypto = yield* Crypto.Crypto;
-      const runUuid = yield* crypto.randomUUIDv4();
-      const orchestratorThreadUuid = yield* crypto.randomUUIDv4();
+      const random = yield* SecureRandom.SecureRandom;
+      const runUuid = yield* random.uuidV4();
+      const orchestratorThreadUuid = yield* random.uuidV4();
       const orchestratorThreadId = ThreadId.make(
         `thread-implementation-orchestrator-${orchestratorThreadUuid}`,
       );

@@ -9,7 +9,7 @@ import {
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -107,7 +107,7 @@ export const make = Effect.gen(function* () {
   const git = yield* GitManager.GitManager;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const fileSystem = yield* FileSystem.FileSystem;
   // Settled threads get one link discovery at startup. Failed lookups retry on
   // the periodic pass a few times, then stop until the thread changes or the
@@ -302,7 +302,7 @@ export const make = Effect.gen(function* () {
             updates,
             ({ thread, branchPullRequest, replacement }) =>
               Effect.gen(function* () {
-                const uuid = yield* crypto.randomUUIDv4();
+                const uuid = yield* random.uuidV4();
                 yield* engine.dispatch({
                   type: "thread.pull-request.sync",
                   commandId: CommandId.make(`server:thread-pull-request:${thread.id}:${uuid}`),

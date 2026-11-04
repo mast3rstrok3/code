@@ -17,8 +17,9 @@ import { McpSchema, McpServer } from "effect/ai";
 
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { getWorkflowArtifactsForThread } from "../../../orchestration/workflowArtifacts.ts";
+import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { handlers, WorkflowArtifactsToolkitHandlersLive } from "./handlers.ts";
+import * as WorkflowArtifactsHandlers from "./handlers.ts";
 import { WorkflowArtifactsToolkit } from "./tools.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 
@@ -312,10 +313,8 @@ const mcpClient = McpSchema.McpServerClient.of({
   getClient: Effect.die("unused"),
 });
 const mcpLayer = (threadId = nestedReviewerThreadId) =>
-  // oxlint-disable-next-line t3code/no-raw-mcp-registration -- Tests exercise encoding with explicit invocation fixtures; production uses McpToolAccess.
-  McpServer.toolkit(WorkflowArtifactsToolkit).pipe(
-    Layer.provide(WorkflowArtifactsToolkitHandlersLive),
-    Layer.provideMerge(McpServer.McpServer.layer),
+  McpHttpServer.toolkitRegistration(WorkflowArtifactsToolkit, WorkflowArtifactsHandlers.layer).pipe(
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provideMerge(queryLayer),
     Layer.provideMerge(
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
@@ -431,11 +430,12 @@ it.effect("returns empty histories and absent planning artifacts as MCP objects"
 describe("workflow-artifacts toolkit handlers", () => {
   it.effect("resolves canonical artifacts and many-to-many App Review links from a child", () =>
     Effect.gen(function* () {
-      const context = yield* handlers.workflow_context_get();
-      const { wayfinderMap } = yield* handlers.workflow_wayfinder_map_get();
-      const { spec } = yield* handlers.workflow_spec_get();
-      const { tickets } = yield* handlers.workflow_tickets_list();
-      const review = yield* handlers.workflow_app_review_get({
+      const context = yield* WorkflowArtifactsHandlers.handlers.workflow_context_get();
+      const { wayfinderMap } =
+        yield* WorkflowArtifactsHandlers.handlers.workflow_wayfinder_map_get();
+      const { spec } = yield* WorkflowArtifactsHandlers.handlers.workflow_spec_get();
+      const { tickets } = yield* WorkflowArtifactsHandlers.handlers.workflow_tickets_list();
+      const review = yield* WorkflowArtifactsHandlers.handlers.workflow_app_review_get({
         reviewId: AppReviewId.make("app-review-1"),
       });
 
@@ -452,7 +452,7 @@ describe("workflow-artifacts toolkit handlers", () => {
 
   it.effect("rejects cross-workflow artifact IDs and cross-project RPC context", () =>
     Effect.gen(function* () {
-      const ticketError = yield* handlers
+      const ticketError = yield* WorkflowArtifactsHandlers.handlers
         .workflow_ticket_get({ ticketId: "planning-ticket-other" })
         .pipe(Effect.flip);
       assert.strictEqual(ticketError._tag, "WorkflowArtifactAccessError");
@@ -468,10 +468,10 @@ describe("workflow-artifacts toolkit handlers", () => {
 
   it.effect("resolves planning artifacts through nested workflow ancestry", () =>
     Effect.gen(function* () {
-      const context = yield* handlers.workflow_context_get();
-      const { spec } = yield* handlers.workflow_spec_get();
-      const { tickets } = yield* handlers.workflow_tickets_list();
-      const ticket = yield* handlers.workflow_ticket_get({ ticketId });
+      const context = yield* WorkflowArtifactsHandlers.handlers.workflow_context_get();
+      const { spec } = yield* WorkflowArtifactsHandlers.handlers.workflow_spec_get();
+      const { tickets } = yield* WorkflowArtifactsHandlers.handlers.workflow_tickets_list();
+      const ticket = yield* WorkflowArtifactsHandlers.handlers.workflow_ticket_get({ ticketId });
 
       assert.strictEqual(context.workflowId, implementationWorkflowId);
       assert.strictEqual(context.parentWorkflowId, workflowId);
@@ -526,11 +526,15 @@ describe("workflow-artifacts toolkit handlers", () => {
 
   it.effect("loads built-in workflow docs and rejects unknown IDs", () =>
     Effect.gen(function* () {
-      const doc = yield* handlers.workflow_doc_get({ docId: "glossary-format" });
+      const doc = yield* WorkflowArtifactsHandlers.handlers.workflow_doc_get({
+        docId: "glossary-format",
+      });
       assert.strictEqual(doc.path, "GLOSSARY-FORMAT.md");
       assert.match(doc.content, /# GLOSSARY\.md Format/);
 
-      const error = yield* handlers.workflow_doc_get({ docId: "missing" }).pipe(Effect.flip);
+      const error = yield* WorkflowArtifactsHandlers.handlers
+        .workflow_doc_get({ docId: "missing" })
+        .pipe(Effect.flip);
       assert.strictEqual(error._tag, "WorkflowArtifactAccessError");
       assert.match(error.message, /was not found/);
     }).pipe(Effect.provide(invocationLayer)),

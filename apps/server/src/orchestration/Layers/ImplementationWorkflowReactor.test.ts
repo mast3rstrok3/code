@@ -1,4 +1,5 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
@@ -977,7 +978,7 @@ function makeTestLayer(
     Layer.provideMerge(
       ServerConfig.layerTest(process.cwd(), { prefix: "implementation-reactor-" }),
     ),
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     Layer.provideMerge(ThreadBackgroundLiveness.layer),
     Layer.provideMerge(ThreadPlanProgress.layer),
     Layer.provideMerge(
@@ -3931,7 +3932,7 @@ describe("ImplementationWorkflowReactor", () => {
         });
         yield* system.reactor.recoverIncompleteStages();
         return { run, worktreePath, fileSystem };
-      }).pipe(Effect.provide(NodeServices.layer));
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
     it.effect("deletes a succeeded ticket's checkout that git already unregistered", () =>
       withSystem(
@@ -11643,7 +11644,7 @@ describe("ImplementationWorkflowReactor", () => {
           "preserve unknown files too",
         );
         expect(snapshot.implementationRuns[0]?.ticketStates[0]?.status).toBe("running");
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     ),
   );
 
@@ -13949,7 +13950,7 @@ it.effect(
               ServerConfig.layerTest("/tmp/implementation-reactor", {
                 prefix: "t3-native-git-test-",
               }),
-            ).pipe(Layer.provideMerge(NodeServices.layer)),
+            ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
           ),
         );
         const execute = (input: Parameters<typeof executeNativeVerification>[0]) =>
@@ -13985,7 +13986,7 @@ it.effect(
                   };
                 }),
             }),
-            Effect.provide(NodeServices.layer),
+            Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           );
         const target = { runId: run.id, ticketId: ticket.id };
         const rejected = yield* execute({

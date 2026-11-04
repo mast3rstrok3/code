@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -14,6 +15,7 @@ import {
   type OrchestrationThread,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 import { WORKFLOW_PROMPT_IDS } from "../provider/WorkflowPromptRegistry.ts";
@@ -156,30 +158,111 @@ function setCyclesCommand(input: {
   };
 }
 
-it.layer(NodeServices.layer)("workflow step cycles decider", (it) => {
-  it.effect("records the budget on the workflow root, not the thread it was set from", () =>
-    Effect.gen(function* () {
-      const decided = yield* decideOrchestrationCommand({
-        command: setCyclesCommand({ threadId: orchestratorThreadId, maxCycles: 10 }),
-        readModel: readModel(),
-      });
-      const events = Array.isArray(decided) ? decided : [decided];
-      expect(events).toHaveLength(1);
-      const event = events[0];
-      if (event?.type !== "thread.workflow-step-cycles-set") throw new Error("Wrong event.");
-      expect(event.payload.threadId).toBe(rootThreadId);
-      expect(event.payload.maxCycles).toBe(10);
-    }),
-  );
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "workflow step cycles decider",
+  (it) => {
+    it.effect("records the budget on the workflow root, not the thread it was set from", () =>
+      Effect.gen(function* () {
+        const decided = yield* decideOrchestrationCommand({
+          command: setCyclesCommand({ threadId: orchestratorThreadId, maxCycles: 10 }),
+          readModel: readModel(),
+        });
+        const events = Array.isArray(decided) ? decided : [decided];
+        expect(events).toHaveLength(1);
+        const event = events[0];
+        if (event?.type !== "thread.workflow-step-cycles-set") throw new Error("Wrong event.");
+        expect(event.payload.threadId).toBe(rootThreadId);
+        expect(event.payload.maxCycles).toBe(10);
+      }),
+    );
 
-  it.effect.each(["running", "exhausted"] as const)(
-    "moves the budget of a %s App Review the run is spending",
-    (status) =>
+    it.effect.each(["running", "exhausted"] as const)(
+      "moves the budget of a %s App Review the run is spending",
+      (status) =>
+        Effect.gen(function* () {
+          const decided = yield* decideOrchestrationCommand({
+            command: setCyclesCommand({ maxCycles: 20 }),
+            readModel: readModel({
+              appReviewWorkflowRuns: [appReviewRun({ cycleBudget: 5, status })],
+            }),
+          });
+          const events = Array.isArray(decided) ? decided : [decided];
+          const updated = events.find(
+            (event) => event.type === "thread.app-review-workflow-updated",
+          );
+          if (updated?.type !== "thread.app-review-workflow-updated") {
+            throw new Error("Live App Review was not updated.");
+          }
+          expect(updated.payload.run.cycleBudget).toBe(10);
+          // Only the budget moves: an exhausted run stays exhausted until it is
+          // asked to review again.
+          expect(updated.payload.run.cyclesUsed).toBe(2);
+          expect(updated.payload.run.status).toBe(status);
+        }),
+    );
+
+    it.effect("leaves a ticket App Review alone when the run's own budget changes", () =>
       Effect.gen(function* () {
         const decided = yield* decideOrchestrationCommand({
           command: setCyclesCommand({ maxCycles: 20 }),
           readModel: readModel({
-            appReviewWorkflowRuns: [appReviewRun({ cycleBudget: 5, status })],
+            appReviewWorkflowRuns: [appReviewRun({ ticketId: "ticket-1", cycleBudget: 10 })],
+          }),
+        });
+        const events = Array.isArray(decided) ? decided : [decided];
+        expect(events.map((event) => event.type)).toEqual(["thread.workflow-step-cycles-set"]);
+      }),
+    );
+
+    it.effect("leaves a finished App Review alone", () =>
+      Effect.gen(function* () {
+        const decided = yield* decideOrchestrationCommand({
+          command: setCyclesCommand({ maxCycles: 20 }),
+          readModel: readModel({
+            appReviewWorkflowRuns: [appReviewRun({ cycleBudget: 10, status: "passed" })],
+          }),
+        });
+        const events = Array.isArray(decided) ? decided : [decided];
+        expect(events.map((event) => event.type)).toEqual(["thread.workflow-step-cycles-set"]);
+      }),
+    );
+
+    it.effect("refuses a step that does not run in cycles", () =>
+      Effect.gen(function* () {
+        const result = yield* Effect.exit(
+          decideOrchestrationCommand({
+            command: setCyclesCommand({
+              workflowPromptId: WORKFLOW_PROMPT_IDS.planningSpecCodex,
+              maxCycles: 4,
+            }),
+            readModel: readModel(),
+          }),
+        );
+        expect(result._tag).toBe("Failure");
+      }),
+    );
+
+    it.effect("clamps a budget above the step's ceiling", () =>
+      Effect.gen(function* () {
+        const decided = yield* decideOrchestrationCommand({
+          command: setCyclesCommand({ maxCycles: 500 }),
+          readModel: readModel(),
+        });
+        const events = Array.isArray(decided) ? decided : [decided];
+        const updated = events.find((event) => event.type === "thread.workflow-step-cycles-set");
+        expect(updated?.payload.maxCycles).toBe(10);
+      }),
+    );
+
+    it.effect("clearing the budget returns a live App Review to the step's default", () =>
+      Effect.gen(function* () {
+        const decided = yield* decideOrchestrationCommand({
+          command: setCyclesCommand({
+            stepWorkflowPromptId: TICKET_WAVE_PROMPT_ID,
+            maxCycles: null,
+          }),
+          readModel: readModel({
+            appReviewWorkflowRuns: [appReviewRun({ ticketId: "ticket-1", cycleBudget: 3 })],
           }),
         });
         const events = Array.isArray(decided) ? decided : [decided];
@@ -187,84 +270,8 @@ it.layer(NodeServices.layer)("workflow step cycles decider", (it) => {
         if (updated?.type !== "thread.app-review-workflow-updated") {
           throw new Error("Live App Review was not updated.");
         }
-        expect(updated.payload.run.cycleBudget).toBe(10);
-        // Only the budget moves: an exhausted run stays exhausted until it is
-        // asked to review again.
-        expect(updated.payload.run.cyclesUsed).toBe(2);
-        expect(updated.payload.run.status).toBe(status);
+        expect(updated.payload.run.cycleBudget).toBe(5);
       }),
-  );
-
-  it.effect("leaves a ticket App Review alone when the run's own budget changes", () =>
-    Effect.gen(function* () {
-      const decided = yield* decideOrchestrationCommand({
-        command: setCyclesCommand({ maxCycles: 20 }),
-        readModel: readModel({
-          appReviewWorkflowRuns: [appReviewRun({ ticketId: "ticket-1", cycleBudget: 10 })],
-        }),
-      });
-      const events = Array.isArray(decided) ? decided : [decided];
-      expect(events.map((event) => event.type)).toEqual(["thread.workflow-step-cycles-set"]);
-    }),
-  );
-
-  it.effect("leaves a finished App Review alone", () =>
-    Effect.gen(function* () {
-      const decided = yield* decideOrchestrationCommand({
-        command: setCyclesCommand({ maxCycles: 20 }),
-        readModel: readModel({
-          appReviewWorkflowRuns: [appReviewRun({ cycleBudget: 10, status: "passed" })],
-        }),
-      });
-      const events = Array.isArray(decided) ? decided : [decided];
-      expect(events.map((event) => event.type)).toEqual(["thread.workflow-step-cycles-set"]);
-    }),
-  );
-
-  it.effect("refuses a step that does not run in cycles", () =>
-    Effect.gen(function* () {
-      const result = yield* Effect.exit(
-        decideOrchestrationCommand({
-          command: setCyclesCommand({
-            workflowPromptId: WORKFLOW_PROMPT_IDS.planningSpecCodex,
-            maxCycles: 4,
-          }),
-          readModel: readModel(),
-        }),
-      );
-      expect(result._tag).toBe("Failure");
-    }),
-  );
-
-  it.effect("clamps a budget above the step's ceiling", () =>
-    Effect.gen(function* () {
-      const decided = yield* decideOrchestrationCommand({
-        command: setCyclesCommand({ maxCycles: 500 }),
-        readModel: readModel(),
-      });
-      const events = Array.isArray(decided) ? decided : [decided];
-      const updated = events.find((event) => event.type === "thread.workflow-step-cycles-set");
-      expect(updated?.payload.maxCycles).toBe(10);
-    }),
-  );
-
-  it.effect("clearing the budget returns a live App Review to the step's default", () =>
-    Effect.gen(function* () {
-      const decided = yield* decideOrchestrationCommand({
-        command: setCyclesCommand({
-          stepWorkflowPromptId: TICKET_WAVE_PROMPT_ID,
-          maxCycles: null,
-        }),
-        readModel: readModel({
-          appReviewWorkflowRuns: [appReviewRun({ ticketId: "ticket-1", cycleBudget: 3 })],
-        }),
-      });
-      const events = Array.isArray(decided) ? decided : [decided];
-      const updated = events.find((event) => event.type === "thread.app-review-workflow-updated");
-      if (updated?.type !== "thread.app-review-workflow-updated") {
-        throw new Error("Live App Review was not updated.");
-      }
-      expect(updated.payload.run.cycleBudget).toBe(5);
-    }),
-  );
-});
+    );
+  },
+);

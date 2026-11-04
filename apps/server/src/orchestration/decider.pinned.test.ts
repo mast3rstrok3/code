@@ -6,9 +6,11 @@ import {
   ThreadId,
   type OrchestrationReadModel,
 } from "@t3tools/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 
@@ -66,7 +68,7 @@ function makeReadModel(input: {
   };
 }
 
-it.layer(NodeServices.layer)("pinned thread decider", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("pinned thread decider", (it) => {
   it.effect("pins a thread, stamping pinnedAt and updatedAt together", () =>
     Effect.gen(function* () {
       const event = yield* decideOrchestrationCommand({

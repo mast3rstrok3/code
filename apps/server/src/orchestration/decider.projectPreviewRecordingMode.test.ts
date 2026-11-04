@@ -7,6 +7,8 @@ import {
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { decideOrchestrationCommand } from "./decider.ts";
@@ -45,59 +47,62 @@ const metaUpdate = (commandId: string, previewRecordingMode: "auto" | "dom" | "v
   previewRecordingMode,
 });
 
-it.layer(NodeServices.layer)("decider project previewRecordingMode", (it) => {
-  it.effect("propagates previewRecordingMode through meta.update into the read model", () =>
-    Effect.gen(function* () {
-      const readModel = yield* projectEvent(createEmptyReadModel(now), seedProjectCreated(1));
-      expect(readModel.projects[0]?.previewRecordingMode ?? null).toBeNull();
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "decider project previewRecordingMode",
+  (it) => {
+    it.effect("propagates previewRecordingMode through meta.update into the read model", () =>
+      Effect.gen(function* () {
+        const readModel = yield* projectEvent(createEmptyReadModel(now), seedProjectCreated(1));
+        expect(readModel.projects[0]?.previewRecordingMode ?? null).toBeNull();
 
-      const result = yield* decideOrchestrationCommand({
-        command: metaUpdate("cmd-project-recording-mode-set", "video"),
-        readModel,
-      });
+        const result = yield* decideOrchestrationCommand({
+          command: metaUpdate("cmd-project-recording-mode-set", "video"),
+          readModel,
+        });
 
-      const event = Array.isArray(result) ? result[0] : result;
-      expect(event.type).toBe("project.meta-updated");
-      expect((event.payload as { previewRecordingMode?: unknown }).previewRecordingMode).toBe(
-        "video",
-      );
+        const event = Array.isArray(result) ? result[0] : result;
+        expect(event.type).toBe("project.meta-updated");
+        expect((event.payload as { previewRecordingMode?: unknown }).previewRecordingMode).toBe(
+          "video",
+        );
 
-      const updated = yield* projectEvent(readModel, { ...event, sequence: 2 });
-      expect(updated.projects[0]?.previewRecordingMode).toBe("video");
-    }),
-  );
+        const updated = yield* projectEvent(readModel, { ...event, sequence: 2 });
+        expect(updated.projects[0]?.previewRecordingMode).toBe("video");
+      }),
+    );
 
-  it.effect("omits the field when unset and clears it on explicit null", () =>
-    Effect.gen(function* () {
-      const readModel = yield* projectEvent(createEmptyReadModel(now), seedProjectCreated(1));
+    it.effect("omits the field when unset and clears it on explicit null", () =>
+      Effect.gen(function* () {
+        const readModel = yield* projectEvent(createEmptyReadModel(now), seedProjectCreated(1));
 
-      const unrelated = yield* decideOrchestrationCommand({
-        command: {
-          type: "project.meta.update",
-          commandId: CommandId.make("cmd-project-recording-mode-title"),
-          projectId,
-          title: "Renamed",
-        },
-        readModel,
-      });
-      const unrelatedEvent = Array.isArray(unrelated) ? unrelated[0] : unrelated;
-      expect("previewRecordingMode" in (unrelatedEvent.payload as object)).toBe(false);
+        const unrelated = yield* decideOrchestrationCommand({
+          command: {
+            type: "project.meta.update",
+            commandId: CommandId.make("cmd-project-recording-mode-title"),
+            projectId,
+            title: "Renamed",
+          },
+          readModel,
+        });
+        const unrelatedEvent = Array.isArray(unrelated) ? unrelated[0] : unrelated;
+        expect("previewRecordingMode" in (unrelatedEvent.payload as object)).toBe(false);
 
-      const set = yield* decideOrchestrationCommand({
-        command: metaUpdate("cmd-project-recording-mode-set", "dom"),
-        readModel,
-      });
-      const setEvent = Array.isArray(set) ? set[0] : set;
-      const afterSet = yield* projectEvent(readModel, { ...setEvent, sequence: 2 });
-      expect(afterSet.projects[0]?.previewRecordingMode).toBe("dom");
+        const set = yield* decideOrchestrationCommand({
+          command: metaUpdate("cmd-project-recording-mode-set", "dom"),
+          readModel,
+        });
+        const setEvent = Array.isArray(set) ? set[0] : set;
+        const afterSet = yield* projectEvent(readModel, { ...setEvent, sequence: 2 });
+        expect(afterSet.projects[0]?.previewRecordingMode).toBe("dom");
 
-      const clear = yield* decideOrchestrationCommand({
-        command: metaUpdate("cmd-project-recording-mode-clear", null),
-        readModel: afterSet,
-      });
-      const clearEvent = Array.isArray(clear) ? clear[0] : clear;
-      const afterClear = yield* projectEvent(afterSet, { ...clearEvent, sequence: 3 });
-      expect(afterClear.projects[0]?.previewRecordingMode).toBeNull();
-    }),
-  );
-});
+        const clear = yield* decideOrchestrationCommand({
+          command: metaUpdate("cmd-project-recording-mode-clear", null),
+          readModel: afterSet,
+        });
+        const clearEvent = Array.isArray(clear) ? clear[0] : clear;
+        const afterClear = yield* projectEvent(afterSet, { ...clearEvent, sequence: 3 });
+        expect(afterClear.projects[0]?.previewRecordingMode).toBeNull();
+      }),
+    );
+  },
+);

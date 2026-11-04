@@ -17,7 +17,7 @@ import {
   type ThreadLinkedPullRequest,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -246,11 +246,8 @@ const makeHarness = Effect.fn("makeThreadPullRequestHarness")(function* (options
     }),
     Layer.succeed(ServerActivation, Deferred.await(activation)),
     Layer.succeed(
-      Crypto.Crypto,
-      Crypto.make({
-        randomBytes: (size) => new Uint8Array(size).fill(++uuid),
-        digest: (_algorithm, data) => Effect.succeed(data),
-      }),
+      SecureRandom.SecureRandom,
+      SecureRandom.make((size) => new Uint8Array(size).fill(++uuid)),
     ),
     FileSystem.layerNoop({
       exists: (path) => Effect.succeed(options.existingWorktrees?.includes(path) ?? false),
