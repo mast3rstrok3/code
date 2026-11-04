@@ -83,6 +83,7 @@ import {
   cleanDescendantAppReviewFailureCanRestart,
   implementationTicketReviewWarningLines,
   implementationAppReviewNeedsCodeReviewRecovery,
+  withFreshCodeReviewForAppReviewRepairs,
   implementationRunAcceptsNestedAppReviewUpdate,
   implementationReviewStageHasConflict,
   implementationAwaitsAppReviewRun,
@@ -554,6 +555,47 @@ it("continues a terminal nested App Review to Code Review instead of launching i
       appReviewedHeadSha: "older-head",
     }),
   ).toBe(false);
+});
+
+it("gives App Review's repairs a fresh Final Code Review budget", () => {
+  const spent = {
+    codeReviewedHeadSha: null,
+    integrationHeadSha: "repaired-head",
+    finalCodeReviewGeneration: 6,
+    finalCodeReviewLaunchCount: 1,
+    finalCodeReviewPassCount: 5,
+    codeReviewExhaustedAt: null,
+    codeReviewExhaustionReason: null,
+  };
+
+  // Every cycle reviewed the HEAD before App Review's fixer committed.
+  expect(withFreshCodeReviewForAppReviewRepairs(spent, true)).toEqual({
+    ...spent,
+    finalCodeReviewGeneration: 7,
+    finalCodeReviewLaunchCount: 0,
+    finalCodeReviewPassCount: 0,
+  });
+  expect(
+    withFreshCodeReviewForAppReviewRepairs(
+      {
+        ...spent,
+        codeReviewExhaustedAt: "2026-01-01T00:00:00.000Z",
+        codeReviewExhaustionReason: "Final Code Review exhausted 5 cycles.",
+      },
+      true,
+    ),
+  ).toMatchObject({
+    finalCodeReviewPassCount: 0,
+    codeReviewExhaustedAt: null,
+    codeReviewExhaustionReason: null,
+  });
+  // App Review committed nothing, Code Review already accepted this HEAD, or
+  // no cycle was spent: the budget stays as it is.
+  expect(withFreshCodeReviewForAppReviewRepairs(spent, false)).toBe(spent);
+  const accepted = { ...spent, codeReviewedHeadSha: "repaired-head" };
+  expect(withFreshCodeReviewForAppReviewRepairs(accepted, true)).toBe(accepted);
+  const unspent = { ...spent, finalCodeReviewPassCount: 0 };
+  expect(withFreshCodeReviewForAppReviewRepairs(unspent, true)).toBe(unspent);
 });
 
 it("keeps a running replacement App Review ahead of historical completion markers", () => {

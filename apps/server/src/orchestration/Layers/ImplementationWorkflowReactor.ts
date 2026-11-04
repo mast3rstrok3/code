@@ -675,6 +675,42 @@ function isFinalCodeReviewPass(run: OrchestrationImplementationRun): boolean {
   );
 }
 
+/**
+ * Give App Review's repairs a fresh Final Code Review budget.
+ *
+ * The cycles spent so far reviewed code from before those repairs, and
+ * publishing needs Code Review to accept this exact HEAD. A re-run of App
+ * Review resets the budget the same way.
+ */
+export function withFreshCodeReviewForAppReviewRepairs<
+  Run extends Pick<
+    OrchestrationImplementationRun,
+    | "codeReviewedHeadSha"
+    | "integrationHeadSha"
+    | "finalCodeReviewGeneration"
+    | "finalCodeReviewLaunchCount"
+    | "finalCodeReviewPassCount"
+    | "codeReviewExhaustedAt"
+    | "codeReviewExhaustionReason"
+  >,
+>(run: Run, appReviewCommitted: boolean): Run {
+  if (
+    !appReviewCommitted ||
+    run.codeReviewedHeadSha === run.integrationHeadSha ||
+    (run.finalCodeReviewPassCount === 0 && run.codeReviewExhaustedAt === null)
+  ) {
+    return run;
+  }
+  return {
+    ...run,
+    finalCodeReviewGeneration: run.finalCodeReviewGeneration + 1,
+    finalCodeReviewLaunchCount: 0,
+    finalCodeReviewPassCount: 0,
+    codeReviewExhaustedAt: null,
+    codeReviewExhaustionReason: null,
+  };
+}
+
 export function automationHaltMatchesTicketRerun(input: {
   readonly halt: NonNullable<OrchestrationImplementationRun["automationHalt"]>;
   readonly ticketId: string;
@@ -11734,7 +11770,7 @@ const make = Effect.gen(function* () {
         rescueAbandonedWork: false,
         createdAt: event.occurredAt,
       });
-      const passedRun: OrchestrationImplementationRun = {
+      const handoffRun: OrchestrationImplementationRun = {
         ...withRepositoryHeads(linkedRun, "appReviewedHeadSha", repositoryHeads),
         // Claim the next stage before starting it. The nested run's terminal
         // event can arrive ahead of its read-model projection, and Code Review
@@ -11756,6 +11792,10 @@ const make = Effect.gen(function* () {
         retryableFailure: null,
         updatedAt: event.occurredAt,
       };
+      const passedRun = withFreshCodeReviewForAppReviewRepairs(
+        handoffRun,
+        nestedRun.cycles.some((cycle) => cycle.fixResult?.status === "succeeded"),
+      );
       yield* updateRun({ sourceThreadId, run: passedRun, createdAt: event.occurredAt });
       yield* startCodeReview({ sourceThreadId, run: passedRun, createdAt: event.occurredAt });
       return;
