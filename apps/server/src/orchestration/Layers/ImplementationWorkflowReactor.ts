@@ -18,6 +18,7 @@ import { parseWorkflowDirectiveFromMarkdown } from "../workflowDirectives.ts";
 import {
   deferredTicketValidationCommands,
   finalAppReviewValidationCommands,
+  withoutAppReviewPlatformSelection,
 } from "../appReviewValidation.ts";
 import {
   type AppStackAutoCreateResult,
@@ -456,10 +457,13 @@ function remoteBranchName(ref: VcsRef): string {
 export function selectPublicationBaseBranch(
   configuredBaseBranch: string,
   refs: ReadonlyArray<VcsRef>,
+  recordedBaseBranch: string | null = null,
 ): string | null {
   const remoteRefs = refs.filter((ref) => ref.isRemote === true);
-  if (remoteRefs.some((ref) => remoteBranchName(ref) === configuredBaseBranch)) {
-    return configuredBaseBranch;
+  for (const branch of [configuredBaseBranch, recordedBaseBranch]) {
+    if (branch !== null && remoteRefs.some((ref) => remoteBranchName(ref) === branch)) {
+      return branch;
+    }
   }
   const defaultRef = remoteRefs.find((ref) => ref.isDefault);
   return defaultRef === undefined ? null : remoteBranchName(defaultRef);
@@ -1974,6 +1978,26 @@ function fastFeatureArtifactMarkdown(input: {
 /** Required when the change touches native mobile files. */
 const NATIVE_MOBILE_VALIDATION_COMMAND = "vp run lint:mobile";
 
+/**
+ * The commands the final gate runs. A run pins Code's built-in commands when it launched before the
+ * repository had a project file, and those are not this repository's checks; the project file in
+ * the reviewed worktree replaces them. Commands App Review deferred keep their place.
+ */
+export function finalGateValidationCommands(
+  pinnedCommands: ReadonlyArray<string>,
+  projectCommands: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  const builtIn = resolveImplementationValidationCommands({});
+  return [
+    ...new Set([
+      ...projectCommands,
+      ...pinnedCommands
+        .filter((command) => projectCommands.length === 0 || !builtIn.includes(command))
+        .map(withoutAppReviewPlatformSelection),
+    ]),
+  ];
+}
+
 function completeValidationCommandsForFiles(
   run: OrchestrationImplementationRun,
   changedFiles: ReadonlyArray<string>,
@@ -2478,9 +2502,9 @@ const make = Effect.gen(function* () {
   /**
    * Asks the frontend URL itself whether a reviewer could load it. Deliberately cheap and
    * fail-closed: anything other than a real answer below 400 blocks App Review on the retryable
-   * `app-dev-stack` stage, so a stack still coming up gets the sweep's retries before a human is
-   * involved. 4xx and 5xx both count as down — at an app root they mean Traefik has no route or no
-   * healthy backend, not a page worth reviewing.
+   * `app-dev-stack` stage. Services install dependencies for minutes after the controller reports
+   * them started, so a failed answer waits like a starting stack and only becomes a repair when
+   * the stack wait runs out.
    */
   const probeFrontend = Effect.fn("ImplementationWorkflowReactor.probeFrontend")(function* (
     url: string,
@@ -2496,7 +2520,6 @@ const make = Effect.gen(function* () {
     if (outcome.success.body.trim().toLowerCase() === APP_STACK_GATEWAY_UNAVAILABLE_BODY) {
       return {
         ok: false,
-        transitioning: true,
         detail: `returned HTTP ${outcome.success.response.status} with the App Stack gateway fallback '${APP_STACK_GATEWAY_UNAVAILABLE_BODY}'`,
       };
     }
@@ -5963,10 +5986,22 @@ const make = Effect.gen(function* () {
         });
         return;
       }
+      const gateCommands =
+        input.kind === "final"
+          ? finalGateValidationCommands(
+              input.run.launchSummary.validationCommands,
+              Option.getOrUndefined(
+                yield* projectFileLoader.load(input.run.orchestratorWorktreePath),
+              )?.validationCommands ?? [],
+            )
+          : input.run.launchSummary.validationCommands;
       const finalCommands =
         input.kind === "final"
           ? completeValidationCommandsForFiles(
-              input.run,
+              {
+                ...input.run,
+                launchSummary: { ...input.run.launchSummary, validationCommands: gateCommands },
+              },
               yield* gitWorkflow.listChangedFiles({
                 cwd: input.run.orchestratorWorktreePath,
                 baseRef: input.run.pinnedCommit,
@@ -6024,6 +6059,7 @@ const make = Effect.gen(function* () {
             : {}),
         })),
         status: "validating",
+        launchSummary: { ...input.run.launchSummary, validationCommands: gateCommands },
         ...(finalRegression
           ? {
               finalRegression: {
@@ -6712,7 +6748,6 @@ const make = Effect.gen(function* () {
           readonly label: string;
           readonly url: string;
           readonly detail: string;
-          readonly transitioning?: boolean;
         } | null = null;
         for (const probe of probes) {
           const serving = yield* probeFrontend(probe.url);
@@ -6739,33 +6774,14 @@ const make = Effect.gen(function* () {
                 lastErrorMarkdown: failedProbe.detail,
                 updatedAt: input.createdAt,
               },
-              lastQaFailure: failedProbe.transitioning
-                ? null
-                : {
-                    kind: "app-dev-stack",
-                    status:
-                      failedProbe.label === "frontend"
-                        ? "frontend-unreachable"
-                        : "backend-unreachable",
-                    detailMarkdown: diagnostics,
-                    reviewId: null,
-                    headSha,
-                    occurredAt: input.createdAt,
-                  },
+              lastQaFailure: null,
             },
             retryableStage: "app-dev-stack",
             automaticRecovery: true,
-            automaticRecoveryWaiting: failedProbe.transitioning === true,
+            automaticRecoveryWaiting: true,
             reasonMarkdown: diagnostics,
             updatedAt: input.createdAt,
           });
-          if (!failedProbe.transitioning) {
-            yield* requestRunRetry({
-              sourceThreadId: input.sourceThreadId,
-              runId: blocked.id,
-              createdAt: input.createdAt,
-            });
-          }
           return;
         }
       }
@@ -7652,6 +7668,10 @@ const make = Effect.gen(function* () {
   const resolvePublicationBaseBranch = Effect.fn(
     "ImplementationWorkflowReactor.resolvePublicationBaseBranch",
   )(function* (input: { readonly cwd: string; readonly baseBranch: string }) {
+    // A workflow's base is often a local worktree branch; it recorded what it branched from.
+    const recordedBaseBranch = yield* gitWorkflow
+      .readBranchBase(input.cwd, input.baseBranch)
+      .pipe(Effect.orElseSucceed(() => null));
     const remoteRefsResult = yield* gitWorkflow
       .listRefs({
         cwd: input.cwd,
@@ -7663,7 +7683,11 @@ const make = Effect.gen(function* () {
       .pipe(Effect.result);
     const fallbackRefsResult =
       remoteRefsResult._tag === "Success" &&
-      selectPublicationBaseBranch(input.baseBranch, remoteRefsResult.success.refs) === null
+      selectPublicationBaseBranch(
+        input.baseBranch,
+        remoteRefsResult.success.refs,
+        recordedBaseBranch,
+      ) === null
         ? yield* gitWorkflow
             .listRefs({
               cwd: input.cwd,
@@ -7675,7 +7699,11 @@ const make = Effect.gen(function* () {
         : remoteRefsResult;
     const branch =
       fallbackRefsResult._tag === "Success"
-        ? selectPublicationBaseBranch(input.baseBranch, fallbackRefsResult.success.refs)
+        ? selectPublicationBaseBranch(
+            input.baseBranch,
+            fallbackRefsResult.success.refs,
+            recordedBaseBranch,
+          )
         : null;
     const lookupFailure =
       fallbackRefsResult._tag === "Failure" ? ` ${errorDetail(fallbackRefsResult.failure)}` : "";
@@ -7838,7 +7866,7 @@ const make = Effect.gen(function* () {
         threadId: input.run.orchestratorThreadId,
         tone: "info",
         kind: "implementation-change-request-base-resolved",
-        summary: `Publishing against remote default branch ${publicationBaseBranch}`,
+        summary: `Publishing against remote branch ${publicationBaseBranch}`,
         payload: {
           runId: input.run.id,
           configuredBaseBranch: input.run.baseBranch,
@@ -9208,6 +9236,17 @@ const make = Effect.gen(function* () {
     if (!claimed) {
       yield* logSkippedLaunch({ runId: input.run.id, stage: "fixer" });
       return;
+    }
+
+    // A replaced fixer's session can wake on its own background work and keep changing the worktree
+    // and App Stack this repair now owns.
+    if (currentRun.activeFixerThreadId !== null) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.session.stop",
+        commandId: yield* serverCommandId("implementation-fixer-replaced-stop"),
+        threadId: currentRun.activeFixerThreadId,
+        createdAt: input.createdAt,
+      });
     }
 
     yield* orchestrationEngine.dispatch({
