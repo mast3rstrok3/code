@@ -44,8 +44,8 @@ import {
   type WorkflowTuningBinding,
 } from "../workflows/WorkflowTuning";
 import {
-  AndroidSettingsEnvironmentFilter,
   SettingsEnvironmentFilterHeader,
+  useSettingsEnvironmentMenu,
 } from "./components/SettingsEnvironmentFilterHeader";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
@@ -74,10 +74,11 @@ const SKIPPABLE_STEP_LABELS: ReadonlyArray<{
  */
 export function SettingsWorkflowsRouteScreen() {
   const insets = useSafeAreaInsets();
+  const environmentMenu = useSettingsEnvironmentMenu();
   return (
     <>
       <SettingsEnvironmentFilterHeader />
-      <SettingsScreen title="Workflows" trailing={<AndroidSettingsEnvironmentFilter />}>
+      <SettingsScreen title="Workflows" menus={[environmentMenu]}>
         <ScrollView
           contentInsetAdjustmentBehavior="automatic"
           showsVerticalScrollIndicator={false}

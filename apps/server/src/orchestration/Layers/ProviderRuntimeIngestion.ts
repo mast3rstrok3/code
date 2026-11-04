@@ -30,7 +30,7 @@ import {
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -1157,7 +1157,7 @@ export function runtimeEventToActivities(
 const make = Effect.gen(function* () {
   const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
   const threadPlanProgress = yield* ThreadPlanProgressService;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const workflowProviderEvents = yield* Effect.serviceOption(WorkflowProviderEvents);
@@ -1171,11 +1171,11 @@ const make = Effect.gen(function* () {
   const serverSettingsService = yield* ServerSettingsService;
   const checkpointStore = yield* CheckpointStore.CheckpointStore;
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
-    crypto
-      .randomUUIDv4()
+    random
+      .uuidV4()
       .pipe(Effect.map((uuid) => CommandId.make(`provider:${event.eventId}:${tag}:${uuid}`)));
   const serverMessageId = (tag: string) =>
-    crypto.randomUUIDv4().pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
+    random.uuidV4().pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
   const workflowBatchId = (threadId: ThreadId, messageId: MessageId) =>
     WorkflowSubagentBatchId.make(`workflow-batch:${threadId}:${messageId}`);
   const workflowChildThreadId = (batchId: WorkflowSubagentBatchId, childIndex: number) =>
@@ -1522,7 +1522,7 @@ const make = Effect.gen(function* () {
       commandId: yield* providerCommandId(input.event, "workflow-directive-rejected"),
       threadId: input.threadId,
       activity: {
-        id: EventId.make(yield* crypto.randomUUIDv4()),
+        id: EventId.make(yield* random.uuidV4()),
         tone: "error",
         kind: "workflow.directive.rejected",
         summary: input.summary,
@@ -1553,7 +1553,7 @@ const make = Effect.gen(function* () {
       commandId: yield* providerCommandId(input.event, "workflow-subagent-model-fallback"),
       threadId: input.threadId,
       activity: {
-        id: EventId.make(yield* crypto.randomUUIDv4()),
+        id: EventId.make(yield* random.uuidV4()),
         tone: "info",
         kind: "workflow.subagent.model-fallback",
         summary: "Workflow sub-agent model hardlock not honored",
@@ -2419,7 +2419,7 @@ const make = Effect.gen(function* () {
                 commandId: yield* providerCommandId(input.event, "product-intent-gate-blocked"),
                 threadId: thread.id,
                 activity: {
-                  id: EventId.make(yield* crypto.randomUUIDv4()),
+                  id: EventId.make(yield* random.uuidV4()),
                   tone: "error",
                   kind: "product-workflow.needs-human-attention",
                   summary: "Product Workflow needs human attention",
@@ -2455,7 +2455,7 @@ const make = Effect.gen(function* () {
             commandId: yield* providerCommandId(input.event, "workflow-product-intent-locked"),
             threadId: thread.id,
             activity: {
-              id: EventId.make(yield* crypto.randomUUIDv4()),
+              id: EventId.make(yield* random.uuidV4()),
               tone: "info",
               kind: "product-intent-locked",
               summary: input.directive.title,
@@ -2717,7 +2717,7 @@ const make = Effect.gen(function* () {
             commandId: yield* providerCommandId(input.event, "workflow-worker-result"),
             threadId: thread.id,
             activity: {
-              id: EventId.make(yield* crypto.randomUUIDv4()),
+              id: EventId.make(yield* random.uuidV4()),
               tone: input.directive.status === "succeeded" ? "info" : "error",
               kind: "implementation-worker-result",
               summary: `Worker ${input.directive.ticketId} ${input.directive.status}`,
@@ -2748,7 +2748,7 @@ const make = Effect.gen(function* () {
             commandId: yield* providerCommandId(input.event, "workflow-merge-gate-result"),
             threadId: thread.id,
             activity: {
-              id: EventId.make(yield* crypto.randomUUIDv4()),
+              id: EventId.make(yield* random.uuidV4()),
               tone: input.directive.status === "passed" ? "info" : "error",
               kind: "implementation-merge-gate-result",
               summary: `Merge gate ${input.directive.status}`,
@@ -2776,7 +2776,7 @@ const make = Effect.gen(function* () {
             commandId: yield* providerCommandId(input.event, "workflow-fix-result"),
             threadId: thread.id,
             activity: {
-              id: EventId.make(yield* crypto.randomUUIDv4()),
+              id: EventId.make(yield* random.uuidV4()),
               tone: input.directive.status === "succeeded" ? "info" : "error",
               kind: "implementation-fix-result",
               summary: `Implementation fix ${input.directive.status}`,
@@ -2807,7 +2807,7 @@ const make = Effect.gen(function* () {
             commandId: yield* providerCommandId(input.event, "app-review-repair-tickets"),
             threadId: thread.id,
             activity: {
-              id: EventId.make(yield* crypto.randomUUIDv4()),
+              id: EventId.make(yield* random.uuidV4()),
               tone: "info",
               kind: "app-review-repair-tickets",
               summary: `Created ${input.directive.tickets.length} App Review repair ticket(s)`,
@@ -2838,7 +2838,7 @@ const make = Effect.gen(function* () {
             commandId: yield* providerCommandId(input.event, "app-review-fix-result"),
             threadId: thread.id,
             activity: {
-              id: EventId.make(yield* crypto.randomUUIDv4()),
+              id: EventId.make(yield* random.uuidV4()),
               tone: input.directive.status === "succeeded" ? "info" : "error",
               kind: "app-review-fix-result",
               summary: `App Review fix ${input.directive.status}`,
@@ -2873,7 +2873,7 @@ const make = Effect.gen(function* () {
             commandId: yield* providerCommandId(input.event, "workflow-code-review-result"),
             threadId: thread.id,
             activity: {
-              id: EventId.make(yield* crypto.randomUUIDv4()),
+              id: EventId.make(yield* random.uuidV4()),
               tone: input.directive.status === "blocked" ? "error" : "info",
               kind: "implementation-code-review-result",
               summary: `Implementation code review ${input.directive.status}`,
@@ -2902,7 +2902,7 @@ const make = Effect.gen(function* () {
             ),
             threadId: thread.id,
             activity: {
-              id: EventId.make(yield* crypto.randomUUIDv4()),
+              id: EventId.make(yield* random.uuidV4()),
               tone: input.directive.status === "passed" ? "info" : "error",
               kind: "implementation-change-request-babysit-result",
               summary: `Change request checks ${input.directive.status}`,
@@ -3067,7 +3067,7 @@ const make = Effect.gen(function* () {
         commandId: yield* providerCommandId(input.event, "planning-artifact-blocked"),
         threadId: thread.id,
         activity: {
-          id: EventId.make(yield* crypto.randomUUIDv4()),
+          id: EventId.make(yield* random.uuidV4()),
           tone: "error",
           kind: "planning-workflow.needs-human-attention",
           summary: "Planning workflow needs human attention",
@@ -3130,7 +3130,7 @@ const make = Effect.gen(function* () {
       commandId: yield* providerCommandId(input.event, "workflow-fix-failure"),
       threadId: thread.id,
       activity: {
-        id: EventId.make(yield* crypto.randomUUIDv4()),
+        id: EventId.make(yield* random.uuidV4()),
         tone: "error",
         kind: "implementation-fix-result",
         summary: "Implementation fix result was missing or malformed",
@@ -3178,7 +3178,7 @@ const make = Effect.gen(function* () {
       commandId: yield* providerCommandId(input.event, "app-review-fix-failure"),
       threadId: thread.id,
       activity: {
-        id: EventId.make(yield* crypto.randomUUIDv4()),
+        id: EventId.make(yield* random.uuidV4()),
         tone: "error",
         kind: "app-review-fix-result",
         summary: "App Review fix result was missing or malformed",
@@ -3835,7 +3835,7 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      const commandUuid = yield* crypto.randomUUIDv4();
+      const commandUuid = yield* random.uuidV4();
       yield* orchestrationEngine.dispatch({
         type: "thread.proposed-plan.upsert",
         commandId: CommandId.make(
@@ -4046,7 +4046,7 @@ const make = Effect.gen(function* () {
             commandId: yield* providerCommandId(event, "provider-turn-failed"),
             threadId: thread.id,
             activity: {
-              id: EventId.make(yield* crypto.randomUUIDv4()),
+              id: EventId.make(yield* random.uuidV4()),
               tone: "error",
               kind: "provider.turn.failed",
               summary: `Provider turn failed: ${recovery.reason}`,

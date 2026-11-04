@@ -9,9 +9,11 @@ import {
   type OrchestrationReadModel,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 import { projectEvent } from "./projector.ts";
@@ -90,63 +92,66 @@ const command = {
   createdAt: NOW,
 };
 
-it.layer(NodeServices.layer)("user input dismiss decider", (it) => {
-  it.effect("closes an async question without sending a message or starting a turn", () =>
-    Effect.gen(function* () {
-      const request = makeRequest("message");
-      const readModel = makeReadModel([request]);
-      const result = yield* decideOrchestrationCommand({
-        command,
-        readModel,
-        userInputActivity: request,
-      });
-      const events = Array.isArray(result) ? result : [result];
-      expect(events.map((event) => event.type)).toEqual(["thread.activity-appended"]);
-      expect(events[0]?.payload).toMatchObject({
-        threadId,
-        activity: {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "user input dismiss decider",
+  (it) => {
+    it.effect("closes an async question without sending a message or starting a turn", () =>
+      Effect.gen(function* () {
+        const request = makeRequest("message");
+        const readModel = makeReadModel([request]);
+        const result = yield* decideOrchestrationCommand({
+          command,
+          readModel,
+          userInputActivity: request,
+        });
+        const events = Array.isArray(result) ? result : [result];
+        expect(events.map((event) => event.type)).toEqual(["thread.activity-appended"]);
+        expect(events[0]?.payload).toMatchObject({
+          threadId,
+          activity: {
+            kind: "user-input.resolved",
+            summary: "User input dismissed",
+            payload: { requestId, responseMode: "message" },
+          },
+        });
+        const projected = yield* projectEvent(readModel, { ...events[0]!, sequence: 1 });
+        expect(projected.threads[0]?.messages).toEqual([]);
+        expect(projected.threads[0]?.latestTurn).toBeNull();
+      }),
+    );
+
+    it.effect("rejects dismissing a native callback question", () =>
+      Effect.gen(function* () {
+        const request = makeRequest(undefined);
+        const result = yield* decideOrchestrationCommand({
+          command,
+          readModel: makeReadModel([request]),
+          userInputActivity: request,
+        }).pipe(Effect.flip);
+        expect(result).toMatchObject({
+          _tag: "OrchestrationCommandInvariantError",
+          detail: "This question needs an answer. Answer it or stop the turn.",
+        });
+      }),
+    );
+
+    it.effect("rejects dismissing a question that was already resolved", () =>
+      Effect.gen(function* () {
+        const resolved: OrchestrationThreadActivity = {
+          ...makeRequest("message"),
+          id: EventId.make("resolved"),
           kind: "user-input.resolved",
-          summary: "User input dismissed",
-          payload: { requestId, responseMode: "message" },
-        },
-      });
-      const projected = yield* projectEvent(readModel, { ...events[0]!, sequence: 1 });
-      expect(projected.threads[0]?.messages).toEqual([]);
-      expect(projected.threads[0]?.latestTurn).toBeNull();
-    }),
-  );
-
-  it.effect("rejects dismissing a native callback question", () =>
-    Effect.gen(function* () {
-      const request = makeRequest(undefined);
-      const result = yield* decideOrchestrationCommand({
-        command,
-        readModel: makeReadModel([request]),
-        userInputActivity: request,
-      }).pipe(Effect.flip);
-      expect(result).toMatchObject({
-        _tag: "OrchestrationCommandInvariantError",
-        detail: "This question needs an answer. Answer it or stop the turn.",
-      });
-    }),
-  );
-
-  it.effect("rejects dismissing a question that was already resolved", () =>
-    Effect.gen(function* () {
-      const resolved: OrchestrationThreadActivity = {
-        ...makeRequest("message"),
-        id: EventId.make("resolved"),
-        kind: "user-input.resolved",
-      };
-      const result = yield* decideOrchestrationCommand({
-        command,
-        readModel: makeReadModel([makeRequest("message"), resolved]),
-        userInputActivity: resolved,
-      }).pipe(Effect.flip);
-      expect(result).toMatchObject({
-        _tag: "OrchestrationCommandInvariantError",
-        detail: "This question has already been answered.",
-      });
-    }),
-  );
-});
+        };
+        const result = yield* decideOrchestrationCommand({
+          command,
+          readModel: makeReadModel([makeRequest("message"), resolved]),
+          userInputActivity: resolved,
+        }).pipe(Effect.flip);
+        expect(result).toMatchObject({
+          _tag: "OrchestrationCommandInvariantError",
+          detail: "This question has already been answered.",
+        });
+      }),
+    );
+  },
+);

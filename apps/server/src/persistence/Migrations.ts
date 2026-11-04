@@ -90,6 +90,9 @@ import Migration0084 from "./Migrations/084_AppReviewScope.ts";
 import Migration0088 from "./Migrations/045_ProjectionProjectsAutoPull.ts";
 import Migration0089 from "./Migrations/046_RepairAutomaticSettlementTimestamps.ts";
 import Migration0090 from "./Migrations/047_ProjectionProjectIcon.ts";
+import Migration0127 from "./Migrations/077_RepairBooleanSettledOverride.ts";
+import Migration0128 from "./Migrations/078_DropOrchestrationEventCorrelationIndex.ts";
+import Migration0129 from "./Migrations/079_DelegatedRecoveryIndexes.ts";
 
 import Migration0091 from "./Migrations/048_ProjectionThreadBranchPullRequest.ts";
 import Migration0092 from "./Migrations/049_ProjectionThreadsActiveOrderKey.ts";
@@ -269,6 +272,10 @@ export const migrationEntries = [
   [124, "ExcludeAttachmentPlaceholdersFromSearch", Migration0124],
   [125, "SubagentDeliveryState", Migration0125],
   [126, "ProjectionProjectsPinArchive", Migration0126],
+  // Upstream 77 through 79 overlap the fork's existing migration ledger.
+  [127, "RepairBooleanSettledOverride", Migration0127],
+  [128, "DropOrchestrationEventCorrelationIndex", Migration0128],
+  [129, "DelegatedRecoveryIndexes", Migration0129],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

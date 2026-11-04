@@ -8,9 +8,11 @@ import {
   type OrchestrationReadModel,
   type OrchestrationThread,
 } from "@t3tools/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
 import { decideOrchestrationCommand } from "./decider.ts";
@@ -77,7 +79,7 @@ function resumeCommand(threadId: string) {
   };
 }
 
-it.layer(NodeServices.layer)("workflow resume decider", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("workflow resume decider", (it) => {
   it.effect("queues resumed tickets before clearing pauses and preserves their stages", () =>
     Effect.gen(function* () {
       const summary = {

@@ -8,9 +8,11 @@ import {
   type OrchestrationReadModel,
   type OrchestrationThread,
 } from "@t3tools/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 import { projectEvent } from "./projector.ts";
@@ -77,7 +79,7 @@ const reorderCommand = {
   orderKey: "m",
 } as const;
 
-it.layer(NodeServices.layer)("active thread ordering", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("active thread ordering", (it) => {
   it.effect("persists changed and repeated slots without changing thread activity timestamps", () =>
     Effect.gen(function* () {
       let readModel = makeReadModel({ unsettledAt: BEFORE_NOW });

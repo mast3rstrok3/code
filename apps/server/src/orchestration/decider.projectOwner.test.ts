@@ -7,6 +7,8 @@ import {
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { decideOrchestrationCommand } from "./decider.ts";
@@ -16,7 +18,7 @@ const alex = WorkspaceUserId.make("alex");
 const projectId = ProjectId.make("project-owner");
 const now = "2026-01-01T00:00:00.000Z";
 
-it.layer(NodeServices.layer)("decider project owner", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("decider project owner", (it) => {
   it.effect("project.create records the owner on project.created", () =>
     Effect.gen(function* () {
       const result = yield* decideOrchestrationCommand({

@@ -21,6 +21,7 @@
  */
 
 // @effect-diagnostics nodeBuiltinImport:off - node:path joins the base directory.
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodePath from "node:path";
@@ -136,7 +137,7 @@ export const deleteOrphanWorkflowThreadsCommand = Command.make(
 if (import.meta.main) {
   Command.run(deleteOrphanWorkflowThreadsCommand, { version: "1.0.0" }).pipe(
     Effect.scoped,
-    Effect.provide(NodeServices.layer),
+    Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     NodeRuntime.runMain,
   );
 }

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -10,6 +11,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
@@ -87,54 +89,57 @@ const turnStartCommand = {
   createdAt,
 };
 
-it.layer(NodeServices.layer)("thread.message.user.append", (it) => {
-  it.effect("persists a user message without a turn, tagged as deferred", () =>
-    Effect.gen(function* () {
-      const readModel = yield* readModelWithThread;
-      const planned = yield* decideOrchestrationCommand({ command: appendCommand, readModel });
-      const events = Array.isArray(planned) ? planned : [planned];
-      expect(events.map((event) => event.type)).toEqual(["thread.message-sent"]);
-      expect(events[0]?.metadata.deferredTurn).toBe(true);
-      expect(events[0]?.payload).toMatchObject({ messageId, role: "user", turnId: null });
-    }),
-  );
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "thread.message.user.append",
+  (it) => {
+    it.effect("persists a user message without a turn, tagged as deferred", () =>
+      Effect.gen(function* () {
+        const readModel = yield* readModelWithThread;
+        const planned = yield* decideOrchestrationCommand({ command: appendCommand, readModel });
+        const events = Array.isArray(planned) ? planned : [planned];
+        expect(events.map((event) => event.type)).toEqual(["thread.message-sent"]);
+        expect(events[0]?.metadata.deferredTurn).toBe(true);
+        expect(events[0]?.payload).toMatchObject({ messageId, role: "user", turnId: null });
+      }),
+    );
 
-  it.effect("rejects a message id that already exists on the thread", () =>
-    Effect.gen(function* () {
-      const readModel = yield* readModelWithThread;
-      const first = yield* decideOrchestrationCommand({ command: appendCommand, readModel });
-      const firstEvent = Array.isArray(first) ? first[0]! : first;
-      const withMessage = yield* projectEvent(readModel, { ...firstEvent, sequence: 3 });
-      const error = yield* Effect.flip(
-        decideOrchestrationCommand({ command: appendCommand, readModel: withMessage }),
-      );
-      expect(error._tag).toBe("OrchestrationCommandInvariantError");
-      expect(error.message).toContain("already exists");
-    }),
-  );
+    it.effect("rejects a message id that already exists on the thread", () =>
+      Effect.gen(function* () {
+        const readModel = yield* readModelWithThread;
+        const first = yield* decideOrchestrationCommand({ command: appendCommand, readModel });
+        const firstEvent = Array.isArray(first) ? first[0]! : first;
+        const withMessage = yield* projectEvent(readModel, { ...firstEvent, sequence: 3 });
+        const error = yield* Effect.flip(
+          decideOrchestrationCommand({ command: appendCommand, readModel: withMessage }),
+        );
+        expect(error._tag).toBe("OrchestrationCommandInvariantError");
+        expect(error.message).toContain("already exists");
+      }),
+    );
 
-  it.effect("lets the following turn start reference the message instead of re-sending it", () =>
-    Effect.gen(function* () {
-      const readModel = yield* readModelWithThread;
-      const appended = yield* decideOrchestrationCommand({ command: appendCommand, readModel });
-      const appendedEvent = Array.isArray(appended) ? appended[0]! : appended;
-      const withMessage = yield* projectEvent(readModel, { ...appendedEvent, sequence: 3 });
+    it.effect("lets the following turn start reference the message instead of re-sending it", () =>
+      Effect.gen(function* () {
+        const readModel = yield* readModelWithThread;
+        const appended = yield* decideOrchestrationCommand({ command: appendCommand, readModel });
+        const appendedEvent = Array.isArray(appended) ? appended[0]! : appended;
+        const withMessage = yield* projectEvent(readModel, { ...appendedEvent, sequence: 3 });
 
-      const planned = yield* decideOrchestrationCommand({
-        command: turnStartCommand,
-        readModel: withMessage,
-      });
-      const events = Array.isArray(planned) ? planned : [planned];
-      expect(events.map((event) => event.type)).toEqual(["thread.turn-start-requested"]);
-      expect(events[0]?.payload).toMatchObject({ messageId });
+        const planned = yield* decideOrchestrationCommand({
+          command: turnStartCommand,
+          readModel: withMessage,
+        });
+        const events = Array.isArray(planned) ? planned : [planned];
+        expect(events.map((event) => event.type)).toEqual(["thread.turn-start-requested"]);
+        expect(events[0]?.payload).toMatchObject({ messageId });
 
-      // Without the append the turn start still carries the message itself.
-      const direct = yield* decideOrchestrationCommand({ command: turnStartCommand, readModel });
-      const directEvents = Array.isArray(direct) ? direct : [direct];
-      expect(directEvents.map((event) => event.type)).toEqual([
-        "thread.message-sent",
-        "thread.turn-start-requested",
-      ]);
-    }),
-  );
-});
+        // Without the append the turn start still carries the message itself.
+        const direct = yield* decideOrchestrationCommand({ command: turnStartCommand, readModel });
+        const directEvents = Array.isArray(direct) ? direct : [direct];
+        expect(directEvents.map((event) => event.type)).toEqual([
+          "thread.message-sent",
+          "thread.turn-start-requested",
+        ]);
+      }),
+    );
+  },
+);

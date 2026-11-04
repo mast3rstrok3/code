@@ -13,9 +13,11 @@ import {
   type AppReviewWorkflowRun,
   type OrchestrationReadModel,
 } from "@t3tools/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
 import { decideOrchestrationCommand } from "./decider.ts";
@@ -226,320 +228,323 @@ function rerunRunAppReview() {
   };
 }
 
-it.layer(NodeServices.layer)("App Review phase re-run decider", (it) => {
-  it.effect("carries split E2E retry commands without replacing historical cycles", () =>
-    Effect.gen(function* () {
-      const readModel = makeReadModel({ cycles: [cycle({})] });
-      const e2eCommands = ["suite --phone", "suite --tablet"];
-      const event = yield* decideOrchestrationCommand({
-        command: { ...rerun("e2e"), e2eCommands },
-        readModel,
-      });
-      expect(event).toMatchObject({
-        type: "thread.app-review-workflow-rerun-requested",
-        payload: { e2eCommands, run: readModel.appReviewWorkflowRuns![0] },
-      });
-      const failure = yield* decideOrchestrationCommand({
-        command: { ...rerun("review"), e2eCommands },
-        readModel,
-      }).pipe(Effect.flip);
-      expect(failure).toMatchObject({ detail: "Replacement E2E commands require an E2E retry." });
-    }),
-  );
-  for (const phase of ["e2e", "review"] as const) {
-    it.effect(`retries ${phase} when startup failed before the first cycle`, () =>
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "App Review phase re-run decider",
+  (it) => {
+    it.effect("carries split E2E retry commands without replacing historical cycles", () =>
       Effect.gen(function* () {
-        const model = makeReadModel({ cycles: [] });
+        const readModel = makeReadModel({ cycles: [cycle({})] });
+        const e2eCommands = ["suite --phone", "suite --tablet"];
         const event = yield* decideOrchestrationCommand({
-          command: rerun(phase),
-          readModel: {
-            ...model,
-            appReviewWorkflowRuns: model.appReviewWorkflowRuns!.map((run) => ({
-              ...run,
-              status: "failed",
-              outcome: "failed",
-              failure: {
-                reason: "preview-unavailable",
-                phase: null,
-                cycleNumber: null,
-                detailMarkdown: "The stack is starting.",
-                failedAt: NOW,
-              },
-            })),
-          },
+          command: { ...rerun("e2e"), e2eCommands },
+          readModel,
         });
         expect(event).toMatchObject({
           type: "thread.app-review-workflow-rerun-requested",
-          payload: { phase },
+          payload: { e2eCommands, run: readModel.appReviewWorkflowRuns![0] },
         });
+        const failure = yield* decideOrchestrationCommand({
+          command: { ...rerun("review"), e2eCommands },
+          readModel,
+        }).pipe(Effect.flip);
+        expect(failure).toMatchObject({ detail: "Replacement E2E commands require an E2E retry." });
       }),
     );
-  }
+    for (const phase of ["e2e", "review"] as const) {
+      it.effect(`retries ${phase} when startup failed before the first cycle`, () =>
+        Effect.gen(function* () {
+          const model = makeReadModel({ cycles: [] });
+          const event = yield* decideOrchestrationCommand({
+            command: rerun(phase),
+            readModel: {
+              ...model,
+              appReviewWorkflowRuns: model.appReviewWorkflowRuns!.map((run) => ({
+                ...run,
+                status: "failed",
+                outcome: "failed",
+                failure: {
+                  reason: "preview-unavailable",
+                  phase: null,
+                  cycleNumber: null,
+                  detailMarkdown: "The stack is starting.",
+                  failedAt: NOW,
+                },
+              })),
+            },
+          });
+          expect(event).toMatchObject({
+            type: "thread.app-review-workflow-rerun-requested",
+            payload: { phase },
+          });
+        }),
+      );
+    }
 
-  for (const phase of ["planning", "fixing"] as const) {
-    it.effect(`refuses ${phase} before the first review cycle`, () =>
+    for (const phase of ["planning", "fixing"] as const) {
+      it.effect(`refuses ${phase} before the first review cycle`, () =>
+        Effect.gen(function* () {
+          const error = yield* decideOrchestrationCommand({
+            command: rerun(phase),
+            readModel: makeReadModel({ cycles: [] }),
+          }).pipe(Effect.flip);
+          expect(String(error)).toContain("has not started a cycle");
+        }),
+      );
+    }
+
+    it.effect("re-runs a phase of the run's current cycle", () =>
+      Effect.gen(function* () {
+        const event = yield* decideOrchestrationCommand({
+          command: rerun("planning"),
+          readModel: makeReadModel({ cycles: [cycle({})] }),
+        });
+        const events = Array.isArray(event) ? event : [event];
+        expect(events.map((entry) => entry.type)).toEqual([
+          "thread.app-review-workflow-rerun-requested",
+        ]);
+      }),
+    );
+
+    it.effect("refuses while the phase thread is still running", () =>
       Effect.gen(function* () {
         const error = yield* decideOrchestrationCommand({
-          command: rerun(phase),
-          readModel: makeReadModel({ cycles: [] }),
+          command: rerun("planning"),
+          readModel: makeReadModel({
+            cycles: [cycle({})],
+            activeThreadId: PLANNER,
+            activeSession: "running",
+          }),
         }).pipe(Effect.flip);
-        expect(String(error)).toContain("has not started a cycle");
+        expect(error._tag).toBe("OrchestrationCommandInvariantError");
+        expect(String(error)).toContain(PLANNER);
       }),
     );
-  }
 
-  it.effect("re-runs a phase of the run's current cycle", () =>
-    Effect.gen(function* () {
-      const event = yield* decideOrchestrationCommand({
-        command: rerun("planning"),
-        readModel: makeReadModel({ cycles: [cycle({})] }),
-      });
-      const events = Array.isArray(event) ? event : [event];
-      expect(events.map((entry) => entry.type)).toEqual([
-        "thread.app-review-workflow-rerun-requested",
-      ]);
-    }),
-  );
+    it.effect("refuses gap analysis when the cycle's review produced no findings", () =>
+      Effect.gen(function* () {
+        const error = yield* decideOrchestrationCommand({
+          command: rerun("planning"),
+          readModel: makeReadModel({
+            cycles: [cycle({ actionableFindingsMarkdown: null })],
+          }),
+        }).pipe(Effect.flip);
+        expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      }),
+    );
 
-  it.effect("refuses while the phase thread is still running", () =>
-    Effect.gen(function* () {
-      const error = yield* decideOrchestrationCommand({
-        command: rerun("planning"),
-        readModel: makeReadModel({
-          cycles: [cycle({})],
-          activeThreadId: PLANNER,
-          activeSession: "running",
-        }),
-      }).pipe(Effect.flip);
-      expect(error._tag).toBe("OrchestrationCommandInvariantError");
-      expect(String(error)).toContain(PLANNER);
-    }),
-  );
+    it.effect("refuses the repair when gap analysis wrote no tickets", () =>
+      Effect.gen(function* () {
+        const error = yield* decideOrchestrationCommand({
+          command: rerun("fixing"),
+          readModel: makeReadModel({ cycles: [cycle({ repairTickets: [] })] }),
+        }).pipe(Effect.flip);
+        expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      }),
+    );
 
-  it.effect("refuses gap analysis when the cycle's review produced no findings", () =>
-    Effect.gen(function* () {
-      const error = yield* decideOrchestrationCommand({
-        command: rerun("planning"),
-        readModel: makeReadModel({
-          cycles: [cycle({ actionableFindingsMarkdown: null })],
-        }),
-      }).pipe(Effect.flip);
-      expect(error._tag).toBe("OrchestrationCommandInvariantError");
-    }),
-  );
+    it.effect("refuses the repair on a run launched to review only", () =>
+      Effect.gen(function* () {
+        const error = yield* decideOrchestrationCommand({
+          command: rerun("fixing"),
+          readModel: makeReadModel({
+            reviewOnly: true,
+            cycles: [
+              cycle({
+                repairTickets: [
+                  {
+                    key: "TICKET-1.1",
+                    parentTicketKey: "TICKET-1",
+                    title: "Fix the gap",
+                    bodyMarkdown: "Repair it.",
+                    dependencyKeys: [],
+                  },
+                ],
+              }),
+            ],
+          }),
+        }).pipe(Effect.flip);
+        expect(error._tag).toBe("OrchestrationCommandInvariantError");
+        expect(String(error)).toContain("review only");
+      }),
+    );
 
-  it.effect("refuses the repair when gap analysis wrote no tickets", () =>
-    Effect.gen(function* () {
-      const error = yield* decideOrchestrationCommand({
-        command: rerun("fixing"),
-        readModel: makeReadModel({ cycles: [cycle({ repairTickets: [] })] }),
-      }).pipe(Effect.flip);
-      expect(error._tag).toBe("OrchestrationCommandInvariantError");
-    }),
-  );
+    it.effect("pins the phase's own sub-step when the re-run names a model", () =>
+      Effect.gen(function* () {
+        const event = yield* decideOrchestrationCommand({
+          command: rerun("fixing", { instanceId: "claudeAgent", model: "claude-sonnet-5" }),
+          readModel: makeReadModel({
+            cycles: [
+              cycle({
+                status: "fixing",
+                repairTickets: [
+                  {
+                    key: "TICKET-1.1",
+                    parentTicketKey: "TICKET-1",
+                    title: "Fix the gap",
+                    bodyMarkdown: "Repair it.",
+                    dependencyKeys: [],
+                  },
+                ],
+              }),
+            ],
+          }),
+        });
+        const events = Array.isArray(event) ? event : [event];
+        expect(events.map((entry) => entry.type)).toEqual([
+          "thread.workflow-step-model-set",
+          "thread.app-review-workflow-rerun-requested",
+        ]);
+        const pin = events[0];
+        if (pin?.type !== "thread.workflow-step-model-set") throw new Error("Pin event missing.");
+        // The repair agent is a sub-step of App Review, so its pin carries both ids.
+        expect(pin.payload.workflowPromptId).toBe("matt-pocock.implement");
+        expect(pin.payload.stepWorkflowPromptId).toBe("implementation.browser-app-review.codex");
+      }),
+    );
 
-  it.effect("refuses the repair on a run launched to review only", () =>
-    Effect.gen(function* () {
-      const error = yield* decideOrchestrationCommand({
-        command: rerun("fixing"),
-        readModel: makeReadModel({
-          reviewOnly: true,
-          cycles: [
-            cycle({
-              repairTickets: [
-                {
-                  key: "TICKET-1.1",
-                  parentTicketKey: "TICKET-1",
-                  title: "Fix the gap",
-                  bodyMarkdown: "Repair it.",
-                  dependencyKeys: [],
-                },
-              ],
-            }),
-          ],
-        }),
-      }).pipe(Effect.flip);
-      expect(error._tag).toBe("OrchestrationCommandInvariantError");
-      expect(String(error)).toContain("review only");
-    }),
-  );
+    it.effect("refuses while the ticket that owns the review has a live agent", () =>
+      Effect.gen(function* () {
+        const error = yield* decideOrchestrationCommand({
+          command: rerun("planning"),
+          readModel: makeReadModel({ cycles: [cycle({})], ticketWorkerSession: "running" }),
+        }).pipe(Effect.flip);
+        expect(error._tag).toBe("OrchestrationCommandInvariantError");
+        expect(String(error)).toContain(WORKER);
+      }),
+    );
 
-  it.effect("pins the phase's own sub-step when the re-run names a model", () =>
-    Effect.gen(function* () {
-      const event = yield* decideOrchestrationCommand({
-        command: rerun("fixing", { instanceId: "claudeAgent", model: "claude-sonnet-5" }),
-        readModel: makeReadModel({
-          cycles: [
-            cycle({
-              status: "fixing",
-              repairTickets: [
-                {
-                  key: "TICKET-1.1",
-                  parentTicketKey: "TICKET-1",
-                  title: "Fix the gap",
-                  bodyMarkdown: "Repair it.",
-                  dependencyKeys: [],
-                },
-              ],
-            }),
-          ],
-        }),
-      });
-      const events = Array.isArray(event) ? event : [event];
-      expect(events.map((entry) => entry.type)).toEqual([
-        "thread.workflow-step-model-set",
-        "thread.app-review-workflow-rerun-requested",
-      ]);
-      const pin = events[0];
-      if (pin?.type !== "thread.workflow-step-model-set") throw new Error("Pin event missing.");
-      // The repair agent is a sub-step of App Review, so its pin carries both ids.
-      expect(pin.payload.workflowPromptId).toBe("matt-pocock.implement");
-      expect(pin.payload.stepWorkflowPromptId).toBe("implementation.browser-app-review.codex");
-    }),
-  );
+    it.effect("refuses a browser review redo once every cycle is spent", () =>
+      Effect.gen(function* () {
+        const error = yield* decideOrchestrationCommand({
+          command: rerun("review"),
+          readModel: makeReadModel({ cycles: [cycle({})], cyclesUsed: 10, cycleBudget: 10 }),
+        }).pipe(Effect.flip);
+        expect(error._tag).toBe("OrchestrationCommandInvariantError");
+        expect(String(error)).toContain("all 10");
+      }),
+    );
 
-  it.effect("refuses while the ticket that owns the review has a live agent", () =>
-    Effect.gen(function* () {
-      const error = yield* decideOrchestrationCommand({
-        command: rerun("planning"),
-        readModel: makeReadModel({ cycles: [cycle({})], ticketWorkerSession: "running" }),
-      }).pipe(Effect.flip);
-      expect(error._tag).toBe("OrchestrationCommandInvariantError");
-      expect(String(error)).toContain(WORKER);
-    }),
-  );
-
-  it.effect("refuses a browser review redo once every cycle is spent", () =>
-    Effect.gen(function* () {
-      const error = yield* decideOrchestrationCommand({
-        command: rerun("review"),
-        readModel: makeReadModel({ cycles: [cycle({})], cyclesUsed: 10, cycleBudget: 10 }),
-      }).pipe(Effect.flip);
-      expect(error._tag).toBe("OrchestrationCommandInvariantError");
-      expect(String(error)).toContain("all 10");
-    }),
-  );
-
-  it.effect("lets a ticket replace an orphaned App Review run", () =>
-    Effect.gen(function* () {
-      const event = yield* decideOrchestrationCommand({
-        command: rerunTicketAppReview(),
-        readModel: makeReadModel({
-          cycles: [cycle({})],
-          activeThreadId: PLANNER,
-          activeSession: "ready",
-        }),
-      });
-      const events = Array.isArray(event) ? event : [event];
-      expect(events.map((entry) => entry.type)).toEqual([
-        "thread.implementation-run-rerun-requested",
-      ]);
-    }),
-  );
-
-  it.effect("refuses to re-run an implementation stage while the workflow is paused", () =>
-    Effect.gen(function* () {
-      const error = yield* decideOrchestrationCommand({
-        command: rerunTicketAppReview(),
-        readModel: pauseRoot(
-          makeReadModel({
+    it.effect("lets a ticket replace an orphaned App Review run", () =>
+      Effect.gen(function* () {
+        const event = yield* decideOrchestrationCommand({
+          command: rerunTicketAppReview(),
+          readModel: makeReadModel({
             cycles: [cycle({})],
             activeThreadId: PLANNER,
             activeSession: "ready",
           }),
-        ),
-      }).pipe(Effect.flip);
+        });
+        const events = Array.isArray(event) ? event : [event];
+        expect(events.map((entry) => entry.type)).toEqual([
+          "thread.implementation-run-rerun-requested",
+        ]);
+      }),
+    );
 
-      expect(error._tag).toBe("OrchestrationCommandInvariantError");
-      expect(String(error)).toContain("Resume the workflow");
-    }),
-  );
+    it.effect("refuses to re-run an implementation stage while the workflow is paused", () =>
+      Effect.gen(function* () {
+        const error = yield* decideOrchestrationCommand({
+          command: rerunTicketAppReview(),
+          readModel: pauseRoot(
+            makeReadModel({
+              cycles: [cycle({})],
+              activeThreadId: PLANNER,
+              activeSession: "ready",
+            }),
+          ),
+        }).pipe(Effect.flip);
 
-  it.effect("refuses to replace a ticket App Review while its phase agent is live", () =>
-    Effect.gen(function* () {
-      const error = yield* decideOrchestrationCommand({
-        command: rerunTicketAppReview(),
-        readModel: makeReadModel({
+        expect(error._tag).toBe("OrchestrationCommandInvariantError");
+        expect(String(error)).toContain("Resume the workflow");
+      }),
+    );
+
+    it.effect("refuses to replace a ticket App Review while its phase agent is live", () =>
+      Effect.gen(function* () {
+        const error = yield* decideOrchestrationCommand({
+          command: rerunTicketAppReview(),
+          readModel: makeReadModel({
+            cycles: [cycle({})],
+            activeThreadId: PLANNER,
+            activeSession: "running",
+          }),
+        }).pipe(Effect.flip);
+        expect(error._tag).toBe("OrchestrationCommandInvariantError");
+        expect(String(error)).toContain(PLANNER);
+      }),
+    );
+
+    it.effect("lets an implementation run replace its orphaned App Review", () =>
+      Effect.gen(function* () {
+        const readModel = makeReadModel({
           cycles: [cycle({})],
           activeThreadId: PLANNER,
-          activeSession: "running",
-        }),
-      }).pipe(Effect.flip);
-      expect(error._tag).toBe("OrchestrationCommandInvariantError");
-      expect(String(error)).toContain(PLANNER);
-    }),
-  );
-
-  it.effect("lets an implementation run replace its orphaned App Review", () =>
-    Effect.gen(function* () {
-      const readModel = makeReadModel({
-        cycles: [cycle({})],
-        activeThreadId: PLANNER,
-        activeSession: "ready",
-      });
-      const reviewRun = (readModel.appReviewWorkflowRuns ?? [])[0]!;
-      const event = yield* decideOrchestrationCommand({
-        command: rerunRunAppReview(),
-        readModel: {
-          ...readModel,
-          appReviewWorkflowRuns: [
-            {
-              ...reviewRun,
-              caller: {
-                type: "implementation",
-                implementationRunId: "implementation-run-1",
-                orchestratorThreadId: TARGET,
+          activeSession: "ready",
+        });
+        const reviewRun = (readModel.appReviewWorkflowRuns ?? [])[0]!;
+        const event = yield* decideOrchestrationCommand({
+          command: rerunRunAppReview(),
+          readModel: {
+            ...readModel,
+            appReviewWorkflowRuns: [
+              {
+                ...reviewRun,
+                caller: {
+                  type: "implementation",
+                  implementationRunId: "implementation-run-1",
+                  orchestratorThreadId: TARGET,
+                },
               },
-            },
-          ],
-        },
-      });
-      const events = Array.isArray(event) ? event : [event];
-      expect(events.map((entry) => entry.type)).toEqual([
-        "thread.implementation-run-rerun-requested",
-      ]);
-    }),
-  );
+            ],
+          },
+        });
+        const events = Array.isArray(event) ? event : [event];
+        expect(events.map((entry) => entry.type)).toEqual([
+          "thread.implementation-run-rerun-requested",
+        ]);
+      }),
+    );
 
-  it.effect("routes a run App Review restart to the ticket that halted there", () =>
-    Effect.gen(function* () {
-      const readModel = makeReadModel({
-        cycles: [cycle({})],
-        activeThreadId: PLANNER,
-        activeSession: "ready",
-      });
-      const implementationRun = readModel.implementationRuns[0]!;
-      const event = yield* decideOrchestrationCommand({
-        command: rerunRunAppReview(),
-        readModel: {
-          ...readModel,
-          implementationRuns: [
-            {
-              ...implementationRun,
-              status: "needs-human-attention",
-              automationHalt: {
-                ticketId: "planning-ticket-1",
-                stage: "app-review",
-                category: "review-blocked",
-                detail: "The ticket App Review failed.",
-                haltedAt: NOW,
+    it.effect("routes a run App Review restart to the ticket that halted there", () =>
+      Effect.gen(function* () {
+        const readModel = makeReadModel({
+          cycles: [cycle({})],
+          activeThreadId: PLANNER,
+          activeSession: "ready",
+        });
+        const implementationRun = readModel.implementationRuns[0]!;
+        const event = yield* decideOrchestrationCommand({
+          command: rerunRunAppReview(),
+          readModel: {
+            ...readModel,
+            implementationRuns: [
+              {
+                ...implementationRun,
+                status: "needs-human-attention",
+                automationHalt: {
+                  ticketId: "planning-ticket-1",
+                  stage: "app-review",
+                  category: "review-blocked",
+                  detail: "The ticket App Review failed.",
+                  haltedAt: NOW,
+                },
               },
-            },
-          ],
-        },
-      });
-      const events = Array.isArray(event) ? event : [event];
-      const rerunEvent = events.find(
-        (entry) => entry.type === "thread.implementation-run-rerun-requested",
-      );
-      expect(rerunEvent?.payload.target).toEqual({
-        kind: "ticket",
-        ticketId: "planning-ticket-1",
-        stage: "app-review",
-      });
-    }),
-  );
-});
+            ],
+          },
+        });
+        const events = Array.isArray(event) ? event : [event];
+        const rerunEvent = events.find(
+          (entry) => entry.type === "thread.implementation-run-rerun-requested",
+        );
+        expect(rerunEvent?.payload.target).toEqual({
+          kind: "ticket",
+          ticketId: "planning-ticket-1",
+          stage: "app-review",
+        });
+      }),
+    );
+  },
+);
 
 it.effect("preserves the active turn in a cancellation event after clearing the run", () =>
   Effect.gen(function* () {
@@ -574,5 +579,5 @@ it.effect("preserves the active turn in a cancellation event after clearing the 
     expect(payload.run.activeThreadId).toBeNull();
     expect(payload.interruptedThreadId).toBe(PLANNER);
     expect(payload.interruptedTurnId).toBe(turnId);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
