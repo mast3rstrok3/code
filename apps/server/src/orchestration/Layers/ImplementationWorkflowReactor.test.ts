@@ -958,6 +958,7 @@ function makeTestLayer(
   }> = [{ name: "origin/main", remoteName: "origin", isDefault: true }],
   projectFile?: T3ProjectFile,
   failIntegratedSetup = false,
+  failTicketSetup = false,
   failDeleteStackAttempts = 0,
   autoCreateCreatedWorktrees: ReadonlyArray<AppStackCreatedWorktree> = [],
 ) {
@@ -999,7 +1000,7 @@ function makeTestLayer(
           runForThread: (input) =>
             Ref.update(calls.setupScriptInputs, (inputs) => [...inputs, input]).pipe(
               Effect.andThen(
-                failIntegratedSetup
+                (input.worktreePath.includes("-ticket-") ? failTicketSetup : failIntegratedSetup)
                   ? Effect.fail(
                       new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
                         threadId: input.threadId,
@@ -1619,6 +1620,7 @@ function withSystem<A, E>(
     }>;
     readonly projectFile?: T3ProjectFile;
     readonly failIntegratedSetup?: boolean;
+    readonly failTicketSetup?: boolean;
     readonly failDeleteStackAttempts?: number;
     /** Worktrees the controller's bundle plan made Code create on each auto-create. */
     readonly autoCreateCreatedWorktrees?: ReadonlyArray<AppStackCreatedWorktree>;
@@ -1760,6 +1762,7 @@ function withSystem<A, E>(
           options?.remoteRefs,
           options?.projectFile,
           options?.failIntegratedSetup,
+          options?.failTicketSetup,
           options?.failDeleteStackAttempts,
           options?.autoCreateCreatedWorktrees,
         ),
@@ -4339,14 +4342,21 @@ describe("ImplementationWorkflowReactor", () => {
             { cwd: medicalRepository.worktreePath, refName: `${workers[2]?.branch}@commit` },
           ]);
           expect(
-            (yield* Ref.get(system.setupScriptInputs)).map((input) => [
-              input.projectId,
-              input.worktreePath,
-            ]),
+            (yield* Ref.get(system.setupScriptInputs))
+              .filter((input) => !input.worktreePath?.includes("-ticket-"))
+              .map((input) => [input.projectId, input.worktreePath]),
           ).toEqual([
             [projectId, run.orchestratorWorktreePath],
             [medicalProjectId, medicalRepository.worktreePath],
           ]);
+          // Each ticket is set up with its own repository's project.
+          expect(
+            new Set(
+              (yield* Ref.get(system.setupScriptInputs))
+                .filter((input) => input.worktreePath?.includes("-ticket-"))
+                .map((input) => input.projectId),
+            ),
+          ).toEqual(new Set([projectId, medicalProjectId]));
           const snapshot = yield* system.query.getSnapshot();
           const validator = snapshot.threads.find(
             (thread) => thread.workflowRole === "implementation-validator",
@@ -7362,19 +7372,67 @@ describe("ImplementationWorkflowReactor", () => {
         const { run } = yield* launchRun(system);
         yield* appendWorkerResult(system, { run, status: "succeeded" });
 
-        expect(yield* Ref.get(system.setupScriptInputs)).toEqual([
-          {
-            threadId: run.orchestratorThreadId,
-            projectId,
-            worktreePath: run.orchestratorWorktreePath,
-            observeCompletion: {},
-          },
-        ]);
+        expect(yield* Ref.get(system.setupScriptInputs)).toContainEqual({
+          threadId: run.orchestratorThreadId,
+          projectId,
+          worktreePath: run.orchestratorWorktreePath,
+          observeCompletion: {},
+        });
         const snapshot = yield* system.query.getSnapshot();
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
         ).toHaveLength(1);
       }),
+    ),
+  );
+
+  it.effect("sets up a ticket's worktree before its worker's first turn, once", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* launchRun(system);
+        const snapshot = yield* system.query.getSnapshot();
+        const worker = snapshot.threads.find(
+          (thread) => thread.workflowRole === "implementation-worker",
+        );
+        if (worker === undefined) throw new Error("Worker missing.");
+        expect(worker.messages.at(-1)?.role).toBe("user");
+        const ticketSetups = () =>
+          Ref.get(system.setupScriptInputs).pipe(
+            Effect.map((inputs) =>
+              inputs.filter((input) => input.worktreePath?.includes("-ticket-")),
+            ),
+          );
+        expect(yield* ticketSetups()).toEqual([
+          {
+            threadId: worker.id,
+            projectId,
+            worktreePath: worker.worktreePath,
+            observeCompletion: {},
+          },
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("holds a ticket's worker when its worktree setup fails", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const snapshot = yield* system.query.getSnapshot();
+          const blocked = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(blocked?.status).toBe("needs-human-attention");
+          expect(blocked?.retryableFailure).toMatchObject({
+            stage: "worker-setup",
+            humanBlocked: false,
+          });
+          expect(blocked?.retryableFailure?.detail).toContain("Worktree setup failed");
+          const worker = snapshot.threads.find(
+            (thread) => thread.workflowRole === "implementation-worker",
+          );
+          expect(worker?.messages ?? []).toHaveLength(0);
+        }),
+      { failTicketSetup: true },
     ),
   );
 
