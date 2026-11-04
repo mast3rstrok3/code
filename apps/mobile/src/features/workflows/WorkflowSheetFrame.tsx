@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Platform, View } from "react-native";
 import { ScreenStack } from "react-native-screens";
 
-import { AndroidSheetHeader } from "../../components/ui/AndroidScreenHeader";
+import { AppBar } from "../../components/ui/AppBar";
 import { ScreenContent } from "../../components/ui/ScreenContent";
 import { NativeStackScreenOptions, nativeHeaderScrollEdgeEffects } from "../../native/StackHeader";
 import { NativeHeader, NativeScreen } from "../../native/ThemedScreenStack";
@@ -54,7 +54,7 @@ export function WorkflowSheetFrame(props: {
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
       <NativeStackScreenOptions options={{ sheetCornerRadius: 28 }} />
-      <AndroidSheetHeader title={props.title} onBack={props.onBack} />
+      <AppBar sheet title={props.title} onBack={props.onBack} />
       <ScreenContent insetHorizontal={layout.usesSplitView}>{props.children}</ScreenContent>
     </View>
   );

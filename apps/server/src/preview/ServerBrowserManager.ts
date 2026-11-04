@@ -1506,6 +1506,7 @@ function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
       try: () => tab.page.evaluate(`(${input.expression})`),
       catch: browserError,
     });
+    // @effect-diagnostics-next-line globalJsonInEffect:off - page.evaluate already returned a serialized value.
     const bytes = Buffer.byteLength(JSON.stringify(value ?? null), "utf8");
     if (bytes > MAX_EVALUATION_BYTES) {
       return yield* new PreviewBrowserUnavailableError({

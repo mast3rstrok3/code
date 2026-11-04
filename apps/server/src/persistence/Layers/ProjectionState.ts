@@ -1,5 +1,6 @@
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -40,11 +41,11 @@ const makeProjectionStateRepository = Effect.gen(function* () {
   const upsertProjectionStateRows = SqlSchema.void({
     Request: Schema.Array(ProjectionState),
     execute: (rows) =>
-      rows.length === 0
+      !Arr.isReadonlyArrayNonEmpty(rows)
         ? Effect.void
         : sql`
             INSERT INTO projection_state ${sql.insert(
-              rows.map((row) => ({
+              Arr.map(rows, (row) => ({
                 projector: row.projector,
                 last_applied_sequence: row.lastAppliedSequence,
                 updated_at: row.updatedAt,

@@ -42,7 +42,7 @@ import { makeDrainableWorker, type DrainableWorker } from "@t3tools/shared/Drain
 import { extractPreviewUrls } from "@t3tools/shared/preview";
 import { resolveAppReviewE2eCommands } from "@t3tools/shared/t3ProjectFile";
 import * as Cause from "effect/Cause";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -1850,7 +1850,7 @@ export function terminalReviewEvidenceFailure(
 const make = Effect.gen(function* () {
   const scope = yield* Scope.Scope;
   const testProcesses = new Map<string, { id: string; fiber: Fiber.Fiber<void, never> }>();
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const workflowDrain = yield* Effect.serviceOption(WorkflowDrainCoordinator);
   const isDraining = Option.isSome(workflowDrain)
@@ -1870,13 +1870,13 @@ const make = Effect.gen(function* () {
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const serverCommandId = (tag: string) =>
-    crypto.randomUUIDv4().pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
+    random.uuidV4().pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverMessageId = (tag: string) =>
-    crypto.randomUUIDv4().pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
+    random.uuidV4().pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
   const serverThreadId = (tag: string) =>
-    crypto.randomUUIDv4().pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
+    random.uuidV4().pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
   const serverReviewId = () =>
-    crypto.randomUUIDv4().pipe(Effect.map((uuid) => AppReviewId.make(`app-review-${uuid}`)));
+    random.uuidV4().pipe(Effect.map((uuid) => AppReviewId.make(`app-review-${uuid}`)));
 
   const resolveThread = (threadId: ThreadId) =>
     projectionSnapshotQuery.getThreadDetailById(threadId).pipe(Effect.map(Option.getOrUndefined));
@@ -2885,7 +2885,7 @@ const make = Effect.gen(function* () {
       ...(includesE2e
         ? {
             e2eExecution: {
-              id: yield* crypto.randomUUIDv4(),
+              id: yield* random.uuidV4(),
               commands: rerunAllTests
                 ? appReviewTestCommands({ cycles: [] }, e2eSelections)
                 : appReviewTestCommands(run, e2eSelections),
@@ -3294,7 +3294,7 @@ const make = Effect.gen(function* () {
             "",
             "Finish with exactly one fenced JSON block:",
             "```json",
-            // @effect-diagnostics-next-line preferSchemaOverJson:off - embeds a fixed example in the agent prompt.
+            // @effect-diagnostics-next-line globalJsonInEffect:off - embeds a fixed example in the agent prompt.
             JSON.stringify(
               {
                 type: "app-review-repair-tickets",

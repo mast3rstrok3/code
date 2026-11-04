@@ -3,6 +3,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeEvents from "node:events";
 import * as NodeStream from "node:stream";
 
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterEach, describe, expect, it, vi } from "@effect/vitest";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
@@ -288,7 +289,7 @@ const makeHarness = (options: { readonly recordingMode?: "auto" | "dom" | "video
     Layer.provide(PreviewRecordingPolicy.layerServerConfigOnly),
     Layer.provide(environmentLayer),
     Layer.provide(configLayer),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
   return {
     launchOptions,

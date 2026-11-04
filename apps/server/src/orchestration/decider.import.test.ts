@@ -1,4 +1,5 @@
 import { DEFAULT_WORKSPACE_USER_ID } from "@t3tools/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -10,12 +11,13 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
 
-it.layer(NodeServices.layer)("thread history import", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("thread history import", (it) => {
   it.effect("marks imported thread creation without changing live creation", () =>
     Effect.gen(function* () {
       const createdAt = "2026-08-24T10:00:00.000Z";

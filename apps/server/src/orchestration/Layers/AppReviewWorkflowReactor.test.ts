@@ -8,6 +8,7 @@ import {
   recoverWorkflowRunsAfterStartup,
 } from "../workflowStageExecutions.ts";
 import { createEmptyReadModel } from "../projector.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -376,6 +377,7 @@ for (const status of ["starting", "running", "stopped"] as const) {
         Layer.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Layer.mock(ProcessRunner)({}),
             Layer.mock(OrchestrationEngineService)({
               dispatch: (command) =>
@@ -625,6 +627,7 @@ effectIt.effect(
       Layer.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           Layer.mock(ProcessRunner)({}),
           Layer.mock(OrchestrationEngineService)({
             dispatch: (command) =>
@@ -3622,6 +3625,7 @@ for (const verdict of ["passed", "failed", "rejected", "draining"] as const) {
       Layer.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           Layer.mock(WorkflowDrainCoordinator)({
             accepting: Effect.sync(() => !draining),
             startupRecoveryCause: null,
@@ -3826,6 +3830,7 @@ for (const mode of ["e2e", "fixing", "fixing-existing", "validation"] as const) 
           Layer.provide(
             Layer.mergeAll(
               NodeServices.layer,
+              NodeCrypto.layer,
               Layer.mock(ProcessRunner)({
                 run: (input) =>
                   Effect.sync(() => {
@@ -4197,6 +4202,7 @@ effectIt.effect(
         Layer.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Layer.mock(ProcessRunner)({}),
             Layer.mock(OrchestrationEngineService)({
               subscribeDomainEvents: PubSub.subscribe(events).pipe(
@@ -4458,6 +4464,7 @@ for (const testExit of [0, 1] as const)
               Layer.provide(
                 Layer.mergeAll(
                   NodeServices.layer,
+                  NodeCrypto.layer,
                   Layer.mock(ProcessRunner)({
                     run: (input) =>
                       Effect.sync(() => {
@@ -4634,6 +4641,7 @@ for (const change of ["suite-writes-tracked-file", "head-moves"] as const) {
         Layer.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Layer.mock(ProcessRunner)({
               run: (input) =>
                 Effect.sync(() => {
@@ -5052,11 +5060,12 @@ for (const scenario of [
         Layer.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             ...(scenario === "combined" || preparation
               ? [
                   serverConfigLayerTest("/assigned/worktree", {
                     prefix: "t3-review-artifacts-",
-                  }).pipe(Layer.provide(NodeServices.layer)),
+                  }).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
                 ]
               : []),
             Layer.mock(ProcessRunner)({

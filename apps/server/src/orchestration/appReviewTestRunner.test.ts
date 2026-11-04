@@ -1,5 +1,6 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { describe } from "vite-plus/test";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, expect } from "@effect/vitest";
 import {
@@ -95,7 +96,11 @@ fs.writeFileSync('restored.apk', apk);`,
     expect(yield* fs.readFileString(path.join(artifactsDir, "candidate.apk"))).toBe("review APK");
   }).pipe(
     Effect.scoped,
-    Effect.provide(processRunnerLayer.pipe(Layer.provideMerge(NodeServices.layer))),
+    Effect.provide(
+      processRunnerLayer.pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
   ),
 );
 
@@ -120,7 +125,7 @@ it.effect("fails before launching a suite when its artifact directory cannot be 
     );
     expect(result.status).toBe("failed");
     expect(result.outputMarkdown).toContain("makeDirectory");
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("retains failure output beyond the inline limit in private logs", () =>
@@ -165,7 +170,11 @@ it.effect("retains failure output beyond the inline limit in private logs", () =
     }
   }).pipe(
     Effect.scoped,
-    Effect.provide(processRunnerLayer.pipe(Layer.provideMerge(NodeServices.layer))),
+    Effect.provide(
+      processRunnerLayer.pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
   ),
 );
 
@@ -237,7 +246,7 @@ describe.each(
         expect(result.outputMarkdown).toContain("Incomplete because a log write failed");
         expect(saved).toBe("");
       }
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 });
 
@@ -566,7 +575,7 @@ describe.each(
           timeout: `${timeoutMinutes ?? 45} minutes`,
           maxOutputBytes: 8192,
         });
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 });
 
@@ -596,7 +605,7 @@ it.effect("interrupts the process scope when execution is cancelled", () =>
     yield* Deferred.await(started);
     yield* Fiber.interrupt(task);
     yield* Deferred.await(stopped);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each([
@@ -651,7 +660,7 @@ it.effect.each([
       expect(result.outputMarkdown).toContain("run 1");
       expect(result.outputMarkdown).toContain("run 2");
     }
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("collects what the suite recorded under server-chosen names", () =>
@@ -708,7 +717,7 @@ it.effect("collects what the suite recorded under server-chosen names", () =>
     expect(
       (yield* fileSystem.readDirectory(recordingsDir)).some((name) => name.endsWith(".incoming")),
     ).toBe(false);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("restores only what the suite wrote and leaves earlier edits alone", () =>
@@ -753,5 +762,11 @@ it.effect("restores only what the suite wrote and leaves earlier edits alone", (
     expect(yield* fileSystem.exists(path.join(repo, "report.html"))).toBe(false);
     expect(yield* fileSystem.readFileString(path.join(repo, "work.ts"))).toBe("in progress\n");
     expect(yield* fileSystem.readFileString(path.join(repo, "notes.md"))).toBe("mine\n");
-  }).pipe(Effect.provide(processRunnerLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      processRunnerLayer.pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );

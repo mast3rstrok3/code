@@ -31,7 +31,7 @@ import {
   workflowPromptIdForPreset,
 } from "@t3tools/shared/workflowPresets";
 import * as Cause from "effect/Cause";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -210,7 +210,7 @@ const buildProductLightweightPlanPrompt = (input: {
   ].join("\n");
 
 const make = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const gitWorkflow = yield* GitWorkflowService;
@@ -221,12 +221,12 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
 
   const serverCommandId = (tag: string) =>
-    crypto.randomUUIDv4().pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
-  const serverEventId = () => crypto.randomUUIDv4().pipe(Effect.map(EventId.make));
+    random.uuidV4().pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
+  const serverEventId = () => random.uuidV4().pipe(Effect.map(EventId.make));
   const serverMessageId = (tag: string) =>
-    crypto.randomUUIDv4().pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
+    random.uuidV4().pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
   const serverThreadId = (tag: string) =>
-    crypto.randomUUIDv4().pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
+    random.uuidV4().pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
 
   const resolveThread = (threadId: ThreadId) =>
     projectionSnapshotQuery.getThreadDetailById(threadId).pipe(Effect.map(Option.getOrUndefined));

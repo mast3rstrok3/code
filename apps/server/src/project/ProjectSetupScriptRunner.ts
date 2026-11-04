@@ -9,7 +9,7 @@ import {
 
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -233,7 +233,7 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const serviceScope = yield* Effect.scope;
 
   const observeTerminalCompletion = Effect.fn("ProjectSetupScriptRunner.observeTerminalCompletion")(
@@ -500,7 +500,7 @@ export const make = Effect.gen(function* () {
     const terminalId =
       input.preferredTerminalId ??
       (trigger === "settle"
-        ? `settle-${script.id}-${(yield* crypto.randomUUIDv4().pipe(Effect.orDie)).slice(0, 8)}`
+        ? `settle-${script.id}-${(yield* random.uuidV4()).slice(0, 8)}`
         : `setup-${script.id}`);
     const cwd = input.worktreePath;
     const env = {
@@ -512,9 +512,7 @@ export const make = Effect.gen(function* () {
       COLORTERM: "",
     };
     const observe = input.observeCompletion;
-    const completionToken = observe
-      ? (yield* crypto.randomUUIDv4().pipe(Effect.orDie)).replaceAll("-", "")
-      : null;
+    const completionToken = observe ? (yield* random.uuidV4()).replaceAll("-", "") : null;
     const echoedWrapperLines: string[] = [];
     // Subscribe before opening so neither startup activity nor the sentinel can race the listeners.
     const observed =

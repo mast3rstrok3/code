@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -8,6 +9,7 @@ import {
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -59,7 +61,9 @@ describe("ServerPreviewAutomationHost", () => {
   it.effect("re-registers with the broker after a timed-out request evicts it", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const broker = yield* PreviewAutomationBroker.make.pipe(Effect.provide(NodeServices.layer));
+        const broker = yield* PreviewAutomationBroker.make.pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        );
         const environmentId = EnvironmentId.make("environment-1");
         const scope = {
           environmentId,

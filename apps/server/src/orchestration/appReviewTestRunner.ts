@@ -21,7 +21,7 @@ import {
   APP_REVIEW_RECORDING_DIR_ENV,
   APP_REVIEW_TEST_RECORDING_SUFFIX,
 } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -41,8 +41,8 @@ const MAX_TEST_LOG_BYTES = 8 * 1024 * 1024;
 const prepareTestLogs = Effect.fn("prepareTestLogs")(function* (runDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
-  const id = yield* crypto.randomUUIDv4();
+  const random = yield* SecureRandom.SecureRandom;
+  const id = yield* random.uuidV4();
   yield* fs.makeDirectory(runDir, { recursive: true });
   const logs = {
     stdout: {
@@ -107,8 +107,8 @@ export const appReviewBuildArtifactsDir = (path: Path.Path, stateDir: string, ru
 const prepareTestRecording = Effect.fn("prepareTestRecording")(function* (runDir: string) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
-  const id = yield* crypto.randomUUIDv4();
+  const random = yield* SecureRandom.SecureRandom;
+  const id = yield* random.uuidV4();
   const incomingDir = path.join(runDir, `${id}.incoming`);
   yield* fileSystem.makeDirectory(incomingDir, { recursive: true });
   const scriptPath = path.join(runDir, "recorder.js");
