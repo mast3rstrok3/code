@@ -13878,10 +13878,18 @@ const make = Effect.gen(function* () {
     }
   });
 
+  // Run id → the run's `updatedAt` when the sweep began retrying it unchanged, and when.
+  const unchangedRetries = new Map<
+    string,
+    { readonly updatedAt: string; readonly sinceMs: number }
+  >();
+
   const recoverRetryableRuns = Effect.fn("ImplementationWorkflowReactor.recoverRetryableRuns")(
     function* () {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const createdAt = DateTime.formatIso(yield* DateTime.now);
+      const nowMs = Date.parse(createdAt);
+      const retrying = new Set<string>();
       for (const run of readModel.implementationRuns) {
         if (
           run.status !== "needs-human-attention" ||
@@ -13902,6 +13910,27 @@ const make = Effect.gen(function* () {
         }
         const sourceThreadId = findRunSourceThreadId({ readModel, run });
         if (sourceThreadId === null) continue;
+        retrying.add(run.id);
+        // A retry that changes nothing leaves the run waiting without a halt, so
+        // no one is told. Stop retrying it and halt, which reaches the root thread.
+        const unchanged = unchangedRetries.get(run.id);
+        if (unchanged === undefined || unchanged.updatedAt !== run.updatedAt) {
+          unchangedRetries.set(run.id, { updatedAt: run.updatedAt, sinceMs: nowMs });
+        } else if (nowMs - unchanged.sinceMs >= RUN_STALL_GRACE_MS) {
+          unchangedRetries.delete(run.id);
+          const failure = run.retryableFailure;
+          yield* blockRun({
+            sourceThreadId,
+            run,
+            ...(failure.ticketId === undefined ? {} : { ticketId: failure.ticketId }),
+            retryableStage: failure.stage,
+            reasonMarkdown: `Automatic retries of ${failure.stage} have not changed this run since ${run.updatedAt}.\n\n${failure.detail}`,
+            updatedAt: createdAt,
+            humanBlocked: true,
+            haltCategory: "retry-exhausted",
+          });
+          continue;
+        }
         yield* orchestrationEngine.dispatch({
           type: "thread.implementation-run.retry",
           commandId: yield* serverCommandId("implementation-auto-retry"),
@@ -13909,6 +13938,9 @@ const make = Effect.gen(function* () {
           runId: run.id,
           createdAt,
         });
+      }
+      for (const runId of unchangedRetries.keys()) {
+        if (!retrying.has(runId)) unchangedRetries.delete(runId);
       }
     },
   );
