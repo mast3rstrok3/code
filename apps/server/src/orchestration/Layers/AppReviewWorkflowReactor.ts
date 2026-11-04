@@ -106,6 +106,7 @@ import {
   type WorkflowNudgeThread,
 } from "../workflowNudge.ts";
 import {
+  lastBackgroundTaskEndedAt,
   openBackgroundTaskActivityAt,
   STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS,
 } from "../stageClaim.ts";
@@ -553,6 +554,13 @@ export function phaseTurnCompleted(thread: {
 }
 
 /**
+ * How long a phase still waits after its last background task ended. The task's
+ * end reaches the workflow before the provider's turn that reports on it, and
+ * re-prompting in that gap starts a second turn beside the provider's own.
+ */
+export const BACKGROUND_TASK_REINVOKE_GRACE_MS = 60_000;
+
+/**
  * A phase agent that ended its turn with a background task still open (an E2E
  * run, a device lease) is waiting for that task: the provider re-invokes it
  * when the task ends. Treating that turn as final re-prompts and interrupts the
@@ -561,9 +569,11 @@ export function phaseTurnCompleted(thread: {
  */
 export function phaseAwaitingBackgroundTask(thread: WorkflowNudgeThread, nowMs: number): boolean {
   const lastTaskActivityMs = openBackgroundTaskActivityAt(thread);
-  return (
-    lastTaskActivityMs !== null && nowMs - lastTaskActivityMs < STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS
-  );
+  if (lastTaskActivityMs !== null) {
+    return nowMs - lastTaskActivityMs < STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS;
+  }
+  const endedMs = lastBackgroundTaskEndedAt(thread);
+  return endedMs !== null && nowMs - endedMs < BACKGROUND_TASK_REINVOKE_GRACE_MS;
 }
 
 /**

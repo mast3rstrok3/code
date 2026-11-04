@@ -13,6 +13,7 @@ import {
   ProviderDriverKind,
   RuntimeItemId,
   RuntimeRequestId,
+  RuntimeTaskId,
   TurnId,
   type OrchestrationEvent,
   type OrchestrationV2ServerCommand,
@@ -42,6 +43,7 @@ import { ProviderRuntimeIngestionService } from "./Services/ProviderRuntimeInges
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { WorkflowProviderEvents } from "./WorkflowProviderEvents.ts";
+import { openBackgroundTaskIds, STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS } from "./stageClaim.ts";
 import {
   appendWorkflowSkillCommandSection,
   appendWorkflowStepInstructions,
@@ -335,6 +337,56 @@ export function workflowRuntimeEvents(
   return [];
 }
 
+/**
+ * A v2 provider thread's background work as the `task.*` activities workflow reactors read to
+ * hold an agent that waits on it; without them they re-prompted it, stopping that work. `open`
+ * is what the activities already show running; null means the event carries no roster.
+ */
+export function workflowBackgroundTaskEvents(
+  stored: OrchestrationV2StoredEvent,
+  open: ReadonlySet<string>,
+): {
+  readonly events: ReadonlyArray<ProviderRuntimeEvent>;
+  readonly open: ReadonlySet<string>;
+} | null {
+  const event = stored.event;
+  if (event.type !== "provider-thread.updated") return null;
+  const roster = event.payload.pendingBackgroundTasks ?? [];
+  const base = {
+    threadId: event.threadId,
+    provider: event.driver ?? ProviderDriverKind.make("codex"),
+    ...(event.providerInstanceId === undefined
+      ? {}
+      : { providerInstanceId: event.providerInstanceId }),
+    createdAt: DateTime.formatIso(event.occurredAt),
+    ...(event.runId == null ? {} : { turnId: TurnId.make(event.runId) }),
+  };
+  const events: Array<ProviderRuntimeEvent> = [];
+  for (const task of roster) {
+    if (open.has(task.taskId)) continue;
+    events.push({
+      ...base,
+      eventId: EventId.make(`workflow:task:${event.id}:${task.taskId}:started`),
+      type: "task.started",
+      payload: {
+        taskId: RuntimeTaskId.make(task.taskId),
+        ...(task.description === undefined ? {} : { description: task.description }),
+      },
+    });
+  }
+  const running = new Set(roster.map((task) => task.taskId));
+  for (const taskId of open) {
+    if (running.has(taskId)) continue;
+    events.push({
+      ...base,
+      eventId: EventId.make(`workflow:task:${event.id}:${taskId}:ended`),
+      type: "task.completed",
+      payload: { taskId: RuntimeTaskId.make(taskId), status: "completed" },
+    });
+  }
+  return { events, open: running };
+}
+
 export class WorkflowThreadImportError extends Schema.TaggedError<WorkflowThreadImportError>()(
   "WorkflowThreadImportError",
   {
@@ -519,6 +571,39 @@ export const make = Effect.gen(function* () {
     );
   };
 
+  // Each workflow thread's open background tasks, as its task activities state them.
+  // A restart forgets them, so the first roster after one reads them back.
+  const openBackgroundTasks = new Map<ThreadId, ReadonlySet<string>>();
+  const recordedOpenBackgroundTasks = Effect.fn(
+    "WorkflowRuntimeBridge.recordedOpenBackgroundTasks",
+  )(function* (threadId: ThreadId, occurredAt: DateTime.Utc) {
+    if (snapshots.listRecentTaskActivities === undefined) return new Set<string>();
+    const since = DateTime.formatIso(
+      DateTime.subtract(occurredAt, { milliseconds: STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS }),
+    );
+    const rows = yield* snapshots.listRecentTaskActivities({ threadIds: [threadId], since });
+    return openBackgroundTaskIds(rows.map((row) => row.activity));
+  });
+  const forwardBackgroundTasks = Effect.fn("WorkflowRuntimeBridge.forwardBackgroundTasks")(
+    function* (stored: OrchestrationV2StoredEvent) {
+      const event = stored.event;
+      if (event.type !== "provider-thread.updated") return;
+      const [record] = yield* workflowRecord(event.threadId);
+      if (record?.workflow_role == null || record.deleted_at !== null) return;
+      const open =
+        openBackgroundTasks.get(event.threadId) ??
+        (yield* recordedOpenBackgroundTasks(event.threadId, event.occurredAt));
+      const forwarded = workflowBackgroundTaskEvents(stored, open);
+      if (forwarded === null) return;
+      if (forwarded.events.length > 0) {
+        if (ingestion.ingest === undefined)
+          return yield* Effect.die(new Error("Workflow runtime ingestion is not configured"));
+        for (const runtime of forwarded.events) yield* ingestion.ingest(runtime);
+      }
+      openBackgroundTasks.set(event.threadId, forwarded.open);
+    },
+  );
+
   const observeNative = Effect.fn("WorkflowRuntimeBridge.observeNative")(function* (
     stored: OrchestrationV2StoredEvent,
   ) {
@@ -562,6 +647,7 @@ export const make = Effect.gen(function* () {
         else yield* mirrorNative({ type, commandId, threadId: event.threadId });
       }
     }
+    yield* forwardBackgroundTasks(stored);
     // Only workflow threads: every mirrored checkpoint forces a pull request refresh.
     const checkpointCommand = workflowCheckpointCommand(stored);
     if (checkpointCommand !== null) {
