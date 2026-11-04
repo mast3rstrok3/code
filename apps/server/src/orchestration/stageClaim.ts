@@ -61,21 +61,45 @@ export const STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS = 60 * 60 * 1_000;
  * when every task it started has ended.
  */
 export function openBackgroundTaskActivityAt(thread: WorkflowNudgeThread): number | null {
+  const { open, lastActivityMs } = scanBackgroundTasks(thread.activities ?? []);
+  return open.size === 0 ? null : lastActivityMs;
+}
+
+/** The background tasks these activities started and have not ended. */
+export function openBackgroundTaskIds(
+  activities: NonNullable<WorkflowNudgeThread["activities"]>,
+): ReadonlySet<string> {
+  return scanBackgroundTasks(activities).open;
+}
+
+/** When the thread's latest background task ended, or null when none has. */
+export function lastBackgroundTaskEndedAt(thread: WorkflowNudgeThread): number | null {
+  return scanBackgroundTasks(thread.activities ?? []).lastEndedMs;
+}
+
+function scanBackgroundTasks(activities: NonNullable<WorkflowNudgeThread["activities"]>): {
+  readonly open: ReadonlySet<string>;
+  readonly lastActivityMs: number | null;
+  readonly lastEndedMs: number | null;
+} {
   const open = new Set<string>();
   let lastActivityMs: number | null = null;
-  for (const activity of thread.activities ?? []) {
+  let lastEndedMs: number | null = null;
+  for (const activity of activities) {
     if (!activity.kind.startsWith("task.")) continue;
     const payload = activity.payload as { taskId?: unknown; endedAt?: unknown } | null;
     const taskId = typeof payload?.taskId === "string" ? payload.taskId : null;
     if (taskId === null) continue;
+    const createdAtMs = Date.parse(activity.createdAt);
+    const at = Number.isFinite(createdAtMs) ? createdAtMs : null;
     if (activity.kind === "task.started") open.add(taskId);
     else if (activity.kind === "task.completed" || typeof payload?.endedAt === "string") {
       open.delete(taskId);
+      if (at !== null) lastEndedMs = Math.max(lastEndedMs ?? 0, at);
     }
-    const createdAtMs = Date.parse(activity.createdAt);
-    if (Number.isFinite(createdAtMs)) lastActivityMs = Math.max(lastActivityMs ?? 0, createdAtMs);
+    if (at !== null) lastActivityMs = Math.max(lastActivityMs ?? 0, at);
   }
-  return open.size === 0 ? null : lastActivityMs;
+  return { open, lastActivityMs, lastEndedMs };
 }
 
 export interface StageClaimThread extends WorkflowNudgeThread {

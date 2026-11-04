@@ -859,6 +859,16 @@ it("keeps a completed phase waiting while a background task it started is open",
       nowMs,
     ),
   ).toBe(false);
+  // The provider's turn that reports on a finished task starts just after the task ends.
+  expect(
+    phaseAwaitingBackgroundTask(
+      fixer([
+        { kind: "task.started", taskId: "e2e", minutesAgo: 20 },
+        { kind: "task.completed", taskId: "e2e", minutesAgo: 0.5 },
+      ]),
+      nowMs,
+    ),
+  ).toBe(true);
 });
 
 it("identifies phase workers that restart after their cycle was superseded", () => {

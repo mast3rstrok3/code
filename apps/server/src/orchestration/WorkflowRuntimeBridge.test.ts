@@ -32,6 +32,7 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 import { emptyProjection } from "../orchestration-v2/ProjectionStore.ts";
 import {
+  workflowBackgroundTaskEvents,
   workflowCheckpointCommand,
   workflowControlCommands,
   workflowRuntimeEvents,
@@ -285,6 +286,167 @@ it("gives a native run's checkpoint to its legacy turn so App Review can advance
   expect(workflowCheckpointCommand(captured(null, "ready"))).toBeNull();
   expect(workflowCheckpointCommand(captured("run", "stale"))).toBeNull();
 });
+
+const rosterEvent = (
+  sequence: number,
+  tasks: ReadonlyArray<{
+    readonly taskId: string;
+    readonly kind: string;
+    readonly description?: string;
+  }>,
+) =>
+  decodeNative({
+    sequence,
+    commandId: null,
+    event: {
+      id: `native:roster:${sequence}`,
+      threadId: "thread-fixer",
+      runId: "run-1",
+      driver: "claudeAgent",
+      providerInstanceId: "claudeAgent",
+      occurredAt: nativeAt,
+      type: "provider-thread.updated",
+      payload: {
+        id: "provider-thread",
+        driver: "claudeAgent",
+        providerInstanceId: "claudeAgent",
+        providerSessionId: null,
+        appThreadId: "thread-fixer",
+        ownerNodeId: null,
+        nativeThreadRef: null,
+        nativeConversationHeadRef: null,
+        status: "active",
+        firstRunOrdinal: 1,
+        lastRunOrdinal: 1,
+        handoffIds: [],
+        forkedFrom: null,
+        pendingBackgroundTasks: tasks,
+        createdAt: nativeAt,
+        updatedAt: nativeAt,
+      },
+    },
+  });
+
+it("states a native thread's background work as the task activities workflows wait on", () => {
+  const started = workflowBackgroundTaskEvents(
+    rosterEvent(1, [{ taskId: "check", kind: "command", description: "pnpm check dev rudi" }]),
+    new Set(),
+  );
+  expect(started?.events).toMatchObject([
+    {
+      eventId: "workflow:task:native:roster:1:check:started",
+      threadId: "thread-fixer",
+      turnId: "run-1",
+      type: "task.started",
+      payload: { taskId: "check", description: "pnpm check dev rudi" },
+    },
+  ]);
+  expect([...(started?.open ?? [])]).toEqual(["check"]);
+  // The same roster again says nothing new.
+  expect(
+    workflowBackgroundTaskEvents(
+      rosterEvent(2, [{ taskId: "check", kind: "command" }]),
+      new Set(["check"]),
+    )?.events,
+  ).toEqual([]);
+  const ended = workflowBackgroundTaskEvents(rosterEvent(3, []), new Set(["check"]));
+  expect(ended?.events).toMatchObject([
+    { type: "task.completed", payload: { taskId: "check", status: "completed" } },
+  ]);
+  expect(ended?.open.size).toBe(0);
+  expect(workflowBackgroundTaskEvents(nativeThread, new Set())).toBeNull();
+});
+
+effectIt.effect(
+  "gives a workflow thread's background work to the reactors, and ends work a restart forgot",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const received: ProviderRuntimeEvent[] = [];
+        let stored: ReadonlyArray<OrchestrationV2StoredEvent> = [
+          rosterEvent(1, [{ taskId: "check", kind: "command" }]),
+          rosterEvent(2, [{ taskId: "check", kind: "command" }]),
+          rosterEvent(3, []),
+        ];
+        let recorded: ReadonlyArray<unknown> = [];
+        const afterRestart = [
+          {
+            threadId: ThreadId.make("thread-fixer"),
+            activity: {
+              id: "activity-rerun",
+              tone: "info",
+              kind: "task.started",
+              summary: "Task started",
+              payload: { taskId: "rerun" },
+              turnId: null,
+              createdAt: at,
+            },
+          },
+        ];
+        const dependencies = Layer.mergeAll(
+          Layer.mock(OrchestrationEngineService)({
+            subscribeDomainEvents: Effect.succeed(Stream.never),
+            readEvents: () => Stream.empty,
+          }),
+          Layer.mock(ProjectionSnapshotQuery)({
+            getThreadShellById: () => Effect.succeedNone,
+            listRecentTaskActivities: () => Effect.succeed(recorded as never),
+          }),
+          Layer.mock(OrchestratorV2)({ streamStoredEventsFrom: () => Stream.never }),
+          Layer.mock(EventStoreV2)({
+            latestSequence: () => Effect.succeed(stored.at(-1)?.sequence ?? 0),
+            read: () => Stream.fromIterable(stored),
+          }),
+          Layer.mock(ProjectService)({}),
+          Layer.mock(ServerSettingsService)({}),
+          Layer.mock(ProviderInstanceRegistry)({}),
+          Layer.mock(WorkflowUserInputBroker)({}),
+          Layer.mock(ProviderRuntimeIngestionService)({
+            start: () => Effect.void,
+            drain: Effect.void,
+            ingest: (event) =>
+              Effect.sync(() => {
+                received.push(event);
+              }),
+          }),
+          layerProviderEvents,
+        );
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* runMigrations();
+          yield* sql`
+            INSERT INTO projection_threads (
+              thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+              created_at, updated_at, workflow_role
+            ) VALUES (
+              'thread-fixer', 'project', 'App Review implementation', '{}', 'full-access', 'default',
+              ${at}, ${at}, 'app-review-fixer'
+            )
+          `;
+          const first = yield* make;
+          yield* first.start;
+          yield* first.drain;
+          expect(
+            received.map((event) => [event.type, (event.payload as { taskId: string }).taskId]),
+          ).toEqual([
+            ["task.started", "check"],
+            ["task.completed", "check"],
+          ]);
+
+          // After a restart the bridge reads back the task the activities still show running.
+          received.length = 0;
+          recorded = afterRestart;
+          stored = [rosterEvent(4, [])];
+          const restarted = yield* make;
+          yield* restarted.start;
+          yield* restarted.drain;
+          expect(
+            received.map((event) => [event.type, (event.payload as { taskId: string }).taskId]),
+          ).toEqual([["task.completed", "rerun"]]);
+        }).pipe(Effect.provide(dependencies));
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+    ),
+);
 
 effectIt.effect("replays native completions once even when a crash loses the cursor update", () =>
   Effect.scoped(
