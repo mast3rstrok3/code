@@ -79,7 +79,11 @@ import {
   isImplementationAppReview,
   reusableAppReviewFixValidations,
 } from "../appReviewValidation.ts";
-import { APP_REVIEW_PREFLIGHT_RETRY_MS, runAppReviewPreflight } from "../appReviewPreflight.ts";
+import {
+  APP_REVIEW_PREFLIGHT_RETRY_MS,
+  APP_REVIEW_PREFLIGHT_WAIT_LIMIT_MS,
+  runAppReviewPreflight,
+} from "../appReviewPreflight.ts";
 
 import { AppStackManager } from "../../appStack/AppStackManager.ts";
 import { ServerConfig } from "../../config.ts";
@@ -2211,7 +2215,7 @@ const make = Effect.gen(function* () {
         : "The test readiness command could not run successfully.",
       config.blockedReason,
       result === "waiting"
-        ? "Only the readiness check will retry, once per minute. This phase will resume automatically when it passes. No repair cycle is spent while waiting."
+        ? `Only the readiness check will retry, once per minute, for up to ${String(APP_REVIEW_PREFLIGHT_WAIT_LIMIT_MS / 60_000)} minutes. This phase will resume automatically when it passes. No repair cycle is spent while waiting.`
         : "Fix e2ePreflight in t3.json, then rerun this phase. Exit 0 means ready; exit 1 means a prerequisite is unavailable. Other exit codes stop automatic checks.",
     ].join("\n\n");
     if (result === "error") {
@@ -4953,7 +4957,16 @@ ${result.outputMarkdown}`,
         appReviewWaitsForAdmission(run, latest)
       )
         return true;
-      if (result === "waiting") return true;
+      if (result === "waiting") {
+        // Nothing restarts what the check waits for, so an endless wait would be a silent stop.
+        const waitedMs = Date.parse(occurredAt) - Date.parse(run.failure?.failedAt ?? occurredAt);
+        if (waitedMs >= APP_REVIEW_PREFLIGHT_WAIT_LIMIT_MS) {
+          yield* stopChecking(
+            `Test prerequisites stayed unavailable for ${String(APP_REVIEW_PREFLIGHT_WAIT_LIMIT_MS / 60_000)} minutes.\n\n${config.blockedReason}`,
+          );
+        }
+        return true;
+      }
       if (result === "error") {
         yield* stopChecking(
           "The test readiness command failed to run. Use exit 1 for unavailable prerequisites; other errors require intervention.",

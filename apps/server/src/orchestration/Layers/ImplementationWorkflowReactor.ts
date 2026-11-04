@@ -62,6 +62,7 @@ import {
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
   type WorkspaceUserId,
   type VcsRef,
+  type ProjectId,
 } from "@t3tools/contracts";
 import {
   resolveReviewTestPlatforms,
@@ -2119,6 +2120,9 @@ function changeRequestFailure(input: {
  */
 const INTEGRATION_STALL_GRACE_MS = 5 * 60 * 1_000;
 
+/** Below the stage claim's grace window, so recovery can't relaunch a ticket still in setup. */
+const TICKET_WORKTREE_SETUP_TIMEOUT_MS = STAGE_CLAIM_GRACE_MS - 60 * 1_000;
+
 /**
  * How long a run may hold a working status with nothing working before recovery
  * calls it stalled.
@@ -3331,6 +3335,35 @@ const make = Effect.gen(function* () {
     );
   });
 
+  /** Runs a worktree's project setup and waits for it to exit. No setup configured is a pass. */
+  const runWorktreeSetup = Effect.fn("ImplementationWorkflowReactor.runWorktreeSetup")(
+    function* (input: {
+      readonly threadId: ThreadId;
+      readonly projectId: ProjectId;
+      readonly worktreePath: string;
+      readonly preferredTerminalId?: string;
+    }) {
+      const result = yield* projectSetupScriptRunner.runForThread({
+        threadId: input.threadId,
+        projectId: input.projectId,
+        worktreePath: input.worktreePath,
+        ...(input.preferredTerminalId === undefined
+          ? {}
+          : { preferredTerminalId: input.preferredTerminalId }),
+        observeCompletion: {},
+      });
+      if (result.status !== "started" || !result.completion) return;
+      const completion = yield* result.completion;
+      if (completion.exitCode === 0) return;
+      return yield* new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
+        threadId: input.threadId,
+        worktreePath: input.worktreePath,
+        operation: "executeCommand",
+        cause: `Setup command exited with code ${completion.exitCode ?? "unknown"}.`,
+      });
+    },
+  );
+
   const createWorker = Effect.fn("ImplementationWorkflowReactor.createWorker")(function* (input: {
     readonly sourceThreadId: ThreadId;
     readonly orchestratorThread: OrchestrationThread;
@@ -3598,6 +3631,27 @@ const make = Effect.gen(function* () {
         worktreePath: plannedWorker.worktreePath,
         createdAt: input.createdAt,
       });
+    }
+
+    // Before the worker's first turn, so it starts in a ready worktree instead of repairing tooling.
+    // The thread above holds the ticket's claim for less than the grace window this stays under.
+    if (durableWorkerThread === null || durableWorkerThread.latestTurn === null) {
+      yield* runWorktreeSetup({
+        threadId: workerThreadId,
+        projectId: repository?.projectId ?? input.orchestratorThread.projectId,
+        worktreePath: plannedWorker.worktreePath,
+      }).pipe(
+        Effect.timeout(Duration.millis(TICKET_WORKTREE_SETUP_TIMEOUT_MS)),
+        Effect.mapError(
+          (cause) =>
+            new GitCommandError({
+              operation: "ImplementationWorkflowReactor.createWorker",
+              command: "project worktree setup",
+              cwd: plannedWorker.worktreePath,
+              detail: `Worktree setup failed: ${errorDetail(cause)}`,
+            }),
+        ),
+      );
     }
 
     const resultProblem = isContinuation
@@ -6386,35 +6440,14 @@ const make = Effect.gen(function* () {
       const setupResult = yield* Effect.forEach(
         setupTargets,
         (target) =>
-          projectSetupScriptRunner
-            .runForThread({
-              threadId: integratedRun.orchestratorThreadId,
-              projectId: target.projectId,
-              worktreePath: target.worktreePath,
-              ...(target.preferredTerminalId === undefined
-                ? {}
-                : { preferredTerminalId: target.preferredTerminalId }),
-              observeCompletion: {},
-            })
-            .pipe(
-              Effect.flatMap((result) => {
-                if (result.status !== "started" || !result.completion) return Effect.void;
-                return result.completion.pipe(
-                  Effect.flatMap((completion) =>
-                    completion.exitCode === 0
-                      ? Effect.void
-                      : Effect.fail(
-                          new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
-                            threadId: integratedRun.orchestratorThreadId,
-                            worktreePath: target.worktreePath,
-                            operation: "executeCommand",
-                            cause: `Setup command exited with code ${completion.exitCode ?? "unknown"}.`,
-                          }),
-                        ),
-                  ),
-                );
-              }),
-            ),
+          runWorktreeSetup({
+            threadId: integratedRun.orchestratorThreadId,
+            projectId: target.projectId,
+            worktreePath: target.worktreePath,
+            ...(target.preferredTerminalId === undefined
+              ? {}
+              : { preferredTerminalId: target.preferredTerminalId }),
+          }),
         { discard: true },
       ).pipe(Effect.result);
       if (setupResult._tag === "Failure") {

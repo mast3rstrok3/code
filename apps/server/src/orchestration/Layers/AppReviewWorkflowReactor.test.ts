@@ -15,6 +15,7 @@ import * as Deferred from "effect/Deferred";
 import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -4031,6 +4032,15 @@ for (const mode of ["e2e", "fixing", "fixing-existing", "validation"] as const) 
                     );
                     yield* reactor.reconcile();
                     expect(probes).toHaveLength(2);
+                    // Nothing restarts what it waits for, so the wait ends and reports.
+                    yield* TestClock.adjust(Duration.minutes(31));
+                    yield* reactor.reconcile();
+                    expect(storedRun.status).toBe("failed");
+                    expect(storedRun.prerequisiteCheck).toBeNull();
+                    expect(storedRun.failure?.detailMarkdown).toContain(
+                      "stayed unavailable for 30 minutes",
+                    );
+                    expect(storedRun.failure?.detailMarkdown).toContain("TEST_DATABASE_URL");
                   }
                   if (["error", "changed-command", "changed-revision"].includes(outcome))
                     expect(storedRun.prerequisiteCheck).toBeNull();
