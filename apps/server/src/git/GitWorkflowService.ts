@@ -85,6 +85,10 @@ export class GitWorkflowService extends Context.Service<
     readonly preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
+    readonly readBranchBase: (
+      cwd: string,
+      branch: string,
+    ) => Effect.Effect<string | null, GitManagerServiceError>;
     readonly listRefs: (
       input: VcsListRefsInput,
     ) => Effect.Effect<VcsListRefsResult, GitCommandError>;
@@ -527,6 +531,13 @@ export const make = Effect.gen(function* () {
         );
       },
     ),
+    readBranchBase: Effect.fn("GitWorkflowService.readBranchBase")(function (cwd, branch) {
+      return detectGitRepositoryForCommand("GitWorkflowService.readBranchBase", cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository ? git.readBranchBase(cwd, branch) : Effect.succeed(null),
+        ),
+      );
+    }),
     listRefs: Effect.fn("GitWorkflowService.listRefs")(function (input) {
       return detectGitRepositoryForCommand("GitWorkflowService.listRefs", input.cwd).pipe(
         Effect.flatMap((isGitRepository) =>

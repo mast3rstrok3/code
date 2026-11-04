@@ -1648,7 +1648,7 @@ export function buildAppReviewFixPrompt(input: {
       "For product defects, write the test each ticket names, watch it fail, then repair. For coverage gaps, add the missing executable test or assertion and run it; it may pass immediately when the product already works. Repair any defects it exposes. Missing test code is repair work, not an external prerequisite. Address every actionable finding together, preserve unrelated work, and run focused validation. Do not ask the user questions.",
       APP_REVIEW_FIXER_IMPLEMENTATION_ONLY_INSTRUCTION,
       WORKFLOW_PARALLEL_VALIDATION_INSTRUCTION,
-      `Set ${APP_REVIEW_TEST_PLATFORMS_ENV}=${(input.run.testPlatforms ?? ["web"]).join(",")} for repair validation commands. Require evidence for every selected platform; report omitted platforms as unrun.`,
+      `Set ${APP_REVIEW_TEST_PLATFORMS_ENV}=${(input.run.testPlatforms ?? ["web"]).join(",")} for E2E repair validation commands, and leave it out of the repository's complete check commands. Require evidence for every selected platform; report omitted platforms as unrun.`,
       "Before declaring a test prerequisite unavailable, inspect this worktree's supported test setup and assigned App Stack. Use an existing authorized test service when available, verify its identity and required permissions, and pass its configuration only to the test processes. A missing environment variable alone does not establish that the service is unavailable. Never use another worktree's database, expose credentials, or provision services without authorization. Record reusable setup instructions without secret values so the next reviewer can recover the same environment.",
       ...(isImplementationAppReview(input.run) && !input.cycle.e2eExecution
         ? [
