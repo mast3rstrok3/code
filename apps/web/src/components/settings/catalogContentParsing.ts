@@ -1,11 +1,8 @@
 /**
- * Catalog prompt and document bodies are authored as Markdown, but they ship as
- * raw model input: skill prompts arrive wrapped in an envelope tag and some
- * carry a YAML frontmatter block partway down. These helpers turn that raw text
- * into something readable without hiding anything — the raw view still shows the
- * exact text the model receives.
+ * Catalog bodies ship as raw model input: skill prompts arrive in an envelope tag
+ * and some carry a YAML frontmatter block partway down. These helpers make that
+ * text readable; the raw view still shows exactly what the model receives.
  */
-
 export type CatalogContentKind = "markdown" | "text";
 
 export interface ParsedCatalogContent {

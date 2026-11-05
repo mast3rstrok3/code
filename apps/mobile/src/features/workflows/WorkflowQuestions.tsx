@@ -5,7 +5,7 @@ import { Pressable, View } from "react-native";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { cn } from "../../lib/cn";
-import type { WorkflowPendingQuestion } from "./workflowQuestions";
+import type { WorkflowPendingQuestion } from "./pendingWorkflowQuestions";
 
 type Question = WorkflowPendingQuestion["questions"][number];
 

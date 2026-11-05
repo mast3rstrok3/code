@@ -15,7 +15,7 @@ import {
 import { useEffect, useState } from "react";
 
 import { uuidv4 } from "../../lib/uuid";
-import { pendingWorkflowQuestions } from "./workflowQuestions";
+import { pendingWorkflowQuestions } from "./pendingWorkflowQuestions";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
   useCanDispatchWorkflowCommand,
@@ -43,9 +43,9 @@ export function useWorkflowRun(environmentId: EnvironmentId, threadId: ThreadId)
     environmentId,
     rootDetail.data === null ? null : { projectId: rootDetail.data.projectId, threadId: rootId },
   );
-  // Artifacts are a query; the snapshot is the live signal that they moved.
   const refreshArtifacts = artifacts.refresh;
   const snapshotData = snapshot.data;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- refetches the artifacts query when the live workflow snapshot subscription moves
   useEffect(() => {
     if (snapshotData !== null) refreshArtifacts();
   }, [snapshotData, refreshArtifacts]);
