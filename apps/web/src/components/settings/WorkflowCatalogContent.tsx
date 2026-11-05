@@ -1,11 +1,11 @@
 import { CodeIcon, TextIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
-import { parseCatalogContent } from "./workflowCatalogContent";
+import { parseCatalogContent } from "./catalogContentParsing";
 
 const RAW_CLASS_NAME =
   "mb-4 overflow-auto rounded-lg border border-border/70 bg-muted/35 p-3 text-2xs leading-relaxed whitespace-pre-wrap";
@@ -24,7 +24,7 @@ export function WorkflowCatalogContent({
   label: string;
   maxHeightClassName: string;
 }) {
-  const parsed = useMemo(() => parseCatalogContent(text), [text]);
+  const parsed = parseCatalogContent(text);
   const [showRaw, setShowRaw] = useState(false);
   const rendered = parsed.kind === "markdown" && !showRaw;
 

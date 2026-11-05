@@ -7,7 +7,7 @@ import {
   escapeStandaloneTagLines,
   normalizeFrontmatterBlocks,
   parseCatalogContent,
-} from "./workflowCatalogContent";
+} from "./catalogContentParsing";
 
 describe("workflow catalog settings", () => {
   it("publishes separate workflow, skill, and doc navigation entries", () => {
