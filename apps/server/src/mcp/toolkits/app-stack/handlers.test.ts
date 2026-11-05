@@ -119,6 +119,7 @@ function harness(
     failMutation?: boolean;
     lookupWait?: Effect.Effect<void>;
     listed?: ReadonlyArray<AppStack>;
+    threads?: ReadonlyArray<{ id: string; parentThreadId: string; worktreePath: string }>;
   } = {},
 ) {
   const calls: Array<{ worktreePath: string; variant?: string | undefined }> = [];
@@ -134,7 +135,19 @@ function harness(
     invocation,
     Layer.mock(ProjectionSnapshotQuery)({
       getThreadShellById: (id) => {
-        expect(id).toBe(thread.id);
+        if (id !== thread.id) {
+          const other = input.threads?.find((candidate) => candidate.id === id);
+          return Effect.succeed(
+            other === undefined
+              ? Option.none()
+              : Option.some({
+                  ...thread,
+                  id: ThreadId.make(other.id),
+                  parentThreadId: ThreadId.make(other.parentThreadId),
+                  worktreePath: other.worktreePath,
+                }),
+          );
+        }
         return Effect.succeed(
           input.missing
             ? Option.none()
@@ -729,6 +742,34 @@ describe.each(
       }).pipe(Effect.provide(test.layer));
     },
   );
+});
+
+it.effect("acts on a thread below the caller and rejects threads outside it", () => {
+  const test = harness({
+    stack: { ...stack, worktreePath: "/worktrees/worker" },
+    threads: [
+      { id: "orchestrator", parentThreadId: thread.id, worktreePath: "/worktrees/orchestrator" },
+      { id: "worker", parentThreadId: "orchestrator", worktreePath: "/worktrees/worker" },
+      { id: "sibling", parentThreadId: "other-root", worktreePath: "/worktrees/sibling" },
+    ],
+  });
+  const worker = ThreadId.make("worker");
+  return Effect.gen(function* () {
+    yield* AppStackHandlers.handlers.app_stack_stop({ threadId: worker });
+    yield* AppStackHandlers.handlers.app_stack_delete({ threadId: worker });
+    expect(test.calls).toEqual([
+      { worktreePath: "/worktrees/worker", variant: "dev" },
+      { worktreePath: "/worktrees/worker", variant: "dev" },
+    ]);
+    const [sibling, unknown] = yield* Effect.forEach(["sibling", "unknown"], (threadId) =>
+      AppStackHandlers.handlers
+        .app_stack_start({ threadId: ThreadId.make(threadId) })
+        .pipe(Effect.flip),
+    );
+    expect(sibling?.message).toContain("this thread or a thread below it");
+    expect(unknown?.message).toContain("workspace was not found");
+    expect(test.operations.map((entry) => entry.operation)).toEqual(["stop", "delete"]);
+  }).pipe(Effect.provide(test.layer));
 });
 
 it.effect("requires a managed stack for mutations and logs", () => {
