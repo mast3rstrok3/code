@@ -73,7 +73,10 @@ import {
   type WorkflowTimelineStep,
   type WorkflowThreadStatus,
 } from "@t3tools/client-runtime/workflow-model";
-import { appReviewPhaseRerunDisabledReason } from "@t3tools/client-runtime/app-review";
+import {
+  appReviewCycleReplayCount,
+  appReviewPhaseRerunDisabledReason,
+} from "@t3tools/client-runtime/app-review";
 import {
   appReviewRunActiveThreadIsBusy,
   collectRunningStepThreadIds,
@@ -585,6 +588,7 @@ export function TicketAppReviewCycles(props: {
   readonly onResumeThreads: ((threadIds: readonly ThreadId[]) => void) | undefined;
   readonly threads: readonly EnvironmentWorkflowThreadShell[];
   readonly onOpenThread: (thread: EnvironmentWorkflowThreadShell) => void;
+  readonly onOpenAppReview?: (() => void) | undefined;
   readonly activeThreadKey: string | null;
   readonly timestampFormat: TimestampFormat;
   readonly disclosures: WorkflowDisclosureControls;
@@ -670,6 +674,7 @@ export function TicketAppReviewCycles(props: {
           // Only the newest cycle can start again: every phase entry point on
           // the server works on the run's current cycle.
           const isCurrentCycle = cycle.cycleNumber === latestCycleNumber;
+          const replayCount = appReviewCycleReplayCount(cycle);
           const cycleStatus = resolveWorkflowStageDetailStatus(cycle.status);
           const cycleDisclosureId = workflowAppReviewCycleDisclosureId(
             props.groupId,
@@ -734,6 +739,16 @@ export function TicketAppReviewCycles(props: {
                       Automated tests: {cycle.e2eExecution.results.length}/
                       {cycle.e2eExecution.commands.length} finished. No agent runs during testing.
                     </p>
+                  ) : null}
+                  {props.onOpenAppReview && replayCount > 0 ? (
+                    <button
+                      type="button"
+                      onClick={props.onOpenAppReview}
+                      className="inline-flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-3xs hover:bg-accent hover:text-foreground"
+                    >
+                      Watch {replayCount} test {replayCount === 1 ? "replay" : "replays"}
+                      <Eye className="size-3" aria-hidden />
+                    </button>
                   ) : null}
                   <ol className="mt-2 space-y-1.5 border-l border-border/70 pl-3">
                     {steps.map((step, index) => {
@@ -939,6 +954,7 @@ function AppReviewRunsTimeline(props: {
     | undefined;
   readonly threads: readonly EnvironmentWorkflowThreadShell[];
   readonly onOpenThread: (thread: EnvironmentWorkflowThreadShell) => void;
+  readonly onOpenAppReview: () => void;
   readonly activeThreadKey: string | null;
   readonly timestampFormat: TimestampFormat;
   readonly disclosures: WorkflowDisclosureControls;
@@ -971,6 +987,7 @@ function AppReviewRunsTimeline(props: {
               }
               threads={props.threads}
               onOpenThread={props.onOpenThread}
+              onOpenAppReview={props.onOpenAppReview}
               activeThreadKey={props.activeThreadKey}
               timestampFormat={props.timestampFormat}
               disclosures={props.disclosures}
@@ -1839,6 +1856,7 @@ function TicketPhases(props: {
                                     }
                                     threads={runThreads}
                                     onOpenThread={props.onOpenThread}
+                                    onOpenAppReview={props.onOpenAppReview}
                                     activeThreadKey={props.activeThreadKey}
                                     timestampFormat={props.timestampFormat}
                                     disclosures={props.disclosures}
@@ -2631,6 +2649,7 @@ function WorkflowGroupCard(props: {
                                   onRerunAppReviewPhase={props.onRerunAppReviewPhase}
                                   threads={workflowThreads}
                                   onOpenThread={props.onOpenThread}
+                                  onOpenAppReview={props.onOpenAppReview}
                                   activeThreadKey={props.activeThreadKey}
                                   timestampFormat={props.timestampFormat}
                                   disclosures={disclosures}

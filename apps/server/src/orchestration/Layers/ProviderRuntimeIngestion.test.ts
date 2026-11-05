@@ -514,7 +514,7 @@ describe("ProviderRuntimeIngestion", () => {
     };
   }
 
-  effectIt.effect.each(["paragraph", "token", "turn"] as const)(
+  effectIt.effect.each(["paragraph", "turn"] as const)(
     "settles a queued text burst without one context query per token in %s mode",
     (responseStreamingMode) =>
       Effect.gen(function* () {
@@ -681,13 +681,8 @@ describe("ProviderRuntimeIngestion", () => {
     );
   });
 
-  it.each([
-    { delivery: "buffered", responseStreamingMode: "paragraph" as const },
-    { delivery: "streamed", responseStreamingMode: "token" as const },
-  ])("settles OpenCode aborted turns and saves $delivery assistant text", async (settings) => {
-    const harness = await createHarness({
-      serverSettings: { responseStreamingMode: settings.responseStreamingMode },
-    });
+  it("settles OpenCode aborted turns and saves buffered assistant text", async () => {
+    const harness = await createHarness({ serverSettings: { responseStreamingMode: "paragraph" } });
     const threadId = asThreadId("thread-1");
     const turnId = asTurnId("opencode-aborted-turn");
     const base = {
@@ -853,7 +848,7 @@ describe("ProviderRuntimeIngestion", () => {
     { source: "an unspecified turn", turnId: undefined },
   ])("ignores late OpenCode aborts for $source across newer turns", async (lateAbort) => {
     const harness = await createHarness({
-      serverSettings: { responseStreamingMode: "token" },
+      serverSettings: { responseStreamingMode: "paragraph" },
     });
     const threadId = asThreadId("thread-1");
     const stoppedTurnId = asTurnId("opencode-stopped-turn");
@@ -888,7 +883,7 @@ describe("ProviderRuntimeIngestion", () => {
       eventId: asEventId("opencode-next-partial-text"),
       turnId: nextTurnId,
       itemId: asItemId("opencode-next-text-part"),
-      payload: { streamKind: "assistant_text", delta: "The next turn is running." },
+      payload: { streamKind: "assistant_text", delta: "The next turn is running.\n\n" },
     });
     await harness.drain();
 
@@ -907,7 +902,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread?.messages).toEqual([
       expect.objectContaining({
         turnId: nextTurnId,
-        text: "The next turn is running.",
+        text: "The next turn is running.\n\n",
         streaming: true,
       }),
     ]);
@@ -1669,7 +1664,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
-  for (const responseStreamingMode of ["paragraph", "token", "turn"] as const) {
+  for (const responseStreamingMode of ["paragraph", "turn"] as const) {
     it.each(["started", "delta", "completion"] as const)(
       `separates a replacement assistant item at %s in ${responseStreamingMode} mode`,
       async (boundary) => {
@@ -3409,7 +3404,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("keeps streaming while an async question is pending", async () => {
-    const harness = await createHarness({ serverSettings: { responseStreamingMode: "token" } });
+    const harness = await createHarness({ serverSettings: { responseStreamingMode: "paragraph" } });
     const base = {
       provider: ProviderDriverKind.make("codex"),
       createdAt: "2026-01-01T00:00:00.000Z",
@@ -3422,7 +3417,7 @@ describe("ProviderRuntimeIngestion", () => {
       type: "content.delta",
       eventId: asEventId("async-before"),
       itemId: asItemId("message-1"),
-      payload: { streamKind: "assistant_text", delta: "Before. " },
+      payload: { streamKind: "assistant_text", delta: "Before.\n\n" },
     });
     harness.emit({
       ...base,
@@ -3452,7 +3447,8 @@ describe("ProviderRuntimeIngestion", () => {
     await harness.drain();
     const thread = (await harness.readModel()).threads[0];
     expect(thread?.session?.status).toBe("running");
-    expect(thread?.messages).toMatchObject([{ text: "Before. After.", streaming: true }]);
+    // Paced paragraph delivery holds "After." back; an unfinished message shows the question kept it open.
+    expect(thread?.messages).toMatchObject([{ text: "Before.\n\n", streaming: true }]);
     expect(
       thread?.activities.find((activity) => activity.kind === "user-input.requested")?.payload,
     ).toMatchObject({ responseMode: "message", requestId: "codex-async:question-1" });
@@ -3651,7 +3647,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("starts a new streaming assistant message segment after approval", async () => {
-    const harness = await createHarness({ serverSettings: { responseStreamingMode: "token" } });
+    const harness = await createHarness({ serverSettings: { responseStreamingMode: "paragraph" } });
     const startedAt = "2026-03-28T07:00:00.000Z";
     const pausedAt = "2026-03-28T07:00:01.000Z";
     const resumedAt = "2026-03-28T07:00:02.000Z";
@@ -3755,98 +3751,6 @@ describe("ProviderRuntimeIngestion", () => {
           message.id === "assistant:item-streaming-request-segment:segment:1",
       )?.text,
     ).toBe(" after approval");
-  });
-
-  it("streams assistant deltas when thread.turn.start requests streaming mode", async () => {
-    const harness = await createHarness({ serverSettings: { responseStreamingMode: "token" } });
-    const now = "2026-01-01T00:00:00.000Z";
-
-    await runtime!.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-streaming-mode"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("message-streaming-mode"),
-          role: "user",
-          text: "stream please",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-    await harness.drain();
-
-    harness.emit({
-      type: "turn.started",
-      eventId: asEventId("evt-turn-started-streaming-mode"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-streaming-mode"),
-    });
-    await waitForThread(
-      harness.readModel,
-      (thread) =>
-        thread.session?.status === "running" &&
-        thread.session?.activeTurnId === "turn-streaming-mode",
-    );
-
-    harness.emit({
-      type: "content.delta",
-      eventId: asEventId("evt-message-delta-streaming-mode"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-streaming-mode"),
-      itemId: asItemId("item-streaming-mode"),
-      payload: {
-        streamKind: "assistant_text",
-        delta: "hello live",
-      },
-    });
-
-    const liveThread = await waitForThread(harness.readModel, (entry) =>
-      entry.messages.some(
-        (message: ProviderRuntimeTestMessage) =>
-          message.id === "assistant:item-streaming-mode" &&
-          message.streaming &&
-          message.text === "hello live",
-      ),
-    );
-    const liveMessage = liveThread.messages.find(
-      (entry: ProviderRuntimeTestMessage) => entry.id === "assistant:item-streaming-mode",
-    );
-    expect(liveMessage?.streaming).toBe(true);
-
-    harness.emit({
-      type: "item.completed",
-      eventId: asEventId("evt-message-completed-streaming-mode"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-streaming-mode"),
-      itemId: asItemId("item-streaming-mode"),
-      payload: {
-        itemType: "assistant_message",
-        status: "completed",
-        detail: "hello live",
-      },
-    });
-
-    const finalThread = await waitForThread(harness.readModel, (entry) =>
-      entry.messages.some(
-        (message: ProviderRuntimeTestMessage) =>
-          message.id === "assistant:item-streaming-mode" && !message.streaming,
-      ),
-    );
-    const finalMessage = finalThread.messages.find(
-      (entry: ProviderRuntimeTestMessage) => entry.id === "assistant:item-streaming-mode",
-    );
-    expect(finalMessage?.text).toBe("hello live");
-    expect(finalMessage?.streaming).toBe(false);
   });
 
   it("delivers finished paragraphs while the rest of the message stays buffered", async () => {

@@ -514,6 +514,41 @@ describe("workflow-artifacts toolkit handlers", () => {
     }).pipe(Effect.provide(queryLayer)),
   );
 
+  it.effect("shows a contextless planning root every workflow started under it", () => {
+    // A planning root has no workflow context of its own, and the
+    // Implementation Run it starts records no parent workflow.
+    const contextlessRootModel = {
+      ...readModel,
+      threads: readModel.threads.map((thread) =>
+        thread.id === rootThreadId
+          ? { ...thread, workflowContext: null }
+          : thread.id === implementationThreadId && thread.workflowContext
+            ? { ...thread, workflowContext: { ...thread.workflowContext, parentWorkflowId: null } }
+            : thread,
+      ),
+    } as OrchestrationReadModel;
+    return Effect.gen(function* () {
+      const snapshot = yield* getWorkflowArtifactsForThread({ threadId: rootThreadId });
+
+      assert.strictEqual(snapshot.context.rootThreadId, rootThreadId);
+      assert.strictEqual(snapshot.spec?.id, "spec-1");
+      assert.deepStrictEqual(
+        snapshot.appReviewWorkflowRuns.map((run) => String(run.id)),
+        [String(appReviewWorkflowId)],
+      );
+      assert.include(
+        snapshot.appReviews.map((review) => String(review.id)),
+        "app-review-nested",
+      );
+    }).pipe(
+      Effect.provide(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getCommandReadModel: () => Effect.succeed(contextlessRootModel),
+        }),
+      ),
+    );
+  });
+
   it.effect("does not authorize artifacts by shared root thread alone", () =>
     Effect.gen(function* () {
       const snapshot = yield* getWorkflowArtifactsForThread({ threadId: detachedThreadId });
