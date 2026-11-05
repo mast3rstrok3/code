@@ -1,5 +1,10 @@
 import * as McpToolAccess from "../../McpToolAccess.ts";
-import { AppStackError, type AppStack, type AppStackVariant } from "@t3tools/contracts";
+import {
+  AppStackError,
+  type AppStack,
+  type AppStackVariant,
+  type ThreadId,
+} from "@t3tools/contracts";
 import { appStackDisplayName, appStackVariantForComposePath } from "@t3tools/shared/appStack";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -22,6 +27,7 @@ import {
 
 const resolveWorkspace = Effect.fn("AppStackToolkit.resolveWorkspace")(function* (
   operation: string,
+  targetThreadId?: ThreadId,
 ) {
   const invocation = yield* McpInvocationContext;
   if (invocation.thread === undefined)
@@ -29,33 +35,49 @@ const resolveWorkspace = Effect.fn("AppStackToolkit.resolveWorkspace")(function*
       operation,
       message: "App Stack tools require a thread credential.",
     });
-  const threadId = invocation.thread.threadId;
+  const callerId = invocation.thread.threadId;
   const query = yield* ProjectionSnapshotQuery;
-  const workspace = yield* Effect.gen(function* () {
-    const thread = yield* query.getThreadShellById(threadId);
-    if (Option.isNone(thread)) return undefined;
-    const branch = thread.value.branch;
-    const workflowId = thread.value.workflowContext?.workflowId;
-    if (thread.value.worktreePath?.trim()) {
-      return { worktreePath: thread.value.worktreePath.trim(), branch, workflowId };
+  const lookupFailed = (cause: unknown) =>
+    new AppStackError({ operation, message: "Could not resolve this thread's workspace.", cause });
+  const target = yield* query
+    .getThreadShellById(targetThreadId ?? callerId)
+    .pipe(Effect.map(Option.getOrUndefined), Effect.mapError(lookupFailed));
+  if (target && target.id !== callerId) {
+    // Workflow workers and fixers sit below their orchestrator, which sits below the root.
+    const seen = new Set<ThreadId>([target.id]);
+    let parentId = target.parentThreadId;
+    while (parentId !== null && parentId !== callerId && !seen.has(parentId)) {
+      seen.add(parentId);
+      const parent = yield* query
+        .getThreadShellById(parentId)
+        .pipe(Effect.map(Option.getOrUndefined), Effect.mapError(lookupFailed));
+      parentId = parent?.parentThreadId ?? null;
     }
-    const project = yield* query.getProjectShellById(thread.value.projectId);
+    if (parentId !== callerId) {
+      return yield* new AppStackError({
+        operation,
+        message: "App Stack tools can only act on this thread or a thread below it.",
+      });
+    }
+  }
+  const workspace = yield* Effect.gen(function* () {
+    if (!target) return undefined;
+    const branch = target.branch;
+    const workflowId = target.workflowContext?.workflowId;
+    if (target.worktreePath?.trim()) {
+      return { worktreePath: target.worktreePath.trim(), branch, workflowId };
+    }
+    const project = yield* query.getProjectShellById(target.projectId);
     const worktreePath = Option.getOrUndefined(project)?.workspaceRoot.trim();
     return worktreePath ? { worktreePath, branch, workflowId } : undefined;
-  }).pipe(
-    Effect.mapError(
-      (cause) =>
-        new AppStackError({
-          operation,
-          message: "Could not resolve this thread's workspace.",
-          cause,
-        }),
-    ),
-  );
+  }).pipe(Effect.mapError(lookupFailed));
   if (!workspace) {
     return yield* new AppStackError({
       operation,
-      message: "This thread's workspace was not found.",
+      message:
+        targetThreadId === undefined
+          ? "This thread's workspace was not found."
+          : "That thread's workspace was not found.",
     });
   }
   return workspace;
@@ -121,7 +143,7 @@ const requireStack = Effect.fn("AppStackToolkit.requireStack")(function* (
   input: WorkspaceInput,
   operation: string,
 ) {
-  const workspace = yield* resolveWorkspace(operation);
+  const workspace = yield* resolveWorkspace(operation, input.threadId);
   const manager = yield* requireEnabled(operation);
   const result = yield* lookupStack(workspace.worktreePath, input.variant ?? "dev", operation);
   if (!result.stack) {
@@ -239,7 +261,7 @@ export const handlers = {
     });
   }),
   app_stack_get: Effect.fn("AppStackToolkit.get")(function* (input: WorkspaceInput) {
-    const workspace = yield* resolveWorkspace("app_stack_get");
+    const workspace = yield* resolveWorkspace("app_stack_get", input.threadId);
     const manager = yield* AppStackManager;
     const variant = input.variant ?? "dev";
     const status = yield* manager.status;
@@ -261,7 +283,7 @@ export const handlers = {
   }),
   app_stack_start: Effect.fn("AppStackToolkit.start")(function* (input: StartInput) {
     const operation = "app_stack_start";
-    const workspace = yield* resolveWorkspace(operation);
+    const workspace = yield* resolveWorkspace(operation, input.threadId);
     const manager = yield* requireEnabled(operation);
     const variant = input.variant ?? "dev";
     const bundle = input.bundle ?? [];
@@ -299,7 +321,7 @@ export const handlers = {
   }),
   app_stack_bundle_plan: Effect.fn("AppStackToolkit.bundlePlan")(function* (input: WorkspaceInput) {
     const operation = "app_stack_bundle_plan";
-    const workspace = yield* resolveWorkspace(operation);
+    const workspace = yield* resolveWorkspace(operation, input.threadId);
     const manager = yield* requireEnabled(operation);
     return yield* manager.bundlePlan({
       worktreePath: workspace.worktreePath,
@@ -311,7 +333,7 @@ export const handlers = {
     input: CreateWorktreesInput,
   ) {
     const operation = "app_stack_create_worktrees";
-    const workspace = yield* resolveWorkspace(operation);
+    const workspace = yield* resolveWorkspace(operation, input.threadId);
     const manager = yield* requireEnabled(operation);
     return yield* manager.createBundleWorktrees({
       worktreePath: workspace.worktreePath,
