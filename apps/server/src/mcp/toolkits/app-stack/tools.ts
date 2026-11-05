@@ -21,6 +21,7 @@ import {
   AppStackOmittedServices,
   AppStackVariant,
   IsoDateTime,
+  ThreadId,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -36,7 +37,15 @@ const dependencies = [
   ProjectionSnapshotQuery,
   AppStackManager,
 ];
-const WorkspaceInput = Schema.Struct({ variant: Schema.optionalKey(AppStackVariant) });
+const WorkspaceInput = Schema.Struct({
+  variant: Schema.optionalKey(AppStackVariant),
+  threadId: Schema.optionalKey(
+    ThreadId.annotate({
+      description:
+        "A thread below this one, such as a workflow worker or fixer, whose workspace stack to use. Default: this thread. Other threads are rejected.",
+    }),
+  ),
+});
 export type WorkspaceInput = typeof WorkspaceInput.Type;
 const StartInput = Schema.Struct({
   ...WorkspaceInput.fields,
@@ -198,7 +207,7 @@ const AppStackCreateWorktreesTool = Tool.make("app_stack_create_worktrees", {
 
 const AppStackStopTool = Tool.make("app_stack_stop", {
   description:
-    "Stop this thread's workspace App Stack, keeping its namespace for restart. Defaults to dev. Explicit stops also stop protected stacks. A bundled stack stops with every stack of its bundle. Resolves the stack from the authenticated thread; cannot target another workspace.",
+    "Stop this thread's workspace App Stack, keeping its namespace for restart. Defaults to dev. Explicit stops also stop protected stacks. A bundled stack stops with every stack of its bundle. Resolves the stack from the authenticated thread, or from threadId for a thread below it, such as a workflow child.",
   parameters: WorkspaceInput,
   success: AppStack,
   failure: Schema.Union([AppStackError, OrchestratorMcpFailure]),
@@ -254,7 +263,7 @@ const AppStackListPodsTool = Tool.make("app_stack_list_pods", {
 
 const AppStackLogsTool = Tool.make("app_stack_logs", {
   description:
-    "Read recent logs from a pod in this thread's workspace App Stack. Defaults to dev and the last 200 lines; tailLines accepts 1 to 5000. Pass app to read another app of this stack's bundle, which a platform workspace needs. Use app_stack_list_pods to find pod and container names. Cannot read another workspace's logs.",
+    "Read recent logs from a pod in this thread's workspace App Stack. Defaults to dev and the last 200 lines; tailLines accepts 1 to 5000. Pass app to read another app of this stack's bundle, which a platform workspace needs. Use app_stack_list_pods to find pod and container names. Cannot read logs outside this thread and the threads below it.",
   parameters: PodLogsInput,
   success: AppStackGetPodLogsResult,
   failure: Schema.Union([AppStackError, OrchestratorMcpFailure]),
