@@ -209,6 +209,8 @@ An App Review repair cycle is different. It contains review, gap analysis, and r
 
 When automation stops, the panel shows **Needs human attention** with the ticket, stage, reason, and next action. Independent sibling tickets may keep running and record results. Dependent tickets and Integration wait. **Start step again** creates a new generation only after the server confirms ownership is free. The panel reports whether the request started, was redirected to the stage that owns the failure, or was rejected with the action that must happen first.
 
+The workflow's root thread is told too: when automation stops, a message names the stage, ticket, and reason, and the root agent can start the stage again or reset it itself. It does that when a fresh attempt can fix the cause, such as a spent launch budget. When the cause needs a person, such as a provider login, a usage limit, CI billing, or uncommitted work, it tells you what to do instead. You can also ask the root thread for the workflow's status or to restart a step.
+
 An App Review failure blocks its ticket and releases its parallel slot. Independent tickets keep running; dependent tickets wait. Resolve the recorded blocker, then start that ticket's App Review again. Other blocked reviews remain stopped until you retry them.
 
 Re-running a ticket's implementation also reopens the tickets that failed only because that one did. Those carried no work of their own, so they go back to waiting and run in dependency order once the re-run lands. Tickets that already succeeded are left alone, which is why a wave has no single re-run of its own.

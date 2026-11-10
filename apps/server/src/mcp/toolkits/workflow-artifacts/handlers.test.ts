@@ -10,11 +10,13 @@ import {
   WorkflowId,
   type OrchestrationReadModel,
 } from "@t3tools/contracts";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { McpSchema, McpServer } from "effect/ai";
 
+import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { getWorkflowArtifactsForThread } from "../../../orchestration/workflowArtifacts.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
@@ -333,6 +335,13 @@ const mcpLayer = (threadId = nestedReviewerThreadId) =>
     ),
     Layer.provideMerge(Layer.succeed(McpSchema.McpServerClient, mcpClient)),
     Layer.provideMerge(Layer.mock(ThreadManagement.ThreadManagementService)({})),
+    Layer.provideMerge(Layer.mock(OrchestrationEngineService)({})),
+    Layer.provideMerge(
+      Layer.succeed(
+        SecureRandom.SecureRandom,
+        SecureRandom.make((size) => new Uint8Array(size).fill(7)),
+      ),
+    ),
   );
 const decodeReviews = Schema.decodeUnknownSync(
   Schema.Struct({ appReviews: Schema.Array(AppReviewRecord) }),
@@ -574,4 +583,138 @@ describe("workflow-artifacts toolkit handlers", () => {
       assert.match(error.message, /was not found/);
     }).pipe(Effect.provide(invocationLayer)),
   );
+
+  describe("workflow status and stage restart", () => {
+    const halt = {
+      ticketId,
+      stage: "code-review",
+      category: "retry-exhausted",
+      detail: "Ticket exhausted its Code Review launch budget.",
+      haltedAt: "2026-01-02T00:00:00.000Z",
+    } as const;
+    const haltedModel = {
+      ...readModel,
+      implementationRuns: [
+        {
+          ...readModel.implementationRuns[0],
+          status: "needs-human-attention",
+          automationHalt: halt,
+          retryableFailure: null,
+          skips: [],
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          ticketStates: [
+            {
+              ticketId,
+              status: "code-reviewing",
+              dependencyTicketIds: [],
+              workerThreadId: childThreadId,
+              updatedAt: "2026-01-01T12:00:00.000Z",
+            },
+          ],
+        },
+      ],
+    } as unknown as OrchestrationReadModel;
+    const callerLayer = (threadId: ThreadId) =>
+      Layer.succeed(McpInvocationContext.McpInvocationContext, {
+        environmentId: EnvironmentId.make("environment-1"),
+        capabilities: new Set(["workflow-artifacts"] as const),
+        issuedAt: 1,
+        thread: {
+          threadId,
+          providerSessionId: "provider-session-restart",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+        client: undefined,
+        requestNamespace: "workflow-test",
+      });
+    const restartLayer = (threadId: ThreadId, dispatched: Array<unknown>) =>
+      Layer.mergeAll(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getCommandReadModel: () => Effect.succeed(haltedModel),
+        }),
+        callerLayer(threadId),
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              dispatched.push(command);
+              return { sequence: 1, outcome: { type: "accepted" as const } };
+            }),
+        }),
+        Layer.succeed(
+          SecureRandom.SecureRandom,
+          SecureRandom.make((size) => new Uint8Array(size).fill(7)),
+        ),
+      );
+
+    it.effect("shows the halt and the ticket it froze", () =>
+      Effect.gen(function* () {
+        const { runs } = yield* WorkflowArtifactsHandlers.handlers.workflow_status_get();
+        assert.deepStrictEqual(runs[0]?.automationHalt, halt);
+        assert.deepInclude(runs[0]?.tickets[0], {
+          ticketId,
+          key: "TICKET-1",
+          status: "code-reviewing",
+          codeReviewThreadId: null,
+        });
+      }).pipe(Effect.provide(restartLayer(rootThreadId, []))),
+    );
+
+    it.effect("restarts a stage from the root thread with the panel's command", () => {
+      const dispatched: Array<unknown> = [];
+      const target = { kind: "ticket", ticketId, stage: "code-review" } as const;
+      return Effect.gen(function* () {
+        const result = yield* WorkflowArtifactsHandlers.handlers.workflow_stage_restart({
+          runId: "implementation-run-1",
+          target,
+          mode: "rerun",
+        });
+        assert.deepStrictEqual(result.outcome, { type: "accepted" });
+        yield* WorkflowArtifactsHandlers.handlers.workflow_stage_restart({
+          runId: "implementation-run-1",
+          target,
+          mode: "reset",
+        });
+        assert.deepStrictEqual(
+          dispatched.map((command) => {
+            const { type, threadId, runId, target } = command as Record<string, unknown>;
+            return { type, threadId, runId, target };
+          }),
+          [
+            {
+              type: "thread.implementation-run.rerun",
+              threadId: rootThreadId,
+              runId: "implementation-run-1",
+              target,
+            },
+            {
+              type: "thread.implementation-run.reset",
+              threadId: rootThreadId,
+              runId: "implementation-run-1",
+              target,
+            },
+          ],
+        );
+      }).pipe(Effect.provide(restartLayer(rootThreadId, dispatched)));
+    });
+
+    it.effect("refuses stage threads and runs outside the workflow", () => {
+      const dispatched: Array<unknown> = [];
+      const input = {
+        runId: "implementation-run-1",
+        target: { kind: "ticket", ticketId, stage: "code-review" },
+        mode: "rerun",
+      } as const;
+      return Effect.gen(function* () {
+        const fromChild = yield* WorkflowArtifactsHandlers.handlers
+          .workflow_stage_restart(input)
+          .pipe(Effect.provide(restartLayer(childThreadId, dispatched)), Effect.flip);
+        assert.match(fromChild.message, /Only the workflow's root thread/);
+        const otherRun = yield* WorkflowArtifactsHandlers.handlers
+          .workflow_stage_restart({ ...input, runId: "implementation-run-other" })
+          .pipe(Effect.provide(restartLayer(rootThreadId, dispatched)), Effect.flip);
+        assert.match(otherRun.message, /is not in this workflow/);
+        assert.deepStrictEqual(dispatched, []);
+      });
+    });
+  });
 });
