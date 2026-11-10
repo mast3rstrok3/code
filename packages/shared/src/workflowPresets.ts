@@ -27,6 +27,8 @@ export interface WorkflowPresetHelpStep {
   readonly skillId?: string;
   readonly threadBoundary?: "same thread" | "new thread" | "new child thread" | "new review thread";
   readonly note?: string;
+  /** The panel section the step sits under; absent reads as "Implementation". */
+  readonly phase?: "Planning";
   /**
    * The agents this step starts, when it starts more than the one its own
    * `skillId` names. Absent means the step is its own single agent.
@@ -398,9 +400,10 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     availability: "available",
     implementationDefaults: FULL_IMPLEMENTATION_DEFAULTS,
     helpSteps: [
-      { label: "Prepare shared worktree", note: "automatic" },
+      { label: "Prepare shared worktree", phase: "Planning", note: "automatic" },
       {
         label: "Grill with Docs",
+        phase: "Planning",
         skillId: "planning.grill-stage.codex",
         threadBoundary: "same thread",
         note: "human-guided, or answered by an LLM judge",
@@ -414,18 +417,21 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       },
       {
         label: "Spec authoring",
+        phase: "Planning",
         skillId: "planning.spec.codex",
         threadBoundary: "same thread",
         note: "automatic",
       },
       {
         label: "Ticket authoring",
+        phase: "Planning",
         skillId: "planning.tickets.codex",
         threadBoundary: "same thread",
         note: "automatic",
       },
       {
         label: "Ticket review and revision",
+        phase: "Planning",
         skillId: "planning.ticket-reviewer.codex",
         threadBoundary: "new review thread",
         note: "automatic; five cycles by default and five at most",

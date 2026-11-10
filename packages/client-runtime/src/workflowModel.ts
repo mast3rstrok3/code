@@ -107,6 +107,7 @@ export interface WorkflowTimelineStep<TThread extends WorkflowModelThread> {
   readonly createdAt: string;
   readonly label: string | null;
   readonly skillId: string | null;
+  readonly phase?: string;
   readonly repeatsAsCycles: boolean;
   /**
    * True when the step's work happens in the workflow's main thread rather
@@ -1053,6 +1054,7 @@ export function buildWorkflowSteps<TThread extends WorkflowModelThread>(
         createdAt: entries[0]?.createdAt ?? group.createdAt,
         label: definition.label,
         skillId: definition.skillId ?? null,
+        ...(definition.phase === undefined ? {} : { phase: definition.phase }),
         repeatsAsCycles: definedStepRepeatsAsCycles(definition),
         usesRootThread,
         entries,
