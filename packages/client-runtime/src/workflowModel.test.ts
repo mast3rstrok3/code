@@ -581,6 +581,17 @@ describe("buildWorkflowViewModel", () => {
       "Ticket authoring",
       "Ticket review and revision",
     ]);
+    // The root thread carries no workflow role, so its steps cannot borrow a phase from one.
+    expect(
+      workflow
+        ? buildWorkflowSteps(workflow.groups[0]!, workflow.groups, workflow.root).map(
+            (step) => step.phase ?? null,
+          )
+        : [],
+    ).toEqual([
+      ...Array.from({ length: 5 }, () => "Planning"),
+      ...Array.from({ length: 6 }, () => null),
+    ]);
     expect(workflowNavigationIsAvailable(workflow)).toBe(true);
     expect(workflowNavigationIsAvailable(ordinary)).toBe(false);
   });

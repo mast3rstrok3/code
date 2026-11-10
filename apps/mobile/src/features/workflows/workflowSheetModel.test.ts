@@ -152,7 +152,7 @@ describe("buildWorkflowSheetRows", () => {
 
   it("lists the planning documents and notes a step that has not started", () => {
     const closed = buildWorkflowSheetRows(input(planningRoot(), { spec }));
-    const step = stepNamed(closed, "Merge ticket branches");
+    const step = stepNamed(closed, "Ticket review and revision");
     const rows = buildWorkflowSheetRows(
       input(planningRoot(), { spec, expanded: { [step!.id]: true } }),
     );
