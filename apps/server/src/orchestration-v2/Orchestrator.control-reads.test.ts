@@ -1621,3 +1621,217 @@ it.effect("dispatch records the command outcome and its duration", () =>
     assert.strictEqual((yield* durations).count - durationsBefore, 1);
   }).pipe(Effect.provide(layerTest)),
 );
+
+it.effect("opens a workflow question as a live card on the running run and retires it", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const outbox = yield* EffectOutbox.EffectOutboxV2;
+    const threadId = ThreadId.make("thread:workflow-question");
+    const sessionId = ProviderSessionId.make("session:workflow-question");
+    const providerThreadId = ProviderThreadId.make("provider-thread:workflow-question");
+    const providerTurnId = ProviderTurnId.make("provider-turn:workflow-question");
+    const runId = RunId.make("run:workflow-question");
+    const attemptId = RunAttemptId.make("attempt:workflow-question");
+    const rootNodeId = NodeId.make("node:workflow-question");
+    const now = yield* DateTime.now;
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create-workflow-question"),
+      threadId,
+      projectId: ProjectId.make("project:workflow-question"),
+      title: "Grill",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const seed: ReadonlyArray<OrchestrationV2DomainEvent> = [
+      {
+        id: EventId.make("workflow-question:session"),
+        type: "provider-session.attached",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: sessionId,
+          driver: adapter.driver,
+          providerInstanceId: instanceId,
+          status: "ready",
+          cwd: "/repo",
+          model: modelSelection.model,
+          capabilities: CodexProviderCapabilitiesV2,
+          createdAt: now,
+          updatedAt: now,
+          lastError: null,
+        },
+      },
+      {
+        id: EventId.make("workflow-question:provider-thread"),
+        type: "provider-thread.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: providerThreadId,
+          driver: adapter.driver,
+          providerInstanceId: instanceId,
+          providerSessionId: sessionId,
+          appThreadId: threadId,
+          ownerNodeId: null,
+          nativeThreadRef: null,
+          nativeConversationHeadRef: null,
+          status: "active",
+          firstRunOrdinal: 1,
+          lastRunOrdinal: 1,
+          handoffIds: [],
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+      {
+        id: EventId.make("workflow-question:run"),
+        type: "run.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: runId,
+          threadId,
+          ordinal: 1,
+          providerInstanceId: instanceId,
+          modelSelection,
+          providerThreadId,
+          userMessageId: MessageId.make("message:workflow-question"),
+          rootNodeId,
+          activeAttemptId: attemptId,
+          status: "running",
+          requestedAt: now,
+          startedAt: now,
+          completedAt: null,
+          checkpointId: null,
+          contextHandoffId: null,
+        },
+      },
+      {
+        id: EventId.make("workflow-question:attempt"),
+        type: "run-attempt.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: attemptId,
+          runId,
+          attemptOrdinal: 1,
+          rootNodeId,
+          providerInstanceId: instanceId,
+          providerThreadId,
+          providerTurnId,
+          reason: "initial",
+          status: "running",
+          startedAt: now,
+          completedAt: null,
+        },
+      },
+      {
+        id: EventId.make("workflow-question:turn"),
+        type: "provider-turn.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: providerTurnId,
+          providerThreadId,
+          nodeId: rootNodeId,
+          runAttemptId: attemptId,
+          nativeTurnRef: null,
+          ordinal: 1,
+          status: "running",
+          startedAt: now,
+          completedAt: null,
+        },
+      },
+    ];
+    for (const event of seed) yield* projections.apply(event);
+    const question = {
+      id: "voice",
+      header: "Voice app",
+      question: "Fold Voice into Phone?",
+      options: [
+        { label: "Fold", description: "Phone owns it." },
+        { label: "Keep", description: "Voice stays." },
+      ],
+      multiSelect: false,
+      recommendation: { optionLabel: "Fold", rationale: "One runtime." },
+    };
+    const record = (requestId: string, overrides: object) => ({
+      type: "workflow_user_input.record" as const,
+      commandId: CommandId.make(`record:${requestId}:${JSON.stringify(overrides)}`),
+      threadId,
+      runId,
+      requestId: RuntimeRequestId.make(requestId),
+      questions: [question],
+      status: "pending" as const,
+      ...overrides,
+    });
+
+    yield* orchestrator.dispatch(record("workflow-user-input-1", {}));
+    // A replayed card for a run that is no longer running opens nothing.
+    yield* orchestrator.dispatch(
+      record("workflow-user-input-stale", { runId: RunId.make("run:finished") }),
+    );
+    const opened = yield* projections.getThreadProjection(threadId);
+    assert.deepEqual(
+      opened.runtimeRequests.map((request) => ({
+        id: request.id,
+        status: request.status,
+        providerTurnId: request.providerTurnId,
+        responseCapability: request.responseCapability,
+      })),
+      [
+        {
+          id: RuntimeRequestId.make("workflow-user-input-1"),
+          status: "pending",
+          providerTurnId,
+          responseCapability: { type: "live", providerSessionId: sessionId },
+        },
+      ],
+    );
+    const card = opened.turnItems.find((item) => item.type === "user_input_request");
+    assert.deepEqual(card?.type === "user_input_request" ? card.questions : undefined, [question]);
+
+    const respond = CommandId.make("respond:workflow-question");
+    yield* orchestrator.dispatch({
+      type: "runtime-request.respond",
+      commandId: respond,
+      threadId,
+      requestId: RuntimeRequestId.make("workflow-user-input-1"),
+      answers: { voice: ["Fold"] },
+    });
+    assert.deepEqual(
+      (yield* outbox.listByCommandId(respond)).map((effect) => effect.request.type),
+      ["runtime-request.respond"],
+    );
+    // The tool call's own resolution arriving afterwards changes nothing.
+    const settled = yield* orchestrator.dispatch(
+      record("workflow-user-input-1", { status: "cancelled" }),
+    );
+    assert.lengthOf(settled.storedEvents, 0);
+
+    yield* orchestrator.dispatch(record("workflow-user-input-2", {}));
+    yield* orchestrator.dispatch(record("workflow-user-input-2", { status: "cancelled" }));
+    const retired = yield* projections.getThreadProjection(threadId);
+    assert.deepEqual(
+      retired.runtimeRequests.map((request) => [request.id, request.status]),
+      [
+        ["workflow-user-input-1", "resolved"],
+        ["workflow-user-input-2", "cancelled"],
+      ],
+    );
+    assert.deepEqual(
+      retired.turnItems.flatMap((item) =>
+        item.type === "user_input_request" ? [item.status] : [],
+      ),
+      ["completed", "cancelled"],
+    );
+  }).pipe(Effect.provide(layerTest)),
+);
