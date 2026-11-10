@@ -27,7 +27,7 @@ import {
   isOrchestrationV2WorkActive,
   isProviderNativeSubagentThread,
   MessageId,
-  type NodeId,
+  NodeId,
   type ModelSelection,
   OrchestrationV2Command,
   type OrchestrationV2InternalCommand,
@@ -614,6 +614,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
       return command.parentThreadId;
     case "secret_request.record":
     case "link_request.record":
+    case "workflow_user_input.record":
       return command.threadId;
     case "thread.fork":
     case "thread.merge_back":
@@ -8896,6 +8897,165 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   );
 
   /**
+   * The card for a workflow_request_user_input call. A stale record (the run
+   * ended, or the card is already gone) is a no-op, because the workflow
+   * bridge replays these and retries any failure.
+   */
+  const dispatchWorkflowUserInputRecord = Effect.fn(
+    "orchestrationV2.dispatch.workflowUserInputRecord",
+  )(function* (
+    command: Extract<
+      OrchestrationV2InternalCommand,
+      { readonly type: "workflow_user_input.record" }
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) {
+    const existing = yield* projectionStore
+      .getRuntimeResponseContext(command.threadId, command.requestId)
+      .pipe(mapDispatchError(command));
+    const now = yield* DateTime.now;
+    const emitEvent = emit(events, command);
+    if (command.status !== "pending") {
+      const { request, node, item } = existing;
+      if (request === undefined || request.status !== "pending") return;
+      const answers = command.status === "resolved" ? command.answers : undefined;
+      const settled = answers === undefined ? ("cancelled" as const) : ("completed" as const);
+      yield* emitEvent({
+        type: "runtime-request.updated",
+        threadId: command.threadId,
+        runId: command.runId,
+        nodeId: request.nodeId,
+        occurredAt: now,
+        payload: {
+          ...request,
+          status: answers === undefined ? "cancelled" : "resolved",
+          resolvedAt: now,
+          ...(answers === undefined ? {} : { answers }),
+        },
+      });
+      if (node !== undefined) {
+        yield* emitEvent({
+          type: "node.updated",
+          threadId: command.threadId,
+          runId: command.runId,
+          nodeId: node.id,
+          occurredAt: now,
+          payload: { ...node, status: settled, completedAt: now },
+        });
+      }
+      if (item !== undefined) {
+        yield* emitEvent({
+          type: "turn-item.updated",
+          threadId: command.threadId,
+          runId: command.runId,
+          nodeId: request.nodeId,
+          occurredAt: now,
+          payload: {
+            ...item,
+            ...(item.type === "user_input_request" && answers !== undefined
+              ? {
+                  questionAnswer: {
+                    requestId: command.requestId,
+                    answers,
+                    attachmentsByQuestionId: {},
+                    questionTextById: Object.fromEntries(
+                      item.questions.map((question) => [question.id, question.question]),
+                    ),
+                  },
+                }
+              : {}),
+            status: settled,
+            completedAt: now,
+            updatedAt: now,
+          },
+        });
+      }
+      return;
+    }
+    if (existing.request !== undefined) return;
+    const { run, providerThread, providerTurn } = yield* projectionStore
+      .getRunningTurnContext(command.threadId)
+      .pipe(mapDispatchError(command));
+    const providerSessionId = providerThread?.providerSessionId ?? null;
+    if (
+      run === undefined ||
+      run.id !== command.runId ||
+      run.rootNodeId === null ||
+      providerThread === undefined ||
+      providerSessionId === null
+    ) {
+      return;
+    }
+    const nodeId = NodeId.make(`node:workflow-user-input:${command.requestId}`);
+    const providerTurnId = providerTurn?.id ?? null;
+    const node: OrchestrationV2ExecutionNode = {
+      id: nodeId,
+      threadId: command.threadId,
+      runId: run.id,
+      parentNodeId: run.rootNodeId,
+      rootNodeId: run.rootNodeId,
+      kind: "user_input_request",
+      status: "waiting",
+      countsForRun: false,
+      providerThreadId: providerThread.id,
+      providerTurnId,
+      nativeItemRef: null,
+      runtimeRequestId: command.requestId,
+      checkpointScopeId: null,
+      startedAt: now,
+      completedAt: null,
+    };
+    const base = {
+      threadId: command.threadId,
+      runId: run.id,
+      nodeId,
+      providerInstanceId: run.providerInstanceId,
+      occurredAt: now,
+    };
+    yield* emitEvent({ ...base, type: "node.updated", payload: node });
+    yield* emitEvent({
+      ...base,
+      type: "runtime-request.updated",
+      payload: {
+        id: command.requestId,
+        nodeId,
+        providerTurnId,
+        nativeRequestRef: null,
+        kind: "user_input",
+        status: "pending",
+        responseCapability: { type: "live", providerSessionId },
+        createdAt: now,
+        resolvedAt: null,
+      },
+    });
+    yield* emitEvent({
+      ...base,
+      type: "turn-item.updated",
+      payload: {
+        id: TurnItemId.make(`turn-item:workflow-user-input:${command.requestId}`),
+        threadId: command.threadId,
+        runId: run.id,
+        nodeId,
+        providerThreadId: providerThread.id,
+        providerTurnId,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: yield* projectionStore
+          .getNextTurnItemOrdinal(command.threadId)
+          .pipe(mapDispatchError(command)),
+        status: "waiting",
+        title: null,
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+        type: "user_input_request",
+        requestId: command.requestId,
+        questions: command.questions,
+      },
+    });
+  });
+
+  /**
    * Records or updates the card for a link an agent asked the user to make.
    * The pairing code goes straight to the link and never through orchestration.
    */
@@ -13542,6 +13702,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "link_request.record":
         yield* dispatchLinkRequestRecord(command, events, effects);
         break;
+      case "workflow_user_input.record":
+        yield* dispatchWorkflowUserInputRecord(command, events);
+        break;
       default:
         return yield* dispatchUnsupported(command);
     }
@@ -13645,6 +13808,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.type === "subagent.stop" ||
           // Closing a share again, or after it ended, is not an error.
           command.type === "thread.guest-share.close" ||
+          // A replayed or late question card is already settled.
+          command.type === "workflow_user_input.record" ||
           (command.type === "thread.delete" && command.onlyIfUnused === true),
         (_planned) =>
           new OrchestratorDispatchError({

@@ -1357,6 +1357,9 @@ export const OrchestrationV2UserInputQuestion = Schema.Struct({
   allowCustomAnswer: Schema.optional(Schema.Boolean),
   initialAnswer: Schema.optional(Schema.String),
   required: Schema.optional(Schema.Boolean),
+  recommendation: Schema.optional(
+    Schema.Struct({ optionLabel: TrimmedNonEmptyString, rationale: TrimmedNonEmptyString }),
+  ),
 });
 export type OrchestrationV2UserInputQuestion = typeof OrchestrationV2UserInputQuestion.Type;
 
@@ -3567,6 +3570,21 @@ const OrchestrationV2InternalCommand = Schema.Union([
     placeholder: Schema.optional(Schema.String),
     delivery: Schema.optional(OrchestrationV2SecretRequestDelivery),
     secretStatus: OrchestrationV2SecretRequestStatus,
+  }),
+  /**
+   * Opens or retires the card for a question asked through the
+   * workflow_request_user_input MCP tool, whose answer goes back to that tool
+   * call rather than to the provider. Internal so no client can open one.
+   */
+  Schema.Struct({
+    type: Schema.Literal("workflow_user_input.record"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    requestId: RuntimeRequestId,
+    questions: Schema.Array(OrchestrationV2UserInputQuestion),
+    status: Schema.Literals(["pending", "resolved", "cancelled"]),
+    answers: Schema.optional(ProviderUserInputAnswers),
   }),
   /**
    * Records or updates a link an agent asked the user to make. Internal so no

@@ -74,6 +74,7 @@ import {
   makeProviderReplayGate,
   type ProviderReplayGate,
 } from "@t3tools/provider-testing/replayGate";
+import * as WorkflowUserInputBroker from "../../mcp/WorkflowUserInputBroker.ts";
 
 export function makeReplayServerConfig(
   scenario: string,
@@ -435,7 +436,13 @@ export function layerWithRegistry<Error>(
     Layer.provide(Layer.merge(layerStores, layerProviderSessionManagerProvided)),
   );
   const layerRuntimeRequestServiceProvided = RuntimeRequestService.layer.pipe(
-    Layer.provide(Layer.merge(layerStores, layerProviderSessionManagerProvided)),
+    Layer.provide(
+      Layer.mergeAll(
+        layerStores,
+        layerProviderSessionManagerProvided,
+        WorkflowUserInputBroker.layer,
+      ),
+    ),
   );
   const layerCheckpointRollbackServiceProvided = CheckpointRollbackService.layer.pipe(
     Layer.provide(

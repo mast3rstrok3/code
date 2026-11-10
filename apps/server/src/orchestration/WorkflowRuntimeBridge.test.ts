@@ -127,6 +127,68 @@ describe("workflow commands on the native runtime", () => {
     expect(workflowControlCommands(event, projection)).toEqual([]);
   });
 
+  it("mirrors a workflow_request_user_input card into a native runtime request", () => {
+    const activity = (kind: string, payload: unknown) =>
+      decodeLegacy({
+        ...legacyBase,
+        type: "thread.activity-appended",
+        payload: {
+          threadId: "thread",
+          activity: {
+            id: "activity",
+            tone: "info",
+            kind,
+            summary: "User input",
+            payload,
+            turnId: "run:thread:ordinal:1",
+            createdAt: at,
+          },
+        },
+      });
+    const question = {
+      id: "voice",
+      header: "Voice app",
+      question: "Fold Voice into Phone?",
+      options: [
+        { label: "Fold", description: "Phone owns it." },
+        { label: "Keep", description: "Voice stays." },
+      ],
+      recommendation: { optionLabel: "Fold", rationale: "One runtime." },
+      multiSelect: false,
+    };
+    const record = {
+      type: "workflow_user_input.record",
+      commandId: "workflow:execute:event",
+      threadId: "thread",
+      runId: "run:thread:ordinal:1",
+      requestId: "workflow-user-input-1",
+    };
+    expect(
+      workflowControlCommands(
+        activity("user-input.requested", {
+          requestId: "workflow-user-input-1",
+          questions: [question],
+        }),
+        projection,
+      ),
+    ).toEqual([{ ...record, questions: [question], status: "pending" }]);
+    expect(
+      workflowControlCommands(
+        activity("user-input.resolved", {
+          requestId: "workflow-user-input-1",
+          answers: { voice: ["Fold"] },
+        }),
+        projection,
+      ),
+    ).toEqual([{ ...record, questions: [], status: "resolved", answers: { voice: ["Fold"] } }]);
+    expect(
+      workflowControlCommands(
+        activity("user-input.resolved", { requestId: "workflow-user-input-1", answers: {} }),
+        projection,
+      ),
+    ).toEqual([{ ...record, questions: [], status: "cancelled" }]);
+  });
+
   it("uses stable native command IDs and sends one provider message per workflow request", () => {
     const event = decodeLegacy({
       ...legacyBase,

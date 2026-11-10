@@ -77,7 +77,6 @@ export interface ThreadUserInputQuestion extends Omit<
   "multiSelect"
 > {
   readonly multiSelect: boolean;
-  readonly recommendation?: { readonly optionLabel: string; readonly rationale: string };
 }
 
 export interface ThreadPendingUserInput {

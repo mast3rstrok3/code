@@ -11,6 +11,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import { WorkflowUserInputBroker } from "../mcp/WorkflowUserInputBroker.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 
@@ -67,12 +68,15 @@ export class RuntimeRequestServiceV2 extends Context.Service<
 export const layer: Layer.Layer<
   RuntimeRequestServiceV2,
   never,
-  ProjectionStore.ProjectionStoreV2 | ProviderSessionManager.ProviderSessionManagerV2
+  | ProjectionStore.ProjectionStoreV2
+  | ProviderSessionManager.ProviderSessionManagerV2
+  | WorkflowUserInputBroker
 > = Layer.effect(
   RuntimeRequestServiceV2,
   Effect.gen(function* () {
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+    const workflowUserInput = yield* WorkflowUserInputBroker;
 
     return RuntimeRequestServiceV2.of({
       respond: Effect.fn("RuntimeRequestService.respond")(
@@ -105,6 +109,17 @@ export const layer: Layer.Layer<
               providerSessionId: input.providerSessionId,
               requestId: input.requestId,
             });
+          }
+          // A workflow_request_user_input call is parked in the MCP server, not the provider.
+          if (
+            request.kind === "user_input" &&
+            (yield* workflowUserInput.respond({
+              threadId: input.threadId,
+              requestId: input.requestId,
+              answers: input.answers ?? {},
+            }))
+          ) {
+            return;
           }
           const session = yield* sessions.get(input.providerSessionId);
           if (Option.isNone(session)) {
