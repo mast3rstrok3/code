@@ -175,6 +175,7 @@ import {
   pendingIngestionThreadIds,
   ProviderIngestionBacklog,
 } from "../ProviderIngestionBacklog.ts";
+import { workflowHaltNotice } from "../workflowHaltNotice.ts";
 
 // Code Review owns its fixes; the final gate owns complete validation.
 
@@ -2733,8 +2734,57 @@ const make = Effect.gen(function* () {
       run,
       writtenAtMs: yield* Clock.currentTimeMillis,
     });
+    yield* notifyRootOfHalt({
+      readModel,
+      previous: currentRun,
+      next: run,
+      createdAt: input.createdAt,
+    });
     return true;
   });
+
+  // The root thread is where the user steers the workflow, so a halt reaches
+  // an agent that can restart the stage instead of waiting for someone to look.
+  const notifyRootOfHalt = Effect.fn("ImplementationWorkflowReactor.notifyRootOfHalt")(
+    function* (input: {
+      readonly readModel: OrchestrationReadModel;
+      readonly previous: OrchestrationImplementationRun | null;
+      readonly next: OrchestrationImplementationRun;
+      readonly createdAt: string;
+    }) {
+      const ticketId = input.next.automationHalt?.ticketId;
+      const ticket =
+        ticketId === undefined
+          ? null
+          : (input.readModel.threads
+              .flatMap((thread) => thread.planningWorkflow?.tickets ?? [])
+              .find((candidate) => candidate.id === ticketId) ?? null);
+      const text = workflowHaltNotice({ previous: input.previous, next: input.next, ticket });
+      if (text === null) return;
+      const orchestratorThread = findThread(input.readModel, input.next.orchestratorThreadId);
+      const rootThreadId =
+        orchestratorThread?.workflowContext?.rootThreadId ?? orchestratorThread?.parentThreadId;
+      const rootThread = rootThreadId == null ? null : findThread(input.readModel, rootThreadId);
+      if (rootThread === null || rootThread.deletedAt !== null) return;
+      yield* orchestrationEngine.dispatch({
+        type: "thread.turn.start",
+        commandId: yield* serverCommandId("implementation-halt-notice"),
+        threadId: rootThread.id,
+        message: {
+          messageId: yield* serverMessageId("implementation-halt-notice"),
+          role: "user",
+          text,
+          attachments: [],
+        },
+        runtimeMode: rootThread.runtimeMode,
+        interactionMode: rootThread.interactionMode,
+        createdAt: input.createdAt,
+      });
+    },
+    Effect.catchCause((cause) =>
+      Effect.logWarning("implementation halt notice failed", { cause: Cause.pretty(cause) }),
+    ),
+  );
 
   /** A stage whose claim `updateRun` dropped is left for recovery to re-derive from fresh state. */
   const logSkippedLaunch = (input: {

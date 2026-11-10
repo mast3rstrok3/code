@@ -182,6 +182,7 @@ export function workflowStepTitle(
 export function workflowStepPhase(
   step: WorkflowTimelineStep<EnvironmentWorkflowThreadShell>,
 ): string {
+  if (step.phase !== undefined) return step.phase;
   const label = workflowStepTitle(step);
   const separator = label.indexOf(" phase · ");
   if (separator !== -1) return label.slice(0, separator);
