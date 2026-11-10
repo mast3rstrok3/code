@@ -12,10 +12,14 @@ import {
   EventId,
   ProviderDriverKind,
   RuntimeItemId,
+  OrchestrationV2UserInputQuestion,
+  ProviderUserInputAnswers,
+  RunId,
   RuntimeRequestId,
   RuntimeTaskId,
   TurnId,
   type OrchestrationEvent,
+  type OrchestrationThreadActivity,
   type OrchestrationV2ServerCommand,
   type OrchestrationV2StoredEvent,
   type OrchestrationV2ThreadProjection,
@@ -51,6 +55,55 @@ import {
 import { ServerSettingsService } from "../serverSettings.ts";
 
 const OBSERVATION_PREFIX = "workflow:observe:";
+const decodeQuestionCard = Schema.decodeUnknownOption(
+  Schema.Struct({
+    requestId: Schema.String,
+    questions: Schema.Array(OrchestrationV2UserInputQuestion),
+  }),
+);
+const decodeQuestionResolution = Schema.decodeUnknownOption(
+  Schema.Struct({ requestId: Schema.String, answers: Schema.optional(ProviderUserInputAnswers) }),
+);
+
+/**
+ * workflow_request_user_input records its card as a legacy activity; the
+ * clients read v2 runtime requests, so the card is mirrored there.
+ */
+function workflowQuestionCardCommand(
+  activity: OrchestrationThreadActivity,
+  threadId: ThreadId,
+  commandId: CommandId,
+): OrchestrationV2ServerCommand | null {
+  if (activity.turnId === null) return null;
+  const base = { type: "workflow_user_input.record" as const, commandId, threadId };
+  const runId = RunId.make(activity.turnId);
+  if (activity.kind === "user-input.requested") {
+    const card = decodeQuestionCard(activity.payload);
+    if (Option.isNone(card)) return null;
+    return {
+      ...base,
+      runId,
+      requestId: RuntimeRequestId.make(card.value.requestId),
+      questions: card.value.questions,
+      status: "pending",
+    };
+  }
+  if (activity.kind === "user-input.resolved") {
+    const resolution = decodeQuestionResolution(activity.payload);
+    if (Option.isNone(resolution)) return null;
+    const answers = resolution.value.answers ?? {};
+    return {
+      ...base,
+      runId,
+      requestId: RuntimeRequestId.make(resolution.value.requestId),
+      questions: [],
+      ...(Object.keys(answers).length === 0
+        ? { status: "cancelled" as const }
+        : { status: "resolved" as const, answers }),
+    };
+  }
+  return null;
+}
 const commandIdFor = (event: OrchestrationEvent, suffix = "") =>
   CommandId.make(`workflow:execute:${event.eventId}${suffix}`);
 
@@ -231,6 +284,15 @@ export function workflowControlCommands(
               }),
         },
       ];
+    case "thread.activity-appended": {
+      if (projection === null) return [];
+      const card = workflowQuestionCardCommand(
+        event.payload.activity,
+        event.payload.threadId,
+        commandId,
+      );
+      return card === null ? [] : [card];
+    }
     case "thread.deleted":
       return [{ type: "thread.delete", commandId, threadId: event.payload.threadId }];
     case "thread.archived":
