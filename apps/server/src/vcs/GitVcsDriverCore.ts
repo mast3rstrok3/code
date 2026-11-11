@@ -4988,10 +4988,50 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     "commitWorktree",
   )(function* (input) {
     const operation = "GitVcsDriver.commitWorktree";
+    // An agent that died mid-merge, rebase, cherry-pick or revert left work only
+    // it can finish. `add -A` would mark its conflicts resolved, markers and all.
+    const operationPaths = yield* runGitStdout(operation, input.cwd, [
+      "rev-parse",
+      ...["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"].flatMap(
+        (name) => ["--git-path", name],
+      ),
+    ]);
+    for (const operationPath of operationPaths.split("\n").filter((line) => line.length > 0)) {
+      const inProgress = yield* fileSystem.exists(path.resolve(input.cwd, operationPath)).pipe(
+        Effect.mapError(
+          (cause) =>
+            new GitCommandError({
+              operation,
+              command: "git commit",
+              cwd: input.cwd,
+              detail: "Could not check whether a Git operation is in progress.",
+              cause,
+            }),
+        ),
+      );
+      if (inProgress) return { commitSha: null };
+    }
+    const unmerged = yield* runGitStdout(operation, input.cwd, ["ls-files", "--unmerged"]);
+    if (unmerged.trim().length > 0) return { commitSha: null };
     yield* executeGit(operation, input.cwd, ["add", "-A", "--", "."], {
       timeoutMs: 30_000,
       fallbackErrorDetail: "git add failed",
     });
+    // A conflict can outlive its merge state, for example after `stash pop`.
+    // Whitespace rules are off so `--check` reports only conflict markers.
+    const check = yield* executeGitWithStableDiagnostics(
+      operation,
+      input.cwd,
+      [
+        "-c",
+        "core.whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab",
+        "diff",
+        "--cached",
+        "--check",
+      ],
+      { timeoutMs: 30_000, allowNonZeroExit: true },
+    );
+    if (check.stdout.includes("leftover conflict marker")) return { commitSha: null };
     // `--no-verify`: hooks belong to whoever owns the repo, and this commit runs
     // during recovery with nobody watching. `--allow-empty` is deliberately not
     // set, so a clean worktree reports nothing committed rather than growing an

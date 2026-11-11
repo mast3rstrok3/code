@@ -230,7 +230,7 @@ export interface GitCommitWorktreeInput {
 }
 
 export interface GitCommitWorktreeResult {
-  /** Null when the worktree was already clean and nothing was committed. */
+  /** Null when nothing was committed: the tree was clean or held an unfinished conflict. */
   commitSha: string | null;
 }
 
@@ -393,11 +393,9 @@ export class GitVcsDriver extends Context.Service<
       input: GitRefreshCheckedOutBranchInput,
     ) => Effect.Effect<GitRefreshCheckedOutBranchResult, GitCommandError>;
     /**
-     * Commits everything in the worktree onto the branch it has checked out.
-     *
-     * For rescuing work an agent left behind, so it survives as history instead
-     * of as a dirty tree nobody may touch. `commitSha` is null when there was
-     * nothing to commit.
+     * Commits everything checked out, to rescue work an agent left behind.
+     * `commitSha` is null when nothing was committed: the tree was clean, or an
+     * unfinished merge, rebase, cherry-pick, revert or conflict makes it unfinished.
      */
     readonly commitWorktree: (
       input: GitCommitWorktreeInput,
