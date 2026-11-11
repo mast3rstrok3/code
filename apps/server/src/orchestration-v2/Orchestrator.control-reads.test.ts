@@ -706,6 +706,69 @@ it.effect("keeps the store's read failure as the cause when a command projection
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("restarts a session for a runtime mode change only when the mode changes", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const outbox = yield* EffectOutbox.EffectOutboxV2;
+    const threadId = ThreadId.make("thread:runtime-mode-detach");
+    const now = yield* DateTime.now;
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create-runtime-mode-detach"),
+      threadId,
+      projectId: ProjectId.make("project:runtime-mode-detach"),
+      title: "Runtime mode",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* projections.apply({
+      id: EventId.make("attach-runtime-mode-detach"),
+      type: "provider-session.attached",
+      threadId,
+      occurredAt: now,
+      payload: {
+        id: ProviderSessionId.make("session:runtime-mode-detach"),
+        driver: adapter.driver,
+        providerInstanceId: instanceId,
+        status: "ready",
+        cwd: "/repo",
+        model: modelSelection.model,
+        capabilities: {
+          ...CodexProviderCapabilitiesV2,
+          sessions: {
+            ...CodexProviderCapabilitiesV2.sessions,
+            supportsRuntimeModeSwitchInSession: false,
+          },
+        },
+        createdAt: now,
+        updatedAt: now,
+        lastError: null,
+      },
+    });
+    const detachesFor = Effect.fn(function* (runtimeMode: "full-access" | "approval-required") {
+      const commandId = CommandId.make(`runtime-mode-detach:${runtimeMode}`);
+      yield* orchestrator.dispatch({
+        type: "thread.runtime-mode.set",
+        commandId,
+        threadId,
+        runtimeMode,
+      });
+      return (yield* outbox.listByCommandId(commandId)).filter(
+        (effect) => effect.request.type === "provider-session.detach",
+      ).length;
+    });
+    // Workflow messages re-assert the thread's mode before every turn; that must not end the running one.
+    assert.equal(yield* detachesFor("full-access"), 0);
+    assert.equal(yield* detachesFor("approval-required"), 1);
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("implements a proposed plan that the command projection leaves out", () =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
