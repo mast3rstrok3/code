@@ -5639,6 +5639,57 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
   });
 
   describe("commit context", () => {
+    it.effect.each([
+      { state: "finished work", merge: false, stageMarkers: false, commits: true },
+      { state: "an unresolved merge conflict", merge: true, stageMarkers: false, commits: false },
+      { state: "a merge staged with its markers", merge: true, stageMarkers: true, commits: false },
+      { state: "markers outside a merge", merge: false, stageMarkers: true, commits: false },
+    ])("commitWorktree with $state", ({ merge, stageMarkers, commits }) =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const path = yield* Path.Path;
+        if (merge) {
+          yield* git(cwd, ["checkout", "-b", "feature"]);
+          yield* writeTextFile(cwd, "README.md", "feature version\n");
+          yield* git(cwd, ["commit", "-am", "Feature"]);
+          yield* git(cwd, ["checkout", initialBranch]);
+          yield* writeTextFile(cwd, "README.md", "main version\n");
+          yield* git(cwd, ["commit", "-am", "Main"]);
+          const result = yield* driver.execute({
+            operation: "test.merge",
+            cwd,
+            args: ["merge", "feature"],
+            allowNonZeroExit: true,
+          });
+          assert.equal(result.exitCode, 1);
+          if (stageMarkers) yield* git(cwd, ["add", "README.md"]);
+        } else if (stageMarkers) {
+          yield* writeTextFile(cwd, "README.md", "<<<<<<< ours\na\n=======\nb\n>>>>>>> theirs\n");
+        }
+        yield* writeTextFile(cwd, "notes.txt", "agent work\n");
+        const head = yield* git(cwd, ["rev-parse", "HEAD"]);
+
+        const { commitSha } = yield* driver.commitWorktree({ cwd, message: "recover" });
+
+        if (commits) {
+          assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), commitSha);
+          assert.equal(yield* git(cwd, ["status", "--porcelain"]), "");
+        } else {
+          assert.isNull(commitSha);
+          assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), head);
+        }
+        if (merge) {
+          const mergeHead = yield* git(cwd, ["rev-parse", "--git-path", "MERGE_HEAD"]);
+          assert.isTrue(NodeFS.existsSync(path.resolve(cwd, mergeHead)));
+        }
+        if (merge && !stageMarkers) {
+          assert.notEqual(yield* git(cwd, ["ls-files", "--unmerged"]), "");
+        }
+      }),
+    );
+
     it.effect("prepares source patches without running textconv", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
