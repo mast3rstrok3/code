@@ -989,6 +989,7 @@ function reopenTicketForRerun(input: {
   readonly updatedAt: string;
   readonly preserveImplementationAttemptCount?: boolean;
   readonly continuationMarkdown?: string | null;
+  readonly workerThreadDeleted?: boolean;
 }): OrchestrationImplementationRun {
   const queuedGeneration = (state: OrchestrationImplementationTicketState) =>
     state.stageExecutions.findLast(
@@ -1081,10 +1082,12 @@ function reopenTicketForRerun(input: {
     }
     // The worker starts another turn in its durable thread. Its reported
     // result stops standing for this ticket, while the thread, worktree,
-    // branch, partial changes, and conversation history survive.
+    // branch, partial changes, and conversation history survive. A deleted
+    // thread has nothing to continue, so the next claim makes a new one.
     const generation = queuedGeneration(state) ?? state.implementationGeneration + 1;
     return {
       ...withoutAppReview,
+      ...(input.workerThreadDeleted ? { workerThreadId: null } : {}),
       status: "ready" as const,
       workerResult: null,
       implementationGeneration: generation,
@@ -3414,6 +3417,22 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const isWorkerThreadDeleted = Effect.fn("ImplementationWorkflowReactor.isWorkerThreadDeleted")(
+    function* (
+      readModel: OrchestrationReadModel,
+      run: OrchestrationImplementationRun,
+      ticketId: string,
+    ) {
+      const workerThreadId =
+        run.ticketStates.find((state) => state.ticketId === ticketId)?.workerThreadId ?? null;
+      if (workerThreadId === null) return false;
+      const thread =
+        findThread(readModel, workerThreadId) ??
+        Option.getOrNull(yield* projectionSnapshotQuery.getThreadDetailById(workerThreadId));
+      return thread !== null && thread.deletedAt !== null;
+    },
+  );
+
   const createWorker = Effect.fn("ImplementationWorkflowReactor.createWorker")(function* (input: {
     readonly sourceThreadId: ThreadId;
     readonly orchestratorThread: OrchestrationThread;
@@ -3624,16 +3643,15 @@ const make = Effect.gen(function* () {
     const durableWorkerThread =
       findThread(readModel, workerThreadId) ??
       Option.getOrNull(yield* projectionSnapshotQuery.getThreadDetailById(workerThreadId));
-    const isContinuation = input.claimedBeforeStart;
-    if (
-      isContinuation &&
-      (durableWorkerThread === null || durableWorkerThread.deletedAt !== null)
-    ) {
+    // A claim whose setup failed before the thread existed has no history to
+    // continue, so the worker starts fresh under the claimed id.
+    const isContinuation = input.claimedBeforeStart && durableWorkerThread !== null;
+    if (isContinuation && durableWorkerThread.deletedAt !== null) {
       return yield* new GitCommandError({
         operation: "ImplementationWorkflowReactor.createWorker",
         command: "continue durable implementation thread",
         cwd: plannedWorker.worktreePath,
-        detail: `Ticket '${input.ticketId}' cannot continue because its durable Implementation thread '${workerThreadId}' is missing or deleted. Human attention is required.`,
+        detail: `Ticket '${input.ticketId}' cannot continue because its durable Implementation thread '${workerThreadId}' was deleted. Reset the ticket's implementation to start it in a new thread.`,
       });
     }
     const sourceThread = findThread(readModel, input.sourceThreadId);
@@ -11317,6 +11335,9 @@ const make = Effect.gen(function* () {
               : target.stage === "implementation" && run.automationHalt?.ticketId !== ticketId
                 ? (run.automationHalt?.detail ?? null)
                 : null,
+          workerThreadDeleted:
+            target.stage === "implementation" &&
+            (yield* isWorkerThreadDeleted(readModel, run, ticketId)),
         });
       }
       const latestBeforeRerun = yield* projectionSnapshotQuery.getCommandReadModel();
@@ -11439,6 +11460,9 @@ const make = Effect.gen(function* () {
       ticketId: target.ticketId,
       stage: target.stage,
       updatedAt: createdAt,
+      workerThreadDeleted:
+        target.stage === "implementation" &&
+        (yield* isWorkerThreadDeleted(readModel, run, target.ticketId)),
     });
     // A re-run wants the worker now; clearing wants it in turn. Every other
     // stage already rests on the status it resumes at.

@@ -933,7 +933,7 @@ function planningTicket(key: string, dependencyKeys: ReadonlyArray<string> = [])
 function makeTestLayer(
   calls: ImplementationCalls,
   serverSettings: DeepPartial<ServerSettings> = {},
-  failCreateWorktreeAfter?: number,
+  failCreateWorktreeCall?: number,
   failAutoCreate = false,
   failAutoCreateAttempts = 0,
   autoCreateFailureMessage = "compose file missing",
@@ -1058,7 +1058,7 @@ function makeTestLayer(
           createWorktree: (input) =>
             Ref.updateAndGet(calls.createWorktreeInputs, (inputs) => [...inputs, input]).pipe(
               Effect.flatMap((inputs) =>
-                failCreateWorktreeAfter !== undefined && inputs.length > failCreateWorktreeAfter
+                inputs.length === failCreateWorktreeCall
                   ? Effect.fail(
                       new GitCommandError({
                         operation: "GitVcsDriver.createWorktree",
@@ -1582,7 +1582,7 @@ function withSystem<A, E>(
   use: (system: ImplementationSystem) => Effect.Effect<A, E, Scope.Scope>,
   options?: {
     readonly serverSettings?: DeepPartial<ServerSettings>;
-    readonly failCreateWorktreeAfter?: number;
+    readonly failCreateWorktreeCall?: number;
     readonly failAutoCreate?: boolean;
     readonly failAutoCreateAttempts?: number;
     readonly autoCreateFailureMessage?: string;
@@ -1741,7 +1741,7 @@ function withSystem<A, E>(
         makeTestLayer(
           calls,
           options?.serverSettings,
-          options?.failCreateWorktreeAfter,
+          options?.failCreateWorktreeCall,
           options?.failAutoCreate,
           options?.failAutoCreateAttempts,
           options?.autoCreateFailureMessage,
@@ -5336,11 +5336,11 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("halts when worker worktree creation fails", () =>
+  it.effect("halts when worker worktree creation fails, and starts the worker on rerun", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
-          const { run } = yield* launchRun(system);
+          const { run, ticket } = yield* launchRun(system);
           const snapshot = yield* system.query.getSnapshot();
           const workerThread = snapshot.threads.find(
             (thread) => thread.workflowRole === "implementation-worker",
@@ -5352,8 +5352,33 @@ describe("ImplementationWorkflowReactor", () => {
           expect(
             snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
           ).toHaveLength(0);
+
+          // The claim recorded a worker thread id that was never created.
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.rerun",
+            commandId: commandId("rerun-after-worktree-failure"),
+            threadId: sourceThreadId,
+            runId: run.id,
+            target: { kind: "ticket", ticketId: ticket.id, stage: "implementation" },
+            createdAt: "2026-01-01T00:05:00.000Z",
+          });
+          yield* system.reactor.drain;
+
+          const rerunSnapshot = yield* system.query.getSnapshot();
+          const rerun = rerunSnapshot.implementationRuns.find((entry) => entry.id === run.id);
+          const workers = rerunSnapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-worker",
+          );
+          expect(rerun?.automationHalt).toBeNull();
+          expect(rerun?.ticketStates[0]?.status).toBe("running");
+          expect(workers.map((thread) => thread.id)).toEqual([
+            rerun?.ticketStates[0]?.workerThreadId,
+          ]);
+          expect(workers[0]?.messages.at(-1)?.text).not.toContain(
+            "Continue the ticket from its existing durable state.",
+          );
         }),
-      { failCreateWorktreeAfter: 1 },
+      { failCreateWorktreeCall: 2 },
     ),
   );
 
@@ -5465,7 +5490,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("stops recovery when the durable Implementation thread is gone", () =>
+  it.effect("stops recovery when the durable Implementation thread is gone, until reset", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system);
@@ -5502,6 +5527,22 @@ describe("ImplementationWorkflowReactor", () => {
           initialState.implementationGeneration,
         );
         expect(recovered?.retryableFailure?.detail).toContain("durable Implementation thread");
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.reset",
+          commandId: commandId("reset-after-worker-deletion"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "ticket", ticketId: initialState.ticketId, stage: "implementation" },
+          createdAt: "2026-01-01T00:10:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const reset = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        );
+        expect(reset?.automationHalt).toBeNull();
+        expect(reset?.ticketStates[0]?.workerThreadId).not.toBe(initialState.workerThreadId);
       }),
     ),
   );

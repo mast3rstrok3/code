@@ -99,7 +99,7 @@ export class GitWorkflowService extends Context.Service<
     /**
      * Narrow on purpose: recovery commits work an agent left behind when its session died, so a
      * review reads history instead of a dirty tree stopping the run. `commitSha` is null when the
-     * worktree was already clean.
+     * worktree was already clean or held an unfinished merge or conflict, which stays for a human.
      */
     readonly commitWorktree: (input: {
       readonly cwd: string;
