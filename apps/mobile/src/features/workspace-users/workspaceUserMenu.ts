@@ -1,4 +1,3 @@
-import type { MenuAction } from "@react-native-menu/menu";
 import type { EnvironmentId, WorkspaceUser, WorkspaceUserView } from "@t3tools/contracts";
 import { workspaceUserViewCacheKey } from "@t3tools/shared/workspaceUsers";
 
@@ -66,39 +65,4 @@ export function workspaceUserMenuIsCustomized(scopes: ReadonlyArray<WorkspaceUse
   return scopes.some(
     (scope) => !scope.options.some((option) => option.key === "all" && option.selected),
   );
-}
-
-const ACTION_ID_PREFIX = "workspace-user:";
-
-/** Android menus report a flat action id, so it carries the scope index and option key. */
-function workspaceUserMenuActionId(scopeIndex: number, optionKey: string): string {
-  return `${ACTION_ID_PREFIX}${scopeIndex}:${optionKey}`;
-}
-
-export function workspaceUserMenuActions(
-  scopes: ReadonlyArray<WorkspaceUserMenuScope>,
-): MenuAction[] {
-  return scopes.map((scope, scopeIndex) => ({
-    id: workspaceUserMenuActionId(scopeIndex, "menu"),
-    title: scope.title,
-    subactions: scope.options.map((option) => ({
-      id: workspaceUserMenuActionId(scopeIndex, option.key),
-      title: option.title,
-      state: option.selected ? ("on" as const) : ("off" as const),
-    })),
-  }));
-}
-
-export function parseWorkspaceUserMenuActionId(
-  actionId: string,
-  scopes: ReadonlyArray<WorkspaceUserMenuScope>,
-): { readonly environmentId: EnvironmentId; readonly key: string } | null {
-  if (!actionId.startsWith(ACTION_ID_PREFIX)) return null;
-  const rest = actionId.slice(ACTION_ID_PREFIX.length);
-  const separator = rest.indexOf(":");
-  if (separator < 0) return null;
-  const scope = scopes[Number(rest.slice(0, separator))];
-  const key = rest.slice(separator + 1);
-  if (!scope?.options.some((option) => option.key === key)) return null;
-  return { environmentId: scope.environmentId, key };
 }

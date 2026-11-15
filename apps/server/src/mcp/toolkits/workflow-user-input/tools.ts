@@ -12,7 +12,7 @@ import {
   WorkflowUserInputResult,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/ai";
+import { McpSchema, Tool, Toolkit } from "effect/ai";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as WorkflowUserInputBroker from "../../WorkflowUserInputBroker.ts";
@@ -51,6 +51,7 @@ export const WorkflowRequestUserInputTool = Tool.make("workflow_request_user_inp
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 export const WorkflowUserInputToolkit = Toolkit.make(WorkflowRequestUserInputTool);

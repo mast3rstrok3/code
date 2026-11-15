@@ -26,7 +26,7 @@ import {
 } from "@t3tools/contracts";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/ai";
+import { McpSchema, Tool, Toolkit } from "effect/ai";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
@@ -50,7 +50,8 @@ const readonlyTool = <T extends Tool.Any>(tool: T): T =>
     .annotate(Tool.Readonly, true)
     .annotate(Tool.Destructive, false)
     .annotate(Tool.Idempotent, true)
-    .annotate(Tool.OpenWorld, false) as T;
+    .annotate(Tool.OpenWorld, false)
+    .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients) as T;
 
 export const WorkflowContextGetTool = readonlyTool(
   Tool.make("workflow_context_get", {
@@ -187,7 +188,8 @@ const WorkflowStageRestartTool = Tool.make("workflow_stage_restart", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 export const WorkflowArtifactsToolkit = Toolkit.make(
   WorkflowContextGetTool,

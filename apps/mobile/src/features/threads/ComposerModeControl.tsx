@@ -14,7 +14,7 @@ import type { ComposerModeChoice } from "../../state/composer-workflow";
 
 const MODE_ICON = {
   build: { ios: "hammer", android: "construction" },
-  plan: { ios: "list.bullet.clipboard", android: "auto_awesome" },
+  plan: { ios: "list.bullet.clipboard", android: "content_paste" },
   workflow: "point.3.connected.trianglepath.dotted",
   skill: { ios: "hammer", android: "construction" },
 } as const satisfies Record<string, AppSymbolName>;
@@ -25,7 +25,6 @@ export interface ComposerModeControlProps {
   readonly lastWorkflowPreset: WorkflowPreset | null;
   /** The provider can run workflows (Codex, Claude, OpenCode). */
   readonly workflowAvailable: boolean;
-  readonly planAvailable: boolean;
   readonly disabled?: boolean;
   readonly iconOnly?: boolean;
   readonly onSelect: (choice: ComposerModeChoice) => void;
@@ -34,13 +33,12 @@ export interface ComposerModeControlProps {
 /** Whether the composer has a choice to offer beyond plain Build. */
 export function composerModeControlVisible(input: {
   readonly workflowAvailable: boolean;
-  readonly planAvailable: boolean;
   readonly workflowPreset: WorkflowPreset | null;
 }): boolean {
-  return input.workflowAvailable || input.planAvailable || input.workflowPreset !== null;
+  return input.workflowAvailable || input.workflowPreset !== null;
 }
 
-/** Build, Plan, and the Engineering workflow variants, in the composer's own menu. */
+/** Build and the Engineering workflow variants, in the composer's own menu. */
 export function ComposerModeControl(props: ComposerModeControlProps) {
   const display = describeComposerMode({
     interactionMode: props.interactionMode,
@@ -57,16 +55,6 @@ export function ComposerModeControl(props: ComposerModeControlProps) {
       subtitle: "Make implementation changes.",
       state: activeMode === "build" ? "on" : "off",
     },
-    ...(props.planAvailable
-      ? [
-          {
-            id: "mode:plan",
-            title: "Plan",
-            subtitle: "Plan without changing files.",
-            state: activeMode === "plan" ? ("on" as const) : ("off" as const),
-          },
-        ]
-      : []),
     props.workflowAvailable
       ? {
           id: "workflow",
@@ -105,7 +93,7 @@ export function ComposerModeControl(props: ComposerModeControlProps) {
     >
       <ComposerInlineControl
         accessibilityLabel={`Mode: ${display.label}`}
-        accessibilityHint="Chooses Build, Plan, or an Engineering workflow"
+        accessibilityHint="Chooses Build or an Engineering workflow"
         disabled={props.disabled}
         emphasized={activeMode !== "build"}
         icon={MODE_ICON[display.kind]}
@@ -118,7 +106,6 @@ export function ComposerModeControl(props: ComposerModeControlProps) {
 
 function parseComposerModeAction(id: string): ComposerModeChoice | null {
   if (id === "mode:build") return { kind: "build" };
-  if (id === "mode:plan") return { kind: "plan" };
   if (!id.startsWith("workflow:")) return null;
   const preset = WORKFLOW_PRESET_DEFINITIONS.find(
     (definition) =>

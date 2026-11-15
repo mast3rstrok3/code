@@ -10,10 +10,12 @@ import {
 import {
   ClientSettingsSchema,
   ClientSettingsPatch,
+  ClientServerSettingsPatch,
   ClaudeSettings,
   DEFAULT_SERVER_SETTINGS,
   globalIdleCompaction,
   idleCompactionPatch,
+  PROJECT_SCOPED_SERVER_SETTING_KEYS,
   requiredScopesForProjectMutation,
   resolveIdleCompaction,
   resolveProjectProviderInstanceEnabled,
@@ -38,6 +40,7 @@ const decodeStringOnlyEnvironment = Schema.decodeUnknownSync(
   ),
 );
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
+const decodeClientServerSettingsPatch = Schema.decodeUnknownSync(ClientServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodeServerSettingsPatch = Schema.encodeSync(ServerSettingsPatch);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
@@ -116,6 +119,18 @@ describe("ServerSettings response streaming", () => {
       expect(() => decodeServerSettingsPatch(input)).toThrow();
     }
   });
+});
+
+it("drops theme defaults from a client's settings patch", () => {
+  expect(
+    decodeClientServerSettingsPatch({
+      newWorktreesStartFromOrigin: false,
+      defaultTheme: "grove",
+      defaultThemeSetAt: "2026-11-13T00:00:00.000Z",
+      defaultAppearance: "dark",
+      defaultAppearanceSetAt: "2026-11-13T00:00:00.000Z",
+    }),
+  ).toEqual({ newWorktreesStartFromOrigin: false });
 });
 
 describe("storage cleanup settings", () => {
@@ -774,20 +789,6 @@ describe("ClientSettings environment identification", () => {
 });
 
 describe("ClientSettings sidebar", () => {
-  it("defaults to the current sidebar", () => {
-    expect(decodeClientSettings({}).legacySidebarEnabled).toBe(false);
-  });
-
-  it("drops the retired sidebar v2 beta keys, resetting everyone to the default", () => {
-    const decoded = decodeClientSettings({
-      sidebarV2Enabled: false,
-      sidebarV2ConfiguredByUser: true,
-    });
-    expect(decoded.legacySidebarEnabled).toBe(false);
-    expect(decoded).not.toHaveProperty("sidebarV2Enabled");
-    expect(decoded).not.toHaveProperty("sidebarV2ConfiguredByUser");
-  });
-
   it("drops the retired compact sidebar keys for users who opted in", () => {
     const stored = { compactSidebarEnabled: true, sidebarCompactThreadRows: true };
     const decoded = decodeClientSettings(stored);
@@ -796,29 +797,10 @@ describe("ClientSettings sidebar", () => {
     expect(decodeClientSettingsPatch(stored)).toEqual({});
   });
 
-  it("preserves an explicit legacy sidebar opt-in", () => {
-    expect(decodeClientSettings({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(true);
-    expect(decodeClientSettingsPatch({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(
-      true,
-    );
-  });
-
   it("keeps unpin confirmation opt-in and patchable", () => {
     expect(decodeClientSettings({}).confirmThreadUnpin).toBe(false);
     expect(decodeClientSettingsPatch({ confirmThreadUnpin: true }).confirmThreadUnpin).toBe(true);
     expect(() => decodeClientSettingsPatch({ confirmThreadUnpin: "yes" })).toThrow();
-  });
-});
-
-describe("ClientSettings context window meter", () => {
-  it("defaults off and preserves an explicit legacy opt-in", () => {
-    expect(decodeClientSettings({}).contextWindowMeterEnabled).toBe(false);
-    expect(
-      decodeClientSettings({ contextWindowMeterEnabled: true }).contextWindowMeterEnabled,
-    ).toBe(true);
-    expect(
-      decodeClientSettingsPatch({ contextWindowMeterEnabled: true }).contextWindowMeterEnabled,
-    ).toBe(true);
   });
 });
 
@@ -847,9 +829,9 @@ describe("ClientSettings follow-up behavior", () => {
 });
 
 describe("ServerSettings thread settlement", () => {
-  it("defaults merge settlement on and inactivity settlement to three days", () => {
+  it("defaults merge settlement on and inactivity settlement to seven days", () => {
     const settings = decodeServerSettings({});
-    expect(settings.sidebarAutoSettleAfterDays).toBe(3);
+    expect(settings.sidebarAutoSettleAfterDays).toBe(7);
     expect(settings.sidebarAutoSettleOnMerge).toBe(true);
   });
 
@@ -887,7 +869,7 @@ describe("ClientSettings pull request merge methods", () => {
   it("rejects unsupported project merge methods", () => {
     expect(() =>
       decodeClientSettingsPatch({
-        pullRequestMergeMethodOverrides: { project: "fast-forward" },
+        pullRequestMergeMethodOverrides: { project: "octopus" },
       }),
     ).toThrow();
   });
@@ -1027,17 +1009,17 @@ describe("ServerSettings environment icon", () => {
 
 const decodeDeviceHostSettings = Schema.decodeSync(ServerSettings);
 
-// `deviceHosts` as it was decoded before EAS hosts existed: an SSH host needs a target.
+// `deviceHosts` as it was decoded before Expo hosts existed: an SSH host needs a target.
 const decodeOlderDeviceHostSettings = Schema.decodeUnknownSync(
   Schema.Struct({
     deviceHosts: Schema.Array(Schema.Struct({ id: Schema.String, target: Schema.String })),
   }),
 );
 
-it("keeps EAS hosts out of the SSH host list servers and clients before EAS hosts decode", () => {
+it("keeps Expo hosts out of the SSH host list servers and clients before Expo hosts decode", () => {
   const settings = decodeDeviceHostSettings({
     deviceHosts: [{ id: "mini", label: "Mac mini", target: "user@mini" }],
-    easDeviceHosts: [{ kind: "eas", id: "eas", label: "EAS Simulator" }],
+    easDeviceHosts: [{ kind: "eas", id: "eas", label: "Expo Simulators" }],
   });
   const wire = encodeServerSettings(settings);
   expect(decodeOlderDeviceHostSettings(wire).deviceHosts).toEqual([
@@ -1048,7 +1030,7 @@ it("keeps EAS hosts out of the SSH host list servers and clients before EAS host
 
 it("validates remote device hosts and rejects ambiguous host ids", () => {
   const host = { id: "mini", label: "Mac mini", target: "user@mini", port: 2222 };
-  // Hosts saved before EAS hosts existed have no `kind`; they are SSH hosts.
+  // Hosts saved before Expo hosts existed have no `kind`; they are SSH hosts.
   expect(decodeDeviceHostSettings({ deviceHosts: [host] }).deviceHosts).toEqual([
     { kind: "ssh", ...host },
   ]);
@@ -1163,6 +1145,31 @@ describe("requiredScopesForProjectMutation", () => {
         scripts: [],
       }),
     ).toEqual(["orchestration:operate", "settings:write"]);
+  });
+});
+
+describe("voice settings", () => {
+  it("does not import voice consent from ordinary device preferences", () => {
+    const imported = {
+      voiceTranscriptionEnvironmentId: "env-1",
+      voiceTranscriptionDestination: { kind: "environment", environmentId: "env-1" },
+      speechPostProcessingEnabled: true,
+    };
+    expect(decodeClientSettings({}).speechSilenceFiltering).toBe(true);
+    expect(decodeClientSettingsPatch({ speechSilenceFiltering: false })).toEqual({
+      speechSilenceFiltering: false,
+    });
+    for (const key of Object.keys(imported)) {
+      expect(decodeClientSettings(imported)).not.toHaveProperty(key);
+      expect(decodeClientSettingsPatch(imported)).not.toHaveProperty(key);
+    }
+  });
+
+  it("keeps the correction cue personal and project vocabulary on the environment", () => {
+    expect(decodeClientSettings({}).speechCorrectionWord).toBe("");
+    expect(() => decodeClientSettingsPatch({ speechCorrectionWord: "x".repeat(51) })).toThrow();
+    expect(DEFAULT_SERVER_SETTINGS.speechProjectCustomWords).toEqual([]);
+    expect(PROJECT_SCOPED_SERVER_SETTING_KEYS).toContain("speechProjectCustomWords");
   });
 });
 

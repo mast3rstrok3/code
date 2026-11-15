@@ -4,12 +4,9 @@ import * as Effect from "effect/Effect";
 import type { NativeCommandRunner } from "./nativeAppStackProvisioning.ts";
 
 /**
- * Creates the worktree a missing bundle member needs, on the bundle's branch.
- *
- * The Stacks controller never creates worktrees; its bundle plan says where a
- * missing one belongs and Code, which owns the checkouts, creates it there. The
- * branch is reused when it exists locally, tracked from origin when it was
- * pushed, and otherwise started from `origin/<baseBranch>`.
+ * Stacks only plans where a missing bundle worktree belongs; Code owns checkouts
+ * and creates it. The branch is reused locally, tracked from origin, or started
+ * from `origin/<baseBranch>`.
  */
 export const createBundleWorktree = Effect.fn("createBundleWorktree")(function* (
   run: NativeCommandRunner,
@@ -74,13 +71,19 @@ export const removeBundleWorktree = (
   run: NativeCommandRunner,
   input: { readonly repositoryPath: string; readonly worktreePath: string },
 ) =>
-  Effect.tryPromise(() =>
-    run("git", ["-C", input.repositoryPath, "worktree", "remove", input.worktreePath]),
-  ).pipe(
-    Effect.catch((cause) =>
+  Effect.tryPromise({
+    try: () => run("git", ["-C", input.repositoryPath, "worktree", "remove", input.worktreePath]),
+    catch: (cause) =>
+      new AppStackError({
+        operation: "autoCreate",
+        reason: "request_failed",
+        message: cause instanceof Error ? cause.message : String(cause),
+      }),
+  }).pipe(
+    Effect.catch((error) =>
       Effect.logWarning("could not remove an unused bundle worktree", {
         worktreePath: input.worktreePath,
-        cause: cause instanceof Error ? cause.message : String(cause),
+        cause: error.message,
       }),
     ),
     Effect.asVoid,

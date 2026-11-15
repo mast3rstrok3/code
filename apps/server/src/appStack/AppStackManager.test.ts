@@ -97,6 +97,7 @@ const derivedPaths = {
   keybindingsConfigPath: "/tmp/t3-app-dev-stack-manager-test/state/keybindings.json",
   settingsPath: "/tmp/t3-app-dev-stack-manager-test/state/settings.json",
   providerStatusCacheDir: "/tmp/t3-app-dev-stack-manager-test/caches",
+  worktreeCheckoutCacheDir: "/tmp/t3-app-dev-stack-manager-test/caches/worktree-checkouts",
   worktreesDir: "/tmp/t3-app-dev-stack-manager-test/worktrees",
   browserArtifactsDir: "/tmp/t3-app-dev-stack-manager-test/state/browser-artifacts",
   attachmentsDir: "/tmp/t3-app-dev-stack-manager-test/state/attachments",

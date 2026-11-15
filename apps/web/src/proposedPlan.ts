@@ -1,11 +1,4 @@
-import { buildPlanImplementationPrompt } from "@t3tools/shared/orchestrationPlanning";
 import { stripDisplayedPlanMarkdown, proposedPlanTitle } from "@t3tools/shared/proposedPlanText";
-
-export {
-  buildPlanImplementationPrompt,
-  buildPlanImplementationThreadTitle,
-} from "@t3tools/shared/orchestrationPlanning";
-export { proposedPlanTitle, stripDisplayedPlanMarkdown } from "@t3tools/shared/proposedPlanText";
 
 export function buildCollapsedProposedPlanPreviewMarkdown(
   planMarkdown: string,
@@ -58,23 +51,7 @@ function sanitizePlanFileSegment(input: string): string {
   return sanitized.length > 0 ? sanitized : "plan";
 }
 
-export function resolvePlanFollowUpSubmission(input: { draftText: string; planMarkdown: string }): {
-  text: string;
-  interactionMode: "default" | "plan";
-} {
-  const trimmedDraftText = input.draftText.trim();
-  if (trimmedDraftText.length > 0) {
-    return {
-      text: trimmedDraftText,
-      interactionMode: "plan",
-    };
-  }
-
-  return {
-    text: buildPlanImplementationPrompt(input.planMarkdown),
-    interactionMode: "default",
-  };
-}
+export const PLAN_IMPLEMENTATION_PROMPT_PREFIX = "PLEASE IMPLEMENT THIS PLAN:\n";
 
 export function buildProposedPlanMarkdownFilename(planMarkdown: string): string {
   const title = proposedPlanTitle(planMarkdown);
@@ -96,5 +73,3 @@ export function downloadPlanAsTextFile(filename: string, contents: string): void
     URL.revokeObjectURL(url);
   }, 0);
 }
-
-export const PLAN_IMPLEMENTATION_PROMPT_PREFIX = "PLEASE IMPLEMENT THIS PLAN:\n";

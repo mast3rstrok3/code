@@ -13,11 +13,9 @@ export const sandboxDisabled = (env: Readonly<Record<string, string | undefined>
   env.T3CODE_SERVER_BROWSER_SANDBOX === "0";
 
 /**
- * Chrome's GPU flags. By default `--disable-gpu` keeps compositing in cheap
- * software while WebGL still runs on SwiftShader. A host with a working EGL
- * driver (such as NVIDIA's) opts in with `T3CODE_SERVER_BROWSER_GPU=1` to run
- * both on its GPU. Disable the software rasterizer so a failed GPU does not
- * silently move WebGL rendering onto the CPU.
+ * By default `--disable-gpu` composites in software with WebGL on SwiftShader.
+ * `T3CODE_SERVER_BROWSER_GPU=1` runs both on a working EGL driver, with the
+ * software rasterizer off so a failed GPU never silently falls back to the CPU.
  */
 export const gpuArgs = (env: Readonly<Record<string, string | undefined>>) =>
   env.T3CODE_SERVER_BROWSER_GPU === "1"
@@ -143,13 +141,18 @@ export const missingLibraries = Effect.fn("PreviewBrowserHost.missingLibraries")
   return listed.length > 0 ? listed : [loaderError];
 });
 
-export const sandboxBlocked = Effect.gen(function* () {
+export const usernsRestricted = Effect.gen(function* () {
   if ((yield* HostProcess.Platform) !== "linux") return false;
   const fs = yield* FileSystem.FileSystem;
-  const restricted = yield* fs.readFileString(USERNS_RESTRICTION).pipe(
+  return yield* fs.readFileString(USERNS_RESTRICTION).pipe(
     Effect.map((value) => value.trim() === "1"),
     Effect.orElseSucceed(() => false),
   );
-  if (!restricted) return false;
+}).pipe(Effect.withSpan("PreviewBrowserHost.usernsRestricted"));
+
+/** A profile on disk can still be unloaded; only a failed launch shows that without root. */
+export const sandboxBlocked = Effect.gen(function* () {
+  if (!(yield* usernsRestricted)) return false;
+  const fs = yield* FileSystem.FileSystem;
   return !(yield* fs.exists(APPARMOR_PROFILE_PATH).pipe(Effect.orElseSucceed(() => false)));
 }).pipe(Effect.withSpan("PreviewBrowserHost.sandboxBlocked"));

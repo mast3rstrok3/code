@@ -5,7 +5,7 @@ import type {
   OrchestrationProject,
   ProjectId,
 } from "@t3tools/contracts";
-import * as Data from "effect/Data";
+import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -14,19 +14,17 @@ import type { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import type { T3ProjectFileLoader } from "../project/T3ProjectFileLoader.ts";
 
 /** A repository a ticket names cannot be prepared for the run. */
-class ImplementationRepositoryError extends Data.TaggedError("ImplementationRepositoryError")<{
-  readonly message: string;
-}> {}
+class ImplementationRepositoryError extends Schema.TaggedError<ImplementationRepositoryError>()(
+  "ImplementationRepositoryError",
+  {
+    message: Schema.String,
+  },
+) {}
 
 /**
- * Prepares the record of every other repository the tickets change.
- *
- * Each repository works from the workflow's base branch when it has one of
- * that name, otherwise from whatever its checkout is on, pinned to the
- * remote's copy when there is one. Its integration worktree takes the
- * orchestrator branch's name at the path git would choose for that branch, so
- * the run's branches line up across repositories. Nothing is created here;
- * the run creates the worktrees once it launches.
+ * Each repository bases on the workflow's base branch if it has one, else its
+ * checkout's branch (remote copy when present). Integration worktrees take the
+ * orchestrator branch's name so branches line up; the run creates them later.
  */
 export const resolveImplementationRepositories = Effect.fn("resolveImplementationRepositories")(
   function* (input: {

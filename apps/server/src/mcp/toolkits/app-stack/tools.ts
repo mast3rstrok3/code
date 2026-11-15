@@ -27,11 +27,11 @@ import {
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/ai";
+import { McpSchema, Tool, Toolkit } from "effect/ai";
 
 import { AppStackManager } from "../../../appStack/AppStackManager.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { McpInvocationContext } from "../../McpInvocationContext.ts";
+import { McpInvocationContext, hiddenFromOutsideClients } from "../../McpInvocationContext.ts";
 
 const dependencies = [
   ThreadManagementService,
@@ -117,7 +117,8 @@ const AppStackDeviceStartTool = Tool.make("app_stack_device_start", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackDeviceStatusTool = Tool.make("app_stack_device_status", {
   description:
@@ -135,7 +136,8 @@ const AppStackDeviceStatusTool = Tool.make("app_stack_device_status", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackDeviceStopTool = Tool.make("app_stack_device_stop", {
   description:
@@ -149,7 +151,8 @@ const AppStackDeviceStopTool = Tool.make("app_stack_device_stop", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackGetTool = Tool.make("app_stack_get", {
   description:
@@ -170,7 +173,8 @@ const AppStackGetTool = Tool.make("app_stack_get", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackStartTool = Tool.make("app_stack_start", {
   description:
@@ -184,7 +188,8 @@ const AppStackStartTool = Tool.make("app_stack_start", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackBundlePlanTool = Tool.make("app_stack_bundle_plan", {
   description:
@@ -198,7 +203,8 @@ const AppStackBundlePlanTool = Tool.make("app_stack_bundle_plan", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackCreateWorktreesTool = Tool.make("app_stack_create_worktrees", {
   description:
@@ -212,7 +218,8 @@ const AppStackCreateWorktreesTool = Tool.make("app_stack_create_worktrees", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackStopTool = Tool.make("app_stack_stop", {
   description:
@@ -226,7 +233,8 @@ const AppStackStopTool = Tool.make("app_stack_stop", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackRestartTool = Tool.make("app_stack_restart", {
   description:
@@ -240,7 +248,8 @@ const AppStackRestartTool = Tool.make("app_stack_restart", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackRestartServicesTool = Tool.make("app_stack_restart_services", {
   description:
@@ -254,7 +263,8 @@ const AppStackRestartServicesTool = Tool.make("app_stack_restart_services", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackDeleteTool = Tool.make("app_stack_delete", {
   description:
@@ -268,7 +278,8 @@ const AppStackDeleteTool = Tool.make("app_stack_delete", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackListPodsTool = Tool.make("app_stack_list_pods", {
   description:
@@ -282,7 +293,8 @@ const AppStackListPodsTool = Tool.make("app_stack_list_pods", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackLogsTool = Tool.make("app_stack_logs", {
   description:
@@ -296,7 +308,8 @@ const AppStackLogsTool = Tool.make("app_stack_logs", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 export const AppStackToolkit = Toolkit.make(
   AppStackGetTool,

@@ -318,7 +318,7 @@ export const resolveFfmpegAvailability = (
   adapter?: BrowserExecutableResolverAdapter,
 ) =>
   resolveFfmpegExecutable(input, adapter).pipe(
-    Effect.map(() => true),
+    Effect.as(true),
     Effect.orElseSucceed(() => false),
   );
 

@@ -148,7 +148,8 @@ export const makeWorkflowModelFallback = Effect.gen(function* () {
     ),
   };
 });
-const MAX_OVERDUE_ARM_MS = 24 * 60 * 60 * 1000;
+
+export const MAX_OVERDUE_ARM_MS = 24 * 60 * 60 * 1000;
 
 export function limitRecoveryCommand(
   thread: ProjectionStore.ProjectionLimitRecoveryCandidate,
@@ -209,7 +210,7 @@ export function limitRecoveryCommand(
     text: "Continue where you left off.",
     attachments: [],
     dispatchMode: { type: "start_immediately" },
-    createdBy: "user",
+    createdBy: "agent",
     creationSource: "server",
   };
 }

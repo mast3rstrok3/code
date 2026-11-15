@@ -1,5 +1,5 @@
 import { CheckIcon, ExternalLinkIcon, KeyRoundIcon, PlusIcon, XIcon } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import type { GithubOwnerTokenVerification, WorkspaceUser } from "@t3tools/contracts";
 
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
@@ -32,7 +32,7 @@ function GithubTokenLink({ owner, children }: { owner?: string; children: string
       href={githubFineGrainedTokenUrl(owner)}
       target="_blank"
       rel="noreferrer"
-      className="inline-flex min-w-0 items-center gap-1 rounded-sm text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+      className="inline-flex min-w-0 items-center gap-1 rounded-sm text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
     >
       <span className="truncate">{children}</span>
       <ExternalLinkIcon className="size-3 shrink-0" aria-hidden />
@@ -46,18 +46,18 @@ function useVerifyGithubOwnerToken() {
   const verify = useAtomCommand(serverEnvironment.verifyGithubOwnerToken, {
     reportFailure: false,
   });
-  return useCallback(
-    async (owner: string, personalAccessToken: string): Promise<GithubOwnerTokenVerification> => {
-      if (!environmentId) {
-        return { valid: false, message: "Connect to the server to check the token." };
-      }
-      const result = await verify({ environmentId, input: { owner, personalAccessToken } });
-      return result._tag === "Success"
-        ? result.value
-        : { valid: false, message: "Could not check the token. Try again." };
-    },
-    [environmentId, verify],
-  );
+  return async (
+    owner: string,
+    personalAccessToken: string,
+  ): Promise<GithubOwnerTokenVerification> => {
+    if (!environmentId) {
+      return { valid: false, message: "Connect to the server to check the token." };
+    }
+    const result = await verify({ environmentId, input: { owner, personalAccessToken } });
+    return result._tag === "Success"
+      ? result.value
+      : { valid: false, message: "Could not check the token. Try again." };
+  };
 }
 
 function updateWorkspaceUserArray(
@@ -85,9 +85,11 @@ function WorkspaceUserSettingsRow({
   const renameValidation = validateRenameWorkspaceUser({ user, displayName, workspaceUsers });
   const renameMessage = workspaceUserDisplayNameMessage(renameValidation);
 
-  useEffect(() => {
+  const [savedDisplayName, setSavedDisplayName] = useState(user.displayName);
+  if (savedDisplayName !== user.displayName) {
+    setSavedDisplayName(user.displayName);
     setDisplayName(user.displayName);
-  }, [user.displayName, user.id]);
+  }
 
   const handleRename = () => {
     const nextUsers = renameWorkspaceUser(workspaceUsers, user.id, displayName);
@@ -419,12 +421,9 @@ function AddWorkspaceUserRow({
 export function UsersSettingsPanel() {
   const workspaceUsers = usePrimarySettings((settings) => settings.workspaceUsers);
   const updateSettings = useUpdatePrimarySettings();
-  const updateWorkspaceUsers = useCallback(
-    (users: ReadonlyArray<WorkspaceUser>) => {
-      updateSettings({ workspaceUsers: [...users] });
-    },
-    [updateSettings],
-  );
+  const updateWorkspaceUsers = (users: ReadonlyArray<WorkspaceUser>) => {
+    updateSettings({ workspaceUsers: [...users] });
+  };
 
   return (
     <SettingsPageContainer>

@@ -52,11 +52,8 @@ export type ThreadActivitySource = Pick<
 >;
 
 /**
- * Latest USER-initiated activity: messages and the turn requests they start,
- * deliberately not the agent-side started/completed stamps. The settle-on-
- * merge anchor uses this so a merge landing mid-turn still settles the
- * thread when that turn finishes, while a user re-engaging after the merge
- * blocks it for good. Falls back to creation time for untouched threads.
+ * Latest user-initiated activity, not agent-side stamps, so a merge landing
+ * mid-turn still settles the thread while re-engaging after the merge blocks it.
  */
 function threadUserActivityAnchorAt(thread: ThreadActivitySource): string {
   const messageAt = thread.latestUserMessageAt;
@@ -71,14 +68,9 @@ function threadUserActivityAnchorAt(thread: ThreadActivitySource): string {
 }
 
 /**
- * Returns whether the change request settles the thread immediately. A
- * terminal request settles the thread only while it postdates every user-
- * initiated event in it: settling on a merge happens ONCE. A request last
- * touched before the thread was created is inherited branch history (a new
- * thread started at a worktree root whose PR already merged), and one older
- * than the user's latest engagement was already adjudicated — re-engaging a
- * thread whose PR merged is the user saying the conversation outlived the
- * PR. Unknown timestamps keep the old always-settle behavior.
+ * A terminal change request settles the thread only while it postdates every
+ * user-initiated event, so settling on a merge happens once and inherited branch
+ * history never settles a new thread. Unknown timestamps always settle.
  */
 export function changeRequestAutoSettles(
   changeRequest: ChangeRequestSettleSource | null | undefined,
@@ -163,11 +155,8 @@ export function hasQueuedTurnStart(
 }
 
 /**
- * A thread may be settled only when none of effectiveSettled's activity
- * blockers hold. This is deliberately the same list: anything the partition
- * refuses to CLASSIFY as settled must also be refused as a settle TARGET.
- * The server enforces its own invariants; this client-side twin exists so
- * the UI can disable/reject before a round trip.
+ * Mirrors effectiveSettled's activity blockers: anything it refuses to classify
+ * as settled is also refused as a settle target, before a server round trip.
  */
 export function canSettle(
   shell: Pick<
@@ -196,8 +185,17 @@ export interface ThreadSnoozeShell extends QueuedThreadShell {
   readonly snoozedAt?: string | null;
   readonly hasPendingApprovals: boolean;
   readonly hasPendingUserInput: boolean;
+  readonly pendingUserInputAt?: string | null;
   readonly pendingSubagentRequest?: PendingSubagentRequest | null;
   readonly pendingGuestMessageCount?: number;
+}
+
+function pendingQuestionAt(shell: ThreadSnoozeShell): string | null {
+  const request = shell.source?.pendingRuntimeRequest;
+  return (
+    shell.pendingUserInputAt ??
+    (request?.kind === "user_input" ? DateTime.formatIso(request.createdAt) : null)
+  );
 }
 
 /**
@@ -206,8 +204,19 @@ export interface ThreadSnoozeShell extends QueuedThreadShell {
  * until its timer.
  */
 export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean {
-  if (shell.hasPendingApprovals || shell.hasPendingUserInput) return true;
-  if (shell.source?.pendingRuntimeRequest != null) return true;
+  const request = shell.source?.pendingRuntimeRequest;
+  if (shell.hasPendingApprovals || (request != null && request.kind !== "user_input")) return true;
+  const questionAt = pendingQuestionAt(shell);
+  // Snoozing an existing question means "ask me later". Only a new question
+  // wakes it early; missing or invalid timestamps keep the request visible.
+  if (
+    (shell.hasPendingUserInput || request?.kind === "user_input") &&
+    (shell.snoozedAt == null ||
+      questionAt == null ||
+      !(Date.parse(questionAt) <= Date.parse(shell.snoozedAt)))
+  ) {
+    return true;
+  }
   if (shell.pendingSubagentRequest != null) return true;
   if ((shell.pendingGuestMessageCount ?? 0) > 0) return true;
   const failedAt = failureEdgeAt(shell);
@@ -246,9 +255,9 @@ export function canSnooze(
   >,
   options: { readonly now: string },
 ): boolean {
-  if (shell.hasPendingApprovals || shell.hasPendingUserInput) return false;
-  // The server rejects snoozing for any pending request.
-  if (shell.source?.pendingRuntimeRequest != null) return false;
+  if (shell.hasPendingApprovals) return false;
+  const request = shell.source?.pendingRuntimeRequest;
+  if (request != null && request.kind !== "user_input") return false;
   if (shell.pendingSubagentRequest != null) return false;
   // A waiting guest message would wake it at once.
   if ((shell.pendingGuestMessageCount ?? 0) > 0) return false;
@@ -279,14 +288,19 @@ export function threadWokeAt(
   // indicator the user already cleared by visiting (snoozedUntil is newer
   // than that visit's lastVisitedAt).
   if (threadRaisedHandWhileSnoozed(shell)) {
-    // An old failure must not replace the activity time of an approval or input wake.
     const failedAt = failureEdgeAt(shell);
-    if (
+    const questionAt = pendingQuestionAt(shell);
+    const freshFailure =
       failedAt != null &&
-      (shell.snoozedAt == null || Date.parse(failedAt) > Date.parse(shell.snoozedAt))
-    ) {
+      (shell.snoozedAt == null || Date.parse(failedAt) > Date.parse(shell.snoozedAt));
+    const freshQuestion =
+      questionAt != null &&
+      shell.snoozedAt != null &&
+      Date.parse(questionAt) > Date.parse(shell.snoozedAt);
+    if (freshFailure && (!freshQuestion || Date.parse(failedAt) >= Date.parse(questionAt))) {
       return failedAt;
     }
+    if (freshQuestion) return questionAt;
     const runtime = shell.runtime ?? shell.session ?? null;
     return runtime?.updatedAt ?? shell.snoozedAt ?? null;
   }
@@ -294,18 +308,10 @@ export function threadWokeAt(
 }
 
 /**
- * Settled resolution over the server-backed settled lifecycle. Activity
- * blockers (pending approval/user-input, a live session, an unadjudicated
- * queued turn) are checked first and hold a thread active regardless of any
- * override. Past the blockers, the explicit user override (thread.settle /
- * thread.unsettle commands, projected into settledOverride + settledAt)
- * wins in both directions; without one, a non-actionable thread auto-settles
- * on inactivity past the window. Failed and plan-ready threads stay visible
- * until the user reviews and settles them. A thread can also auto-settle on a
- * merged or closed change request when that state is its latest event. An open
- * change request blocks inactivity-based settling. The server
- * un-settles on real activity (user message, session start, approval/
- * user-input request), so an override never goes stale silently.
+ * Activity blockers hold a thread active regardless of any override; past them
+ * the user's settle/unsettle override wins, else inactivity or a latest-event
+ * merged/closed change request auto-settles. Failed and plan-ready threads and
+ * open change requests stay visible.
  */
 export function effectiveSettled(
   shell: OrchestrationThreadShell,
@@ -325,14 +331,9 @@ export function effectiveSettled(
   if (shell.workflowPausedAt != null) return true;
   if (shell.session?.status === "starting" || shell.session?.status === "running") return false;
   if (hasQueuedTurnStart(shell, { now: options.now })) {
-    // The queued-turn blocker alone is forgivable: it is clock-derived, and
-    // list callers pass a coarser `now` than the settle action used. When
-    // the server already adjudicated the queued message by accepting a
-    // settle after it (settledAt stamps server accept time), trust that
-    // ruling — otherwise a settle near the grace boundary leaves the row
-    // pinned active until the caller's clock ticks over. A message NEWER
-    // than settledAt is genuinely new work and keeps the block until the
-    // server's auto-unsettle lands.
+    // Clock-derived and forgivable: trust a server settle accepted after the
+    // queued message (settledAt), or a settle near the grace boundary pins the
+    // row active. A message newer than settledAt is new work and still blocks.
     const serverAdjudicated =
       shell.settledOverride === "settled" &&
       shell.settledAt !== null &&
@@ -530,11 +531,12 @@ export function snoozeWakeLabel(snoozedUntil: string, options: { readonly now: s
   const wakeMs = Date.parse(snoozedUntil);
   const nowMs = Date.parse(options.now);
   if (Number.isNaN(wakeMs) || Number.isNaN(nowMs)) return "now";
-  const remainingMs = wakeMs - nowMs;
-  if (remainingMs <= 0) return "now";
-  if (remainingMs < HOUR_MS) return `${Math.max(1, Math.ceil(remainingMs / 60_000))}m`;
-  if (remainingMs < DAY_MS) return `${Math.ceil(remainingMs / HOUR_MS)}h`;
-  return `${Math.ceil(remainingMs / DAY_MS)}d`;
+  if (wakeMs <= nowMs) return "now";
+  // Count clock minutes: callers pass a minute-floored or live `now`, and durations keep seconds.
+  const minutes = Math.max(1, Math.floor(wakeMs / 60_000) - Math.floor(nowMs / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 24 * 60) return `${Math.ceil(minutes / 60)}h`;
+  return `${Math.ceil(minutes / (24 * 60))}d`;
 }
 
 export type CustomSnoozeInput =
@@ -588,4 +590,23 @@ export function isThreadWokeUnseen(input: {
     .map((value) => (value ? Date.parse(value) : NaN))
     .filter((ms) => !Number.isNaN(ms));
   return seenAt.every((ms) => ms < wokeAtMs);
+}
+
+/**
+ * Whether the latest run failed after the user last saw the thread. Only the run dates the
+ * failure, since the shell's updatedAt also moves on renames. A failed run without a
+ * completion time, from older data, is dated by its start.
+ */
+export function hasUnseenRunFailure(
+  thread: Pick<EnvironmentThreadShell, "latestRun"> & {
+    readonly lastVisitedAt?: string | null | undefined;
+  },
+): boolean {
+  const run = thread.latestRun;
+  if (run?.status !== "failed") return false;
+  if (!thread.lastVisitedAt) return true;
+  const failedAtMs = Date.parse(run.completedAt ?? run.startedAt ?? run.requestedAt ?? "");
+  const lastVisitedAtMs = Date.parse(thread.lastVisitedAt);
+  if (Number.isNaN(failedAtMs) || Number.isNaN(lastVisitedAtMs)) return true;
+  return failedAtMs > lastVisitedAtMs;
 }
