@@ -18,6 +18,8 @@ import {
   AppStackGetPodLogsInput,
   AppStackGetPodLogsResult,
   AppStackListPodsResult,
+  AppStackRestartServicesInput,
+  AppStackRestartServicesResult,
   AppStackOmittedServices,
   AppStackVariant,
   IsoDateTime,
@@ -72,6 +74,13 @@ const PodLogsInput = Schema.Struct({
   tailLines: AppStackGetPodLogsInput.fields.tailLines,
 });
 export type PodLogsInput = typeof PodLogsInput.Type;
+const RestartServicesInput = Schema.Struct({
+  ...MemberInput.fields,
+  services: AppStackRestartServicesInput.fields.services.annotate({
+    description: "Compose service names, as app_stack_get lists them, such as backend.",
+  }),
+});
+export type RestartServicesInput = typeof RestartServicesInput.Type;
 
 const DeviceInput = Schema.Struct({
   ...WorkspaceInput.fields,
@@ -233,6 +242,20 @@ const AppStackRestartTool = Tool.make("app_stack_restart", {
   .annotate(Tool.Idempotent, false)
   .annotate(Tool.OpenWorld, true);
 
+const AppStackRestartServicesTool = Tool.make("app_stack_restart_services", {
+  description:
+    "Restart named services of this thread's workspace App Stack. Their pods are replaced while the rest of the stack keeps running. Use it to bring back a crashed or stuck service, or to reload one that hot reload missed. Defaults to dev. Pass app for another app of this stack's bundle. Acts on that one stack, never on device guests. Use app_stack_restart for the whole stack, and app_stack_list_pods afterwards to check readiness.",
+  parameters: RestartServicesInput,
+  success: AppStackRestartServicesResult,
+  failure: Schema.Union([AppStackError, OrchestratorMcpFailure]),
+  dependencies,
+})
+  .annotate(Tool.Title, "Restart services of this workspace's App Stack")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, true)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, true);
+
 const AppStackDeleteTool = Tool.make("app_stack_delete", {
   description:
     "Delete this thread's workspace App Stack and its Kubernetes namespace, including resources and data stored in that namespace. Defaults to dev. Explicit deletion also deletes protected stacks. A bundled stack is deleted with every stack of its bundle. Use app_stack_stop instead when the namespace should be kept.",
@@ -282,6 +305,7 @@ export const AppStackToolkit = Toolkit.make(
   AppStackCreateWorktreesTool,
   AppStackStopTool,
   AppStackRestartTool,
+  AppStackRestartServicesTool,
   AppStackDeleteTool,
   AppStackListPodsTool,
   AppStackLogsTool,

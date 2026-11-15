@@ -381,6 +381,19 @@ export const AppStackGetPodLogsResult = Schema.Struct({
 });
 export type AppStackGetPodLogsResult = typeof AppStackGetPodLogsResult.Type;
 
+export const AppStackRestartServicesInput = Schema.Struct({
+  stackId: TrimmedNonEmptyString,
+  services: Schema.NonEmptyArray(TrimmedNonEmptyString),
+});
+export type AppStackRestartServicesInput = typeof AppStackRestartServicesInput.Type;
+
+export const AppStackRestartServicesResult = Schema.Struct({
+  stackId: TrimmedNonEmptyString,
+  namespace: TrimmedNonEmptyString,
+  restarted: Schema.Array(TrimmedNonEmptyString),
+});
+export type AppStackRestartServicesResult = typeof AppStackRestartServicesResult.Type;
+
 export const AppStackPodLogEntry = Schema.Struct({
   podName: TrimmedNonEmptyString,
   containerName: TrimmedNonEmptyString,
