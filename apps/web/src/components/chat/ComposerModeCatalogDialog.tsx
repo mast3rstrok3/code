@@ -8,7 +8,7 @@ import {
 } from "@t3tools/shared/workflowPresets";
 import { setWorkflowStepCycleOverride } from "@t3tools/shared/workflowStepCycles";
 import { CheckIcon, CircleHelpIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { cn } from "~/lib/utils";
 import { WorkflowSettingsBody } from "../WorkflowSettingsMenu";
 import {
@@ -96,31 +96,29 @@ export function ComposerModeCatalogDialog(props: {
     props.workflowDefaults.implementationSettings,
   );
 
-  useEffect(() => {
-    if (props.catalog === null) return;
-    setStepModels(props.workflowDefaults.stepModels);
-    setStepCycles(props.workflowDefaults.stepCycles);
-    setStepReviewParts(props.workflowDefaults.stepReviewParts);
-    if (props.catalog === "workflows") {
-      const preset =
-        WORKFLOW_PRESET_DEFINITIONS.find(
-          (definition) =>
-            definition.id === props.activePreset && definition.availability !== "under-development",
-        )?.id ?? "fast-plan";
-      setConfiguringPreset(preset);
-      setImplementationSettings({
-        ...props.workflowDefaults.implementationSettings,
-        ...implementationDefaultsForWorkflowPreset(preset),
-      });
+  // Each open starts from the current defaults, not the last session's edits.
+  const [openedCatalog, setOpenedCatalog] = useState<ComposerModeCatalog | null>(null);
+  if (openedCatalog !== props.catalog) {
+    setOpenedCatalog(props.catalog);
+    if (props.catalog !== null) {
+      setStepModels(props.workflowDefaults.stepModels);
+      setStepCycles(props.workflowDefaults.stepCycles);
+      setStepReviewParts(props.workflowDefaults.stepReviewParts);
+      if (props.catalog === "workflows") {
+        const preset =
+          WORKFLOW_PRESET_DEFINITIONS.find(
+            (definition) =>
+              definition.id === props.activePreset &&
+              definition.availability !== "under-development",
+          )?.id ?? "fast-plan";
+        setConfiguringPreset(preset);
+        setImplementationSettings({
+          ...props.workflowDefaults.implementationSettings,
+          ...implementationDefaultsForWorkflowPreset(preset),
+        });
+      }
     }
-  }, [
-    props.activePreset,
-    props.catalog,
-    props.workflowDefaults.implementationSettings,
-    props.workflowDefaults.stepCycles,
-    props.workflowDefaults.stepModels,
-    props.workflowDefaults.stepReviewParts,
-  ]);
+  }
 
   const configurePreset = (preset: WorkflowPreset) => {
     setImplementationSettings({
@@ -190,7 +188,7 @@ export function ComposerModeCatalogDialog(props: {
                   >
                     <button
                       aria-checked={selected}
-                      className="grid min-h-12 min-w-0 grid-cols-[1rem_minmax(0,1fr)] gap-x-2 rounded-md px-2 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+                      className="grid min-h-12 min-w-0 grid-cols-[1rem_minmax(0,1fr)] gap-x-2 rounded-md px-2 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                       data-composer-mode-option
                       onClick={() => {
                         props.onSelectSkill(skill.id);

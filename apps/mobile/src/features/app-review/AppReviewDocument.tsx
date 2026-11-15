@@ -14,8 +14,8 @@ import { Image } from "expo-image";
 import { useState, type ReactNode } from "react";
 import { Pressable, View } from "react-native";
 
-import type { FilePreviewItem, FilePreviewSource } from "../../components/FilePreviewModal";
-import { FilePreviewModal } from "../../components/FilePreviewModal";
+import type { FilePreviewItem, FilePreviewSource } from "../../components/ui/FilePreviewModal";
+import { FilePreviewModal } from "../../components/ui/FilePreviewModal";
 import { MediaVideoPlayer } from "../../components/MediaVideoPlayer";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";

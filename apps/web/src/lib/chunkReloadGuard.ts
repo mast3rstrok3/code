@@ -1,20 +1,20 @@
 import { reloadApp } from "./reloadApp";
 
 // Deploys and desktop server swaps can invalidate lazy chunks, and cached responses can be
-// incomplete. Refresh assets before one reload; the guard stops a persistent failure from looping.
+// incomplete. Refresh assets before one reload of the fresh index.
+// Keyed by build and kept across boots: a chunk loaded after boot can fail on every visit.
 const CHUNK_RELOAD_GUARD_KEY = "t3code:chunk-load-reloaded";
-// A previous plain reload did not repair cached chunks, so allow the new recovery once.
-const CHUNK_RELOAD_GUARD_VALUE = "refresh-assets";
 
 export function reloadOnceForChunkLoadError(
   getStorage: () => Storage = () => window.sessionStorage,
   reload: () => void = () => void reloadApp(),
+  build = import.meta.env.APP_VERSION,
 ): boolean {
   let alreadyReloaded: boolean;
   try {
     const storage = getStorage();
-    alreadyReloaded = storage.getItem(CHUNK_RELOAD_GUARD_KEY) === CHUNK_RELOAD_GUARD_VALUE;
-    if (!alreadyReloaded) storage.setItem(CHUNK_RELOAD_GUARD_KEY, CHUNK_RELOAD_GUARD_VALUE);
+    alreadyReloaded = storage.getItem(CHUNK_RELOAD_GUARD_KEY) === build;
+    if (!alreadyReloaded) storage.setItem(CHUNK_RELOAD_GUARD_KEY, build);
   } catch {
     // Without storage, the reload guard cannot prevent an infinite loop.
     return false;
@@ -24,8 +24,16 @@ export function reloadOnceForChunkLoadError(
   return true;
 }
 
-export function clearChunkReloadGuard(getStorage: () => Storage = () => window.sessionStorage) {
-  try {
-    getStorage().removeItem(CHUNK_RELOAD_GUARD_KEY);
-  } catch {}
+// Browsers cache a failed dynamic import per document, so only a reload can retry it.
+const CHUNK_LOAD_ERROR_PREFIXES = [
+  "Failed to fetch dynamically imported module", // Chromium
+  "error loading dynamically imported module", // Firefox
+  "Importing a module script failed", // Safari
+];
+
+export function isChunkLoadError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : undefined;
+  return (
+    message !== undefined && CHUNK_LOAD_ERROR_PREFIXES.some((prefix) => message.startsWith(prefix))
+  );
 }

@@ -22,7 +22,7 @@ import {
   APP_REVIEW_TEST_RECORDING_SUFFIX,
 } from "@t3tools/contracts";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import * as Data from "effect/Data";
+import * as Schema from "effect/Schema";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -288,9 +288,12 @@ export function finalAppReviewE2eSelections(input: {
   ];
 }
 
-class AppReviewTestRestoreError extends Data.TaggedError("AppReviewTestRestoreError")<{
-  readonly message: string;
-}> {}
+class AppReviewTestRestoreError extends Schema.TaggedError<AppReviewTestRestoreError>()(
+  "AppReviewTestRestoreError",
+  {
+    message: Schema.String,
+  },
+) {}
 
 /**
  * Undo what an E2E command wrote to the reviewed worktree. `paths` are relative

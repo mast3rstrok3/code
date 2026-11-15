@@ -40,10 +40,7 @@ import { useEnvironmentScope, useEnvironmentsWithScope } from "../../state/sessi
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useWorkspaceUsers } from "../../state/workspace-users";
 import { ListActionRow } from "../../components/ui/ListActionRow";
-import {
-  SettingsEnvironmentFilterHeader,
-  useSettingsEnvironmentMenu,
-} from "./components/SettingsEnvironmentFilterHeader";
+import { useSettingsEnvironmentMenu } from "./components/SettingsEnvironmentFilterHeader";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
 import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-environment-filter";
@@ -124,38 +121,35 @@ export function SettingsUsersRouteScreen() {
   const writableEnvironments = useEnvironmentsWithScope(selectedTargets, AuthSettingsWriteScope);
   const environmentMenu = useSettingsEnvironmentMenu();
   return (
-    <>
-      <SettingsEnvironmentFilterHeader />
-      <SettingsScreen title="Users" menus={[environmentMenu]}>
-        <ScreenScrollView
-          className="flex-1"
-          contentInsetAdjustmentBehavior="automatic"
-          showsVerticalScrollIndicator={false}
-          contentContainerClassName="gap-6 px-5 pt-4"
-          contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
-        >
-          {selectedTargets.length === 0 ? (
-            <Text className="px-2 text-base text-foreground-muted">
-              Use the filter above to select a connected environment.
+    <SettingsScreen title="Users" menus={[environmentMenu]}>
+      <ScreenScrollView
+        className="flex-1"
+        contentInsetAdjustmentBehavior="automatic"
+        showsVerticalScrollIndicator={false}
+        contentContainerClassName="gap-6 px-5 pt-4"
+        contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
+      >
+        {selectedTargets.length === 0 ? (
+          <Text className="px-2 text-base text-foreground-muted">
+            Use the filter above to select a connected environment.
+          </Text>
+        ) : (
+          <>
+            <Text textRole="footnote" className="px-2 text-foreground-muted android:px-4">
+              {USERS_INTRO}
             </Text>
-          ) : (
-            <>
-              <Text textRole="footnote" className="px-2 text-foreground-muted android:px-4">
-                {USERS_INTRO}
-              </Text>
-              {selectedTargets.map((target) => (
-                <EnvironmentUsersSection
-                  key={target.environmentId}
-                  target={target}
-                  title={selectedTargets.length === 1 ? "Users" : target.label}
-                  canWrite={writableEnvironments.has(target.environmentId)}
-                />
-              ))}
-            </>
-          )}
-        </ScreenScrollView>
-      </SettingsScreen>
-    </>
+            {selectedTargets.map((target) => (
+              <EnvironmentUsersSection
+                key={target.environmentId}
+                target={target}
+                title={selectedTargets.length === 1 ? "Users" : target.label}
+                canWrite={writableEnvironments.has(target.environmentId)}
+              />
+            ))}
+          </>
+        )}
+      </ScreenScrollView>
+    </SettingsScreen>
   );
 }
 

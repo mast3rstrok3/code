@@ -220,6 +220,7 @@ const withService = <A, E>(
               }),
           }),
       Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+        isNonGitProject: () => Effect.succeed(false),
         launch: (input) =>
           Effect.suspend(() => {
             if (options.completedLaunches?.has(input.commandId))

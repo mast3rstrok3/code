@@ -1,12 +1,7 @@
 import { DEFAULT_WORKSPACE_USER, EnvironmentId, WorkspaceUserId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  buildWorkspaceUserMenuScopes,
-  parseWorkspaceUserMenuActionId,
-  workspaceUserMenuActions,
-  workspaceUserMenuIsCustomized,
-} from "./workspaceUserMenu";
+import { buildWorkspaceUserMenuScopes, workspaceUserMenuIsCustomized } from "./workspaceUserMenu";
 
 const home = EnvironmentId.make("home");
 const work = EnvironmentId.make("work");
@@ -64,26 +59,5 @@ describe("buildWorkspaceUserMenuScopes", () => {
         (scope) => scope.title,
       ),
     ).toEqual(["User"]);
-  });
-});
-
-describe("workspace user menu action ids", () => {
-  it("round-trips every option and rejects anything else", () => {
-    const scopes = buildWorkspaceUserMenuScopes({
-      scopes: [
-        { environmentId: home, users: [DEFAULT_WORKSPACE_USER, ada], view: { kind: "all" } },
-        { environmentId: work, users: [DEFAULT_WORKSPACE_USER, ada], view: { kind: "all" } },
-      ],
-      environments,
-      selectedEnvironmentId: null,
-    });
-    const actions = workspaceUserMenuActions(scopes);
-    const workAda = actions[1]?.subactions?.[2]?.id;
-    expect(workAda && parseWorkspaceUserMenuActionId(workAda, scopes)).toEqual({
-      environmentId: work,
-      key: "user:ada",
-    });
-    expect(parseWorkspaceUserMenuActionId(actions[0]!.id!, scopes)).toBeNull();
-    expect(parseWorkspaceUserMenuActionId("environment:all", scopes)).toBeNull();
   });
 });

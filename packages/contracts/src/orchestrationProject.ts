@@ -12,6 +12,9 @@ export const OrchestrationProjectShell = Schema.Struct({
   ownerUserId: Schema.optionalKey(WorkspaceUserId),
   previewRecordingMode: Schema.optionalKey(Schema.NullOr(PreviewRecordingMode)),
   title: TrimmedNonEmptyString,
+  // Set once someone renames the project. A folder-default title can equal the
+  // repository name, so grouped labels need this to tell a chosen name apart.
+  hasCustomTitle: Schema.optional(Schema.Boolean),
   workspaceRoot: TrimmedNonEmptyString,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
