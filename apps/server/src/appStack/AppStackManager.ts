@@ -31,9 +31,11 @@ import {
   type AppStackListPodsInput,
   type AppStackListInput,
   AppStackListPodsResult,
+  AppStackRestartServicesResult,
   type AppStackPod,
   type AppStackPodContainer,
   type AppStackPodLogEntry,
+  type AppStackRestartServicesInput,
   type AppStackSetProtectedInput,
   type AppStackWorkflowTeardownInput,
   AppStackWorkflowTeardownResult,
@@ -160,6 +162,10 @@ export class AppStackManager extends Context.Service<
     readonly getPodLogs: (
       input: AppStackGetPodLogsInput,
     ) => Effect.Effect<AppStackGetPodLogsResult, AppStackError>;
+    /** Replaces the pods of the named services of one stack, not its bundle. */
+    readonly restartServices: (
+      input: AppStackRestartServicesInput,
+    ) => Effect.Effect<AppStackRestartServicesResult, AppStackError>;
     readonly getStackPodLogs: (
       input: AppStackGetStackPodLogsInput,
     ) => Effect.Effect<AppStackGetStackPodLogsResult, AppStackError>;
@@ -213,6 +219,9 @@ export class AppStackManager extends Context.Service<
           ),
           getDeviceStatus: Effect.fn("AppStackManager.getDeviceStatus")(() =>
             unavailable("getDeviceStatus"),
+          ),
+          restartServices: Effect.fn("AppStackManager.restartServices")(() =>
+            unavailable("restartServices", "Service restarts"),
           ),
         });
       }
@@ -508,41 +517,13 @@ export class AppStackManager extends Context.Service<
         const base = yield* requireBaseUrl("getByWorktree");
         const url = new URL(appStackUrl(base, "/by-worktree"));
         url.searchParams.set("worktreePath", input.worktreePath);
+        url.searchParams.set("variant", input.variant ?? "dev");
         const result = yield* executeJson(
           "getByWorktree",
           HttpClientRequest.get(url.toString()),
           AppStackByWorktreeResult,
         );
-        const stack = result.stack === null ? null : withVariant(result.stack);
-        // The controller keys this lookup on the worktree alone, so the stack
-        // it returns may be the other variant's. That one is not ours.
-        if (stack === null) return result;
-        if (stack.variant !== (input.variant ?? "dev")) {
-          const normalizePath = (path: string) => path.trim().replace(/[\\/]+$/u, "");
-          const candidates = yield* list({});
-          const matchingStack = candidates.stacks.find(
-            (candidate) =>
-              normalizePath(candidate.worktreePath) === normalizePath(input.worktreePath) &&
-              candidate.variant === (input.variant ?? "dev"),
-          );
-          const frontendServiceName =
-            ["frontend", "web", "app"].find(
-              (name) =>
-                matchingStack?.previewUrls?.[name] ||
-                matchingStack?.services?.some(
-                  (service) => service.name === name && service.previewUrl,
-                ),
-            ) ?? null;
-          const frontendUrl =
-            frontendServiceName === null
-              ? null
-              : (matchingStack?.previewUrls?.[frontendServiceName] ??
-                matchingStack?.services?.find((service) => service.name === frontendServiceName)
-                  ?.previewUrl ??
-                null);
-          return { stack: matchingStack ?? null, frontendUrl, frontendServiceName };
-        }
-        return { ...result, stack };
+        return { ...result, stack: result.stack === null ? null : withVariant(result.stack) };
       });
 
       const get = Effect.fn("AppStackManager.get")(function* (input: AppStackGetInput) {
@@ -678,11 +659,9 @@ export class AppStackManager extends Context.Service<
       });
 
       /**
-       * A platform worktree (healthcare-infra) always starts a bundle, every
-       * app unless the request names some, so its missing worktrees have to
-       * exist first. Only the plan says whether a worktree is one; a worktree
-       * whose contract names no app, or an older controller, fails the plan
-       * and starts as before.
+       * A platform worktree (healthcare-infra) always starts a bundle, so its missing
+       * worktrees must exist first. Only the plan says whether a worktree is one; one
+       * whose contract names no app, or an older controller, fails the plan.
        */
       const platformPlan = (input: AppStackAutoCreateInput) =>
         requestBundlePlan(
@@ -924,6 +903,19 @@ export class AppStackManager extends Context.Service<
         );
       });
 
+      const restartServices = Effect.fn("AppStackManager.restartServices")(function* (
+        input: AppStackRestartServicesInput,
+      ) {
+        const base = yield* requireBaseUrl("restartServices");
+        return yield* executeJson(
+          "restartServices",
+          HttpClientRequest.post(
+            appStackUrl(base, `/${encodeURIComponent(input.stackId)}/services/restart`),
+          ).pipe(HttpClientRequest.bodyJsonUnsafe({ services: input.services })),
+          AppStackRestartServicesResult,
+        );
+      });
+
       const getStackPodLogs = Effect.fn("AppStackManager.getStackPodLogs")(function* (
         input: AppStackGetStackPodLogsInput,
       ) {
@@ -1101,6 +1093,7 @@ export class AppStackManager extends Context.Service<
         delete: deleteStack,
         listPods,
         getPodLogs,
+        restartServices,
         getStackPodLogs,
         getAllStackPodLogs,
       });
