@@ -584,7 +584,7 @@ describe("workflow-artifacts toolkit handlers", () => {
     }).pipe(Effect.provide(invocationLayer)),
   );
 
-  describe("workflow status and stage restart", () => {
+  describe("workflow status and run control", () => {
     const halt = {
       ticketId,
       stage: "code-review",
@@ -594,6 +594,9 @@ describe("workflow-artifacts toolkit handlers", () => {
     } as const;
     const haltedModel = {
       ...readModel,
+      threads: readModel.threads.map((thread) =>
+        thread.id === implementationThreadId ? { ...thread, parentThreadId: rootThreadId } : thread,
+      ),
       implementationRuns: [
         {
           ...readModel.implementationRuns[0],
@@ -659,38 +662,47 @@ describe("workflow-artifacts toolkit handlers", () => {
       }).pipe(Effect.provide(restartLayer(rootThreadId, []))),
     );
 
-    it.effect("restarts a stage from the root thread with the panel's command", () => {
+    it.effect("controls the run from the root thread with the panel's commands", () => {
       const dispatched: Array<unknown> = [];
       const target = { kind: "ticket", ticketId, stage: "code-review" } as const;
+      const runId = "implementation-run-1";
       return Effect.gen(function* () {
-        const result = yield* WorkflowArtifactsHandlers.handlers.workflow_stage_restart({
-          runId: "implementation-run-1",
-          target,
-          mode: "rerun",
-        });
+        const { handlers } = WorkflowArtifactsHandlers;
+        const result = yield* handlers.workflow_stage_restart({ runId, target, mode: "rerun" });
         assert.deepStrictEqual(result.outcome, { type: "accepted" });
-        yield* WorkflowArtifactsHandlers.handlers.workflow_stage_restart({
-          runId: "implementation-run-1",
-          target,
-          mode: "reset",
-        });
+        yield* handlers.workflow_stage_restart({ runId, target, mode: "reset" });
+        yield* handlers.workflow_stage_skip({ runId, target, skipped: true });
+        yield* handlers.workflow_pause({ threadId: implementationThreadId, paused: true });
+        yield* handlers.workflow_pause({ threadId: rootThreadId, paused: false });
+        yield* handlers.workflow_run_control({ runId, action: "retry" });
+        yield* handlers.workflow_run_control({ runId, action: "cancel", reason: "User asked" });
         assert.deepStrictEqual(
           dispatched.map((command) => {
-            const { type, threadId, runId, target } = command as Record<string, unknown>;
-            return { type, threadId, runId, target };
+            const {
+              commandId: _commandId,
+              createdAt: _createdAt,
+              ...rest
+            } = command as Record<string, unknown>;
+            return rest;
           }),
           [
+            { type: "thread.implementation-run.rerun", threadId: rootThreadId, runId, target },
+            { type: "thread.implementation-run.reset", threadId: rootThreadId, runId, target },
             {
-              type: "thread.implementation-run.rerun",
+              type: "thread.implementation-run.skip",
               threadId: rootThreadId,
-              runId: "implementation-run-1",
+              runId,
               target,
+              skipped: true,
             },
+            { type: "thread.workflow.pause", threadId: implementationThreadId },
+            { type: "thread.workflow.resume", threadId: rootThreadId },
+            { type: "thread.implementation-run.retry", threadId: rootThreadId, runId },
             {
-              type: "thread.implementation-run.reset",
+              type: "thread.implementation-run.cancel",
               threadId: rootThreadId,
-              runId: "implementation-run-1",
-              target,
+              runId,
+              reason: "User asked",
             },
           ],
         );
@@ -713,6 +725,18 @@ describe("workflow-artifacts toolkit handlers", () => {
           .workflow_stage_restart({ ...input, runId: "implementation-run-other" })
           .pipe(Effect.provide(restartLayer(rootThreadId, dispatched)), Effect.flip);
         assert.match(otherRun.message, /is not in this workflow/);
+        const childPause = yield* WorkflowArtifactsHandlers.handlers
+          .workflow_pause({ threadId: implementationThreadId, paused: true })
+          .pipe(Effect.provide(restartLayer(childThreadId, dispatched)), Effect.flip);
+        assert.match(childPause.message, /Only the workflow's root thread/);
+        const selfPause = yield* WorkflowArtifactsHandlers.handlers
+          .workflow_pause({ threadId: rootThreadId, paused: true })
+          .pipe(Effect.provide(restartLayer(rootThreadId, dispatched)), Effect.flip);
+        assert.match(selfPause.message, /would stop this thread too/);
+        const outsidePause = yield* WorkflowArtifactsHandlers.handlers
+          .workflow_pause({ threadId: detachedThreadId, paused: true })
+          .pipe(Effect.provide(restartLayer(rootThreadId, dispatched)), Effect.flip);
+        assert.match(outsidePause.message, /is not in this workflow/);
         assert.deepStrictEqual(dispatched, []);
       });
     });
