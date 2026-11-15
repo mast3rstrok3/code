@@ -18,6 +18,7 @@ import {
   type CreateWorktreesInput,
   type MemberInput,
   type PodLogsInput,
+  type RestartServicesInput,
   type StartInput,
   type WorkspaceInput,
   type DeviceInput,
@@ -83,8 +84,8 @@ const resolveWorkspace = Effect.fn("AppStackToolkit.resolveWorkspace")(function*
   return workspace;
 });
 
-// Controllers can return another variant from a worktree lookup. Check identity
-// before passing its id to an operation that changes a stack or reads its logs.
+// Check that a returned stack is this workspace's, in the requested variant, before
+// passing its id to an operation that changes a stack or reads its logs.
 const checkStackScope = Effect.fn("AppStackToolkit.checkStackScope")(function* (
   stack: AppStack | null,
   worktreePath: string,
@@ -350,6 +351,12 @@ export const handlers = {
     const { manager, stack } = yield* requireStack(input, "app_stack_restart");
     return yield* manager.restart({ stackId: stack.id });
   }),
+  app_stack_restart_services: Effect.fn("AppStackToolkit.restartServices")(function* (
+    input: RestartServicesInput,
+  ) {
+    const { manager, stack } = yield* requirePodStack(input, "app_stack_restart_services");
+    return yield* manager.restartServices({ stackId: stack.id, services: input.services });
+  }),
   app_stack_delete: Effect.fn("AppStackToolkit.delete")(function* (input: WorkspaceInput) {
     const { manager, stack } = yield* requireStack(input, "app_stack_delete");
     return yield* manager.delete({ stackId: stack.id });
@@ -376,6 +383,7 @@ export const layer = McpToolAccess.toLayer(AppStackToolkit, {
   app_stack_start: McpToolAccess.actsAsCaller(handlers.app_stack_start),
   app_stack_stop: McpToolAccess.actsAsCaller(handlers.app_stack_stop),
   app_stack_restart: McpToolAccess.actsAsCaller(handlers.app_stack_restart),
+  app_stack_restart_services: McpToolAccess.actsAsCaller(handlers.app_stack_restart_services),
   app_stack_delete: McpToolAccess.actsAsCaller(handlers.app_stack_delete),
   app_stack_list_pods: McpToolAccess.readsAsCaller(handlers.app_stack_list_pods),
   app_stack_logs: McpToolAccess.readsAsCaller(handlers.app_stack_logs),

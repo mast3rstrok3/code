@@ -395,6 +395,7 @@ it.effect("registers workspace tools, validates inputs, and returns results thro
         "app_stack_list_pods",
         "app_stack_logs",
         "app_stack_restart",
+        "app_stack_restart_services",
         "app_stack_start",
         "app_stack_stop",
       ]);
