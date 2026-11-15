@@ -1,25 +1,28 @@
 import { Pressable, ScrollView } from "react-native";
 import { SymbolView } from "../../components/ui/AppSymbol";
-import { ListFilterMenu } from "../workspace/ListFilterMenu";
-import { workspaceUserMenuIsCustomized } from "../workspace-users/workspaceUserMenu";
-import type { HomeHeaderProps } from "./HomeHeader.types";
+import { ListFilterMenu } from "../layout/workspace/ListFilterMenu";
+import type { EnvironmentId } from "@t3tools/contracts";
+import type {
+  HomeListFilterMenuEnvironment,
+  HomeListFilterMenuProject,
+} from "./home-list-filter-menu";
+import {
+  workspaceUserMenuIsCustomized,
+  type WorkspaceUserMenuScope,
+} from "../workspace-users/workspaceUserMenu";
 
-export function ThreadListFilters(
-  props: Pick<
-    HomeHeaderProps,
-    | "environments"
-    | "projects"
-    | "selectedEnvironmentId"
-    | "selectedProjectKey"
-    | "userScopes"
-    | "onEnvironmentChange"
-    | "onProjectChange"
-    | "onUserScopeChange"
-  > & {
-    /** List padding the scroller bleeds through so pills start where row content does. */
-    readonly gutter: number;
-  },
-) {
+export function ThreadListFilters(props: {
+  readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
+  readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
+  readonly selectedEnvironmentId: EnvironmentId | null;
+  readonly selectedProjectKey: string | null;
+  readonly userScopes: ReadonlyArray<WorkspaceUserMenuScope>;
+  readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
+  readonly onProjectChange: (projectKey: string | null) => void;
+  readonly onUserScopeChange: (environmentId: EnvironmentId, key: string) => void;
+  /** List padding the scroller bleeds through so pills start where row content does. */
+  readonly gutter: number;
+}) {
   const selectedEnvironment = props.environments.find(
     (environment) => environment.environmentId === props.selectedEnvironmentId,
   );
@@ -30,7 +33,7 @@ export function ThreadListFilters(
     <ScrollView
       horizontal
       showsHorizontalScrollIndicator={false}
-      style={{ marginHorizontal: -props.gutter }}
+      style={{ marginHorizontal: -props.gutter, overflow: "visible" }}
       contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 2, paddingBottom: 10, gap: 8 }}
     >
       <ListFilterMenu

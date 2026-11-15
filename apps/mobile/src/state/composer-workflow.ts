@@ -1,8 +1,9 @@
-import type {
-  ImplementationWorkflowSettings,
-  ProviderDriverKind,
-  ProviderInteractionMode,
-  WorkflowPreset,
+import {
+  DEFAULT_PROVIDER_INTERACTION_MODE,
+  type ImplementationWorkflowSettings,
+  type ProviderDriverKind,
+  type ProviderInteractionMode,
+  type WorkflowPreset,
 } from "@t3tools/contracts";
 import {
   isPlanningWorkflowAvailableForProvider,
@@ -45,6 +46,17 @@ export function resolveComposerWorkflowPreset(input: {
   return input.draftWorkflow === undefined
     ? (input.threadPreset ?? null)
     : input.draftWorkflow.preset;
+}
+
+/** Plan mode is not offered on its own, so only a workflow keeps a non-build interaction mode. */
+export function resolveComposerInteractionMode(input: {
+  readonly interactionMode: ProviderInteractionMode | null | undefined;
+  readonly workflowPreset: WorkflowPreset | null;
+}): ProviderInteractionMode {
+  const mode = input.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE;
+  return input.workflowPreset !== null || mode.endsWith("-workflow")
+    ? mode
+    : DEFAULT_PROVIDER_INTERACTION_MODE;
 }
 
 /** The draft workflow after choosing Build or Plan, remembering the preset it left. */

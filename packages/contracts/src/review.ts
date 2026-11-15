@@ -46,13 +46,9 @@ export const APP_REVIEW_ARTIFACT_DIR_ENV = "APP_REVIEW_ARTIFACT_DIR";
 export const APP_REVIEW_BASE_REF_ENV = "APP_REVIEW_BASE_REF";
 
 /**
- * Recording contract for `e2eCommands`. The suite launches its own browsers, so
- * the server cannot attach a recorder to them. A suite that wants its tests
- * replayable adds the script at `APP_REVIEW_RECORDER_SCRIPT` to each browser
- * context as an init script, exposes a binding named
- * `APP_REVIEW_RECORDER_BINDING` that appends every event of the batch it
- * receives as one JSON line to `<APP_REVIEW_RECORDING_DIR>/<test name>.rrweb.jsonl`,
- * and returns nothing. The server collects that directory when the command exits.
+ * `e2eCommands` recording contract: add `APP_REVIEW_RECORDER_SCRIPT` as an init
+ * script and expose `APP_REVIEW_RECORDER_BINDING`, which appends each batch as a
+ * JSON line to `<APP_REVIEW_RECORDING_DIR>/<test name>.rrweb.jsonl`.
  */
 export const APP_REVIEW_RECORDING_DIR_ENV = "APP_REVIEW_RECORDING_DIR";
 export const APP_REVIEW_RECORDER_SCRIPT_ENV = "APP_REVIEW_RECORDER_SCRIPT";
@@ -396,12 +392,8 @@ export const AppReviewVerdict = Schema.Literals(["pending", "passed", "failed"])
 export type AppReviewVerdict = typeof AppReviewVerdict.Type;
 
 /**
- * One acceptance check in a review's matrix.
- *
- * `carriedFromCycle` names the earlier cycle of the same run whose browser pass
- * still stands, and is set only when this cycle did not exercise the check
- * again. E2E checks use `reusedValidation` for verified post-repair evidence,
- * rather than carrying a browser verdict.
+ * `carriedFromCycle` names the earlier cycle whose browser pass still stands when
+ * this cycle did not re-run the check. E2E checks use `reusedValidation` instead.
  */
 export const AppReviewCheck = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -590,9 +582,20 @@ export const ReviewDiffPreviewSourceKind = Schema.Literals([
 ]);
 export type ReviewDiffPreviewSourceKind = typeof ReviewDiffPreviewSourceKind.Type;
 
+export const ReviewDiffChangeType = Schema.Literals([
+  "change",
+  "rename-pure",
+  "rename-changed",
+  "new",
+  "deleted",
+]);
+export type ReviewDiffChangeType = typeof ReviewDiffChangeType.Type;
+
 export const ReviewDiffFileStat = Schema.Struct({
   path: Schema.String,
   previousPath: Schema.NullOr(Schema.String),
+  // Older servers omit it.
+  changeType: Schema.optionalKey(ReviewDiffChangeType),
   additions: Schema.Number,
   deletions: Schema.Number,
 });
@@ -616,7 +619,7 @@ export type ReviewDiffPreviewSource = typeof ReviewDiffPreviewSource.Type;
 export const ReviewDiffFileContentsInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   sourceKind: ReviewDiffPreviewSourceKind,
-  changeType: Schema.Literals(["change", "rename-pure", "rename-changed", "new", "deleted"]),
+  changeType: ReviewDiffChangeType,
   baseRef: Schema.NullOr(TrimmedNonEmptyString),
   headRef: Schema.NullOr(TrimmedNonEmptyString),
   oldPath: TrimmedNonEmptyString,

@@ -19,7 +19,7 @@ import {
   CheckIcon,
   ChevronRightIcon,
   PencilRulerIcon,
-  SparklesIcon,
+  PuzzleIcon,
   WorkflowIcon,
 } from "lucide-react";
 import { memo, type KeyboardEvent } from "react";
@@ -65,7 +65,7 @@ const COMPOSER_MODE_ICON = {
   build: BotIcon,
   plan: PencilRulerIcon,
   workflow: WorkflowIcon,
-  skill: SparklesIcon,
+  skill: PuzzleIcon,
 } as const;
 
 function buildComposerModeTriggerDisplay(input: Parameters<typeof describeComposerMode>[0]) {
@@ -134,7 +134,7 @@ export function ComposerModePickerContent(props: {
       id: "skills",
       label: "Skills",
       description: "Invoke an engineering skill in Build mode.",
-      icon: SparklesIcon,
+      icon: PuzzleIcon,
     },
   ];
 
@@ -146,7 +146,7 @@ export function ComposerModePickerContent(props: {
         return (
           <button
             aria-checked={selected}
-            className="grid min-h-12 grid-cols-[1rem_minmax(0,1fr)_1rem] items-start gap-2 rounded-md px-2 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+            className="grid min-h-12 grid-cols-[1rem_minmax(0,1fr)_1rem] items-start gap-2 rounded-md px-2 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:opacity-50"
             data-composer-mode-option
             disabled={
               (option.id === "workflow" && !props.workflowAvailable) ||

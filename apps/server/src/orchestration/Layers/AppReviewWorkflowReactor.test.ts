@@ -4172,7 +4172,7 @@ effectIt.effect(
   () =>
     Effect.gen(function* () {
       const interrupted = yield* Deferred.make<OrchestrationCommand>();
-      const events = yield* PubSub.unbounded<typeof OrchestrationEvent.Type>();
+      const events = yield* PubSub.unbounded<OrchestrationEvent>();
       const original = validationFixingRun();
       const event = yield* decodeEvent({
         sequence: 1,
@@ -5010,7 +5010,7 @@ for (const scenario of [
       const commands: OrchestrationCommand[] = [];
       const executions: string[] = [];
       const executionEnvironments: Array<ProcessRunInput["env"]> = [];
-      const events = yield* PubSub.unbounded<typeof OrchestrationEvent.Type>();
+      const events = yield* PubSub.unbounded<OrchestrationEvent>();
       let stackStarting = scenario === "ticket-starting-stack";
       let settled = yield* Deferred.make<void>();
       const completePhase = (payload: Record<string, unknown>) => {

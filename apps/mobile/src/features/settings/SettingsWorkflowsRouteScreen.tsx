@@ -43,10 +43,7 @@ import {
   workflowTuningSteps,
   type WorkflowTuningBinding,
 } from "../workflows/WorkflowTuning";
-import {
-  SettingsEnvironmentFilterHeader,
-  useSettingsEnvironmentMenu,
-} from "./components/SettingsEnvironmentFilterHeader";
+import { useSettingsEnvironmentMenu } from "./components/SettingsEnvironmentFilterHeader";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-environment-filter";
@@ -76,20 +73,17 @@ export function SettingsWorkflowsRouteScreen() {
   const insets = useSafeAreaInsets();
   const environmentMenu = useSettingsEnvironmentMenu();
   return (
-    <>
-      <SettingsEnvironmentFilterHeader />
-      <SettingsScreen title="Workflows" menus={[environmentMenu]}>
-        <ScrollView
-          contentInsetAdjustmentBehavior="automatic"
-          showsVerticalScrollIndicator={false}
-          className="flex-1"
-          contentContainerClassName="gap-6 px-5 pt-4"
-          contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
-        >
-          <WorkflowDefaults />
-        </ScrollView>
-      </SettingsScreen>
-    </>
+    <SettingsScreen title="Workflows" menus={[environmentMenu]}>
+      <ScrollView
+        contentInsetAdjustmentBehavior="automatic"
+        showsVerticalScrollIndicator={false}
+        className="flex-1"
+        contentContainerClassName="gap-6 px-5 pt-4"
+        contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
+      >
+        <WorkflowDefaults />
+      </ScrollView>
+    </SettingsScreen>
   );
 }
 

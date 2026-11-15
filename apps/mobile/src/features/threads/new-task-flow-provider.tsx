@@ -21,6 +21,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { threadContextsOutsideEnvironment } from "@t3tools/shared/composerContextReferences";
+import { isTriagePrompt, replaceTriagePlaybookLink } from "@t3tools/shared/triagePrompt";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 
@@ -34,6 +35,7 @@ import {
   resolveDefaultableModelSelection,
   resolveNewTaskModelSelection,
   resolveSelectableModelSelection,
+  serverConfigForCwd,
 } from "../../lib/modelOptions";
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import { useAtomValue } from "@effect/atom-react";
@@ -87,16 +89,12 @@ import {
   type HomeProjectScope,
 } from "../home/homeThreadList";
 import { useMobileProjectGroupingSettings } from "../../state/project-grouping";
-import {
-  resolvePendingTaskInteractionMode,
-  resolveProviderInteractionMode,
-} from "../../state/legacy-plan-mode";
-import { useLegacyPlanModeState } from "./use-legacy-plan-mode-enabled";
 import { isPlanningWorkflowAvailableForProvider } from "@t3tools/client-runtime/workflow-composer-mode";
 import { workflowPresetStartsInDedicatedWorkspace } from "@t3tools/shared/orchestrationImplementation";
 import {
   applyComposerModeChoice,
   composerWorkflowSendForQueue,
+  resolveComposerInteractionMode,
   resolveComposerWorkflowSend,
   type ComposerModeChoice,
 } from "../../state/composer-workflow";
@@ -106,7 +104,7 @@ import {
   resolveNewTaskBranchWorktreePath,
   resolveNewTaskLocalWorkspaceSelection,
 } from "./new-task-context-presentation";
-import { resolveEnvironmentProjectMatch } from "./new-task-project-selection";
+import { isSameRepository, resolveEnvironmentProjectMatch } from "./new-task-project-selection";
 import { useNewTaskProjectDefaults } from "./use-new-task-project-defaults";
 import { resolveNewThreadRuntimeMode } from "./thread-settings-options";
 import { resolveProjectThreadCreationBranch } from "./projectThreadCreationValidation";
@@ -120,6 +118,7 @@ import {
   stampedEnvironmentProjectsLoading,
   updateNewTaskFlowState,
 } from "./new-task-flow-state";
+import { usePrepareTriage } from "../triage/usePrepareTriage";
 import { useEnvironmentShellReadiness } from "../../state/shell";
 import { useConnectionsReady, useWorkspaceEnvironments } from "../../state/workspace";
 
@@ -156,6 +155,8 @@ type NewTaskFlowContextValue = {
   readonly canChooseWorkspace: boolean;
   readonly selectedBranchName: string | null;
   readonly selectedWorktreePath: string | null;
+  /** Where the draft's agent will run: the selected worktree, else the project root. */
+  readonly workspaceCwd: string | null;
   readonly resolveWorkspaceSelection: (
     selection: ComposerDraftWorkspaceSelection | undefined,
   ) => ComposerDraftWorkspaceSelection;
@@ -170,8 +171,7 @@ type NewTaskFlowContextValue = {
   readonly currentCheckoutBranchName: string | null;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
-  readonly planModeEnabled: boolean;
-  /** The workflow the task starts, or null for a Build or Plan turn. */
+  /** The workflow the task starts, or null for a Build turn. */
   readonly workflowPreset: WorkflowPreset | null;
   readonly lastWorkflowPreset: WorkflowPreset | null;
   readonly workflowAvailable: boolean;
@@ -193,11 +193,14 @@ type NewTaskFlowContextValue = {
   /** The flow's project, read when a continuation resumes after an await. */
   readonly getSelectedProjectKey: () => string | null;
   /**
-   * The draft id of the route this flow serves when that draft, or its
-   * project, is gone. Only the topmost draft route is served, so a screen
-   * compares this with its own draft id.
+   * The route this flow serves when its draft cannot open: the draft is gone
+   * (`missing`) or only its project is (`pickProject`). Only the topmost draft
+   * route is served, so a screen compares `draftId` with its own draft id.
    */
-  readonly missingRouteDraftId: string | null;
+  readonly unopenableRouteDraft: {
+    readonly draftId: string;
+    readonly kind: "missing" | "pickProject";
+  } | null;
   readonly selectEnvironment: (environmentId: EnvironmentId) => void;
   readonly switchEnvironment: (environmentId: EnvironmentId) => Promise<boolean>;
   readonly switchingToEnvironmentId: EnvironmentId | null;
@@ -226,7 +229,6 @@ type NewTaskFlowContextValue = {
   readonly setSubmitting: (value: boolean) => void;
   readonly loadBranches: () => void;
   readonly setRuntimeMode: (value: RuntimeMode) => void;
-  readonly setInteractionMode: (value: ProviderInteractionMode) => void;
   readonly setComposerMode: (choice: ComposerModeChoice) => void;
   readonly setSelectedModelOptions: (
     value: ReadonlyArray<ProviderOptionSelection> | undefined,
@@ -254,7 +256,6 @@ export function NewTaskFlowProvider(
   const threads = useThreadShells();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const groupingSettings = useMobileProjectGroupingSettings();
-  const { enabled: legacyPlanModeEnabled } = useLegacyPlanModeState();
 
   const projectScopes = sortHomeProjectScopes({
     scopes: buildHomeProjectScopes({
@@ -355,7 +356,6 @@ export function NewTaskFlowProvider(
   const storedStickyModelSelection = useStickyComposerModelSelection();
   const modelSelectionNow = useNowMinuteMs();
   const projectDefaults = useNewTaskProjectDefaults(selectedProject);
-  const selectedEnvironmentServerConfig = projectDefaults.serverConfig;
   const isScratchDraft = projectDefaults.isScratch;
   const { connectedEnvironments } = useRemoteConnectionStatus();
   const selectedProjectDraftKey = selectedProject ? activeDraftKey : null;
@@ -434,6 +434,15 @@ export function NewTaskFlowProvider(
   const workspaceMode = workspaceSelection.mode;
   const selectedBranchName = workspaceSelection.branch;
   const selectedWorktreePath = workspaceSelection.worktreePath;
+  // A new worktree does not exist yet, so the project root stands in for it.
+  const workspaceCwd =
+    (workspaceMode === "worktree"
+      ? selectedProject?.workspaceRoot
+      : (selectedWorktreePath ?? selectedProject?.workspaceRoot)) || null;
+  const selectedEnvironmentServerConfig = serverConfigForCwd(
+    projectDefaults.serverConfig,
+    workspaceCwd,
+  );
   // Keep the user's explicit choice separate from the resolved display value:
   // only the explicit flag is ever written back to the draft, so the resolved
   // value keeps tracking the server setting when the config loads late.
@@ -505,14 +514,12 @@ export function NewTaskFlowProvider(
     selectedEnvironmentServerConfig?.providers.find(
       (provider) => provider.instanceId === selectedModel?.instanceId,
     ) ?? null;
-  const planModeEnabled =
-    legacyPlanModeEnabled && selectedProviderStatus?.showInteractionModeToggle !== false;
   const workflowAvailable = isPlanningWorkflowAvailableForProvider(selectedProviderStatus?.driver);
   const workflowPreset = workflowAvailable ? (selectedProjectDraft.workflow?.preset ?? null) : null;
-  const interactionMode =
-    workflowPreset !== null || planModeEnabled
-      ? (selectedProjectDraft.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE)
-      : DEFAULT_PROVIDER_INTERACTION_MODE;
+  const interactionMode = resolveComposerInteractionMode({
+    interactionMode: selectedProjectDraft.interactionMode,
+    workflowPreset,
+  });
   const setSelectedModelKey = (
     key: string | null,
     options?: ReadonlyArray<ProviderOptionSelection>,
@@ -536,10 +543,9 @@ export function NewTaskFlowProvider(
       (getComposerDraftSnapshot(selectedProjectDraftKey).workflow?.preset ?? null) !== null;
     updateComposerDraftSettings(selectedProjectDraftKey, {
       modelSelection: selection,
-      ...(provider?.showInteractionModeToggle === false || dropsWorkflow
-        ? { interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE }
+      ...(dropsWorkflow
+        ? { interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE, workflow: undefined }
         : {}),
-      ...(dropsWorkflow ? { workflow: undefined } : {}),
     });
     setStickyComposerModelSelection(selection);
   };
@@ -598,11 +604,14 @@ export function NewTaskFlowProvider(
     replaceComposerDraftAttachments(selectedProjectDraftKey, []);
   };
 
-  const carryDraftContentTo = (project: EnvironmentProject): string => {
+  const carryDraftContentTo = (
+    project: EnvironmentProject,
+    options?: Parameters<typeof retargetNewTaskDraft>[2],
+  ): string => {
     const target = { environmentId: project.environmentId, projectId: project.id };
     const current = readFlow().draftKey;
     if (current !== null && isNewTaskDraftKey(current)) {
-      retargetNewTaskDraft(current, target);
+      retargetNewTaskDraft(current, target, options);
       return current;
     }
     return createNewTaskDraft(target);
@@ -622,13 +631,19 @@ export function NewTaskFlowProvider(
       selectedProject,
     );
     updateFlow({
-      draftKey: match ? carryDraftContentTo(match) : readFlow().draftKey,
+      // A name or title match may be another repository, which must not receive the PR checkout.
+      draftKey: match
+        ? carryDraftContentTo(match, {
+            keepPullRequestWorkspace: isSameRepository(match, selectedProject),
+          })
+        : readFlow().draftKey,
       environmentId,
       projectKey: match ? scopedProjectKey(match.environmentId, match.id) : null,
     });
   };
 
   const openScratch = useAtomCommand(projectEnvironment.openScratch, { reportFailure: false });
+  const prepareTriage = usePrepareTriage();
   const [switchingToEnvironmentId, setSwitchingToEnvironmentId] = useState<EnvironmentId | null>(
     null,
   );
@@ -646,11 +661,27 @@ export function NewTaskFlowProvider(
     const request = {};
     latestSwitchRef.current = request;
     setSwitchingToEnvironmentId(environmentId);
-    const result = await openScratch({ environmentId, input: {} });
+    // A triage draft takes its session along: the playbook and context files
+    // exist only on the machine that prepared them.
+    const { draftKey, projectKey } = readFlow();
+    const triage =
+      draftKey !== null && isTriagePrompt(getComposerDraftSnapshot(draftKey).text)
+        ? await prepareTriage(environmentId)
+        : null;
+    const result =
+      triage?._tag === "Failure" ? triage : await openScratch({ environmentId, input: {} });
     if (latestSwitchRef.current !== request) return false;
     latestSwitchRef.current = null;
     setSwitchingToEnvironmentId(null);
+    // A project picked while this waited stands.
+    if (readFlow().projectKey !== projectKey) return false;
     if (result._tag === "Success") {
+      if (triage?._tag === "Success" && draftKey !== null && readFlow().draftKey === draftKey) {
+        // Read now, so text typed while the machine prepared the session is kept.
+        const text = getComposerDraftSnapshot(draftKey).text;
+        const nextText = replaceTriagePlaybookLink(text, triage.value.prompt);
+        if (nextText !== text) setComposerDraftText(draftKey, nextText);
+      }
       setProject(result.value);
       return true;
     }
@@ -660,7 +691,9 @@ export function NewTaskFlowProvider(
         "Could not switch machine",
         error instanceof Error
           ? error.message
-          : "The folder for threads without a project could not be created.",
+          : triage?._tag === "Failure"
+            ? "The server could not prepare triage."
+            : "The folder for threads without a project could not be created.",
       );
     }
     return false;
@@ -740,13 +773,6 @@ export function NewTaskFlowProvider(
       updateComposerDraftSettings(selectedProjectDraftKey, { runtimeMode: value });
     }
   };
-  const setInteractionMode = (value: ProviderInteractionMode) => {
-    if (selectedProjectDraftKey) {
-      updateComposerDraftSettings(selectedProjectDraftKey, {
-        interactionMode: resolveProviderInteractionMode(selectedProviderStatus, value),
-      });
-    }
-  };
   const setComposerMode = (choice: ComposerModeChoice) => {
     if (!selectedProjectDraftKey || !selectedProject) {
       return;
@@ -760,7 +786,7 @@ export function NewTaskFlowProvider(
       ).implementation,
     });
     updateComposerDraftSettings(selectedProjectDraftKey, {
-      interactionMode: resolveProviderInteractionMode(selectedProviderStatus, next.interactionMode),
+      interactionMode: next.interactionMode,
       workflow: next.workflow,
     });
     // Like the web composer, a workflow that owns its workspace starts in a worktree.
@@ -832,10 +858,9 @@ export function NewTaskFlowProvider(
         defaultRuntimeMode,
         managedPolicy,
       ),
-      interactionMode: resolvePendingTaskInteractionMode({
-        planModeEnabled: legacyPlanModeEnabled,
-        draftInteractionMode: draft.interactionMode,
-        provider: draftProvider,
+      interactionMode: resolveComposerInteractionMode({
+        interactionMode: draft.interactionMode,
+        workflowPreset: workflow?.workflowPreset ?? null,
       }),
       ...(workflow === undefined ? {} : { workflow }),
       creation: {
@@ -935,6 +960,7 @@ export function NewTaskFlowProvider(
     canChooseWorkspace,
     selectedBranchName,
     selectedWorktreePath,
+    workspaceCwd,
     resolveWorkspaceSelection,
     startFromOrigin,
     draftKey: selectedProjectDraftKey,
@@ -947,7 +973,6 @@ export function NewTaskFlowProvider(
     currentCheckoutBranchName,
     runtimeMode,
     interactionMode,
-    planModeEnabled,
     workflowPreset,
     lastWorkflowPreset: selectedProjectDraft.workflow?.lastPreset ?? null,
     workflowAvailable,
@@ -963,8 +988,11 @@ export function NewTaskFlowProvider(
     providerGroups,
     setProject,
     getSelectedProjectKey: () => readFlow().projectKey,
-    missingRouteDraftId:
-      routeDraftResolution.kind === "missing" ? (props.routeDraftId ?? null) : null,
+    unopenableRouteDraft:
+      props.routeDraftId !== undefined &&
+      (routeDraftResolution.kind === "missing" || routeDraftResolution.kind === "pickProject")
+        ? { draftId: props.routeDraftId, kind: routeDraftResolution.kind }
+        : null,
     selectEnvironment,
     switchEnvironment,
     switchingToEnvironmentId,
@@ -978,10 +1006,16 @@ export function NewTaskFlowProvider(
     appendAttachments,
     removeAttachment,
     clearAttachments,
-    setSubmitting: (value: boolean) => updateFlow({ submitting: value }),
+    setSubmitting: (value: boolean) => {
+      // A send takes the draft as it is, so a machine switch still waiting is dropped.
+      if (value) {
+        latestSwitchRef.current = null;
+        setSwitchingToEnvironmentId(null);
+      }
+      updateFlow({ submitting: value });
+    },
     loadBranches,
     setRuntimeMode,
-    setInteractionMode,
     setComposerMode,
     setSelectedModelOptions,
     setExpandedProvider: (value: string | null) => updateFlow({ expandedProvider: value }),

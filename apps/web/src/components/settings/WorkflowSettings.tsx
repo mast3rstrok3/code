@@ -6,7 +6,7 @@ import {
   HammerIcon,
   Loader2Icon,
   SlidersHorizontalIcon,
-  SparklesIcon,
+  PuzzleIcon,
   WorkflowIcon,
 } from "lucide-react";
 import {
@@ -105,6 +105,7 @@ function CatalogBoundary({ state, noun }: { state: WorkflowCatalogState; noun: s
 
 function FocusedRow({ focused, children }: { focused: boolean; children: React.ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the DOM row into view when focused
   useEffect(() => {
     if (focused) ref.current?.scrollIntoView({ block: "center" });
   }, [focused]);
@@ -283,7 +284,7 @@ function FeatureWorkflowDefaults(props: {
     >
       <SettingsRow
         title="Model"
-        description="What a Feature started by a scheduled task or an agent runs on when it names no model. Instruction, implementation, and pull request creation run on it, and so do the reviewers below unless they have their own."
+        description="The model a Feature started by a scheduled task or agent uses when none is named. Instruction, implementation, PR creation, and reviewers without their own model use it."
       >
         <WorkflowModelControl
           workflow="feature"
@@ -395,7 +396,7 @@ function WorkflowStepModelDefaultsBody(props: {
       </SettingsRow>
       <SettingsRow
         title="Models and defaults for all eleven steps"
-        description="The order below matches the Engineering Workflow. App Review stops at 10 cycles. Ticket and Final Code Review stop clean or run at most five cycles. Recovery continues the current phase or cycle thread. Same-thread work uses the model selected when the workflow starts. Review and publication steps can be skipped by default."
+        description="Ordered as in the Engineering Workflow. App Review stops at 10 cycles; Ticket and Final Code Review at five or when clean. Same-thread work uses the model chosen at start."
       >
         <div className="mt-1 pb-3">
           <EngineeringWorkflowSettings
@@ -543,7 +544,7 @@ export function SkillSettings({
       />
       <CatalogBoundary state={state} noun="Skills" />
       {state.status === "loaded" ? (
-        <SettingsSection title="Skill Catalog" icon={<SparklesIcon className="size-3.5" />}>
+        <SettingsSection title="Skill Catalog" icon={<PuzzleIcon className="size-3.5" />}>
           {state.catalog.skills
             .toSorted(
               (left, right) =>
@@ -674,7 +675,7 @@ export function DocSettings({ focusedDocId }: { focusedDocId: string | undefined
                               search={{ skill: skillId, prompt: undefined }}
                             >
                               <Badge variant="secondary" size="sm">
-                                <SparklesIcon />
+                                <PuzzleIcon />
                                 {skillsById.get(skillId)?.title ?? skillId}
                               </Badge>
                             </Link>
