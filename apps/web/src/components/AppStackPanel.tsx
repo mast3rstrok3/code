@@ -36,7 +36,7 @@ import {
   TriangleAlertIcon,
   XIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { OpenPreviewMutation } from "~/browser/openFileInPreview";
 import { openUrlInPreview } from "~/browser/openFileInPreview";
@@ -57,6 +57,7 @@ import { AppStackBundleAppChecklist } from "./AppStackBundleAppChecklist";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
+import { Toggle, ToggleGroup } from "./ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   APP_STACK_VARIANTS,
@@ -66,14 +67,18 @@ import {
 } from "@t3tools/shared/appStack";
 
 import {
+  APP_STACK_STATUS_FILTERS,
   appStackBulkDeleteConfirmation,
   appStackBulkDeleteFailureMessage,
   appStackBundleApps,
   appStackBundleMemberDescription,
+  appStackMatchesStatusFilter,
   appStackProtectionAction,
   appStackPlatformMembers,
+  appStackRangeIds,
   appStackSelectionState,
   appStackStartShape,
+  appStackStatusFilterCounts,
   autoCreateNotice,
   defaultAppStackBundleSelection,
   missingAppStackBundleMembers,
@@ -85,6 +90,7 @@ import {
   previewUrlForService,
   reconcileAppStackIds,
   shouldPollAppStacks,
+  type AppStackStatusFilter,
   type AutoCreateNotice,
   type PreviewCandidate,
 } from "@t3tools/client-runtime/app-stack-panel";
@@ -124,6 +130,13 @@ interface StartPathChoice {
 }
 
 type StackPendingAction = "start" | "stop" | "restart" | "delete" | "protect";
+
+const STATUS_FILTER_LABELS: Record<AppStackStatusFilter, string> = {
+  all: "All",
+  running: "Running",
+  stopped: "Stopped",
+  error: "Error",
+};
 
 function nonEmpty(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
@@ -547,6 +560,10 @@ export function AppStackPanel(props: AppStackPanelProps) {
   const [expandedStackIds, setExpandedStackIds] = useState<ReadonlySet<string>>(() => new Set());
   const [selectedStackIds, setSelectedStackIds] = useState<ReadonlySet<string>>(() => new Set());
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<AppStackStatusFilter>("all");
+  const selectionAnchorId = useRef<string | null>(null);
+  // Base UI reports the hidden input's change event, which carries no modifier keys.
+  const extendSelectionRange = useRef(false);
   const [inspectedStackId, setInspectedStackId] = useState<string | null>(null);
   const [selectedPodName, setSelectedPodName] = useState<string | null>(null);
   const [selectedContainerName, setSelectedContainerName] = useState<string | null>(null);
@@ -781,22 +798,24 @@ export function AppStackPanel(props: AppStackPanelProps) {
       }),
     [currentPath, currentStack, listedStacks],
   );
-  const selectionState = appStackSelectionState(selectedStackIds, stacks);
-  const selectedStacks = stacks.filter((stack) => selectedStackIds.has(stack.id));
+  const statusFilterCounts = appStackStatusFilterCounts(stacks);
+  const visibleStacks = stacks.filter((stack) => appStackMatchesStatusFilter(stack, statusFilter));
+  const selectionState = appStackSelectionState(selectedStackIds, visibleStacks);
+  const selectedStacks = visibleStacks.filter((stack) => selectedStackIds.has(stack.id));
   const selectedStackHasPendingAction = selectedStacks.some((stack) =>
     pendingActions.has(stack.id),
   );
 
   useEffect(() => {
     setSelectedStackIds((current) => {
-      const reconciled = reconcileAppStackIds(current, stacks);
+      const reconciled = reconcileAppStackIds(current, visibleStacks);
       return sameStringSet(current, reconciled) ? current : reconciled;
     });
     setExpandedStackIds((current) => {
       const reconciled = reconcileAppStackIds(current, stacks);
       return sameStringSet(current, reconciled) ? current : reconciled;
     });
-  }, [stacks]);
+  }, [stacks, visibleStacks]);
 
   const setPendingAction = useCallback((key: string, action: StackPendingAction | null) => {
     setPendingActions((current) => {
@@ -1142,14 +1161,25 @@ export function AppStackPanel(props: AppStackPanelProps) {
     [expandedStackIds, inspectedStackId],
   );
 
-  const toggleStackSelected = useCallback((stackId: string, selected: boolean) => {
-    setSelectedStackIds((current) => {
-      const next = new Set(current);
-      if (selected) next.add(stackId);
-      else next.delete(stackId);
-      return next;
-    });
-  }, []);
+  const toggleStackSelected = useCallback(
+    (stackId: string, selected: boolean, extendRange: boolean) => {
+      const ids = extendRange
+        ? appStackRangeIds(visibleStacks, selectionAnchorId.current, stackId).filter(
+            (id) => !pendingActions.has(id),
+          )
+        : [stackId];
+      selectionAnchorId.current = stackId;
+      setSelectedStackIds((current) => {
+        const next = new Set(current);
+        for (const id of ids) {
+          if (selected) next.add(id);
+          else next.delete(id);
+        }
+        return next;
+      });
+    },
+    [pendingActions, visibleStacks],
+  );
 
   const renderStackRow = (stack: AppStack) => {
     const preview = primaryPreviewForStack(stack);
@@ -1180,7 +1210,18 @@ export function AppStackPanel(props: AppStackPanelProps) {
         <div className="flex min-w-0 items-start gap-2">
           <Checkbox
             checked={selected}
-            onCheckedChange={(checked) => toggleStackSelected(stack.id, Boolean(checked))}
+            onCheckedChange={(checked) => {
+              const extendRange = extendSelectionRange.current;
+              extendSelectionRange.current = false;
+              toggleStackSelected(stack.id, checked, extendRange);
+            }}
+            onClickCapture={(event) => {
+              extendSelectionRange.current = event.shiftKey;
+            }}
+            // Shift-click would otherwise extend the page's text selection across rows.
+            onMouseDown={(event) => {
+              if (event.shiftKey) event.preventDefault();
+            }}
             disabled={pendingAction !== undefined || isBulkDeleting}
             aria-label={`Select ${stackName}`}
             className="mt-0.5"
@@ -1737,21 +1778,43 @@ export function AppStackPanel(props: AppStackPanelProps) {
                     indeterminate={selectionState.indeterminate}
                     onCheckedChange={(checked) => {
                       setSelectedStackIds(
-                        checked ? new Set(stacks.map((stack) => stack.id)) : new Set(),
+                        checked ? new Set(visibleStacks.map((stack) => stack.id)) : new Set(),
                       );
                     }}
-                    disabled={stacks.length === 0 || isBulkDeleting}
-                    aria-label="Select all App Stacks"
+                    disabled={visibleStacks.length === 0 || isBulkDeleting}
+                    aria-label={
+                      statusFilter === "all"
+                        ? "Select all App Stacks"
+                        : `Select all ${STATUS_FILTER_LABELS[statusFilter].toLowerCase()} App Stacks`
+                    }
                   />
-                  <span>All Stacks</span>
+                  <span>{STATUS_FILTER_LABELS[statusFilter]} Stacks</span>
                 </label>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   {(listQuery.isPending || currentStackQuery.isPending) && stacks.length === 0 ? (
                     <LoaderIcon className="size-3.5 animate-spin" />
                   ) : null}
-                  <span>{stacks.length}</span>
+                  <span>{visibleStacks.length}</span>
                 </div>
               </div>
+
+              {stacks.length > 0 ? (
+                <ToggleGroup
+                  aria-label="Filter App Stacks by status"
+                  value={[statusFilter]}
+                  onValueChange={(value) => {
+                    const next = APP_STACK_STATUS_FILTERS.find((filter) => filter === value[0]);
+                    if (next) setStatusFilter(next);
+                  }}
+                >
+                  {APP_STACK_STATUS_FILTERS.map((filter) => (
+                    <Toggle key={filter} value={filter}>
+                      {STATUS_FILTER_LABELS[filter]}
+                      <span className="tabular-nums opacity-70">{statusFilterCounts[filter]}</span>
+                    </Toggle>
+                  ))}
+                </ToggleGroup>
+              ) : null}
 
               {selectedStacks.length > 0 ? (
                 <div className="flex items-center justify-between gap-2 rounded-md border border-primary/25 bg-primary/5 px-2 py-1.5">
@@ -1786,8 +1849,13 @@ export function AppStackPanel(props: AppStackPanelProps) {
                   {listQuery.error}
                 </div>
               ) : null}
-              {stacks.length > 0 ? (
-                <div className="space-y-2">{stacks.map(renderStackRow)}</div>
+              {visibleStacks.length > 0 ? (
+                <div className="space-y-2">{visibleStacks.map(renderStackRow)}</div>
+              ) : stacks.length > 0 ? (
+                <EmptyPanelState
+                  title={`No ${STATUS_FILTER_LABELS[statusFilter].toLowerCase()} stacks`}
+                  description="Pick another filter to see the rest."
+                />
               ) : (
                 <EmptyPanelState
                   title="No app stacks"

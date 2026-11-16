@@ -7,15 +7,19 @@ import type {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  type AppStackStatusFilter,
   appStackBulkDeleteConfirmation,
   appStackBulkDeleteFailureMessage,
   appStackBundleApps,
   appStackBundleMemberDescription,
+  appStackMatchesStatusFilter,
   appStackOwnershipLabel,
   appStackPlatformMembers,
   appStackProtectionAction,
+  appStackRangeIds,
   appStackSelectionState,
   appStackStartShape,
+  appStackStatusFilterCounts,
   appStackWorkflowConflictSummary,
   autoCreateNotice,
   defaultAppStackBundleSelection,
@@ -218,6 +222,40 @@ describe("AppStackPanel list management", () => {
       checked: false,
       indeterminate: false,
     });
+  });
+
+  it("partitions stacks by status filter", () => {
+    const stacks = [
+      makeStack({ id: "running", status: "running" }),
+      makeStack({ id: "starting", status: "starting" }),
+      makeStack({ id: "stopping", status: "stopping" }),
+      makeStack({ id: "stopped", status: "stopped" }),
+      makeStack({ id: "error", status: "error" }),
+    ];
+    const idsFor = (filter: AppStackStatusFilter) =>
+      stacks.filter((stack) => appStackMatchesStatusFilter(stack, filter)).map(({ id }) => id);
+
+    expect(idsFor("running")).toEqual(["running", "starting", "stopping"]);
+    expect(idsFor("stopped")).toEqual(["stopped"]);
+    expect(idsFor("error")).toEqual(["error"]);
+    expect(idsFor("all")).toHaveLength(5);
+    expect(appStackStatusFilterCounts(stacks)).toEqual({
+      all: 5,
+      running: 3,
+      stopped: 1,
+      error: 1,
+    });
+  });
+
+  it("covers the anchor-to-target range in list order for shift-click", () => {
+    const stacks = ["a", "b", "c", "d"].map((id) => makeStack({ id }));
+
+    expect(appStackRangeIds(stacks, "b", "d")).toEqual(["b", "c", "d"]);
+    expect(appStackRangeIds(stacks, "d", "b")).toEqual(["b", "c", "d"]);
+    // An anchor the filter hid, or none yet, selects only the clicked stack.
+    expect(appStackRangeIds(stacks, "hidden", "c")).toEqual(["c"]);
+    expect(appStackRangeIds(stacks, null, "c")).toEqual(["c"]);
+    expect(appStackRangeIds(stacks, "a", "hidden")).toEqual([]);
   });
 
   it("builds bulk-delete confirmation and partial failure copy", () => {
