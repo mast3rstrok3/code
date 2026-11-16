@@ -1,14 +1,7 @@
 /**
- * Merge batches on the home cluster's app builds (healthcare-infra
- * `scripts/home/build_batch.py`). While a batch is open for `<app>.<branch>`,
- * every build of that route exits without building, so several pull requests
- * can merge and build once. A batch is one key of the ConfigMap
- * `healthcare-build-batches` in namespace `argo`, holding
- * `{"reason": <text>, "until": <epoch seconds>}`. The server's kubectl account
- * may only get and patch that ConfigMap, so it cannot create it or submit a
- * build: a finished batch builds the branch tip at the next 10-minute poll.
- *
- * @module BuildBatchService
+ * Merge batches on home cluster app builds: one key of ConfigMap `argo/healthcare-build-batches`
+ * per `<app>.<branch>`, `{"reason", "until": <epoch seconds>}`. kubectl may only get and patch it,
+ * so a finished batch builds the branch tip at the next 10-minute poll.
  */
 import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
