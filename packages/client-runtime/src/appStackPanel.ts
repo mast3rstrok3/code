@@ -158,6 +158,55 @@ export function appStackSelectionState(
   };
 }
 
+export const APP_STACK_STATUS_FILTERS = ["all", "running", "stopped", "error"] as const;
+export type AppStackStatusFilter = (typeof APP_STACK_STATUS_FILTERS)[number];
+
+// "running" also holds the transitional states so the three narrow filters partition the list.
+export function appStackMatchesStatusFilter(
+  stack: AppStack,
+  filter: AppStackStatusFilter,
+): boolean {
+  switch (filter) {
+    case "all":
+      return true;
+    case "stopped":
+    case "error":
+      return stack.status === filter;
+    case "running":
+      return stack.status !== "stopped" && stack.status !== "error";
+  }
+}
+
+export function appStackStatusFilterCounts(
+  stacks: ReadonlyArray<AppStack>,
+): Record<AppStackStatusFilter, number> {
+  const counts = { all: 0, running: 0, stopped: 0, error: 0 };
+  for (const stack of stacks) {
+    for (const filter of APP_STACK_STATUS_FILTERS) {
+      if (appStackMatchesStatusFilter(stack, filter)) counts[filter] += 1;
+    }
+  }
+  return counts;
+}
+
+/**
+ * The ids a shift-click covers, anchor to target inclusive, in list order.
+ * Without a visible anchor the click covers the target alone.
+ */
+export function appStackRangeIds(
+  stacks: ReadonlyArray<AppStack>,
+  anchorId: string | null,
+  targetId: string,
+): string[] {
+  const targetIndex = stacks.findIndex((stack) => stack.id === targetId);
+  if (targetIndex === -1) return [];
+  const anchorIndex = anchorId === null ? -1 : stacks.findIndex((stack) => stack.id === anchorId);
+  if (anchorIndex === -1) return [targetId];
+  const start = Math.min(anchorIndex, targetIndex);
+  const end = Math.max(anchorIndex, targetIndex);
+  return stacks.slice(start, end + 1).map((stack) => stack.id);
+}
+
 export function appStackBulkDeleteConfirmation(count: number): string {
   return [
     `Delete ${count} App Stack${count === 1 ? "" : "s"}?`,

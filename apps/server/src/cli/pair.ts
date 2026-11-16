@@ -363,6 +363,7 @@ const makePairServerConfig = Effect.fn(function* (input: {
     appStackBackendOidcClientId: undefined,
     appStackBackendOidcClientSecret: undefined,
     appStackNative: undefined,
+    buildBatchesEnabled: false,
     devAllowedOrigins: [],
     noBrowser: true,
     startupPresentation: "headless",
