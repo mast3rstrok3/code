@@ -4,33 +4,50 @@ import {
   createArchivedThreadSnapshotsAtomFamily,
   makeArchivedThreadsEnvironmentKey,
 } from "@t3tools/client-runtime/state/threads";
-import {
-  DEFAULT_WORKSPACE_USER_VIEW,
-  type EnvironmentId,
-  type WorkspaceUserView,
-} from "@t3tools/contracts";
-import { useCallback, useMemo } from "react";
+import { DEFAULT_WORKSPACE_USER_VIEW, type EnvironmentId } from "@t3tools/contracts";
+import { isOwnedByWorkspaceUserView } from "@t3tools/shared/workspaceUsers";
+import { AsyncResult, Atom } from "effect/reactivity";
+import { useMemo } from "react";
 
 import { appAtomRegistry } from "../../state/atom-registry";
 import { orchestrationEnvironment } from "../../state/orchestration";
+import { serverEnvironment } from "../../state/server";
+import { environmentThreadShells } from "../../state/threads";
+import { workspaceUserViewAtom } from "../../state/workspace-users";
 
-function archivedSnapshotAtom(
-  environmentId: EnvironmentId,
-  userView: WorkspaceUserView = DEFAULT_WORKSPACE_USER_VIEW,
-) {
+// One unfiltered fetch per environment; switching users filters it locally.
+function archivedSourceAtom(environmentId: EnvironmentId) {
   return orchestrationEnvironment.archivedShellSnapshot({
     environmentId,
-    input: { userView },
+    input: { userView: DEFAULT_WORKSPACE_USER_VIEW },
   });
 }
 
+const archivedSnapshotAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get) => {
+    const view = get(workspaceUserViewAtom(environmentId));
+    return AsyncResult.map(get(archivedSourceAtom(environmentId)), (snapshot) =>
+      view.kind === "all"
+        ? snapshot
+        : {
+            ...snapshot,
+            threads: snapshot.threads.filter((thread) => isOwnedByWorkspaceUserView(thread, view)),
+          },
+    );
+  }),
+);
+
 const archivedSnapshotsAtom = createArchivedThreadSnapshotsAtomFamily({
   getSnapshotAtom: archivedSnapshotAtom,
+  hiddenThreadTagsAtom: serverEnvironment.hiddenThreadTagsAtom,
+  hiddenThreadKeysAtom: environmentThreadShells.hiddenThreadKeysAtom,
+  liveThreadRefsAtom: environmentThreadShells.threadRefsAtom,
+  anyEnvironmentHidingAtom: environmentThreadShells.anyEnvironmentHidingAtom,
   labelPrefix: "mobile:archived-thread-snapshots",
 });
 
 export function refreshArchivedThreadsForEnvironment(environmentId: EnvironmentId): void {
-  appAtomRegistry.refresh(archivedSnapshotAtom(environmentId));
+  appAtomRegistry.refresh(archivedSourceAtom(environmentId));
 }
 
 export function useArchivedThreadSnapshots(environmentIds: ReadonlyArray<EnvironmentId>): {
@@ -44,11 +61,11 @@ export function useArchivedThreadSnapshots(environmentIds: ReadonlyArray<Environ
     [environmentIds],
   );
   const result = useAtomValue(archivedSnapshotsAtom(environmentKey));
-  const refresh = useCallback(() => {
+  const refresh = () => {
     for (const environmentId of environmentIds) {
-      appAtomRegistry.refresh(archivedSnapshotAtom(environmentId, DEFAULT_WORKSPACE_USER_VIEW));
+      appAtomRegistry.refresh(archivedSourceAtom(environmentId));
     }
-  }, [environmentIds]);
+  };
 
   return { ...result, refresh };
 }

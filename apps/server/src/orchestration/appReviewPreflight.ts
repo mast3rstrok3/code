@@ -1,3 +1,4 @@
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   APP_REVIEW_PREVIEW_URL_ENV,
   APP_REVIEW_TEST_PLATFORMS_ENV,
@@ -7,10 +8,10 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { ProcessRunner } from "../processRunner.ts";
 
 export const APP_REVIEW_PREFLIGHT_RETRY_MS = 60_000;
+export const APP_REVIEW_PREFLIGHT_WAIT_LIMIT_MS = 30 * 60_000;
 
 /** Discard process output because connection diagnostics may contain credentials. */
 export const runAppReviewPreflight = Effect.fn("runAppReviewPreflight")(function* (input: {
@@ -23,7 +24,7 @@ export const runAppReviewPreflight = Effect.fn("runAppReviewPreflight")(function
   readonly env?: Readonly<Record<string, string>> | undefined;
 }) {
   const runner = yield* ProcessRunner;
-  const platform = yield* HostProcessPlatform;
+  const platform = yield* HostProcess.Platform;
   if (input.artifactsDir !== undefined) {
     const fs = yield* FileSystem.FileSystem;
     yield* fs.makeDirectory(input.artifactsDir, { recursive: true, mode: 0o700 });
@@ -53,6 +54,6 @@ export const runAppReviewPreflight = Effect.fn("runAppReviewPreflight")(function
             ? ("ready" as const)
             : ("error" as const),
       ),
-      Effect.catch(() => Effect.succeed("error" as const)),
+      Effect.orElseSucceed(() => "error" as const),
     );
 });

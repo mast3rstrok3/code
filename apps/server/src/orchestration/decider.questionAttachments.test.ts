@@ -8,9 +8,11 @@ import {
   ThreadId,
   type OrchestrationReadModel,
 } from "@t3tools/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 
@@ -91,50 +93,63 @@ const request = {
     ],
   },
 };
-it.layer(NodeServices.layer)("question attachment answers", (it) => {
-  it.effect("persists the original answer with its attachment and emits a provider response", () =>
-    Effect.gen(function* () {
-      const result = yield* decideOrchestrationCommand({
-        readModel,
-        command,
-        userInputActivity: request,
-      });
-      const events = Array.isArray(result) ? result : [result];
-      expect(events.map((event) => event.type)).toEqual([
-        "thread.activity-appended",
-        "thread.user-input-response-requested",
-      ]);
-      expect(events[0]?.payload).toMatchObject({
-        activity: {
-          kind: "user-input.answer-submitted",
-          payload: { answers: { q: "" }, attachmentsByQuestionId: command.attachmentsByQuestionId },
-        },
-      });
-      expect(events[1]?.payload).toMatchObject({
-        answers: { q: "" },
-        attachmentsByQuestionId: command.attachmentsByQuestionId,
-      });
-    }),
-  );
-  it.effect("rejects attachments for a resolved or unknown request", () =>
-    Effect.gen(function* () {
-      const result = yield* decideOrchestrationCommand({ readModel, command }).pipe(Effect.result);
-      expect(result._tag).toBe("Failure");
-    }),
-  );
-  it.effect("rejects unknown question IDs and predefined-choice-only protocols", () =>
-    Effect.gen(function* () {
-      for (const question of [
-        { ...request.payload.questions[0], id: "other" },
-        { ...request.payload.questions[0], allowCustomAnswer: false },
-      ]) {
-        const result = yield* decideOrchestrationCommand({
-          readModel,
-          command,
-          userInputActivity: { ...request, payload: { ...request.payload, questions: [question] } },
-        }).pipe(Effect.result);
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "question attachment answers",
+  (it) => {
+    it.effect(
+      "persists the original answer with its attachment and emits a provider response",
+      () =>
+        Effect.gen(function* () {
+          const result = yield* decideOrchestrationCommand({
+            readModel,
+            command,
+            userInputActivity: request,
+          });
+          const events = Array.isArray(result) ? result : [result];
+          expect(events.map((event) => event.type)).toEqual([
+            "thread.activity-appended",
+            "thread.user-input-response-requested",
+          ]);
+          expect(events[0]?.payload).toMatchObject({
+            activity: {
+              kind: "user-input.answer-submitted",
+              payload: {
+                answers: { q: "" },
+                attachmentsByQuestionId: command.attachmentsByQuestionId,
+              },
+            },
+          });
+          expect(events[1]?.payload).toMatchObject({
+            answers: { q: "" },
+            attachmentsByQuestionId: command.attachmentsByQuestionId,
+          });
+        }),
+    );
+    it.effect("rejects attachments for a resolved or unknown request", () =>
+      Effect.gen(function* () {
+        const result = yield* decideOrchestrationCommand({ readModel, command }).pipe(
+          Effect.result,
+        );
         expect(result._tag).toBe("Failure");
-      }
-    }),
-  );
-});
+      }),
+    );
+    it.effect("rejects unknown question IDs and predefined-choice-only protocols", () =>
+      Effect.gen(function* () {
+        for (const question of [
+          { ...request.payload.questions[0], id: "other" },
+          { ...request.payload.questions[0], allowCustomAnswer: false },
+        ]) {
+          const result = yield* decideOrchestrationCommand({
+            readModel,
+            command,
+            userInputActivity: {
+              ...request,
+              payload: { ...request.payload, questions: [question] },
+            },
+          }).pipe(Effect.result);
+          expect(result._tag).toBe("Failure");
+        }
+      }),
+    );
+  },
+);

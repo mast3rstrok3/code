@@ -155,7 +155,7 @@ export const layer = Layer.effectDiscard(
             return yield* status(request, snapshot.tabId);
           }
           if (input.url) {
-            yield* coordinator.navigate({
+            yield* browser.navigate({
               threadId: request.threadId,
               tabId: activeTabId,
               url: normalizePreviewUrl(input.url),
@@ -174,7 +174,7 @@ export const layer = Layer.effectDiscard(
           const activeTabId =
             tabId ?? (yield* coordinator.open({ threadId: request.threadId, url })).tabId;
           if (tabId) {
-            yield* coordinator.navigate({ threadId: request.threadId, tabId: activeTabId, url });
+            yield* browser.navigate({ threadId: request.threadId, tabId: activeTabId, url });
           }
           if ((input.readiness ?? "load") !== "none") {
             yield* browser

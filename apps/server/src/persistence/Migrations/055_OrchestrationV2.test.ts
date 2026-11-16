@@ -13,7 +13,7 @@ layer("055_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        Array.from({ length: 107 }, (_, index) => index + 1).filter((id) => id !== 52),
+        Array.from({ length: 111 }, (_, index) => index + 1).filter((id) => id !== 52),
       );
     }),
   );
@@ -31,6 +31,10 @@ layer("055_OrchestrationV2", (it) => {
         [105, "WebhookRelayDeliveries"],
         [106, "WorkflowEventHistory"],
         [107, "McpAppModelContext"],
+        [108, "RetireQuickWorkflowPresets"],
+        [109, "ThreadSnapshotWindowIndexes"],
+        [110, "PullRequestReviewGuides"],
+        [111, "ThreadFailureLookupIndex"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
 
@@ -45,6 +49,10 @@ layer("055_OrchestrationV2", (it) => {
         { migration_id: 105, name: "WebhookRelayDeliveries" },
         { migration_id: 106, name: "WorkflowEventHistory" },
         { migration_id: 107, name: "McpAppModelContext" },
+        { migration_id: 108, name: "RetireQuickWorkflowPresets" },
+        { migration_id: 109, name: "ThreadSnapshotWindowIndexes" },
+        { migration_id: 110, name: "PullRequestReviewGuides" },
+        { migration_id: 111, name: "ThreadFailureLookupIndex" },
       ]);
 
       const tables = yield* sql<{ readonly name: string }>`

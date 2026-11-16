@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -17,6 +18,7 @@ import {
   type ThreadPlanningTicketArtifactInput,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 
@@ -152,49 +154,55 @@ function firstEvent(result: unknown): OrchestrationEvent {
   return (Array.isArray(result) ? result[0] : result) as OrchestrationEvent;
 }
 
-it.layer(NodeServices.layer)("decider ticket repositories", (it) => {
-  it.effect("keeps a ticket in another of the owner's projects and drops its own", () =>
-    Effect.gen(function* () {
-      const event = firstEvent(
-        yield* applyTickets([ticket("TICKET-1", medical), ticket("TICKET-2", rudi)]),
-      );
-      expect(event.type).toBe("thread.planning-tickets-created");
-      const tickets = (event.payload as { tickets: ReadonlyArray<{ projectId?: string }> }).tickets;
-      expect(tickets.map((entry) => entry.projectId)).toEqual([medical, undefined]);
-    }),
-  );
-
-  it.effect("rejects a ticket in a project the workflow cannot change", () =>
-    Effect.gen(function* () {
-      for (const projectId of [rudiClone, someoneElses, ProjectId.make("project-missing")]) {
-        const error = yield* Effect.flip(applyTickets([ticket("TICKET-1", projectId)]));
-        expect(error.message).toContain(
-          `names project '${projectId}', which is not a repository this workflow can change`,
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "decider ticket repositories",
+  (it) => {
+    it.effect("keeps a ticket in another of the owner's projects and drops its own", () =>
+      Effect.gen(function* () {
+        const event = firstEvent(
+          yield* applyTickets([ticket("TICKET-1", medical), ticket("TICKET-2", rudi)]),
         );
-      }
-    }),
-  );
+        expect(event.type).toBe("thread.planning-tickets-created");
+        const tickets = (event.payload as { tickets: ReadonlyArray<{ projectId?: string }> })
+          .tickets;
+        expect(tickets.map((entry) => entry.projectId)).toEqual([medical, undefined]);
+      }),
+    );
 
-  it.effect("lists the other repositories in the ticket authoring prompt", () =>
-    Effect.gen(function* () {
-      const result = yield* decideOrchestrationCommand({
-        command: {
-          type: "thread.planning-spec.apply",
-          commandId: CommandId.make("cmd-spec"),
-          threadId: planningThreadId,
-          sourceMessageId: MessageId.make("message-spec"),
-          title: "Studies",
-          summaryMarkdown: "Serve studies to Rudi.",
-          createdAt: now,
-        },
-        readModel: readModel("spec-authoring"),
-      });
-      const prompt = (Array.isArray(result) ? result : [result])
-        .map((event) => event.payload as { text?: string })
-        .find((payload) => payload.text?.startsWith("Decompose this Spec"))?.text;
-      expect(prompt).toContain(`- ${medical} (projectId: ${medical}) at /repos/medical-repository`);
-      expect(prompt).not.toContain(rudiClone);
-      expect(prompt).not.toContain(someoneElses);
-    }),
-  );
-});
+    it.effect("rejects a ticket in a project the workflow cannot change", () =>
+      Effect.gen(function* () {
+        for (const projectId of [rudiClone, someoneElses, ProjectId.make("project-missing")]) {
+          const error = yield* Effect.flip(applyTickets([ticket("TICKET-1", projectId)]));
+          expect(error.message).toContain(
+            `names project '${projectId}', which is not a repository this workflow can change`,
+          );
+        }
+      }),
+    );
+
+    it.effect("lists the other repositories in the ticket authoring prompt", () =>
+      Effect.gen(function* () {
+        const result = yield* decideOrchestrationCommand({
+          command: {
+            type: "thread.planning-spec.apply",
+            commandId: CommandId.make("cmd-spec"),
+            threadId: planningThreadId,
+            sourceMessageId: MessageId.make("message-spec"),
+            title: "Studies",
+            summaryMarkdown: "Serve studies to Rudi.",
+            createdAt: now,
+          },
+          readModel: readModel("spec-authoring"),
+        });
+        const prompt = (Array.isArray(result) ? result : [result])
+          .map((event) => event.payload as { text?: string })
+          .find((payload) => payload.text?.startsWith("Decompose this Spec"))?.text;
+        expect(prompt).toContain(
+          `- ${medical} (projectId: ${medical}) at /repos/medical-repository`,
+        );
+        expect(prompt).not.toContain(rudiClone);
+        expect(prompt).not.toContain(someoneElses);
+      }),
+    );
+  },
+);

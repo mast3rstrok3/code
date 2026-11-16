@@ -11,6 +11,7 @@ export {
   OrchestrationThreadWorkflowRole,
 } from "./workflowIdentity.ts";
 import { PreviewRecordingMode } from "./previewRecording.ts";
+import { ImplementationWorkflowSettings, LaunchableWorkflow } from "./workflowSettings.ts";
 import { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 export { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 import { OrchestrationGetWorkflowScriptError } from "./orchestrationV2.ts";
@@ -278,25 +279,15 @@ const ModelSelectionSource = Schema.Struct({
  */
 export const WORKFLOW_AUTOMATION_RUNTIME_MODE: RuntimeMode = "full-access";
 
-export const DEFAULT_MAX_PARALLEL_TICKETS = 10;
-export const DEFAULT_MAX_PARALLEL_APP_REVIEWS = 2;
-export const MAX_PARALLEL_TICKETS = 32;
-export const MaxParallelTickets = Schema.Int.check(
-  Schema.isBetween({ minimum: 1, maximum: MAX_PARALLEL_TICKETS }),
-);
-
-export const ImplementationWorkflowSettings = Schema.Struct({
-  maxParallelTickets: Schema.optionalKey(MaxParallelTickets),
-  maxParallelAppReviews: Schema.optionalKey(MaxParallelTickets),
-  ticketAppReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  appReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  finalCodeReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  pullRequestCreationEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  pullRequestBabysittingEnabled: Schema.Boolean.pipe(
-    Schema.withDecodingDefault(Effect.succeed(true)),
-  ),
-});
-export type ImplementationWorkflowSettings = typeof ImplementationWorkflowSettings.Type;
+export {
+  DEFAULT_MAX_PARALLEL_APP_REVIEWS,
+  DEFAULT_MAX_PARALLEL_TICKETS,
+  GrillAnswerer,
+  ImplementationWorkflowSettings,
+  LaunchableWorkflow,
+  MAX_PARALLEL_TICKETS,
+  MaxParallelTickets,
+} from "./workflowSettings.ts";
 export const isPlanningWorkflowInteractionMode = (
   mode: ProviderInteractionMode | null | undefined,
 ): mode is "planning-workflow" | "product-workflow" =>
@@ -492,11 +483,28 @@ export const WorkflowStepModelOverride = Schema.Struct({
    * by `workflowPromptId` and every agent it starts.
    */
   stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
+  /**
+   * The workflow a standing default applies to. Absent covers every workflow
+   * that runs the step, which is how defaults were stored before workflows had
+   * their own; a scoped default outranks it. Run pins carry none.
+   */
+  workflow: Schema.optionalKey(LaunchableWorkflow),
   modelSelection: ModelSelection,
 });
 export type WorkflowStepModelOverride = typeof WorkflowStepModelOverride.Type;
 
-export const WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN = "workflow.recovery-fallback";
+/**
+ * Standing `workflowStepModels` pins for the model a Feature or Engineering
+ * workflow starts on when whoever starts it names none: a scheduled task on
+ * its workflow default, or an agent's `t3_thread_launch`. Without one it
+ * starts on the default model for new threads. Kept as pins rather than a
+ * settings field because the WebSocket RPC group sits at the compiler's type
+ * instantiation budget, and every new `ServerSettings` field tips it over.
+ */
+export const WORKFLOW_START_MODEL_PINS = {
+  feature: "workflow.feature-start",
+  engineering: "workflow.engineering-start",
+} as const;
 
 /**
  * How many times one workflow step repeats before the run moves on.

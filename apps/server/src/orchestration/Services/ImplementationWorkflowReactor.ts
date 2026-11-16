@@ -1,4 +1,5 @@
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import type * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 
@@ -19,6 +20,16 @@ export interface ImplementationWorkflowReactorShape {
    */
   readonly recoverIncompleteStages: () => Effect.Effect<void>;
 }
+
+/**
+ * How often `start` runs the retry and stage recovery sweeps. Tests that drive those sweeps by
+ * hand turn it off, since advancing the test clock past a grace window would otherwise run a
+ * sweep on every interval it crosses.
+ */
+export const ImplementationRecoverySweepInterval = Context.Reference<Duration.Duration>(
+  "t3/orchestration/Services/ImplementationRecoverySweepInterval",
+  { defaultValue: () => Duration.seconds(30) },
+);
 
 export class ImplementationWorkflowReactor extends Context.Service<
   ImplementationWorkflowReactor,

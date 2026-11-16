@@ -14,7 +14,6 @@ import {
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -110,12 +109,10 @@ const makeHarness = (input: {
       getThreadDetailSnapshotById: () => Effect.die("unused"),
 
       getThreadDetailById: () =>
-        Effect.succeed(
-          Option.some({
-            id: threadId,
-            appReviews: [input.review],
-          } as never),
-        ),
+        Effect.succeedSome({
+          id: threadId,
+          appReviews: [input.review],
+        } as never),
     }),
     Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({
       invoke: (request) => {

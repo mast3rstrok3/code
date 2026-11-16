@@ -7,7 +7,6 @@ import {
   type OrchestrationSessionStatus,
   ThreadId,
 } from "@t3tools/contracts";
-import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -16,11 +15,12 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
+
 import {
   legacyThreadPullRequestKey,
   threadPullRequestKeysEqual,
-} from "@t3tools/shared/threadPullRequests";
-
+} from "../../sourceControl/threadPullRequests.ts";
+import { compareDateTimeStrings } from "../dateTime.ts";
 import { toPersistenceSqlError, type ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { ProjectionPendingApprovalRepository } from "../../persistence/Services/ProjectionPendingApprovals.ts";
@@ -2836,7 +2836,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             attachmentSideEffects.prunedThreadRelativePaths.size > 0;
           // Return the cleanup effect so the caller runs it after the outer transaction commits.
           // Most events have no cleanup, so they skip the call and write no cleanup span.
-          // @effect-diagnostics-next-line returnEffectInGen:off
           return hasCleanup
             ? applyAttachmentSideEffects(event, attachmentSideEffects).pipe(Effect.asVoid)
             : Effect.void;

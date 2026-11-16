@@ -1,13 +1,6 @@
 import * as Schema from "effect/Schema";
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
-import {
-  ApprovalRequestId,
-  EventId,
-  IsoDateTime,
-  ProviderItemId,
-  ThreadId,
-  TurnId,
-} from "./baseSchemas.ts";
+import { ApprovalRequestId, IsoDateTime, ThreadId, TurnId } from "./baseSchemas.ts";
 import {
   getProviderAttachmentLimitError,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
@@ -18,7 +11,6 @@ import {
   ProviderApprovalDecision,
   ProviderApprovalPolicy,
   ProviderInteractionMode,
-  ProviderRequestKind,
   ProviderSandboxMode,
   ProviderUserInputAnswers,
   UserInputAttachments,
@@ -36,9 +28,6 @@ const ProviderSessionStatus = Schema.Literals([
 
 export const ProviderSession = Schema.Struct({
   provider: ProviderDriverKind,
-  // Optional during the driver/instance migration. Once every producer
-  // populates it (post-slice-4), routing flips to instance-id-only and the
-  // legacy `provider` field is removed.
   providerInstanceId: Schema.optional(ProviderInstanceId),
   status: ProviderSessionStatus,
   runtimeMode: RuntimeMode,
@@ -56,7 +45,6 @@ export type ProviderSession = typeof ProviderSession.Type;
 export const ProviderSessionStartInput = Schema.Struct({
   threadId: ThreadId,
   provider: Schema.optional(ProviderDriverKind),
-  // See ProviderSession for the migration story.
   providerInstanceId: Schema.optional(ProviderInstanceId),
   cwd: Schema.optional(TrimmedNonEmptyString),
   title: Schema.optional(TrimmedNonEmptyString),
@@ -71,8 +59,7 @@ export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
 
 export const ProviderSendTurnInput = Schema.Struct({
   threadId: ThreadId,
-  /** Internal recovery signal. Allows an empty turn only for adapters that
-      explicitly support promptless continuation. */
+  /** Internal recovery: permits empty turns only for adapters supporting promptless continuation. */
   continuation: Schema.optional(Schema.Boolean),
   input: Schema.optional(
     TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
@@ -143,24 +130,3 @@ export class ProviderUploadFeedbackError extends Schema.TaggedError<ProviderUplo
     return `Failed to upload feedback for thread ${this.threadId}.`;
   }
 }
-
-const ProviderEventKind = Schema.Literals(["session", "notification", "request", "error"]);
-
-export const ProviderEvent = Schema.Struct({
-  id: EventId,
-  kind: ProviderEventKind,
-  provider: ProviderDriverKind,
-  // See ProviderSession for the migration story.
-  providerInstanceId: Schema.optional(ProviderInstanceId),
-  threadId: ThreadId,
-  createdAt: IsoDateTime,
-  method: TrimmedNonEmptyString,
-  message: Schema.optional(TrimmedNonEmptyString),
-  turnId: Schema.optional(TurnId),
-  itemId: Schema.optional(ProviderItemId),
-  requestId: Schema.optional(ApprovalRequestId),
-  requestKind: Schema.optional(ProviderRequestKind),
-  textDelta: Schema.optional(Schema.String),
-  payload: Schema.optional(Schema.Unknown),
-});
-export type ProviderEvent = typeof ProviderEvent.Type;

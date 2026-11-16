@@ -2,7 +2,8 @@ import type { ServerConfig } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 
 import type { ConnectionCatalogEntry } from "./catalog.ts";
-import type { SupervisorConnectionState } from "./model.ts";
+import type { ConnectionTarget, SupervisorConnectionState } from "./model.ts";
+import { connectionRouteId, connectionRoutes, routeHttpBaseUrl } from "./routes.ts";
 
 export type EnvironmentConnectionPhase =
   | "available"
@@ -17,17 +18,40 @@ export interface EnvironmentConnectionPresentation {
   readonly phase: EnvironmentConnectionPhase;
   readonly error: string | null;
   readonly traceId: string | null;
+  /**
+   * Set while reconnecting because the host has not approved this device yet. `error` then
+   * says where to approve it and shows the code, and is not a failure.
+   */
+  readonly awaitingApproval?: true;
 }
+
+/**
+ * Provider statuses are pushed every few minutes with fresh `checkedAt` stamps, and every root
+ * coordinator reads environment presentations. Leaving them out keeps a presentation stable
+ * across those pushes; provider readers subscribe to the server's providers atom instead.
+ */
+export type EnvironmentServerConfig = Omit<ServerConfig, "providers">;
 
 export interface EnvironmentPresentation {
   readonly entry: ConnectionCatalogEntry;
   readonly connection: EnvironmentConnectionPresentation;
-  readonly serverConfig: ServerConfig | null;
+  readonly serverConfig: EnvironmentServerConfig | null;
 }
 
 export function presentConnectionState(
   state: SupervisorConnectionState,
 ): EnvironmentConnectionPresentation {
+  if (
+    (state.phase === "connecting" || state.phase === "backoff") &&
+    state.lastFailure?.reason === "approval-pending"
+  ) {
+    return {
+      phase: "reconnecting",
+      error: state.lastFailure.message,
+      traceId: state.lastFailure.traceId ?? null,
+      awaitingApproval: true,
+    };
+  }
   switch (state.phase) {
     case "available":
       return { phase: "available", error: null, traceId: null };
@@ -65,6 +89,9 @@ export function connectionStatusText(connection: EnvironmentConnectionPresentati
     case "connecting":
       return "Connecting...";
     case "reconnecting":
+      if (connection.awaitingApproval) {
+        return connection.error ?? "Waiting for approval on the host";
+      }
       return connection.error
         ? `Failed to connect. Reconnecting... Reason: ${connection.error}`
         : "Reconnecting...";
@@ -80,45 +107,47 @@ export function connectionStatusText(connection: EnvironmentConnectionPresentati
 }
 
 export function connectionStatusTitle(connection: EnvironmentConnectionPresentation): string {
+  if (connection.awaitingApproval) {
+    return "Waiting for approval";
+  }
   if (connection.phase === "reconnecting" && connection.error) {
     return "Failed to connect. Reconnecting...";
   }
   return connectionStatusText({ ...connection, error: null });
 }
 
-export function presentEnvironmentConnection(
-  state: SupervisorConnectionState,
-): EnvironmentConnectionPresentation {
-  return presentConnectionState(state);
-}
-
 /**
- * The address an agent outside T3 (Claude Code, Codex) uses to reach this
- * environment's MCP server. Only HTTPS and loopback addresses qualify: MCP
- * clients refuse to sign in through a plain-http token endpoint elsewhere.
- * SSH connections ride a local forward that disappears with the client, so
- * they have no stable address to hand out.
+ * The T3 Connect address wins whenever it is known: it works for agents anywhere, while the
+ * connected route is often a LAN or loopback address. SSH routes ride a local forward that
+ * disappears with the client, so they have no stable address.
  */
 export function environmentMcpUrl(input: {
   readonly entry: ConnectionCatalogEntry;
   readonly relayHttpBaseUrl?: string | undefined;
+  readonly connectedTarget?: ConnectionTarget | null | undefined;
 }): string | null {
-  const httpBaseUrl =
-    input.entry.target._tag === "RelayConnectionTarget"
-      ? (input.relayHttpBaseUrl ?? null)
-      : input.entry.target._tag === "SshConnectionTarget"
-        ? null
-        : connectionCatalogDisplayUrl(input.entry);
-  if (httpBaseUrl === null) return null;
+  const relayMcpUrl = input.relayHttpBaseUrl ? mcpUrlFromBase(input.relayHttpBaseUrl) : null;
+  if (relayMcpUrl !== null) return relayMcpUrl;
+  const connectedRouteId = input.connectedTarget ? connectionRouteId(input.connectedTarget) : null;
+  const routes = connectionRoutes(input.entry);
+  const connectedRoute = routes.find(
+    (route) => connectionRouteId(route.target) === connectedRouteId,
+  );
+  for (const route of connectedRoute ? [connectedRoute, ...routes] : routes) {
+    const httpBaseUrl = routeHttpBaseUrl(route);
+    const mcpUrl = httpBaseUrl === null ? null : mcpUrlFromBase(httpBaseUrl);
+    if (mcpUrl !== null) return mcpUrl;
+  }
+  return null;
+}
+
+function mcpUrlFromBase(httpBaseUrl: string): string | null {
   let url: URL;
   try {
     url = new URL(httpBaseUrl);
   } catch {
     return null;
   }
-  const loopback =
-    url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) return null;
   url.pathname = "/mcp";
   url.search = "";
   url.hash = "";

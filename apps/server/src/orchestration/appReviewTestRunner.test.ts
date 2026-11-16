@@ -1,8 +1,16 @@
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { describe } from "vite-plus/test";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, expect } from "@effect/vitest";
-import { AppReviewWorkflowRunId, type AppReviewWorkflowCycle } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import {
+  AppReviewWorkflowRunId,
+  OrchestrationPlanningSpecId,
+  OrchestrationPlanningTicketId,
+  ProjectId,
+  type AppReviewWorkflowCycle,
+  type OrchestrationPlanningTicket,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -19,7 +27,11 @@ import {
 import {
   appReviewRetryCommandsFailure,
   appReviewTestCommands,
+  appReviewTestTimeoutMinutes,
+  blockingAppReviewTestFailures,
   completedAppReviewTests,
+  finalAppReviewE2eSelections,
+  implementationFeatureE2eCommands,
   restoreAppReviewTestWrites,
   runAppReviewTest,
 } from "./appReviewTestRunner.ts";
@@ -84,7 +96,11 @@ fs.writeFileSync('restored.apk', apk);`,
     expect(yield* fs.readFileString(path.join(artifactsDir, "candidate.apk"))).toBe("review APK");
   }).pipe(
     Effect.scoped,
-    Effect.provide(processRunnerLayer.pipe(Layer.provideMerge(NodeServices.layer))),
+    Effect.provide(
+      processRunnerLayer.pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
   ),
 );
 
@@ -109,14 +125,14 @@ it.effect("fails before launching a suite when its artifact directory cannot be 
     );
     expect(result.status).toBe("failed");
     expect(result.outputMarkdown).toContain("makeDirectory");
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("retains failure output beyond the inline limit in private logs", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const platform = yield* HostProcessPlatform;
+    const platform = yield* HostProcess.Platform;
     const cwd = yield* fs.makeTempDirectoryScoped();
     const script = path.join(cwd, "fail.cjs");
     const stdout = `${"x".repeat(9_000)}\nLast stdout failure\n`;
@@ -154,7 +170,11 @@ it.effect("retains failure output beyond the inline limit in private logs", () =
     }
   }).pipe(
     Effect.scoped,
-    Effect.provide(processRunnerLayer.pipe(Layer.provideMerge(NodeServices.layer))),
+    Effect.provide(
+      processRunnerLayer.pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
   ),
 );
 
@@ -226,7 +246,7 @@ describe.each(
         expect(result.outputMarkdown).toContain("Incomplete because a log write failed");
         expect(saved).toBe("");
       }
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 });
 
@@ -276,6 +296,88 @@ it("runs the ticket's exact selection once on the first cycle", () => {
   expect(
     appReviewTestCommands({ cycles: [] }, ["calendar --grep booking", "calendar --grep booking"]),
   ).toEqual([{ command: "calendar --grep booking", retryCommand: "calendar --grep booking" }]);
+});
+
+it("runs a final review's feature tests before its affected tests, which never block it", () => {
+  const first = appReviewTestCommands(
+    { cycles: [] },
+    finalAppReviewE2eSelections({
+      featureCommands: ["dictation", "dictation", "journey"],
+      projectFile: { e2eCommands: ["fleet"], e2eAffectedCommands: ["affected"] },
+    }),
+  );
+  expect(first).toEqual([
+    { command: "dictation", retryCommand: "dictation", purpose: "feature" },
+    { command: "journey", retryCommand: "journey", purpose: "feature" },
+    { command: "affected", retryCommand: "affected", purpose: "affected" },
+  ]);
+  const failed = (command: string) => ({
+    command,
+    executedCommand: command,
+    status: "failed" as const,
+    outputMarkdown: "",
+    completedAt,
+  });
+  const execution = {
+    id: "first",
+    commands: first,
+    results: [
+      { ...failed("dictation"), status: "passed" as const },
+      failed("journey"),
+      failed("affected"),
+    ],
+  };
+  expect(blockingAppReviewTestFailures(execution).map(({ command }) => command)).toEqual([
+    "journey",
+  ]);
+  expect(first.map((selection) => appReviewTestTimeoutMinutes(selection, 180))).toEqual([
+    180, 180, 30,
+  ]);
+  expect(appReviewTestTimeoutMinutes(first[2]!, 20)).toBe(20);
+  expect(appReviewTestTimeoutMinutes(first[2]!, undefined)).toBe(30);
+  expect(
+    appReviewTestCommands({ cycles: [{ e2eExecution: execution, fixResult: null }] }, []),
+  ).toEqual([first[1]]);
+  expect(
+    finalAppReviewE2eSelections({
+      featureCommands: ["dictation"],
+      projectFile: { e2eCommands: ["fleet"] },
+    }),
+  ).toEqual([{ command: "dictation", purpose: "feature" }, { command: "fleet" }]);
+});
+
+it("takes feature tests from the run's eligible tickets in this repository, in run order", () => {
+  const ticket = (
+    id: string,
+    overrides: Partial<OrchestrationPlanningTicket> = {},
+  ): OrchestrationPlanningTicket => ({
+    id: OrchestrationPlanningTicketId.make(id),
+    specId: OrchestrationPlanningSpecId.make("spec"),
+    ordinal: 0,
+    title: id,
+    bodyMarkdown: id,
+    plannedFileChanges: [],
+    dependencies: [],
+    appReviewEligible: true,
+    appReviewCommands: [`${id}-e2e`],
+    status: "open",
+    createdAt: completedAt,
+    updatedAt: completedAt,
+    ...overrides,
+  });
+  expect(
+    implementationFeatureE2eCommands({
+      planningTicketIds: ["second", "first", "desktop", "other-repo", "missing"],
+      tickets: [
+        ticket("first"),
+        ticket("second"),
+        ticket("desktop", { appReviewEligible: false }),
+        ticket("other-repo", { projectId: ProjectId.make("other") }),
+        ticket("unrelated"),
+      ],
+      projectId: "project",
+    }),
+  ).toEqual(["second-e2e", "first-e2e"]);
 });
 
 it("keeps passed suites and retries only failed or unfinished suites", () => {
@@ -428,6 +530,7 @@ describe.each(
           previewUrl: "https://assigned.example",
           executionId: "cycle-2",
           stackId: "stack-assigned",
+          baseRef: "base-commit",
           testPlatforms: ["web", "android"],
           env: { APP_REVIEW_TEST_PLATFORMS: "ios", APP_REVIEW_TEST_TIMEOUT_MS: "1" },
           timeoutMinutes,
@@ -465,13 +568,14 @@ describe.each(
             APP_REVIEW_PREVIEW_URL: "https://assigned.example",
             APP_REVIEW_EXECUTION_ID: "cycle-2",
             APP_REVIEW_STACK_ID: "stack-assigned",
+            APP_REVIEW_BASE_REF: "base-commit",
             APP_REVIEW_TEST_PLATFORMS: "web,android",
             APP_REVIEW_TEST_TIMEOUT_MS: String((timeoutMinutes ?? 45) * 60_000),
           },
           timeout: `${timeoutMinutes ?? 45} minutes`,
           maxOutputBytes: 8192,
         });
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 });
 
@@ -501,7 +605,62 @@ it.effect("interrupts the process scope when execution is cancelled", () =>
     yield* Deferred.await(started);
     yield* Fiber.interrupt(task);
     yield* Deferred.await(stopped);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
+it.effect.each([
+  { name: "a flaky failure passes on its second run", exits: [1, 0], retryFailure: true, runs: 2 },
+  { name: "a repeated failure fails", exits: [1, 1], retryFailure: true, runs: 2 },
+  { name: "a timeout is not run again", exits: ["timeout", 0], retryFailure: true, runs: 1 },
+  { name: "a command without retries runs once", exits: [1, 0], retryFailure: false, runs: 1 },
+] as const)("reruns a failed command once when asked: $name", (scenario) =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const recordingsDir = yield* fileSystem.makeTempDirectoryScoped();
+    let runs = 0;
+    const result = yield* runAppReviewTest({
+      command: "suite",
+      retryCommand: "suite",
+      cwd: "/assigned",
+      previewUrl: null,
+      executionId: "flaky",
+      recordingsDir,
+      retryFailure: scenario.retryFailure,
+    }).pipe(
+      Effect.provideService(ProcessRunner, {
+        run: (input) =>
+          Effect.gen(function* () {
+            const exit = scenario.exits[runs] ?? 1;
+            runs += 1;
+            yield* fileSystem.writeFileString(
+              path.join(input.env?.APP_REVIEW_RECORDING_DIR ?? "", `run_${runs}.rrweb.jsonl`),
+              '{"type":4}\n',
+            );
+            return {
+              code: ChildProcessSpawner.ExitCode(exit === "timeout" ? 1 : exit),
+              timedOut: exit === "timeout",
+              stdout: `run ${runs}`,
+              stderr: "",
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              stdoutInvalidUtf8: false,
+              stderrInvalidUtf8: false,
+            };
+          }).pipe(Effect.orDie),
+      }),
+    );
+    expect(runs).toBe(scenario.runs);
+    expect(result.status).toBe(scenario.exits[scenario.runs - 1] === 0 ? "passed" : "failed");
+    expect(result.recordings?.map((recording) => recording.label)).toEqual(
+      ["run_1", "run_2"].slice(0, scenario.runs),
+    );
+    if (scenario.runs === 2) {
+      expect(result.outputMarkdown).toMatch(/^The command failed(, then passed| twice)/);
+      expect(result.outputMarkdown).toContain("run 1");
+      expect(result.outputMarkdown).toContain("run 2");
+    }
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("collects what the suite recorded under server-chosen names", () =>
@@ -558,7 +717,7 @@ it.effect("collects what the suite recorded under server-chosen names", () =>
     expect(
       (yield* fileSystem.readDirectory(recordingsDir)).some((name) => name.endsWith(".incoming")),
     ).toBe(false);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("restores only what the suite wrote and leaves earlier edits alone", () =>
@@ -603,5 +762,11 @@ it.effect("restores only what the suite wrote and leaves earlier edits alone", (
     expect(yield* fileSystem.exists(path.join(repo, "report.html"))).toBe(false);
     expect(yield* fileSystem.readFileString(path.join(repo, "work.ts"))).toBe("in progress\n");
     expect(yield* fileSystem.readFileString(path.join(repo, "notes.md"))).toBe("mine\n");
-  }).pipe(Effect.provide(processRunnerLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      processRunnerLayer.pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );

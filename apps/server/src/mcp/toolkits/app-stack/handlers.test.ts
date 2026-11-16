@@ -23,10 +23,12 @@ import { McpServer, McpSchema } from "effect/ai";
 import { AppStackManager } from "../../../appStack/AppStackManager.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { McpInvocationContext, type McpCapability } from "../../McpInvocationContext.ts";
-import { AppStackToolkitRegistrationLive } from "../../McpHttpServer.ts";
-import { handlers } from "./handlers.ts";
+import { layerInProcessMcpServer, toolkitRegistration } from "../../McpHttpServer.ts";
+import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
+import * as AppStackHandlers from "./handlers.ts";
+import { AppStackToolkit } from "./tools.ts";
 
-const thread = Schema.decodeUnknownSync(OrchestrationThreadShell)({
+const thread = Schema.decodeSync(OrchestrationThreadShell)({
   ownerUserId: DEFAULT_WORKSPACE_USER_ID,
   parentThreadId: null,
   workflowRole: null,
@@ -48,7 +50,7 @@ const thread = Schema.decodeUnknownSync(OrchestrationThreadShell)({
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
 });
-const project = Schema.decodeUnknownSync(OrchestrationProjectShell)({
+const project = Schema.decodeSync(OrchestrationProjectShell)({
   id: "project-1",
   title: "Rudi",
   workspaceRoot: "/repo/rudi",
@@ -57,7 +59,7 @@ const project = Schema.decodeUnknownSync(OrchestrationProjectShell)({
   createdAt: thread.createdAt,
   updatedAt: thread.updatedAt,
 });
-const stack = Schema.decodeUnknownSync(AppStack)({
+const stack = Schema.decodeSync(AppStack)({
   id: "stack-1",
   uuid: "stack-1",
   userId: "user-1",
@@ -117,6 +119,7 @@ function harness(
     failMutation?: boolean;
     lookupWait?: Effect.Effect<void>;
     listed?: ReadonlyArray<AppStack>;
+    threads?: ReadonlyArray<{ id: string; parentThreadId: string; worktreePath: string }>;
   } = {},
 ) {
   const calls: Array<{ worktreePath: string; variant?: string | undefined }> = [];
@@ -132,7 +135,19 @@ function harness(
     invocation,
     Layer.mock(ProjectionSnapshotQuery)({
       getThreadShellById: (id) => {
-        expect(id).toBe(thread.id);
+        if (id !== thread.id) {
+          const other = input.threads?.find((candidate) => candidate.id === id);
+          return Effect.succeed(
+            other === undefined
+              ? Option.none()
+              : Option.some({
+                  ...thread,
+                  id: ThreadId.make(other.id),
+                  parentThreadId: ThreadId.make(other.parentThreadId),
+                  worktreePath: other.worktreePath,
+                }),
+          );
+        }
         return Effect.succeed(
           input.missing
             ? Option.none()
@@ -267,8 +282,8 @@ function harness(
 it.effect("refreshes the authenticated repo-root workspace and defaults to dev", () => {
   const test = harness();
   return Effect.gen(function* () {
-    const result = yield* handlers.app_stack_get({});
-    yield* handlers.app_stack_get({});
+    const result = yield* AppStackHandlers.handlers.app_stack_get({});
+    yield* AppStackHandlers.handlers.app_stack_get({});
     expect(result).toMatchObject({
       ...emptyStack,
       worktreePath: "/repo/rudi",
@@ -286,7 +301,7 @@ it.effect("refreshes the authenticated repo-root workspace and defaults to dev",
 it.effect("keeps an explicit child worktree and prod request scoped to that directory", () => {
   const test = harness({ worktreePath: "/worktrees/feature" });
   return Effect.gen(function* () {
-    yield* handlers.app_stack_get({ variant: "prod" });
+    yield* AppStackHandlers.handlers.app_stack_get({ variant: "prod" });
     expect(test.calls).toEqual([{ worktreePath: "/worktrees/feature", variant: "prod" }]);
   }).pipe(Effect.provide(test.layer));
 });
@@ -294,7 +309,7 @@ it.effect("keeps an explicit child worktree and prod request scoped to that dire
 it.effect("reports disabled integration without looking up a stack", () => {
   const test = harness({ enabled: false });
   return Effect.gen(function* () {
-    expect((yield* handlers.app_stack_get({})).enabled).toBe(false);
+    expect((yield* AppStackHandlers.handlers.app_stack_get({})).enabled).toBe(false);
     expect(test.calls).toEqual([]);
   }).pipe(Effect.provide(test.layer));
 });
@@ -302,7 +317,7 @@ it.effect("reports disabled integration without looking up a stack", () => {
 it.effect("rejects a missing thread without falling back to another workspace", () => {
   const test = harness({ missing: true });
   return Effect.gen(function* () {
-    const error = yield* handlers.app_stack_get({}).pipe(Effect.flip);
+    const error = yield* AppStackHandlers.handlers.app_stack_get({}).pipe(Effect.flip);
     expect(error.message).toContain("workspace was not found");
     expect(test.calls).toEqual([]);
   }).pipe(Effect.provide(test.layer));
@@ -311,7 +326,7 @@ it.effect("rejects a missing thread without falling back to another workspace", 
 it.effect("reports lookup failure instead of claiming no stack exists", () => {
   const test = harness({ fail: true });
   return Effect.gen(function* () {
-    const error = yield* handlers.app_stack_get({}).pipe(Effect.flip);
+    const error = yield* AppStackHandlers.handlers.app_stack_get({}).pipe(Effect.flip);
     expect(error.message).toContain("Could not refresh");
   }).pipe(Effect.provide(test.layer));
 });
@@ -326,7 +341,7 @@ it.effect("releases the workspace device after a slow stack lookup", () =>
         Effect.andThen(Deferred.await(release)),
       ),
     });
-    const fiber = yield* handlers
+    const fiber = yield* AppStackHandlers.handlers
       .app_stack_device_stop({ platform: "android", leaseId })
       .pipe(Effect.provide(test.layer), Effect.forkChild);
     yield* Deferred.await(entered);
@@ -347,7 +362,7 @@ it.effect("bounds a stuck lookup without releasing a device", () =>
       stack,
       lookupWait: Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
     });
-    const fiber = yield* handlers
+    const fiber = yield* AppStackHandlers.handlers
       .app_stack_device_stop({ platform: "android", leaseId })
       .pipe(Effect.provide(test.layer), Effect.result, Effect.forkChild);
     yield* Deferred.await(entered);
@@ -360,9 +375,10 @@ it.effect("bounds a stuck lookup without releasing a device", () =>
 
 it.effect("registers workspace tools, validates inputs, and returns results through MCP", () => {
   const test = harness({ stack });
-  const layer = AppStackToolkitRegistrationLive.pipe(
-    Layer.provideMerge(McpServer.McpServer.layer),
+  const layer = toolkitRegistration(AppStackToolkit, AppStackHandlers.layer).pipe(
+    Layer.provideMerge(layerInProcessMcpServer),
     Layer.provideMerge(test.layer),
+    Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
   );
   return Effect.scoped(
     Effect.gen(function* () {
@@ -379,6 +395,7 @@ it.effect("registers workspace tools, validates inputs, and returns results thro
         "app_stack_list_pods",
         "app_stack_logs",
         "app_stack_restart",
+        "app_stack_restart_services",
         "app_stack_start",
         "app_stack_stop",
       ]);
@@ -478,7 +495,7 @@ it.effect("registers workspace tools, validates inputs, and returns results thro
 it.effect("starts the authenticated worktree with its branch and explicit variant", () => {
   const test = harness({ worktreePath: "/worktrees/feature" });
   return Effect.gen(function* () {
-    const result = yield* handlers.app_stack_start({
+    const result = yield* AppStackHandlers.handlers.app_stack_start({
       variant: "prod",
       displayName: "Feature preview",
     });
@@ -506,7 +523,7 @@ describe.each([...(["dev", "prod"] as const)].map((scenarioCase) => [scenarioCas
         workflowId: "implementation-run-1",
       });
       return Effect.gen(function* () {
-        yield* handlers.app_stack_start({ variant });
+        yield* AppStackHandlers.handlers.app_stack_start({ variant });
         expect(test.operations).toMatchObject([
           {
             operation: "autoCreate",
@@ -525,7 +542,7 @@ describe.each([...(["dev", "prod"] as const)].map((scenarioCase) => [scenarioCas
 it.effect("reuses an existing stack without provisioning or changing its owner", () => {
   const test = harness({ stack });
   return Effect.gen(function* () {
-    const result = yield* handlers.app_stack_start({ displayName: "New name" });
+    const result = yield* AppStackHandlers.handlers.app_stack_start({ displayName: "New name" });
     expect(result).toMatchObject({
       created: false,
       alreadyRunning: true,
@@ -538,7 +555,7 @@ it.effect("reuses an existing stack without provisioning or changing its owner",
 it.effect("keeps an existing stack's owner when changing its shape", () => {
   const test = harness({ stack, workflowId: "another-calling-workflow" });
   return Effect.gen(function* () {
-    yield* handlers.app_stack_start({ bundle: ["cortex"] });
+    yield* AppStackHandlers.handlers.app_stack_start({ bundle: ["cortex"] });
     expect(test.operations).toMatchObject([
       { operation: "autoCreate", input: { workflowId: stack.workflowId, bundle: ["cortex"] } },
     ]);
@@ -548,7 +565,7 @@ it.effect("keeps an existing stack's owner when changing its shape", () => {
 it.effect("sends a bundle to the controller even when this worktree already runs alone", () => {
   const test = harness({ stack });
   return Effect.gen(function* () {
-    yield* handlers.app_stack_start({ bundle: ["cortex"] });
+    yield* AppStackHandlers.handlers.app_stack_start({ bundle: ["cortex"] });
     expect(test.operations).toMatchObject([
       { operation: "autoCreate", input: { worktreePath: stack.worktreePath, bundle: ["cortex"] } },
     ]);
@@ -558,7 +575,10 @@ it.effect("sends a bundle to the controller even when this worktree already runs
 it.effect("sends omitted services to the controller even when this worktree already runs", () => {
   const test = harness({ stack });
   return Effect.gen(function* () {
-    yield* handlers.app_stack_start({ bundle: "all", omitServices: { rudi: ["codex-runner"] } });
+    yield* AppStackHandlers.handlers.app_stack_start({
+      bundle: "all",
+      omitServices: { rudi: ["codex-runner"] },
+    });
     expect(test.operations).toMatchObject([
       {
         operation: "autoCreate",
@@ -577,7 +597,7 @@ it.effect(
   () => {
     const test = harness({ worktreePath: "/worktrees/feature" });
     return Effect.gen(function* () {
-      const plan = yield* handlers.app_stack_bundle_plan({});
+      const plan = yield* AppStackHandlers.handlers.app_stack_bundle_plan({});
       expect(plan.members[0]?.services).toEqual(["backend", "codex-runner", "frontend"]);
       expect(test.operations).toEqual([
         {
@@ -597,7 +617,7 @@ describe.each([...(["stopped", "error"] as const)].map((scenarioCase) => [scenar
       () => {
         const test = harness({ stack: { ...stack, status } });
         return Effect.gen(function* () {
-          const result = yield* handlers.app_stack_start({});
+          const result = yield* AppStackHandlers.handlers.app_stack_start({});
           expect(result).toMatchObject({
             created: false,
             stack: { status: "running", workflowId: "workflow-1" },
@@ -612,7 +632,7 @@ describe.each([...(["stopped", "error"] as const)].map((scenarioCase) => [scenar
 it.effect("does not start a stack while it is stopping", () => {
   const test = harness({ stack: { ...stack, status: "stopping" } });
   return Effect.gen(function* () {
-    const error = yield* handlers.app_stack_start({}).pipe(Effect.flip);
+    const error = yield* AppStackHandlers.handlers.app_stack_start({}).pipe(Effect.flip);
     expect(error.message).toContain("still stopping");
     expect(test.operations).toEqual([]);
   }).pipe(Effect.provide(test.layer));
@@ -621,7 +641,7 @@ it.effect("does not start a stack while it is stopping", () => {
 it.effect("preserves reserved deployment results without claiming a new stack", () => {
   const test = harness({ reserved: true });
   return Effect.gen(function* () {
-    const result = yield* handlers.app_stack_start({});
+    const result = yield* AppStackHandlers.handlers.app_stack_start({});
     expect(result).toMatchObject({
       stack: null,
       created: false,
@@ -635,13 +655,19 @@ it.effect("preserves reserved deployment results without claiming a new stack", 
 });
 
 const scopedOperations = [
-  { name: "stop", run: () => handlers.app_stack_stop({}).pipe(Effect.asVoid) },
-  { name: "restart", run: () => handlers.app_stack_restart({}).pipe(Effect.asVoid) },
-  { name: "delete", run: () => handlers.app_stack_delete({}).pipe(Effect.asVoid) },
-  { name: "listPods", run: () => handlers.app_stack_list_pods({}).pipe(Effect.asVoid) },
+  { name: "stop", run: () => AppStackHandlers.handlers.app_stack_stop({}).pipe(Effect.asVoid) },
+  {
+    name: "restart",
+    run: () => AppStackHandlers.handlers.app_stack_restart({}).pipe(Effect.asVoid),
+  },
+  { name: "delete", run: () => AppStackHandlers.handlers.app_stack_delete({}).pipe(Effect.asVoid) },
+  {
+    name: "listPods",
+    run: () => AppStackHandlers.handlers.app_stack_list_pods({}).pipe(Effect.asVoid),
+  },
   {
     name: "getPodLogs",
-    run: () => handlers.app_stack_logs({ podName: "api-1" }).pipe(Effect.asVoid),
+    run: () => AppStackHandlers.handlers.app_stack_logs({ podName: "api-1" }).pipe(Effect.asVoid),
   },
 ];
 
@@ -668,19 +694,27 @@ describe.each([...scopedOperations].map((scenarioCase) => [scenarioCase] as cons
 );
 
 const allOperations = [
-  { name: "start", run: () => handlers.app_stack_start({}).pipe(Effect.asVoid) },
+  { name: "start", run: () => AppStackHandlers.handlers.app_stack_start({}).pipe(Effect.asVoid) },
   {
     name: "deviceStart",
     run: () =>
-      handlers.app_stack_device_start({ platform: "android", leaseId }).pipe(Effect.asVoid),
+      AppStackHandlers.handlers
+        .app_stack_device_start({ platform: "android", leaseId })
+        .pipe(Effect.asVoid),
   },
   {
     name: "deviceStatus",
-    run: () => handlers.app_stack_device_status({ platform: "windows" }).pipe(Effect.asVoid),
+    run: () =>
+      AppStackHandlers.handlers
+        .app_stack_device_status({ platform: "windows" })
+        .pipe(Effect.asVoid),
   },
   {
     name: "deviceStop",
-    run: () => handlers.app_stack_device_stop({ platform: "windows", leaseId }).pipe(Effect.asVoid),
+    run: () =>
+      AppStackHandlers.handlers
+        .app_stack_device_stop({ platform: "windows", leaseId })
+        .pipe(Effect.asVoid),
   },
   ...scopedOperations,
 ];
@@ -711,6 +745,34 @@ describe.each(
   );
 });
 
+it.effect("acts on a thread below the caller and rejects threads outside it", () => {
+  const test = harness({
+    stack: { ...stack, worktreePath: "/worktrees/worker" },
+    threads: [
+      { id: "orchestrator", parentThreadId: thread.id, worktreePath: "/worktrees/orchestrator" },
+      { id: "worker", parentThreadId: "orchestrator", worktreePath: "/worktrees/worker" },
+      { id: "sibling", parentThreadId: "other-root", worktreePath: "/worktrees/sibling" },
+    ],
+  });
+  const worker = ThreadId.make("worker");
+  return Effect.gen(function* () {
+    yield* AppStackHandlers.handlers.app_stack_stop({ threadId: worker });
+    yield* AppStackHandlers.handlers.app_stack_delete({ threadId: worker });
+    expect(test.calls).toEqual([
+      { worktreePath: "/worktrees/worker", variant: "dev" },
+      { worktreePath: "/worktrees/worker", variant: "dev" },
+    ]);
+    const [sibling, unknown] = yield* Effect.forEach(["sibling", "unknown"], (threadId) =>
+      AppStackHandlers.handlers
+        .app_stack_start({ threadId: ThreadId.make(threadId) })
+        .pipe(Effect.flip),
+    );
+    expect(sibling?.message).toContain("this thread or a thread below it");
+    expect(unknown?.message).toContain("workspace was not found");
+    expect(test.operations.map((entry) => entry.operation)).toEqual(["stop", "delete"]);
+  }).pipe(Effect.provide(test.layer));
+});
+
 it.effect("requires a managed stack for mutations and logs", () => {
   const test = harness();
   return Effect.gen(function* () {
@@ -725,7 +787,7 @@ it.effect("requires a managed stack for mutations and logs", () => {
 it.effect("reads the requested prod pod and container with the requested log limit", () => {
   const test = harness({ stack: { ...stack, variant: "prod" } });
   return Effect.gen(function* () {
-    const result = yield* handlers.app_stack_logs({
+    const result = yield* AppStackHandlers.handlers.app_stack_logs({
       variant: "prod",
       podName: "backend-1",
       containerName: "api",
@@ -745,7 +807,7 @@ it.effect("reads the requested prod pod and container with the requested log lim
 it.effect("propagates backend mutation failures", () => {
   const test = harness({ stack, failMutation: true });
   return Effect.gen(function* () {
-    const error = yield* handlers.app_stack_stop({}).pipe(Effect.flip);
+    const error = yield* AppStackHandlers.handlers.app_stack_stop({}).pipe(Effect.flip);
     expect(error.message).toBe("backend unavailable");
   }).pipe(Effect.provide(test.layer));
 });
@@ -753,7 +815,7 @@ it.effect("propagates backend mutation failures", () => {
 it.effect("rejects a controller create response for another variant", () => {
   const test = harness({ createdStack: { ...stack, variant: "prod" } });
   return Effect.gen(function* () {
-    const error = yield* handlers.app_stack_start({}).pipe(Effect.flip);
+    const error = yield* AppStackHandlers.handlers.app_stack_start({}).pipe(Effect.flip);
     expect(error.reason).toBe("invalid_response");
   }).pipe(Effect.provide(test.layer));
 });
@@ -767,7 +829,11 @@ describe.each(
       stack: { ...stack, worktreePath: "/repo/feature", namespace: "dev-feature" },
     });
     return Effect.gen(function* () {
-      const result = yield* handlers.app_stack_device_start({ platform, leaseId, ttlSeconds: 300 });
+      const result = yield* AppStackHandlers.handlers.app_stack_device_start({
+        platform,
+        leaseId,
+        ttlSeconds: 300,
+      });
       expect(result.lease).toEqual({ ...deviceLease, platform });
       expect(result.access.namespace).toBe("dev-feature");
       expect(result.access.execPrefix).toEqual([
@@ -793,14 +859,14 @@ describe.each(
 it.effect("reports queued Windows readiness and releases only the supplied device lease", () => {
   const test = harness({ stack: { ...stack, variant: "prod", namespace: "dev-feature-prod" } });
   return Effect.gen(function* () {
-    const result = yield* handlers.app_stack_device_status({
+    const result = yield* AppStackHandlers.handlers.app_stack_device_status({
       platform: "windows",
       variant: "prod",
     });
     expect(result.lease.status).toBe("queued");
     expect(result.lease.retryAfterSeconds).toBe(10);
     expect(result.readiness).toMatchObject({ ready: false, guestAgentConnected: false });
-    const released = yield* handlers.app_stack_device_stop({
+    const released = yield* AppStackHandlers.handlers.app_stack_device_stop({
       platform: "windows",
       variant: "prod",
       leaseId,
@@ -854,7 +920,7 @@ describe("a platform workspace", () => {
   it.effect("returns the apps of its bundle with their URLs", () => {
     const test = platformHarness();
     return Effect.gen(function* () {
-      const result = yield* handlers.app_stack_get({});
+      const result = yield* AppStackHandlers.handlers.app_stack_get({});
       expect(result.stack?.platform).toBe(true);
       expect(result.bundle?.map((member) => [member.app, member.previewUrls?.frontend])).toEqual([
         [null, undefined],
@@ -867,11 +933,13 @@ describe("a platform workspace", () => {
   it.effect("reads pods and logs of the app it names, and asks for one otherwise", () => {
     const test = platformHarness();
     return Effect.gen(function* () {
-      const error = yield* handlers.app_stack_list_pods({}).pipe(Effect.flip);
+      const error = yield* AppStackHandlers.handlers.app_stack_list_pods({}).pipe(Effect.flip);
       expect(error.message).toContain("Pass app, one of: rudi, chat");
-      yield* handlers.app_stack_list_pods({ app: "chat" });
-      yield* handlers.app_stack_logs({ app: "rudi", podName: "backend-1" });
-      const missing = yield* handlers.app_stack_list_pods({ app: "cortex" }).pipe(Effect.flip);
+      yield* AppStackHandlers.handlers.app_stack_list_pods({ app: "chat" });
+      yield* AppStackHandlers.handlers.app_stack_logs({ app: "rudi", podName: "backend-1" });
+      const missing = yield* AppStackHandlers.handlers
+        .app_stack_list_pods({ app: "cortex" })
+        .pipe(Effect.flip);
       expect(missing.message).toContain("runs no cortex");
       expect(test.operations).toEqual([
         { operation: "listPods", input: { stackId: "chat-1" } },
@@ -886,9 +954,9 @@ describe("a platform workspace", () => {
   it.effect("stops, restarts and deletes the platform record", () => {
     const test = platformHarness();
     return Effect.gen(function* () {
-      yield* handlers.app_stack_stop({});
-      yield* handlers.app_stack_restart({});
-      yield* handlers.app_stack_delete({});
+      yield* AppStackHandlers.handlers.app_stack_stop({});
+      yield* AppStackHandlers.handlers.app_stack_restart({});
+      yield* AppStackHandlers.handlers.app_stack_delete({});
       expect(test.operations.map(({ operation, input }) => [operation, input])).toEqual([
         ["stop", { stackId: platformRecord.id }],
         ["restart", { stackId: platformRecord.id }],
@@ -900,7 +968,7 @@ describe("a platform workspace", () => {
   it.effect("creates the chosen apps' worktrees on its branch without starting them", () => {
     const test = platformHarness();
     return Effect.gen(function* () {
-      yield* handlers.app_stack_create_worktrees({ bundle: ["rudi", "chat"] });
+      yield* AppStackHandlers.handlers.app_stack_create_worktrees({ bundle: ["rudi", "chat"] });
       expect(test.operations).toEqual([
         {
           operation: "createBundleWorktrees",

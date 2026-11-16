@@ -6,6 +6,8 @@ disable-model-invocation: true
 
 Implement the work described by the user in the spec or tickets.
 
+If the user passes a ticket reference, fetch it from the issue tracker and state its title before starting. If the reference is ambiguous, ask.
+
 Use /tdd where possible, at pre-agreed seams.
 
 Run focused tests and affected type checks as the work changes. Follow the active workflow phase's validation scope. Ticket implementation and ticket repair use focused acceptance checks; the integrated workflow owns full project validation and shared regression repairs. Outside a workflow, follow the repository's completion checks.

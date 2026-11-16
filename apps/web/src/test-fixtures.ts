@@ -2,6 +2,7 @@ import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
   EnvironmentId,
   MessageId,
+  PlanId,
   RunId,
   TurnItemId,
   type OrchestrationV2ProjectedTurnItem,
@@ -21,9 +22,7 @@ export type ThreadFixtureOverrides = Partial<Thread> & {
   readonly parentThreadId?: ThreadId | null;
   readonly planningWorkflow?: import("@t3tools/contracts").OrchestrationPlanningWorkflow | null;
   readonly appReviews?: ReadonlyArray<unknown>;
-  /** Test-only fallback data for the generic thread-sort contract. */
   readonly messages?: ReadonlyArray<ChatMessage>;
-  /** Accepted while older unit cases are migrated; never consumed by production code. */
   readonly proposedPlans?: ReadonlyArray<unknown>;
 };
 
@@ -75,7 +74,6 @@ export function makeThreadProjectionFixture(): OrchestrationV2ThreadProjection {
   };
 }
 
-/** Creates a structurally complete V2 shell for UI unit tests. */
 export function makeThreadFixture(overrides: ThreadFixtureOverrides = {}): Thread {
   const environmentId = overrides.environmentId ?? EnvironmentId.make("environment-test");
   const id = overrides.id ?? ThreadId.make("thread-test");
@@ -143,7 +141,6 @@ export function makeThreadFixture(overrides: ThreadFixtureOverrides = {}): Threa
   return { ...shell, ...overrides };
 }
 
-/** Canonical v2 history and a live response for streaming projection tests. */
 export function makeStreamingTimelineFixture(text = "") {
   const threadId = ThreadId.make("streaming-thread");
   const runId = RunId.make("live-run");
@@ -226,5 +223,53 @@ export function makeStreamingTimelineFixture(text = "") {
     sourceItemId: item.id,
     item,
   }));
-  return { threadId, runId, historyRunId, visibleTurnItems, time };
+  return { threadId, runId, historyRunId, visibleTurnItems, time, base };
+}
+
+/** The streaming fixture, ending in streaming thinking or a streaming plan instead of assistant text. */
+export function makeStreamingWorkTimelineFixture(kind: "reasoning" | "proposed_plan") {
+  const fixture = makeStreamingTimelineFixture();
+  const live = {
+    ...fixture.base("live-streaming", fixture.runId, 7),
+    status: "running" as const,
+    completedAt: null,
+  };
+  const streamingItem: OrchestrationV2TurnItem =
+    kind === "proposed_plan"
+      ? {
+          ...live,
+          type: "proposed_plan",
+          planId: PlanId.make("live-plan"),
+          markdown: "",
+          streaming: true,
+        }
+      : { ...live, type: "reasoning", text: "", streaming: true };
+  const visibleTurnItems = fixture.visibleTurnItems.map((row) =>
+    row.item.id === "live-assistant-item"
+      ? { ...row, sourceItemId: streamingItem.id, item: streamingItem }
+      : row,
+  );
+  return { ...fixture, visibleTurnItems, streamingItemId: streamingItem.id };
+}
+
+/** One coalesced provider flush: only the streamed text and `updatedAt` change. */
+export function withStreamedText(
+  rows: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+  itemId: string,
+  text: string,
+  updatedAt: string,
+): OrchestrationV2ProjectedTurnItem[] {
+  return rows.map((row) => {
+    if (row.item.id !== itemId) return row;
+    const updated = DateTime.makeUnsafe(updatedAt);
+    return {
+      ...row,
+      item:
+        row.item.type === "proposed_plan"
+          ? { ...row.item, markdown: text, updatedAt: updated }
+          : row.item.type === "reasoning"
+            ? { ...row.item, text, updatedAt: updated }
+            : row.item,
+    };
+  });
 }

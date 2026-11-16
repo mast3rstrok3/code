@@ -1,4 +1,9 @@
-import { AppReviewId, AppReviewWorkflowRun, ThreadId } from "@t3tools/contracts";
+import {
+  AppReviewId,
+  AppReviewWorkflowRun,
+  AppReviewWorkflowRunId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -150,6 +155,13 @@ it.effect("looks up review ownership without decoding unrelated snapshot data", 
       reviewId: AppReviewId.make("review-1"),
     });
     assert.equal(Option.getOrThrow(historical).status, "passed");
+    const byRunId = yield* query.getAppReviewWorkflowRun({ runId: run.id });
+    assert.equal(Option.getOrThrow(byRunId).status, "passed");
+    assert.isTrue(
+      Option.isNone(
+        yield* query.getAppReviewWorkflowRun({ runId: AppReviewWorkflowRunId.make("unknown") }),
+      ),
+    );
   }).pipe(
     Effect.provide(
       OrchestrationProjectionSnapshotQueryLive.pipe(

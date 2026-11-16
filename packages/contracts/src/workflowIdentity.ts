@@ -47,6 +47,7 @@ export type ThreadWorkflowContext = typeof ThreadWorkflowContext.Type;
 export const OrchestrationThreadWorkflowRole = Schema.Literals([
   "planning-orchestrator",
   "planning-reviewer",
+  "planning-grill-judge",
   "implementation-orchestrator",
   "implementation-worker",
   "implementation-validator",

@@ -49,10 +49,18 @@ this panel. It shows the dev stack for the thread's worktree, or the repository 
 the thread uses the local checkout. Agents receive fresh dev stack status and service URLs at
 each turn. Agents with T3's MCP tools can use `app_stack_get` to refresh status during a turn or
 request the prod variant. You can ask an agent to start, stop, restart, or delete that workspace's
-stack, list its pods, and read recent container logs. These actions default to dev; ask for prod
-explicitly when needed. Starting reuses an existing stack or resumes a stopped one. Stopping keeps
+stack, list its pods, read recent container logs, and restart single services, such as a crashed
+backend, while the rest keeps running. These actions default to dev; ask for prod explicitly when
+needed. Starting reuses an existing stack or resumes a stopped one. Stopping keeps
 the namespace, while deleting removes it. Explicit stop, restart, and delete actions apply even
 when the stack is protected.
+
+On mobile, open **App Stack** from a thread's Git sheet. While the thread's stack is running,
+starting, or failing, a stack button also appears above the composer. The sheet shows the stack's
+status, services and preview links, and start, stop, restart, protect and delete controls, plus
+per-service pod logs and a list of every stack in the environment. Mobile always starts the dev
+variant in the worktree's default bundle; use web or desktop to pick bundle apps, leave services
+out, or start a prod stack.
 
 When a thread settles, T3 Code stops its unprotected dev and prod stacks to free resources.
 This includes automatic settlement after a pull request merges or closes. Stacks stay running
@@ -179,11 +187,6 @@ Prod images built by the native provisioner are tagged with the worktree's commi
 suffix when the worktree is dirty), so a rebuilt release candidate rolls out instead of leaving the
 node on a cached image. If the repository has no prod contract the start fails and names the
 missing file.
-
-The Stacks controller accepts `variant: "prod"` on `/auto-create` but still keys its
-"already running" lookup on the worktree alone, so until that changes a worktree with a running dev
-stack gets that dev stack back when it asks the controller for a prod one. The native provisioner
-has no such limit.
 
 ## T3 Code configuration
 

@@ -74,13 +74,13 @@ describe("workflow presets", () => {
     ).toContain("up to five cycles");
   });
 
-  it("plans, implements, reviews, tests, and publishes Feature from one thread", () => {
+  it("instructs, implements, tests, reviews, and publishes Feature from one thread", () => {
     const steps = WORKFLOW_PRESET_DEFINITION_BY_ID["fast-plan"].helpSteps;
     expect(steps.map((step) => step.label)).toEqual([
-      "Plan",
-      "Implement",
-      "Code Review",
+      "Instruction",
+      "TDD implementation",
       "App Review",
+      "Code Review",
       "Create PR",
     ]);
     expect(steps.map((step) => step.threadBoundary)).toEqual([
@@ -131,7 +131,7 @@ describe("workflow presets", () => {
 
   it("maps presets to provider modes and intent kinds", () => {
     expect(interactionModeForWorkflowPreset("fast-feature")).toBe("plan");
-    expect(interactionModeForWorkflowPreset("fast-plan")).toBe("plan");
+    expect(interactionModeForWorkflowPreset("fast-plan")).toBe("default");
     expect(interactionModeForWorkflowPreset("product-planning")).toBe("product-workflow");
     expect(interactionModeForWorkflowPreset("implementation")).toBe("implementation-workflow");
     expect(expectedIntentKindForWorkflowPreset("fix")).toBe("fix");
@@ -147,10 +147,13 @@ describe("workflow presets", () => {
     expect(planning?.helpSteps.at(-2)?.label).toContain("pull request");
   });
 
-  it("keeps the standalone Planning grill choice interactive", () => {
+  it("lets a person or an LLM judge answer the Engineering grill", () => {
     const planning = WORKFLOW_PRESET_DEFINITIONS.find((definition) => definition.id === "planning");
     expect(planning?.helpSteps[1]?.skillId).toBe("planning.grill-stage.codex");
-    expect(planning?.helpSteps[1]?.note).toBe("human-guided");
+    expect(planning?.helpSteps[1]?.note).toBe("human-guided, or answered by an LLM judge");
+    expect(planning?.helpSteps[1]?.subSteps?.map((subStep) => subStep.workflowPromptId)).toEqual([
+      "planning.grill-judge.codex",
+    ]);
   });
 
   it("starts the Engineering Workflow on its grill prompt", () => {

@@ -88,75 +88,76 @@ const make = Effect.gen(function* () {
   });
   const active = yield* Ref.make<ActiveDrain | null>(null);
 
-  const requestDrain: WorkflowDrainCoordinator["Service"]["requestDrain"] = (input) =>
-    Effect.gen(function* () {
-      const requestedAt = input.requestedAt ?? DateTime.formatIso(yield* DateTime.now);
-      const deadlineAt =
-        input.deadlineAt ??
-        DateTime.formatIso(
-          DateTime.add(DateTime.makeUnsafe(Date.parse(requestedAt)), {
-            milliseconds: WORKFLOW_DRAIN_TIMEOUT_MS,
-          }),
-        );
-      const completed = yield* Deferred.make<WorkflowDrainState>();
-      const forceRequested = yield* Deferred.make<void>();
-      const drainingState: WorkflowDrainState = {
-        status: "draining",
-        operationId: input.operationId,
-        requestedAt,
-        deadlineAt,
-      };
-      const prior = yield* Ref.get(active);
-      if (
-        prior !== null &&
-        prior.state.operationId !== input.operationId &&
-        (yield* Deferred.isDone(prior.completed))
-      ) {
-        yield* Ref.set(active, null);
-      }
-      const selected = yield* Ref.modify(active, (current) =>
-        current === null
-          ? [
-              { state: drainingState, completed, forceRequested },
-              { state: drainingState, completed, forceRequested },
-            ]
-          : [current, current],
+  const requestDrain: WorkflowDrainCoordinator["Service"]["requestDrain"] = Effect.fn(
+    "WorkflowDrainCoordinator.requestDrain",
+  )(function* (input) {
+    const requestedAt = input.requestedAt ?? DateTime.formatIso(yield* DateTime.now);
+    const deadlineAt =
+      input.deadlineAt ??
+      DateTime.formatIso(
+        DateTime.add(DateTime.makeUnsafe(Date.parse(requestedAt)), {
+          milliseconds: WORKFLOW_DRAIN_TIMEOUT_MS,
+        }),
       );
-      if (selected.completed !== completed) return yield* Deferred.await(selected.completed);
+    const completed = yield* Deferred.make<WorkflowDrainState>();
+    const forceRequested = yield* Deferred.make<void>();
+    const drainingState: WorkflowDrainState = {
+      status: "draining",
+      operationId: input.operationId,
+      requestedAt,
+      deadlineAt,
+    };
+    const prior = yield* Ref.get(active);
+    if (
+      prior !== null &&
+      prior.state.operationId !== input.operationId &&
+      (yield* Deferred.isDone(prior.completed))
+    ) {
+      yield* Ref.set(active, null);
+    }
+    const selected = yield* Ref.modify(active, (current) =>
+      current === null
+        ? [
+            { state: drainingState, completed, forceRequested },
+            { state: drainingState, completed, forceRequested },
+          ]
+        : [current, current],
+    );
+    if (selected.completed !== completed) return yield* Deferred.await(selected.completed);
 
-      const marker: PlannedRestartMarker = {
-        operationId: input.operationId,
-        requestedAt,
-        deadlineAt,
-      };
-      yield* fs.writeFileString(plannedMarkerPath, encodeMarker(marker)).pipe(Effect.orDie);
-      yield* Ref.set(state, drainingState);
+    const marker: PlannedRestartMarker = {
+      operationId: input.operationId,
+      requestedAt,
+      deadlineAt,
+    };
+    yield* fs.writeFileString(plannedMarkerPath, encodeMarker(marker)).pipe(Effect.orDie);
+    yield* Ref.set(state, drainingState);
+    yield* lifecycle.publish({
+      version: 1,
+      type: "draining",
+      payload: { ...marker, forced: false },
+    });
+
+    const remainingMs = Math.max(0, Date.parse(deadlineAt) - Date.parse(requestedAt));
+    const status = yield* Effect.race(
+      Effect.race(
+        input.drain.pipe(Effect.as("ready" as const)),
+        Effect.sleep(remainingMs).pipe(Effect.as("forced" as const)),
+      ),
+      Deferred.await(forceRequested).pipe(Effect.as("forced" as const)),
+    );
+    const settled: WorkflowDrainState = { ...drainingState, status };
+    yield* Ref.set(state, settled);
+    yield* Deferred.succeed(completed, settled);
+    if (status === "forced") {
       yield* lifecycle.publish({
         version: 1,
         type: "draining",
-        payload: { ...marker, forced: false },
+        payload: { ...marker, forced: true },
       });
-
-      const remainingMs = Math.max(0, Date.parse(deadlineAt) - Date.parse(requestedAt));
-      const status = yield* Effect.race(
-        Effect.race(
-          input.drain.pipe(Effect.as("ready" as const)),
-          Effect.sleep(remainingMs).pipe(Effect.as("forced" as const)),
-        ),
-        Deferred.await(forceRequested).pipe(Effect.as("forced" as const)),
-      );
-      const settled: WorkflowDrainState = { ...drainingState, status };
-      yield* Ref.set(state, settled);
-      yield* Deferred.succeed(completed, settled);
-      if (status === "forced") {
-        yield* lifecycle.publish({
-          version: 1,
-          type: "draining",
-          payload: { ...marker, forced: true },
-        });
-      }
-      return settled;
-    });
+    }
+    return settled;
+  });
 
   const force = Effect.gen(function* () {
     const current = yield* Ref.get(active);

@@ -97,6 +97,7 @@ const derivedPaths = {
   keybindingsConfigPath: "/tmp/t3-app-dev-stack-manager-test/state/keybindings.json",
   settingsPath: "/tmp/t3-app-dev-stack-manager-test/state/settings.json",
   providerStatusCacheDir: "/tmp/t3-app-dev-stack-manager-test/caches",
+  worktreeCheckoutCacheDir: "/tmp/t3-app-dev-stack-manager-test/caches/worktree-checkouts",
   worktreesDir: "/tmp/t3-app-dev-stack-manager-test/worktrees",
   browserArtifactsDir: "/tmp/t3-app-dev-stack-manager-test/state/browser-artifacts",
   attachmentsDir: "/tmp/t3-app-dev-stack-manager-test/state/attachments",
@@ -595,6 +596,13 @@ it.effect("proxies pod list and log reads to the configured backend", () => {
           pods: [],
         });
       }
+      if (request.url.endsWith("/api/app-dev-stacks/rudi-dev/services/restart")) {
+        return Response.json({
+          stackId: "rudi-dev",
+          namespace: "rudi-dev",
+          restarted: ["backend", "worker"],
+        });
+      }
       return Response.json({
         stackId: "rudi-dev",
         namespace: "rudi-dev",
@@ -627,6 +635,23 @@ it.effect("proxies pod list and log reads to the configured backend", () => {
       `${backendUrl.href.replace(/\/+$/u, "")}/api/app-dev-stacks/rudi-dev/pods/backend-pod/logs?containerName=backend&tailLines=300`,
     );
     assert.equal(requests[1]?.headers.authorization, "Bearer backend-token");
+
+    const restarted = yield* manager.restartServices({
+      stackId: "rudi-dev",
+      services: ["backend", "worker"],
+    });
+    assert.deepStrictEqual(restarted.restarted, ["backend", "worker"]);
+    const restart = requests[2];
+    if (restart === undefined || restart.body._tag !== "Uint8Array") {
+      assert.fail("expected a JSON restart request");
+    }
+    assert.equal(restart.method, "POST");
+    assert.equal(
+      restart.url,
+      `${backendUrl.href.replace(/\/+$/u, "")}/api/app-dev-stacks/rudi-dev/services/restart`,
+    );
+    assert.equal(restart.headers.authorization, "Bearer backend-token");
+    assert.equal(new TextDecoder().decode(restart.body.body), '{"services":["backend","worker"]}');
   }).pipe(Effect.provide(layer));
 });
 
@@ -895,7 +920,7 @@ it.effect("tears a workflow's stacks down in one controller call", () => {
   }).pipe(Effect.provide(layer));
 });
 
-it.effect("asks the controller for the prod contract and ignores the worktree's dev stack", () => {
+it.effect("asks the controller for the requested variant's stack", () => {
   const requests: Array<HttpClientRequest.HttpClientRequest> = [];
   const prodStackJson = {
     ...stackJson,
@@ -903,74 +928,52 @@ it.effect("asks the controller for the prod contract and ignores the worktree's 
     uuid: "22222222-2222-2222-2222-222222222222",
     composePath: "/repo/worktrees/feature/infra/compose/compose.app-prod.yml",
   };
+  let prodRunning = false;
   const layer = makeLayer({
     requests,
-    response: (request) =>
-      Response.json(
-        new URL(request.url).pathname.endsWith("/by-worktree")
-          ? // The controller keys this on the worktree alone and returns the dev stack.
-            {
-              stack: stackJson,
-              frontendUrl: "https://feature.example.test",
-              frontendServiceName: "frontend",
-            }
-          : request.method === "GET"
-            ? [stackJson]
-            : { stack: prodStackJson, created: true, frontendUrl: null, frontendServiceName: null },
-      ),
+    response: (request) => {
+      const url = new URL(request.url);
+      if (url.pathname.endsWith("/by-worktree")) {
+        // The worktree runs a dev stack; the controller answers with it unless asked for prod.
+        const prod = url.searchParams.get("variant") === "prod";
+        return Response.json({
+          stack: prod ? (prodRunning ? prodStackJson : null) : stackJson,
+          frontendUrl: null,
+          frontendServiceName: null,
+        });
+      }
+      prodRunning = true;
+      return Response.json({
+        stack: prodStackJson,
+        created: true,
+        frontendUrl: null,
+        frontendServiceName: null,
+      });
+    },
   });
 
   return Effect.gen(function* () {
     const manager = yield* AppStackManager;
-    const byWorktree = yield* manager.getByWorktree({
-      worktreePath: stackJson.worktreePath,
-      variant: "prod",
-    });
-    assert.equal(byWorktree.stack, null);
-
-    const result = yield* manager.autoCreate({
+    const created = yield* manager.autoCreate({
       worktreePath: stackJson.worktreePath,
       displayName: "feature",
       variant: "prod",
     });
-    assert.equal(result.created, true);
-    assert.equal(result.stack?.variant, "prod");
-
-    const request = requests.at(-1);
-    if (request === undefined || request.body._tag !== "Uint8Array") {
+    assert.equal(created.created, true);
+    const post = requests.at(-1);
+    if (post === undefined || post.body._tag !== "Uint8Array") {
       assert.fail("expected a JSON auto-create request");
     }
-    assert.equal(request.method, "POST");
-    assert.equal(decodeVariantRequest(new TextDecoder().decode(request.body.body)).variant, "prod");
-  }).pipe(Effect.provide(layer));
-});
+    assert.equal(decodeVariantRequest(new TextDecoder().decode(post.body.body)).variant, "prod");
 
-it.effect("finds the exact workspace dev stack when the controller returns its prod stack", () => {
-  const dev = {
-    ...stackJson,
-    composePath: "infra/compose/compose.app-dev.yml",
-    previewUrls: { frontend: "https://dev.example.test" },
-  };
-  const prod = { ...stackJson, composePath: "infra/compose/compose.app-prod.yml" };
-  const layer = makeLayer({
-    requests: [],
-    response: (request) =>
-      Response.json(
-        new URL(request.url).pathname.endsWith("/by-worktree")
-          ? {
-              stack: prod,
-              frontendUrl: "https://prod.example.test",
-              frontendServiceName: "frontend",
-            }
-          : [{ ...dev, worktreePath: "/another/worktree" }, prod, dev],
-      ),
-  });
-  return Effect.gen(function* () {
-    const manager = yield* AppStackManager;
-    const result = yield* manager.getByWorktree({ worktreePath: stackJson.worktreePath + "/" });
-    assert.equal(result.stack?.worktreePath, stackJson.worktreePath);
-    assert.equal(result.stack?.variant, "dev");
-    assert.equal(result.frontendUrl, "https://dev.example.test");
+    const prod = yield* manager.getByWorktree({
+      worktreePath: stackJson.worktreePath,
+      variant: "prod",
+    });
+    assert.equal(prod.stack?.id, prodStackJson.id);
+    assert.equal(prod.stack?.variant, "prod");
+    const dev = yield* manager.getByWorktree({ worktreePath: stackJson.worktreePath });
+    assert.equal(dev.stack?.id, stackJson.id);
   }).pipe(Effect.provide(layer));
 });
 

@@ -11,9 +11,11 @@ import {
   type OrchestrationMessageContext,
   type OrchestrationReadModel,
 } from "@t3tools/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
@@ -89,7 +91,7 @@ function makeEvent(sequence: number, type: OrchestrationEvent["type"], payload: 
   } as OrchestrationEvent;
 }
 
-it.layer(NodeServices.layer)("message context plumbing", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("message context plumbing", (it) => {
   it.effect("carries context records from turn start into the message-sent event", () =>
     Effect.gen(function* () {
       const result = yield* decideOrchestrationCommand({

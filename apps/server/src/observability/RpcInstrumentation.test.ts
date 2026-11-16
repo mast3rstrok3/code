@@ -4,7 +4,7 @@ import {
   AuthOrchestrationReadScope,
   type AuthEnvironmentScope,
   ScheduledTaskError,
-  ScheduledTaskId,
+  ServerSettingsError,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -18,6 +18,9 @@ import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
+import * as Headers from "effect/http/Headers";
+import * as Rpc from "effect/rpc/Rpc";
+import { RequestId } from "effect/rpc/RpcMessage";
 import * as RpcTest from "effect/rpc/RpcTest";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -27,7 +30,6 @@ import { RpcInstrumentation, rpcInstrumentationLayer } from "./RpcInstrumentatio
 
 type WsRpcMethod = keyof typeof RPC_REQUIRED_SCOPES;
 
-/** The server group narrowed to `tags`, so a test only implements the handlers it calls. */
 const groupOf = <const Tags extends ReadonlyArray<WsRpcMethod>>(...tags: Tags) =>
   WsRpcGroup.omit(
     ...[...WsRpcGroup.requests.keys()].filter(
@@ -36,14 +38,12 @@ const groupOf = <const Tags extends ReadonlyArray<WsRpcMethod>>(...tags: Tags) =
     ),
   ).middleware(RpcInstrumentation);
 
-/** The middleware ws.ts installs for a connection with `scopes`. */
 const connectionMiddleware = (scopes: ReadonlyArray<AuthEnvironmentScope>) =>
   Layer.merge(RpcAuthorization.layer(scopes), rpcInstrumentationLayer);
 const readOnlyConnection = connectionMiddleware([AuthOrchestrationReadScope]);
-const taskId = ScheduledTaskId.make("scheduled-task:instrumented");
+const settingsPath = "/instrumented/settings.json";
 const rpcSpanDefaults = { "rpc.transport": "websocket", "rpc.system": "effect-rpc" };
 
-/** Runs a test with a fresh metric registry and a tracer that keeps every span it ends. */
 const withTelemetry = <A, E, R>(
   test: (ended: ReadonlyArray<Tracer.NativeSpan>) => Effect.Effect<A, E, R>,
 ) => {
@@ -70,9 +70,9 @@ const rpcSpans = (ended: ReadonlyArray<Tracer.NativeSpan>) =>
   ended.filter((span) => span.name.startsWith("ws.rpc."));
 
 // RpcTest keeps Effect's own RpcServer/RpcClient spans, which ws.ts turns off with
-// `disableTracing: true`. Everything else comes from the middleware or the handlers.
+// `disableTracing: true`.
 const appSpans = (ended: ReadonlyArray<Tracer.NativeSpan>) =>
-  ended.filter((span) => !/^Rpc(Server|Client)\./.test(span.name));
+  ended.filter((span) => span.attributes.get("rpc.system.name") !== "effect_rpc");
 
 const exitTag = (span: Tracer.NativeSpan | undefined) =>
   span?.status._tag === "Ended" ? span.status.exit._tag : undefined;
@@ -107,11 +107,11 @@ describe("WS RPC instrumentation middleware", () => {
       Effect.gen(function* () {
         const group = groupOf(
           WS_METHODS.serverProbe,
-          WS_METHODS.scheduledTasksList,
+          WS_METHODS.serverGetConfig,
           WS_METHODS.serverRetryResourceTelemetry,
           WS_METHODS.pullRequestsSubscribeRefreshes,
           WS_METHODS.scheduledTasksSubscribe,
-          WS_METHODS.serverGetSettings,
+          WS_METHODS.serverGetHostResources,
         );
         const client = yield* RpcTest.makeClient(group).pipe(
           Effect.provide(
@@ -119,9 +119,9 @@ describe("WS RPC instrumentation middleware", () => {
               WsRpcGroup.toLayerHandler(WS_METHODS.serverProbe, () =>
                 Effect.succeed({}).pipe(Effect.withSpan("serverProbe.child")),
               ),
-              WsRpcGroup.toLayerHandler(WS_METHODS.scheduledTasksList, () =>
-                Effect.annotateCurrentSpan({ "scheduled_task.id": taskId }).pipe(
-                  Effect.andThen(new ScheduledTaskError({ message: "List failed." })),
+              WsRpcGroup.toLayerHandler(WS_METHODS.serverGetConfig, () =>
+                Effect.annotateCurrentSpan({ "settings.path": settingsPath }).pipe(
+                  Effect.andThen(new ServerSettingsError({ settingsPath, operation: "read-file" })),
                 ),
               ),
               WsRpcGroup.toLayerHandler(WS_METHODS.serverRetryResourceTelemetry, () =>
@@ -136,16 +136,17 @@ describe("WS RPC instrumentation middleware", () => {
                   Stream.fail(new ScheduledTaskError({ message: "Subscription failed." })),
                 ),
               ),
-              WsRpcGroup.toLayerHandler(WS_METHODS.serverGetSettings, () => Effect.die("broken")),
+              WsRpcGroup.toLayerHandler(WS_METHODS.serverGetHostResources, () =>
+                Effect.die("broken"),
+              ),
               readOnlyConnection,
             ),
           ),
         );
 
         assert.deepStrictEqual(yield* client[WS_METHODS.serverProbe]({}), {});
-        const listError = yield* client[WS_METHODS.scheduledTasksList]({}).pipe(Effect.flip);
-        assert.equal(listError._tag, "ScheduledTaskError");
-        // Retrying telemetry needs operate scope, so the handler must not run.
+        const configError = yield* client[WS_METHODS.serverGetConfig]({}).pipe(Effect.flip);
+        assert.equal(configError._tag, "ServerSettingsError");
         const rejection = yield* client[WS_METHODS.serverRetryResourceTelemetry]({}).pipe(
           Effect.flip,
         );
@@ -158,8 +159,8 @@ describe("WS RPC instrumentation middleware", () => {
           client[WS_METHODS.scheduledTasksSubscribe]({}),
         ).pipe(Effect.flip);
         assert.equal(subscribeError._tag, "ScheduledTaskError");
-        const settingsExit = yield* Effect.exit(client[WS_METHODS.serverGetSettings]({}));
-        assert.isTrue(Exit.hasDies(settingsExit));
+        const resourcesExit = yield* Effect.exit(client[WS_METHODS.serverGetHostResources]({}));
+        assert.isTrue(Exit.hasDies(resourcesExit));
 
         assert.deepStrictEqual(
           rpcSpans(ended).map((span) => [span.name, Object.fromEntries(span.attributes)]),
@@ -173,12 +174,12 @@ describe("WS RPC instrumentation middleware", () => {
               },
             ],
             [
-              "ws.rpc.scheduledTasks.list",
+              "ws.rpc.server.getConfig",
               {
                 ...rpcSpanDefaults,
-                "rpc.method": WS_METHODS.scheduledTasksList,
-                "rpc.aggregate": "scheduledTasks",
-                "scheduled_task.id": taskId,
+                "rpc.method": WS_METHODS.serverGetConfig,
+                "rpc.aggregate": "server",
+                "settings.path": settingsPath,
               },
             ],
             [
@@ -206,10 +207,10 @@ describe("WS RPC instrumentation middleware", () => {
               },
             ],
             [
-              "ws.rpc.server.getSettings",
+              "ws.rpc.server.getHostResources",
               {
                 ...rpcSpanDefaults,
-                "rpc.method": WS_METHODS.serverGetSettings,
+                "rpc.method": WS_METHODS.serverGetHostResources,
                 "rpc.aggregate": "server",
               },
             ],
@@ -231,11 +232,11 @@ describe("WS RPC instrumentation middleware", () => {
         assert.deepStrictEqual(
           [
             requestCount(snapshots, WS_METHODS.serverProbe, "success"),
-            requestCount(snapshots, WS_METHODS.scheduledTasksList, "failure"),
+            requestCount(snapshots, WS_METHODS.serverGetConfig, "failure"),
             requestCount(snapshots, WS_METHODS.serverRetryResourceTelemetry, "failure"),
             requestCount(snapshots, WS_METHODS.pullRequestsSubscribeRefreshes, "success"),
             requestCount(snapshots, WS_METHODS.scheduledTasksSubscribe, "failure"),
-            requestCount(snapshots, WS_METHODS.serverGetSettings, "failure"),
+            requestCount(snapshots, WS_METHODS.serverGetHostResources, "failure"),
           ].map((state) => state?.count),
           [1, 1, 1, 1, 1, 1],
         );
@@ -270,8 +271,6 @@ describe("WS RPC instrumentation middleware", () => {
           ),
         );
 
-        // Wall and monotonic time disagree before the call starts, so a duration that mixes
-        // the two clocks is caught.
         yield* TestClock.adjust(Duration.seconds(1));
         yield* TestClock.setTime(0);
         const consumer = yield* Stream.runDrain(
@@ -279,11 +278,9 @@ describe("WS RPC instrumentation middleware", () => {
         ).pipe(Effect.forkChild);
         yield* Deferred.await(waiting);
         yield* TestClock.adjust(Duration.millis(250));
-        // A backward wall-clock correction must not shorten the measured duration.
         yield* TestClock.setTime(0);
         assert.deepStrictEqual(appSpans(ended), []);
 
-        // The client waits for the server to stop the call, which ends the RPC span.
         yield* Fiber.interrupt(consumer);
 
         const [rpcSpan] = rpcSpans(ended);
@@ -334,3 +331,34 @@ describe("WS RPC instrumentation middleware", () => {
     ),
   );
 });
+
+it.effect("starts each RPC in its own trace, linked to the connection span", () =>
+  Effect.gen(function* () {
+    const middleware = yield* RpcInstrumentation;
+    let rpcSpan: Tracer.Span | undefined;
+    const handler = Effect.gen(function* () {
+      rpcSpan = yield* Effect.currentSpan;
+    }).pipe(Effect.orDie, Effect.asVoid);
+
+    const connection = yield* Effect.gen(function* () {
+      const span = yield* Effect.currentSpan;
+      yield* middleware(handler as never, {
+        client: new Rpc.ServerClient(0),
+        requestId: RequestId(1),
+        rpc: Rpc.make(WS_METHODS.reviewGetDiffPreview),
+        payload: {},
+        headers: Headers.empty,
+      });
+      return span;
+    }).pipe(Effect.withSpan("GET /ws"), Effect.orDie);
+
+    assert.isDefined(rpcSpan);
+    assert.equal(rpcSpan!.name, "ws.rpc.review.getDiffPreview");
+    assert.isTrue(Option.isNone(rpcSpan!.parent));
+    assert.notEqual(rpcSpan!.traceId, connection.traceId);
+    assert.deepEqual(
+      rpcSpan!.links.map((link) => link.span.spanId),
+      [connection.spanId],
+    );
+  }).pipe(Effect.provide(rpcInstrumentationLayer)),
+);

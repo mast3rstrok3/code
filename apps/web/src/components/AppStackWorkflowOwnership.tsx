@@ -1,7 +1,10 @@
 import type { AppStack, AppStackListResult } from "@t3tools/contracts";
 import { TriangleAlertIcon } from "lucide-react";
 
-import { appStackOwnershipLabel, appStackWorkflowConflictSummary } from "./AppStackPanel.logic";
+import {
+  appStackOwnershipLabel,
+  appStackWorkflowConflictSummary,
+} from "@t3tools/client-runtime/app-stack-panel";
 
 type WorkflowConflict = NonNullable<AppStackListResult["workflowConflicts"]>[number];
 

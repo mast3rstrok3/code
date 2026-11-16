@@ -8,6 +8,7 @@ import {
   recoverWorkflowRunsAfterStartup,
 } from "../workflowStageExecutions.ts";
 import { createEmptyReadModel } from "../projector.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -15,6 +16,7 @@ import * as Deferred from "effect/Deferred";
 import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -375,6 +377,7 @@ for (const status of ["starting", "running", "stopped"] as const) {
         Layer.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Layer.mock(ProcessRunner)({}),
             Layer.mock(OrchestrationEngineService)({
               dispatch: (command) =>
@@ -624,6 +627,7 @@ effectIt.effect(
       Layer.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           Layer.mock(ProcessRunner)({}),
           Layer.mock(OrchestrationEngineService)({
             dispatch: (command) =>
@@ -859,6 +863,16 @@ it("keeps a completed phase waiting while a background task it started is open",
       nowMs,
     ),
   ).toBe(false);
+  // The provider's turn that reports on a finished task starts just after the task ends.
+  expect(
+    phaseAwaitingBackgroundTask(
+      fixer([
+        { kind: "task.started", taskId: "e2e", minutesAgo: 20 },
+        { kind: "task.completed", taskId: "e2e", minutesAgo: 0.5 },
+      ]),
+      nowMs,
+    ),
+  ).toBe(true);
 });
 
 it("identifies phase workers that restart after their cycle was superseded", () => {
@@ -3611,6 +3625,7 @@ for (const verdict of ["passed", "failed", "rejected", "draining"] as const) {
       Layer.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           Layer.mock(WorkflowDrainCoordinator)({
             accepting: Effect.sync(() => !draining),
             startupRecoveryCause: null,
@@ -3669,8 +3684,7 @@ for (const verdict of ["passed", "failed", "rejected", "draining"] as const) {
             getSettings: Effect.succeed(decodeServerSettings({})),
           }),
           Layer.mock(T3ProjectFileLoader)({
-            loadStrict: () =>
-              Effect.succeed(Option.some({ e2eCommands: ["pytest tests/drafts.py"] })),
+            loadStrict: () => Effect.succeedSome({ e2eCommands: ["pytest tests/drafts.py"] }),
           }),
         ),
       ),
@@ -3816,6 +3830,7 @@ for (const mode of ["e2e", "fixing", "fixing-existing", "validation"] as const) 
           Layer.provide(
             Layer.mergeAll(
               NodeServices.layer,
+              NodeCrypto.layer,
               Layer.mock(ProcessRunner)({
                 run: (input) =>
                   Effect.sync(() => {
@@ -4022,6 +4037,15 @@ for (const mode of ["e2e", "fixing", "fixing-existing", "validation"] as const) 
                     );
                     yield* reactor.reconcile();
                     expect(probes).toHaveLength(2);
+                    // Nothing restarts what it waits for, so the wait ends and reports.
+                    yield* TestClock.adjust(Duration.minutes(31));
+                    yield* reactor.reconcile();
+                    expect(storedRun.status).toBe("failed");
+                    expect(storedRun.prerequisiteCheck).toBeNull();
+                    expect(storedRun.failure?.detailMarkdown).toContain(
+                      "stayed unavailable for 30 minutes",
+                    );
+                    expect(storedRun.failure?.detailMarkdown).toContain("TEST_DATABASE_URL");
                   }
                   if (["error", "changed-command", "changed-revision"].includes(outcome))
                     expect(storedRun.prerequisiteCheck).toBeNull();
@@ -4148,7 +4172,7 @@ effectIt.effect(
   () =>
     Effect.gen(function* () {
       const interrupted = yield* Deferred.make<OrchestrationCommand>();
-      const events = yield* PubSub.unbounded<typeof OrchestrationEvent.Type>();
+      const events = yield* PubSub.unbounded<OrchestrationEvent>();
       const original = validationFixingRun();
       const event = yield* decodeEvent({
         sequence: 1,
@@ -4178,6 +4202,7 @@ effectIt.effect(
         Layer.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Layer.mock(ProcessRunner)({}),
             Layer.mock(OrchestrationEngineService)({
               subscribeDomainEvents: PubSub.subscribe(events).pipe(
@@ -4439,6 +4464,7 @@ for (const testExit of [0, 1] as const)
               Layer.provide(
                 Layer.mergeAll(
                   NodeServices.layer,
+                  NodeCrypto.layer,
                   Layer.mock(ProcessRunner)({
                     run: (input) =>
                       Effect.sync(() => {
@@ -4511,7 +4537,7 @@ for (const testExit of [0, 1] as const)
                     getSettings: Effect.succeed(decodeServerSettings({})),
                   }),
                   Layer.mock(T3ProjectFileLoader)({
-                    loadStrict: () => Effect.succeed(Option.some({ e2eCommands: ["all-apps"] })),
+                    loadStrict: () => Effect.succeedSome({ e2eCommands: ["all-apps"] }),
                   }),
                 ),
               ),
@@ -4615,6 +4641,7 @@ for (const change of ["suite-writes-tracked-file", "head-moves"] as const) {
         Layer.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Layer.mock(ProcessRunner)({
               run: (input) =>
                 Effect.sync(() => {
@@ -4689,7 +4716,7 @@ for (const change of ["suite-writes-tracked-file", "head-moves"] as const) {
               getSettings: Effect.succeed(decodeServerSettings({})),
             }),
             Layer.mock(T3ProjectFileLoader)({
-              loadStrict: () => Effect.succeed(Option.some({ e2eCommands: ["pnpm e2e"] })),
+              loadStrict: () => Effect.succeedSome({ e2eCommands: ["pnpm e2e"] }),
             }),
           ),
         ),
@@ -4761,6 +4788,28 @@ it("preserves programmatic check identities across completion order and narrowed
   expect(programmaticReviewRecord(current, second).document.checks).toMatchObject([
     { id: "e2e-2", label: "lists", notes: "Executed: lists --grep search\nok" },
   ]);
+  const affectedFailed = {
+    ...second.e2eExecution,
+    commands: [
+      ...second.e2eExecution.commands,
+      { command: "affected", retryCommand: "affected", purpose: "affected" as const },
+    ],
+    results: [
+      ...second.e2eExecution.results,
+      {
+        ...results[0]!,
+        command: "affected",
+        executedCommand: "affected",
+        status: "failed" as const,
+      },
+    ],
+  };
+  expect(
+    programmaticReviewRecord(current, { ...second, e2eExecution: affectedFailed }),
+  ).toMatchObject({
+    status: "passed",
+    document: { checks: [{ status: "passed" }, { label: "affected", status: "failed" }] },
+  });
   for (const execution of [
     { ...second.e2eExecution, results: [] },
     { ...second.e2eExecution, commands: [], results: [] },
@@ -4902,7 +4951,7 @@ for (const scenario of [
               ],
             }
           : {}),
-        cycleBudget: AppReviewWorkflowCycleBudget.make(5),
+        cycleBudget: AppReviewWorkflowCycleBudget.make(7),
         ...(embedded
           ? {
               caller: {
@@ -4961,7 +5010,7 @@ for (const scenario of [
       const commands: OrchestrationCommand[] = [];
       const executions: string[] = [];
       const executionEnvironments: Array<ProcessRunInput["env"]> = [];
-      const events = yield* PubSub.unbounded<typeof OrchestrationEvent.Type>();
+      const events = yield* PubSub.unbounded<OrchestrationEvent>();
       let stackStarting = scenario === "ticket-starting-stack";
       let settled = yield* Deferred.make<void>();
       const completePhase = (payload: Record<string, unknown>) => {
@@ -5011,11 +5060,12 @@ for (const scenario of [
         Layer.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             ...(scenario === "combined" || preparation
               ? [
                   serverConfigLayerTest("/assigned/worktree", {
                     prefix: "t3-review-artifacts-",
-                  }).pipe(Layer.provide(NodeServices.layer)),
+                  }).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
                 ]
               : []),
             Layer.mock(ProcessRunner)({
@@ -5227,22 +5277,20 @@ for (const scenario of [
             }),
             Layer.mock(T3ProjectFileLoader)({
               loadStrict: () =>
-                Effect.succeed(
-                  Option.some({
-                    e2eCommands: ["suite-a", "suite-b"],
-                    e2eConcurrency: 4,
-                    ...(scenario === "combined" || preparation ? { e2eTimeoutMinutes: 120 } : {}),
-                    ...(preparation
-                      ? {
-                          e2ePrepare: { command: "prepare-fleet", timeoutMinutes: 90 },
-                          e2ePreflight: {
-                            command: "check-fleet",
-                            blockedReason: "The fleet owner must prepare live targets.",
-                          },
-                        }
-                      : {}),
-                  }),
-                ),
+                Effect.succeedSome({
+                  e2eCommands: ["suite-a", "suite-b"],
+                  e2eConcurrency: 4,
+                  ...(scenario === "combined" || preparation ? { e2eTimeoutMinutes: 120 } : {}),
+                  ...(preparation
+                    ? {
+                        e2ePrepare: { command: "prepare-fleet", timeoutMinutes: 90 },
+                        e2ePreflight: {
+                          command: "check-fleet",
+                          blockedReason: "The fleet owner must prepare live targets.",
+                        },
+                      }
+                    : {}),
+                }),
             }),
           ),
         ),
@@ -5580,6 +5628,7 @@ for (const scenario of [
               return;
             }
             expect(storedRun.cyclesUsed).toBe(cycleNumber + 1);
+            expect(storedRun.cycleBudget).toBe(7);
           }
           expect(storedRun.id).toBe(initial.id);
           expect(storedRun.status).toBe("passed");

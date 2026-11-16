@@ -1,8 +1,8 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 
-import { countReviewCommentContexts, parseReviewInlineComments } from "./reviewCommentSelection";
+import { parseReviewInlineComments } from "./reviewCommentSelection";
 import { getCachedNativeReviewDiffData } from "./nativeReviewDiffAdapter";
-import { markReviewEvent, measureReviewWork } from "./reviewPerf";
 import { getCachedReviewParsedDiff } from "./reviewState";
 import {
   applyReviewDiffMetadata,
@@ -14,6 +14,7 @@ import {
 
 import type {
   EnvironmentId,
+  OrchestrationMessageContext,
   ReviewDiffFileStat,
   ReviewDiffPreviewSource,
 } from "@t3tools/contracts";
@@ -54,7 +55,7 @@ function getCachedReviewFile(
     ...(loaded ?? {
       path: stat.path,
       previousPath: stat.previousPath,
-      changeType: "change" as const,
+      changeType: stat.changeType ?? ("change" as const),
       languageHint: null,
       additionLines: [],
       deletionLines: [],
@@ -100,7 +101,7 @@ function logReviewDiffDiagnostic(message: string, details?: Record<string, unkno
   console.log(`[review-sheet] ${message}`);
 }
 
-export function formatHeaderDiffSummary(
+function formatHeaderDiffSummary(
   parsedDiff: ReviewParsedDiff,
   files?: ReviewSectionItem["files"],
 ): {
@@ -109,12 +110,15 @@ export function formatHeaderDiffSummary(
 } {
   if (files) {
     return {
-      additions: `+${files.reduce((total, file) => total + file.additions, 0)}`,
-      deletions: `-${files.reduce((total, file) => total + file.deletions, 0)}`,
+      additions: `+${formatDiffCount(files.reduce((total, file) => total + file.additions, 0))}`,
+      deletions: `-${formatDiffCount(files.reduce((total, file) => total + file.deletions, 0))}`,
     };
   }
   if (parsedDiff.kind !== "files") return { additions: null, deletions: null };
-  return { additions: `+${parsedDiff.additions}`, deletions: `-${parsedDiff.deletions}` };
+  return {
+    additions: `+${formatDiffCount(parsedDiff.additions)}`,
+    deletions: `-${formatDiffCount(parsedDiff.deletions)}`,
+  };
 }
 
 export function useReviewDiffData(input: {
@@ -122,35 +126,23 @@ export function useReviewDiffData(input: {
   readonly environmentId: EnvironmentId | undefined;
   readonly cwd: string | null;
   readonly selectedSection: ReviewSectionItem | null;
-  readonly revision: string | undefined;
   readonly draftMessage: string;
+  readonly draftContext: OrchestrationMessageContext | undefined;
 }) {
-  const { draftMessage, selectedSection, threadKey } = input;
+  const { draftMessage, draftContext, selectedSection, threadKey } = input;
   const selectedSectionId = selectedSection?.id ?? null;
   const source = selectedSection?.source;
   const lazySource = source?.truncated && source.files ? source : null;
-  const previewDiff = useMemo<ReviewParsedDiff>(
-    () =>
-      lazySource
-        ? { kind: "empty" }
-        : measureReviewWork("parse-diff", () =>
-            getCachedReviewParsedDiff({
-              threadKey,
-              sectionId: selectedSection?.id ?? null,
-              diff: selectedSection?.diff,
-            }),
-          ),
-    [lazySource, selectedSection?.diff, selectedSection?.id, threadKey],
-  );
+  const previewDiff: ReviewParsedDiff = lazySource
+    ? { kind: "empty" }
+    : getCachedReviewParsedDiff({
+        threadKey,
+        sectionId: selectedSection?.id ?? null,
+        diff: selectedSection?.diff,
+      });
   const registry = useContext(RegistryContext);
   const { environmentId, cwd } = input;
-  const scope = JSON.stringify([
-    environmentId,
-    cwd,
-    source?.kind,
-    source?.baseRef,
-    source?.diffHash,
-  ]);
+  const scope = JSON.stringify([environmentId, cwd, lazySource?.kind, source?.baseRef]);
   const [requested, setRequested] = useState({ scope, indices: [0, 1, 2] });
   const indices = useMemo(
     () => new Set(requested.scope === scope ? requested.indices : [0, 1, 2]),
@@ -166,6 +158,8 @@ export function useReviewDiffData(input: {
                   environmentId,
                   input: {
                     cacheKey: scope,
+                    // Newer preview revisions refresh patches read under an older one.
+                    preview: { cwd },
                     request: {
                       cwd,
                       ...(lazySource.baseRef ? { baseRef: lazySource.baseRef } : {}),
@@ -199,24 +193,6 @@ export function useReviewDiffData(input: {
       [queries, parsedQuery],
     ),
   );
-  const previousPreview = useRef({
-    scope,
-    revision: input.revision,
-    queries: [] as typeof queries,
-  });
-  useEffect(() => {
-    const previous = previousPreview.current;
-    previousPreview.current = { scope, revision: input.revision, queries };
-    for (const query of queries) {
-      if (!query) continue;
-      const changed = previous.scope === scope && previous.revision !== input.revision;
-      const cached =
-        !previous.queries.includes(query) &&
-        registry.get(query)._tag !== "Initial" &&
-        !registry.get(query).waiting;
-      if (changed || cached) registry.refresh(query);
-    }
-  }, [input.revision, queries, registry, scope]);
   const loadVisibleFile = useCallback(
     (fileId: string | null, retry = false) => {
       const index =
@@ -250,49 +226,31 @@ export function useReviewDiffData(input: {
     () => formatHeaderDiffSummary(parsedDiff, selectedSection?.files),
     [parsedDiff, selectedSection?.files],
   );
-  const inlineReviewComments = useMemo(
-    () => parseReviewInlineComments(draftMessage),
-    [draftMessage],
-  );
+  const inlineReviewComments = parseReviewInlineComments(draftMessage, draftContext);
   const selectedSectionInlineComments = useMemo(() => {
     if (!selectedSectionId || inlineReviewComments.length === 0) {
       return EMPTY_INLINE_REVIEW_COMMENTS;
     }
     return inlineReviewComments.filter((comment) => comment.sectionId === selectedSectionId);
   }, [inlineReviewComments, selectedSectionId]);
-  const nativeReviewDiffData = useMemo(
-    () =>
-      measureReviewWork("build-native-diff-data", () =>
-        getCachedNativeReviewDiffData({
-          parsedDiff,
-          comments: selectedSectionInlineComments,
-        }),
-      ),
-    [parsedDiff, selectedSectionInlineComments],
-  );
-  const pendingReviewCommentCount = useMemo(
-    () => countReviewCommentContexts(draftMessage),
-    [draftMessage],
-  );
+  const nativeReviewDiffData = getCachedNativeReviewDiffData({
+    parsedDiff,
+    comments: selectedSectionInlineComments,
+  });
+  const pendingReviewCommentCount = inlineReviewComments.length;
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- records review perf marks and diagnostic logs once a parsed diff has committed
   useEffect(() => {
     if (parsedDiff.kind !== "files") {
       return;
     }
 
-    markReviewEvent("parsed-diff-ready", {
-      sectionId: selectedSection?.id ?? null,
-      fileCount: parsedDiff.fileCount,
-      additions: parsedDiff.additions,
-      deletions: parsedDiff.deletions,
-      renderedItems: nativeReviewDiffData.rows.length,
-    });
     logReviewDiffDiagnostic("parsed diff files", {
       selectedSectionId: selectedSection?.id ?? null,
       fileCount: parsedDiff.fileCount,
       renderableFileCount: parsedDiff.files.length,
     });
-  }, [nativeReviewDiffData.rows.length, parsedDiff, selectedSection?.id]);
+  }, [parsedDiff, selectedSection?.id]);
 
   return {
     parsedDiff,

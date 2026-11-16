@@ -3,20 +3,34 @@ import * as ThreadManagementService from "../../../orchestration-v2/ThreadManage
 import {
   AppReviewId,
   AppReviewRecord,
+  DispatchResult,
+  IsoDateTime,
+  OrchestrationDispatchCommandError,
   OrchestrationGetSnapshotError,
+  OrchestrationImplementationAutomationHalt,
+  OrchestrationImplementationRerunTarget,
+  OrchestrationImplementationRetryableFailure,
+  OrchestrationImplementationRunId,
+  OrchestrationImplementationRunStatus,
+  OrchestrationImplementationSkipTarget,
+  OrchestrationImplementationTicketStateStatus,
   OrchestrationPlanningSpec,
   OrchestrationPlanningTicket,
   OrchestrationPlanningTicketId,
   PreviewAutomationUnavailableError,
   McpCapabilityUnavailableError,
+  ThreadId,
   ThreadWorkflowContext,
+  TrimmedNonEmptyString,
   WorkflowArtifactAccessError,
   WorkflowDocContract,
 } from "@t3tools/contracts";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/ai";
+import { McpSchema, Tool, Toolkit } from "effect/ai";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 
 const dependencies = [
@@ -28,6 +42,7 @@ const failure = Schema.Union([
   OrchestratorMcpFailure,
   WorkflowArtifactAccessError,
   OrchestrationGetSnapshotError,
+  OrchestrationDispatchCommandError,
   PreviewAutomationUnavailableError,
   McpCapabilityUnavailableError,
 ]);
@@ -36,7 +51,8 @@ const readonlyTool = <T extends Tool.Any>(tool: T): T =>
     .annotate(Tool.Readonly, true)
     .annotate(Tool.Destructive, false)
     .annotate(Tool.Idempotent, true)
-    .annotate(Tool.OpenWorld, false) as T;
+    .annotate(Tool.OpenWorld, false)
+    .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients) as T;
 
 export const WorkflowContextGetTool = readonlyTool(
   Tool.make("workflow_context_get", {
@@ -120,6 +136,112 @@ const WorkflowDocGetTool = readonlyTool(
   }).annotate(Tool.Title, "Get workflow document"),
 );
 
+const WorkflowTicketProgress = Schema.Struct({
+  ticketId: OrchestrationPlanningTicketId,
+  key: Schema.NullOr(Schema.String),
+  title: Schema.NullOr(Schema.String),
+  status: OrchestrationImplementationTicketStateStatus,
+  dependencyTicketIds: Schema.Array(OrchestrationPlanningTicketId),
+  workerThreadId: Schema.NullOr(ThreadId),
+  codeReviewThreadId: Schema.NullOr(ThreadId),
+  updatedAt: IsoDateTime,
+});
+
+export const WorkflowRunProgress = Schema.Struct({
+  runId: OrchestrationImplementationRunId,
+  status: OrchestrationImplementationRunStatus,
+  automationHalt: Schema.NullOr(OrchestrationImplementationAutomationHalt),
+  retryableFailure: Schema.NullOr(OrchestrationImplementationRetryableFailure),
+  skips: Schema.Array(OrchestrationImplementationSkipTarget),
+  orchestratorThreadId: ThreadId,
+  tickets: Schema.Array(WorkflowTicketProgress),
+  updatedAt: IsoDateTime,
+});
+
+export const WorkflowStatusGetTool = readonlyTool(
+  Tool.make("workflow_status_get", {
+    description:
+      "Get the progress of the calling workflow's implementation runs: run status, the `automationHalt` that stopped automation (one halt pauses every ticket of the run until it clears), and each ticket's stage and last change.",
+    parameters: Tool.EmptyParams,
+    success: Schema.Struct({ runs: Schema.Array(WorkflowRunProgress) }),
+    failure,
+    dependencies,
+  }).annotate(Tool.Title, "Get workflow status"),
+);
+
+const rootControl = <T extends Tool.Any>(tool: T): T =>
+  tool
+    .annotate(Tool.Readonly, false)
+    .annotate(Tool.Destructive, true)
+    .annotate(Tool.Idempotent, false)
+    .annotate(Tool.OpenWorld, false)
+    .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients) as T;
+const controlDependencies = [
+  ...dependencies,
+  OrchestrationEngineService,
+  SecureRandom.SecureRandom,
+];
+
+const WorkflowStageRestartTool = rootControl(
+  Tool.make("workflow_stage_restart", {
+    description: [
+      "Workflow root thread only. Start one stage of an implementation run again, as the Workflows panel's Rerun and Reset do. Read `workflow_status_get` first and target what `automationHalt` names.",
+      "`rerun` starts the stage now in a fresh thread and clears a matching halt. `reset` clears it without starting it; use it for a ticket whose dependency has not succeeded yet, so the run starts it in turn.",
+      "Rerun fits `retry-exhausted`, and `review-blocked` or `structural-invariant` once the cause is gone. Do not rerun when the detail names a provider login, usage limit, missing App Stack, CI billing, or uncommitted work that is not yours to commit, and do not rerun the same target twice for the same detail: tell the user instead.",
+      "A `rejected` outcome with `live-stage-owner` means the stage is still working.",
+    ].join(" "),
+    parameters: Schema.Struct({
+      runId: OrchestrationImplementationRunId,
+      target: OrchestrationImplementationRerunTarget,
+      mode: Schema.Literals(["rerun", "reset"]),
+    }),
+    success: DispatchResult,
+    failure,
+    dependencies: controlDependencies,
+  }).annotate(Tool.Title, "Restart workflow stage"),
+);
+
+const WorkflowStageSkipTool = rootControl(
+  Tool.make("workflow_stage_skip", {
+    description:
+      "Workflow root thread only. Tell an implementation run to pass over a stage, or take that back with `skipped: false`, as the Workflows panel's Skip does. A ticket target without `stage` skips the whole ticket: it keeps its branch and dependents still build on it. A running stage keeps running; pause it first to stop it.",
+    parameters: Schema.Struct({
+      runId: OrchestrationImplementationRunId,
+      target: OrchestrationImplementationSkipTarget,
+      skipped: Schema.Boolean,
+    }),
+    success: DispatchResult,
+    failure,
+    dependencies: controlDependencies,
+  }).annotate(Tool.Title, "Skip workflow stage"),
+);
+
+const WorkflowPauseTool = rootControl(
+  Tool.make("workflow_pause", {
+    description:
+      "Workflow root thread only. Pause or resume part of this workflow, as the Workflows panel's Pause and Resume do. Pausing stops every agent at or below `threadId` and keeps their worktrees; resuming lets the run start that work again. Pause a whole run through its `orchestratorThreadId`, or one ticket through its `workerThreadId`, from `workflow_status_get`. You cannot pause your own thread; resuming it resumes everything below it.",
+    parameters: Schema.Struct({ threadId: ThreadId, paused: Schema.Boolean }),
+    success: DispatchResult,
+    failure,
+    dependencies: controlDependencies,
+  }).annotate(Tool.Title, "Pause or resume workflow"),
+);
+
+const WorkflowRunControlTool = rootControl(
+  Tool.make("workflow_run_control", {
+    description:
+      "Workflow root thread only. `retry` retries the run's `retryableFailure` now instead of waiting for the next automatic attempt. `cancel` ends the run for good and cannot be undone, so cancel only when the user asks for it.",
+    parameters: Schema.Struct({
+      runId: OrchestrationImplementationRunId,
+      action: Schema.Literals(["retry", "cancel"]),
+      reason: Schema.optional(TrimmedNonEmptyString),
+    }),
+    success: DispatchResult,
+    failure,
+    dependencies: controlDependencies,
+  }).annotate(Tool.Title, "Retry or cancel workflow run"),
+);
+
 export const WorkflowArtifactsToolkit = Toolkit.make(
   WorkflowContextGetTool,
   WorkflowSpecGetTool,
@@ -129,4 +251,9 @@ export const WorkflowArtifactsToolkit = Toolkit.make(
   WorkflowAppReviewsListTool,
   WorkflowAppReviewGetTool,
   WorkflowDocGetTool,
+  WorkflowStatusGetTool,
+  WorkflowStageRestartTool,
+  WorkflowStageSkipTool,
+  WorkflowPauseTool,
+  WorkflowRunControlTool,
 );

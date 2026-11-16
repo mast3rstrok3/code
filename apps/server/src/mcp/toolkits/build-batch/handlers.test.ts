@@ -10,7 +10,7 @@ import { McpSchema, McpServer } from "effect/ai";
 import * as BuildBatchService from "../../../buildBatch/BuildBatchService.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as ProcessRunner from "../../../processRunner.ts";
-import { layerBuildBatchToolkit } from "../../McpHttpServer.ts";
+import { layerBuildBatchToolkit, layerInProcessMcpServer } from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
 
@@ -99,7 +99,7 @@ function harness(
     ),
   );
   const layer = layerBuildBatchToolkit.pipe(
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(layerInProcessMcpServer),
     Layer.provideMerge(Layer.mergeAll(service, McpToolAccessTestkit.liveThreadsLayer)),
   );
   const call = (name: string, arguments_: Record<string, unknown> = {}) =>

@@ -5,13 +5,13 @@ import {
 } from "@t3tools/contracts";
 import { truncate } from "@t3tools/shared/String";
 import { extractPreviewUrls } from "@t3tools/shared/preview";
-
 import {
-  type BrowserAppReviewSourceContext,
   type AppReviewWorkflowLaunchRequest,
+  isValidAppReviewWorkflowLaunch,
   normalizeAppReviewPreviewTarget,
-} from "./ChatView.logic";
-import { isValidAppReviewWorkflowLaunch } from "./AppReviewPanel.logic";
+} from "@t3tools/client-runtime/app-review";
+
+import type { BrowserAppReviewSourceContext } from "./ChatView.logic";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
 import {

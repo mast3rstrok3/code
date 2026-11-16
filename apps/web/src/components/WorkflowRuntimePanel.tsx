@@ -13,6 +13,7 @@ import {
   WorkflowId,
   MessageId,
   type ClientOrchestrationCommand,
+  type ImplementationWorkflowSettings,
   type ScopedThreadRef,
   type WorkflowPreset,
 } from "@t3tools/contracts";
@@ -21,8 +22,12 @@ import {
   WORKFLOW_PRESET_DEFINITION_BY_ID,
   WORKFLOW_PRESET_DEFINITIONS,
 } from "@t3tools/shared/workflowPresets";
+import { appReviewWorkflowLaunchCommand } from "@t3tools/client-runtime/app-review";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import { buildWorkflowViewModel, selectWorkflowRootForThread } from "~/workflowModel";
+import {
+  buildWorkflowViewModel,
+  selectWorkflowRootForThread,
+} from "@t3tools/client-runtime/workflow-model";
 import { useWorkflowSnapshot, useWorkflowThread, workflowEnvironment } from "~/state/workflows";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams, buildWorkflowRouteUrl } from "~/threadRoutes";
@@ -127,10 +132,8 @@ export function WorkflowRuntimePanel({
   }, [snapshot.dataUpdatedAt, refreshArtifacts]);
   const planning = rootDetail.data?.planningWorkflow;
   const workflowBase = () => ({ ...base(), threadId: rootId });
-  const setConcurrency = (change: {
-    maxParallelTickets?: number;
-    maxParallelAppReviews?: number;
-  }) => {
+  // Run-level choices live on the root's stage settings, the same place the composer pinned them.
+  const setRunSettings = (change: Partial<ImplementationWorkflowSettings>) => {
     const root = workflow?.root;
     if (!root) return;
     void send({
@@ -377,24 +380,20 @@ export function WorkflowRuntimePanel({
           onLaunch={(request) => {
             const source = nativeThread ?? detail.data;
             if (!source || !sourceSettled) return;
-            void send({
-              type: "thread.app-review-workflow.launch",
-              commandId: CommandId.make(randomUUID()),
-              targetThreadId: threadRef.threadId,
-              controllerThreadId: ThreadId.make(randomUUID()),
-              caller: { type: "standalone", sourceThreadId: threadRef.threadId },
-              briefMarkdown: request.brief,
-              supportingContextMarkdown:
-                sourceContext?.messages
-                  .map((message) => `${message.role}: ${message.text}`)
-                  .join("\n\n") ?? null,
-              previewTargets: request.reviewUrl ? [request.reviewUrl] : [],
-              previewTargetsPinned: Boolean(request.reviewUrl),
-              reviewOnly: request.reviewOnly,
-              cycleBudget: request.reviewOnly ? 1 : request.cycleBudget,
-              modelSelection: source.modelSelection,
-              createdAt: new Date().toISOString(),
-            });
+            void send(
+              appReviewWorkflowLaunchCommand({
+                request,
+                commandId: CommandId.make(randomUUID()),
+                targetThreadId: threadRef.threadId,
+                controllerThreadId: ThreadId.make(randomUUID()),
+                supportingContextMarkdown:
+                  sourceContext?.messages
+                    .map((message) => `${message.role}: ${message.text}`)
+                    .join("\n\n") ?? null,
+                modelSelection: source.modelSelection,
+                createdAt: new Date().toISOString(),
+              }),
+            );
           }}
           onStop={(run) =>
             void send({
@@ -411,12 +410,16 @@ export function WorkflowRuntimePanel({
         defaultMaxParallelTickets={settings.implementation.maxParallelTickets}
         defaultMaxParallelAppReviews={settings.implementation.maxParallelAppReviews}
         onSetMaxParallelTickets={
-          canDispatch ? (maxParallelTickets) => setConcurrency({ maxParallelTickets }) : undefined
+          canDispatch ? (maxParallelTickets) => setRunSettings({ maxParallelTickets }) : undefined
         }
         onSetMaxParallelAppReviews={
           canDispatch
-            ? (maxParallelAppReviews) => setConcurrency({ maxParallelAppReviews })
+            ? (maxParallelAppReviews) => setRunSettings({ maxParallelAppReviews })
             : undefined
+        }
+        defaultGrillAnswerer={settings.implementation.grillAnswerer}
+        onSetGrillAnswerer={
+          canDispatch ? (grillAnswerer) => setRunSettings({ grillAnswerer }) : undefined
         }
         activeThreadKey={scopedThreadKey(threadRef)}
         focusedWorkflowId={focusedWorkflowId}

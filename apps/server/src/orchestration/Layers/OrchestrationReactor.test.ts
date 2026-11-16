@@ -9,6 +9,8 @@ import { AppReviewWorkflowReactor } from "../Services/AppReviewWorkflowReactor.t
 import { PreviewLifecycleReactor } from "../Services/PreviewLifecycleReactor.ts";
 import { AppStackLifecycleReactor } from "../AppStackLifecycleReactor.ts";
 import { FeatureWorkflowReactor } from "../FeatureWorkflowReactor.ts";
+import { GrillJudgeReactor } from "../GrillJudgeReactor.ts";
+import { ScheduledWorkflowReporter } from "../ScheduledWorkflowReporter.ts";
 
 it.effect(
   "starts the native bridge before workflow recovery and drains workflow effects before shutdown",
@@ -53,6 +55,16 @@ it.effect(
           evaluate: () => Effect.void,
           drain: record("feature:drain"),
         }),
+        Layer.succeed(GrillJudgeReactor, {
+          start: () => record("grill-judge:start"),
+          evaluate: () => Effect.void,
+          drain: record("grill-judge:drain"),
+        }),
+        Layer.succeed(ScheduledWorkflowReporter, {
+          start: () => record("scheduled-report:start"),
+          report: () => Effect.void,
+          drain: record("scheduled-report:drain"),
+        }),
       );
       yield* Effect.gen(function* () {
         const reactor = yield* makeOrchestrationReactor;
@@ -68,6 +80,8 @@ it.effect(
         "preview:start",
         "app-stack:start",
         "feature:start",
+        "grill-judge:start",
+        "scheduled-report:start",
         "app-review:recover",
         "app-review:flush",
         "implementation:recover",
@@ -81,6 +95,8 @@ it.effect(
         "native:drain",
         "app-stack:drain",
         "feature:drain",
+        "grill-judge:drain",
+        "scheduled-report:drain",
       ]);
     }),
 );

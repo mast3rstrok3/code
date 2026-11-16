@@ -1,5 +1,5 @@
 import { CheckIcon, ExternalLinkIcon, KeyRoundIcon, PlusIcon, XIcon } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import type { GithubOwnerTokenVerification, WorkspaceUser } from "@t3tools/contracts";
 
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
@@ -15,15 +15,16 @@ import {
   clearWorkspaceUserGithubPersonalAccessToken,
   createWorkspaceUser,
   githubFineGrainedTokenUrl,
-  type GithubOwnerTokenValidation,
+  githubOwnerTokenValidationMessage,
   removeWorkspaceUserGithubOwnerToken,
   renameWorkspaceUser,
   replaceWorkspaceUserGithubOwnerToken,
   validateAddGithubOwnerToken,
   validateAddWorkspaceUser,
   validateRenameWorkspaceUser,
-  type WorkspaceUserDisplayNameValidation,
-} from "./UsersSettings.logic";
+  workspaceUserDisplayNameMessage,
+  workspaceUserGithubTokenCount,
+} from "@t3tools/shared/workspaceUserSettings";
 
 function GithubTokenLink({ owner, children }: { owner?: string; children: string }) {
   return (
@@ -31,35 +32,12 @@ function GithubTokenLink({ owner, children }: { owner?: string; children: string
       href={githubFineGrainedTokenUrl(owner)}
       target="_blank"
       rel="noreferrer"
-      className="inline-flex min-w-0 items-center gap-1 rounded-sm text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+      className="inline-flex min-w-0 items-center gap-1 rounded-sm text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
     >
       <span className="truncate">{children}</span>
       <ExternalLinkIcon className="size-3 shrink-0" aria-hidden />
     </a>
   );
-}
-
-function validationMessage(validation: WorkspaceUserDisplayNameValidation): string | null {
-  if (validation.valid || validation.reason === "unchanged") {
-    return null;
-  }
-  if (validation.reason === "blank") {
-    return "Display name is required.";
-  }
-  return "Display name already exists.";
-}
-
-function ownerTokenValidationMessage(validation: GithubOwnerTokenValidation): string | null {
-  if (validation.valid || validation.reason === "blank-owner") {
-    return null;
-  }
-  if (validation.reason === "invalid-owner") {
-    return "Enter a GitHub user or organization name.";
-  }
-  if (validation.reason === "duplicate-owner") {
-    return "That owner already has a token.";
-  }
-  return null;
 }
 
 /** Asks the server to check an owner token with GitHub before it is saved. */
@@ -68,18 +46,18 @@ function useVerifyGithubOwnerToken() {
   const verify = useAtomCommand(serverEnvironment.verifyGithubOwnerToken, {
     reportFailure: false,
   });
-  return useCallback(
-    async (owner: string, personalAccessToken: string): Promise<GithubOwnerTokenVerification> => {
-      if (!environmentId) {
-        return { valid: false, message: "Connect to the server to check the token." };
-      }
-      const result = await verify({ environmentId, input: { owner, personalAccessToken } });
-      return result._tag === "Success"
-        ? result.value
-        : { valid: false, message: "Could not check the token. Try again." };
-    },
-    [environmentId, verify],
-  );
+  return async (
+    owner: string,
+    personalAccessToken: string,
+  ): Promise<GithubOwnerTokenVerification> => {
+    if (!environmentId) {
+      return { valid: false, message: "Connect to the server to check the token." };
+    }
+    const result = await verify({ environmentId, input: { owner, personalAccessToken } });
+    return result._tag === "Success"
+      ? result.value
+      : { valid: false, message: "Could not check the token. Try again." };
+  };
 }
 
 function updateWorkspaceUserArray(
@@ -103,13 +81,15 @@ function WorkspaceUserSettingsRow({
   const [displayName, setDisplayName] = useState(user.displayName);
   const hasOwnerlessToken = Boolean(user.github.personalAccessTokenRedacted);
   const ownerTokens = user.github.ownerTokens ?? [];
-  const tokenCount = ownerTokens.length + (hasOwnerlessToken ? 1 : 0);
+  const tokenCount = workspaceUserGithubTokenCount(user);
   const renameValidation = validateRenameWorkspaceUser({ user, displayName, workspaceUsers });
-  const renameMessage = validationMessage(renameValidation);
+  const renameMessage = workspaceUserDisplayNameMessage(renameValidation);
 
-  useEffect(() => {
+  const [savedDisplayName, setSavedDisplayName] = useState(user.displayName);
+  if (savedDisplayName !== user.displayName) {
+    setSavedDisplayName(user.displayName);
     setDisplayName(user.displayName);
-  }, [user.displayName, user.id]);
+  }
 
   const handleRename = () => {
     const nextUsers = renameWorkspaceUser(workspaceUsers, user.id, displayName);
@@ -305,7 +285,7 @@ function AddGithubOwnerTokenForm({
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const verifyToken = useVerifyGithubOwnerToken();
   const validation = validateAddGithubOwnerToken(user, owner, tokenDraft);
-  const message = ownerTokenValidationMessage(validation) ?? verificationError;
+  const message = githubOwnerTokenValidationMessage(validation) ?? verificationError;
 
   const handleAdd = async (candidate: { owner: string; personalAccessToken: string }) => {
     setChecking(true);
@@ -398,7 +378,7 @@ function AddWorkspaceUserRow({
 }) {
   const [displayName, setDisplayName] = useState("");
   const validation = validateAddWorkspaceUser(displayName, workspaceUsers);
-  const message = displayName.length > 0 ? validationMessage(validation) : null;
+  const message = displayName.length > 0 ? workspaceUserDisplayNameMessage(validation) : null;
 
   const handleAddUser = () => {
     const user = createWorkspaceUser(displayName, workspaceUsers);
@@ -441,12 +421,9 @@ function AddWorkspaceUserRow({
 export function UsersSettingsPanel() {
   const workspaceUsers = usePrimarySettings((settings) => settings.workspaceUsers);
   const updateSettings = useUpdatePrimarySettings();
-  const updateWorkspaceUsers = useCallback(
-    (users: ReadonlyArray<WorkspaceUser>) => {
-      updateSettings({ workspaceUsers: [...users] });
-    },
-    [updateSettings],
-  );
+  const updateWorkspaceUsers = (users: ReadonlyArray<WorkspaceUser>) => {
+    updateSettings({ workspaceUsers: [...users] });
+  };
 
   return (
     <SettingsPageContainer>

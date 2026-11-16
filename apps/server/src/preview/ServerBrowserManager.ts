@@ -2,6 +2,7 @@
 // @effect-diagnostics globalDate:off - CDP callbacks run outside Effect's clock service.
 // @effect-diagnostics globalTimers:off - ffmpeg teardown timers run in CDP/child-process callbacks outside Effect.
 // @effect-diagnostics preferSchemaOverJson:off - JSON byte sizing guards untrusted automation results.
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
@@ -28,7 +29,6 @@ import {
   extractChromiumNetError,
   sanitizePreviewNavigationFailureDescription,
 } from "@t3tools/shared/preview";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import type { BrowserContext, CDPSession, Page } from "playwright";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -444,7 +444,7 @@ const defaultAdapter: ServerBrowserManagerAdapter = {
 };
 
 function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
-  const env = yield* HostProcessEnvironment;
+  const env = yield* HostProcess.Environment;
   const config = yield* ServerConfig.ServerConfig;
   const previewManager = yield* PreviewManager.PreviewManager;
   const recordingPolicy = yield* PreviewRecordingPolicy;
@@ -1091,10 +1091,8 @@ function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
         ),
       catch: browserError,
     }).pipe(
-      Effect.catch((error) =>
-        reportStatus(tab, { _tag: "LoadFailed", url: input.url, cause: error }).pipe(
-          Effect.andThen(Effect.fail(error)),
-        ),
+      Effect.tapError((error) =>
+        reportStatus(tab, { _tag: "LoadFailed", url: input.url, cause: error }),
       ),
     );
     yield* reportStatus(tab, "Success");
@@ -1508,6 +1506,7 @@ function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
       try: () => tab.page.evaluate(`(${input.expression})`),
       catch: browserError,
     });
+    // @effect-diagnostics-next-line globalJsonInEffect:off - page.evaluate already returned a serialized value.
     const bytes = Buffer.byteLength(JSON.stringify(value ?? null), "utf8");
     if (bytes > MAX_EVALUATION_BYTES) {
       return yield* new PreviewBrowserUnavailableError({

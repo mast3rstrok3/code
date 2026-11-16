@@ -138,172 +138,168 @@ export const handlers = {
   app_review_get: (input) =>
     resolveAppReview(input.reviewId).pipe(Effect.map(({ review }) => review)),
 
-  app_review_update: (input) =>
-    Effect.gen(function* () {
-      const { scope, review } = yield* resolveAppReview(input.reviewId);
-      if (input.status === undefined && input.document === undefined) {
-        return yield* reviewError(review.id, "Provide status, document, or both.");
-      }
-      if (input.status === "passed" && review.appReviewScope !== "e2e") {
-        const { recording, screenshots } = review.evidence;
-        if (!hasCompleteAppReviewEvidence(review.evidence)) {
-          return yield* reviewError(
-            review.id,
-            `Cannot set status 'passed' without browser evidence: a saved screen recording (current recording status is '${recording.status}') and at least one screenshot (currently ${screenshots.length}) are required. ` +
-              "Run app_review_recording_start, exercise the app with the preview_* tools, capture screenshots with app_review_capture_screenshot, then app_review_recording_stop. " +
-              "If the browser tools are unavailable, set status 'failed' with concrete diagnostic detail instead.",
-          );
-        }
-      }
-      const engine = yield* OrchestrationEngineService;
-      const updatedAt = yield* nowIso;
-      yield* engine
-        .dispatch({
-          type: "thread.app-review.update",
-          commandId: yield* newCommandId("app-review-update", review.id),
-          threadId: scope.thread.threadId,
-          reviewId: review.id,
-          ...(input.status === undefined ? {} : { status: input.status }),
-          ...(input.document === undefined ? {} : { document: input.document }),
-          createdAt: updatedAt,
-          updatedAt,
-        })
-        .pipe(
-          Effect.mapError((cause) => dispatchError("Failed to persist App Review update.", cause)),
+  app_review_update: Effect.fn("AppReviewToolkit.update")(function* (input) {
+    const { scope, review } = yield* resolveAppReview(input.reviewId);
+    if (input.status === undefined && input.document === undefined) {
+      return yield* reviewError(review.id, "Provide status, document, or both.");
+    }
+    if (input.status === "passed" && review.appReviewScope !== "e2e") {
+      const { recording, screenshots } = review.evidence;
+      if (!hasCompleteAppReviewEvidence(review.evidence)) {
+        return yield* reviewError(
+          review.id,
+          `Cannot set status 'passed' without browser evidence: a saved screen recording (current recording status is '${recording.status}') and at least one screenshot (currently ${screenshots.length}) are required. ` +
+            "Run app_review_recording_start, exercise the app with the preview_* tools, capture screenshots with app_review_capture_screenshot, then app_review_recording_stop. " +
+            "If the browser tools are unavailable, set status 'failed' with concrete diagnostic detail instead.",
         );
-      return {
-        ...review,
+      }
+    }
+    const engine = yield* OrchestrationEngineService;
+    const updatedAt = yield* nowIso;
+    yield* engine
+      .dispatch({
+        type: "thread.app-review.update",
+        commandId: yield* newCommandId("app-review-update", review.id),
+        threadId: scope.thread.threadId,
+        reviewId: review.id,
         ...(input.status === undefined ? {} : { status: input.status }),
         ...(input.document === undefined ? {} : { document: input.document }),
+        createdAt: updatedAt,
         updatedAt,
-      };
-    }),
-
-  app_review_recording_start: (input) =>
-    Effect.gen(function* () {
-      const { scope, review } = yield* resolveAppReview(input.reviewId);
-      const status = yield* invokeBrowser<PreviewAutomationRecordingStatus>(
-        scope,
-        "recordingStart",
-        input.tabId,
+      })
+      .pipe(
+        Effect.mapError((cause) => dispatchError("Failed to persist App Review update.", cause)),
       );
-      const startedAt = status.startedAt ?? (yield* nowIso);
-      const evidence: AppReviewEvidence = {
-        ...review.evidence,
-        recording: {
-          status: "recording",
-          path: null,
-          mimeType: null,
-          sizeBytes: null,
-          startedAt,
-          completedAt: null,
-          error: null,
-        },
-      };
-      yield* dispatchEvidenceUpdate({ scope, review, evidence });
-      return evidence.recording;
-    }),
+    return {
+      ...review,
+      ...(input.status === undefined ? {} : { status: input.status }),
+      ...(input.document === undefined ? {} : { document: input.document }),
+      updatedAt,
+    };
+  }),
 
-  app_review_recording_stop: (input) =>
-    Effect.gen(function* () {
-      const { scope, review } = yield* resolveAppReview(input.reviewId);
-      const completedAt = yield* nowIso;
-      const stopped = yield* Effect.exit(
-        invokeBrowser<PreviewAutomationRecordingArtifact>(scope, "recordingStop", input.tabId),
+  app_review_recording_start: Effect.fn("AppReviewToolkit.recordingStart")(function* (input) {
+    const { scope, review } = yield* resolveAppReview(input.reviewId);
+    const status = yield* invokeBrowser<PreviewAutomationRecordingStatus>(
+      scope,
+      "recordingStart",
+      input.tabId,
+    );
+    const startedAt = status.startedAt ?? (yield* nowIso);
+    const evidence: AppReviewEvidence = {
+      ...review.evidence,
+      recording: {
+        status: "recording",
+        path: null,
+        mimeType: null,
+        sizeBytes: null,
+        startedAt,
+        completedAt: null,
+        error: null,
+      },
+    };
+    yield* dispatchEvidenceUpdate({ scope, review, evidence });
+    return evidence.recording;
+  }),
+
+  app_review_recording_stop: Effect.fn("AppReviewToolkit.recordingStop")(function* (input) {
+    const { scope, review } = yield* resolveAppReview(input.reviewId);
+    const completedAt = yield* nowIso;
+    const stopped = yield* Effect.exit(
+      invokeBrowser<PreviewAutomationRecordingArtifact>(scope, "recordingStop", input.tabId),
+    );
+    // The artifact path never round-trips through the model: it is persisted
+    // server-side and served later through signed asset URLs.
+    const evidence: AppReviewEvidence =
+      stopped._tag === "Success"
+        ? {
+            ...review.evidence,
+            recording: {
+              status: "saved",
+              path: stopped.value.path,
+              mimeType: stopped.value.mimeType,
+              sizeBytes: stopped.value.sizeBytes,
+              startedAt: review.evidence.recording.startedAt,
+              completedAt,
+              error: null,
+            },
+          }
+        : {
+            ...review.evidence,
+            recording: {
+              status: "failed",
+              path: null,
+              mimeType: null,
+              sizeBytes: null,
+              startedAt: review.evidence.recording.startedAt,
+              completedAt,
+              error: Cause.findErrorOption(stopped.cause).pipe(
+                Option.map((failure) => failure.message),
+                Option.getOrElse(() => Cause.pretty(stopped.cause)),
+              ),
+            },
+          };
+    yield* dispatchEvidenceUpdate({ scope, review, evidence });
+    return evidence.recording;
+  }),
+
+  app_review_capture_screenshot: Effect.fn("AppReviewToolkit.captureScreenshot")(function* (input) {
+    const { scope, review } = yield* resolveAppReview(input.reviewId);
+    const snapshot = yield* invokeBrowser<PreviewAutomationSnapshot>(
+      scope,
+      "snapshot",
+      input.tabId,
+    );
+    const config = yield* ServerConfig.ServerConfig;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const screenshotDir = path.join(
+      config.stateDir,
+      "preview-artifacts",
+      "app-review",
+      sanitizePathSegment(review.id),
+    );
+    yield* fileSystem
+      .makeDirectory(screenshotDir, { recursive: true })
+      .pipe(
+        Effect.mapError((cause) =>
+          reviewError(review.id, "Failed to create the App Review evidence directory.", cause),
+        ),
       );
-      // The artifact path never round-trips through the model: it is persisted
-      // server-side and served later through signed asset URLs.
-      const evidence: AppReviewEvidence =
-        stopped._tag === "Success"
-          ? {
-              ...review.evidence,
-              recording: {
-                status: "saved",
-                path: stopped.value.path,
-                mimeType: stopped.value.mimeType,
-                sizeBytes: stopped.value.sizeBytes,
-                startedAt: review.evidence.recording.startedAt,
-                completedAt,
-                error: null,
-              },
-            }
-          : {
-              ...review.evidence,
-              recording: {
-                status: "failed",
-                path: null,
-                mimeType: null,
-                sizeBytes: null,
-                startedAt: review.evidence.recording.startedAt,
-                completedAt,
-                error: Cause.findErrorOption(stopped.cause).pipe(
-                  Option.map((failure) => failure.message),
-                  Option.getOrElse(() => Cause.pretty(stopped.cause)),
-                ),
-              },
-            };
-      yield* dispatchEvidenceUpdate({ scope, review, evidence });
-      return evidence.recording;
-    }),
 
-  app_review_capture_screenshot: (input) =>
-    Effect.gen(function* () {
-      const { scope, review } = yield* resolveAppReview(input.reviewId);
-      const snapshot = yield* invokeBrowser<PreviewAutomationSnapshot>(
-        scope,
-        "snapshot",
-        input.tabId,
+    let index = review.evidence.screenshots.length + 1;
+    let artifactPath = path.join(screenshotDir, `shot-${index}.png`);
+    while (yield* fileSystem.exists(artifactPath).pipe(Effect.orElseSucceed(() => false))) {
+      index += 1;
+      artifactPath = path.join(screenshotDir, `shot-${index}.png`);
+    }
+
+    const bytes = Buffer.from(snapshot.screenshot.data, "base64");
+    yield* fileSystem
+      .writeFile(artifactPath, bytes)
+      .pipe(
+        Effect.mapError((cause) =>
+          reviewError(review.id, "Failed to write the App Review screenshot.", cause),
+        ),
       );
-      const config = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const screenshotDir = path.join(
-        config.stateDir,
-        "preview-artifacts",
-        "app-review",
-        sanitizePathSegment(review.id),
-      );
-      yield* fileSystem
-        .makeDirectory(screenshotDir, { recursive: true })
-        .pipe(
-          Effect.mapError((cause) =>
-            reviewError(review.id, "Failed to create the App Review evidence directory.", cause),
-          ),
-        );
 
-      let index = review.evidence.screenshots.length + 1;
-      let artifactPath = path.join(screenshotDir, `shot-${index}.png`);
-      while (yield* fileSystem.exists(artifactPath).pipe(Effect.orElseSucceed(() => false))) {
-        index += 1;
-        artifactPath = path.join(screenshotDir, `shot-${index}.png`);
-      }
-
-      const bytes = Buffer.from(snapshot.screenshot.data, "base64");
-      yield* fileSystem
-        .writeFile(artifactPath, bytes)
-        .pipe(
-          Effect.mapError((cause) =>
-            reviewError(review.id, "Failed to write the App Review screenshot.", cause),
-          ),
-        );
-
-      const capturedAt = yield* nowIso;
-      const screenshot: AppReviewScreenshotEvidence = {
-        id: `shot-${index}`,
-        path: artifactPath,
-        mimeType: "image/png",
-        caption: input.caption,
-        capturedAt,
-      };
-      const evidence: AppReviewEvidence = {
-        ...review.evidence,
-        screenshots: [...review.evidence.screenshots, screenshot],
-      };
-      yield* dispatchEvidenceUpdate({ scope, review, evidence });
-      // Image bytes stay on disk; returning only metadata keeps the tool
-      // result small for the model.
-      return { id: screenshot.id, caption: screenshot.caption, capturedAt };
-    }),
+    const capturedAt = yield* nowIso;
+    const screenshot: AppReviewScreenshotEvidence = {
+      id: `shot-${index}`,
+      path: artifactPath,
+      mimeType: "image/png",
+      caption: input.caption,
+      capturedAt,
+    };
+    const evidence: AppReviewEvidence = {
+      ...review.evidence,
+      screenshots: [...review.evidence.screenshots, screenshot],
+    };
+    yield* dispatchEvidenceUpdate({ scope, review, evidence });
+    // Image bytes stay on disk; returning only metadata keeps the tool
+    // result small for the model.
+    return { id: screenshot.id, caption: screenshot.caption, capturedAt };
+  }),
 } satisfies Parameters<typeof AppReviewToolkit.toLayer>[0];
 
 export const layer = McpToolAccess.toLayer(AppReviewToolkit, {

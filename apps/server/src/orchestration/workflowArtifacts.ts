@@ -57,9 +57,23 @@ export const getWorkflowArtifactsForThread = Effect.fn("getWorkflowArtifactsForT
         : (readModel.threads.find(
             (candidate) => candidate.id === relatedAppReviewRun.controllerThreadId,
           ) ?? thread);
+    // A planning root starts its workflows without joining one, so it has no
+    // context of its own. It still owns every workflow started under it.
+    const rootOwnedContexts =
+      relatedAppReviewRun === undefined && thread.workflowContext == null
+        ? readModel.threads.flatMap((candidate) =>
+            candidate.projectId === thread.projectId &&
+            candidate.workflowContext?.rootThreadId === thread.id
+              ? [candidate.workflowContext]
+              : [],
+          )
+        : [];
     const context =
       relatedAppReviewRun === undefined
-        ? thread.workflowContext
+        ? (thread.workflowContext ??
+          rootOwnedContexts.find((candidate) => candidate.parentWorkflowId == null) ??
+          rootOwnedContexts[0] ??
+          null)
         : (targetThread.workflowContext ?? controllerThread.workflowContext);
     if (context == null) {
       return yield* new WorkflowArtifactAccessError({
@@ -102,7 +116,10 @@ export const getWorkflowArtifactsForThread = Effect.fn("getWorkflowArtifactsForT
         ? [candidate.workflowContext]
         : [],
     );
-    const familyWorkflowIds = new Set(workflowIds);
+    const familyWorkflowIds = new Set([
+      ...workflowIds,
+      ...rootOwnedContexts.map((candidate) => candidate.workflowId),
+    ]);
     for (let grew = true; grew;) {
       grew = false;
       for (const candidateContext of familyContexts) {
@@ -162,7 +179,12 @@ export const getWorkflowArtifactsForThread = Effect.fn("getWorkflowArtifactsForT
             )
             .map((candidate) => candidate.planningWorkflow)
             .find((workflow) => workflow?.spec?.id === relatedImplementationRun.specId);
-    const planningWorkflow = lineagePlanningWorkflow ?? runPlanningWorkflow;
+    const rootPlanningWorkflow =
+      rootOwnedContexts.length > 0 &&
+      (thread.planningWorkflow?.spec != null || thread.planningWorkflow?.wayfinderMap != null)
+        ? thread.planningWorkflow
+        : undefined;
+    const planningWorkflow = lineagePlanningWorkflow ?? runPlanningWorkflow ?? rootPlanningWorkflow;
     const spec = planningWorkflow?.spec ?? null;
     const wayfinderMap = planningWorkflow?.wayfinderMap ?? null;
     const implementationRuns = readModel.implementationRuns.filter(

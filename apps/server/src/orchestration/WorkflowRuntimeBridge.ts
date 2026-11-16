@@ -12,9 +12,14 @@ import {
   EventId,
   ProviderDriverKind,
   RuntimeItemId,
+  OrchestrationV2UserInputQuestion,
+  ProviderUserInputAnswers,
+  RunId,
   RuntimeRequestId,
+  RuntimeTaskId,
   TurnId,
   type OrchestrationEvent,
+  type OrchestrationThreadActivity,
   type OrchestrationV2ServerCommand,
   type OrchestrationV2StoredEvent,
   type OrchestrationV2ThreadProjection,
@@ -42,6 +47,7 @@ import { ProviderRuntimeIngestionService } from "./Services/ProviderRuntimeInges
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { WorkflowProviderEvents } from "./WorkflowProviderEvents.ts";
+import { openBackgroundTaskIds, STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS } from "./stageClaim.ts";
 import {
   appendWorkflowSkillCommandSection,
   appendWorkflowStepInstructions,
@@ -49,6 +55,55 @@ import {
 import { ServerSettingsService } from "../serverSettings.ts";
 
 const OBSERVATION_PREFIX = "workflow:observe:";
+const decodeQuestionCard = Schema.decodeUnknownOption(
+  Schema.Struct({
+    requestId: Schema.String,
+    questions: Schema.Array(OrchestrationV2UserInputQuestion),
+  }),
+);
+const decodeQuestionResolution = Schema.decodeUnknownOption(
+  Schema.Struct({ requestId: Schema.String, answers: Schema.optional(ProviderUserInputAnswers) }),
+);
+
+/**
+ * workflow_request_user_input records its card as a legacy activity; the
+ * clients read v2 runtime requests, so the card is mirrored there.
+ */
+function workflowQuestionCardCommand(
+  activity: OrchestrationThreadActivity,
+  threadId: ThreadId,
+  commandId: CommandId,
+): OrchestrationV2ServerCommand | null {
+  if (activity.turnId === null) return null;
+  const base = { type: "workflow_user_input.record" as const, commandId, threadId };
+  const runId = RunId.make(activity.turnId);
+  if (activity.kind === "user-input.requested") {
+    const card = decodeQuestionCard(activity.payload);
+    if (Option.isNone(card)) return null;
+    return {
+      ...base,
+      runId,
+      requestId: RuntimeRequestId.make(card.value.requestId),
+      questions: card.value.questions,
+      status: "pending",
+    };
+  }
+  if (activity.kind === "user-input.resolved") {
+    const resolution = decodeQuestionResolution(activity.payload);
+    if (Option.isNone(resolution)) return null;
+    const answers = resolution.value.answers ?? {};
+    return {
+      ...base,
+      runId,
+      requestId: RuntimeRequestId.make(resolution.value.requestId),
+      questions: [],
+      ...(Object.keys(answers).length === 0
+        ? { status: "cancelled" as const }
+        : { status: "resolved" as const, answers }),
+    };
+  }
+  return null;
+}
 const commandIdFor = (event: OrchestrationEvent, suffix = "") =>
   CommandId.make(`workflow:execute:${event.eventId}${suffix}`);
 
@@ -229,6 +284,15 @@ export function workflowControlCommands(
               }),
         },
       ];
+    case "thread.activity-appended": {
+      if (projection === null) return [];
+      const card = workflowQuestionCardCommand(
+        event.payload.activity,
+        event.payload.threadId,
+        commandId,
+      );
+      return card === null ? [] : [card];
+    }
     case "thread.deleted":
       return [{ type: "thread.delete", commandId, threadId: event.payload.threadId }];
     case "thread.archived":
@@ -244,6 +308,28 @@ export function workflowControlCommands(
     default:
       return [];
   }
+}
+
+/** App Review advances a phase only once the legacy turn it read has a checkpoint. */
+export function workflowCheckpointCommand(
+  stored: OrchestrationV2StoredEvent,
+): OrchestrationCommand | null {
+  const event = stored.event;
+  if (event.type !== "checkpoint.captured") return null;
+  const checkpoint = event.payload;
+  if (checkpoint.runId === null || checkpoint.status === "stale") return null;
+  return {
+    type: "thread.turn.diff.complete",
+    commandId: CommandId.make(`${OBSERVATION_PREFIX}${event.id}`),
+    threadId: checkpoint.threadId,
+    turnId: TurnId.make(checkpoint.runId),
+    completedAt: DateTime.formatIso(checkpoint.capturedAt),
+    checkpointRef: checkpoint.ref,
+    status: checkpoint.status,
+    files: checkpoint.files,
+    checkpointTurnCount: checkpoint.ordinalWithinScope,
+    createdAt: DateTime.formatIso(event.occurredAt),
+  };
 }
 
 /** Feed completed native messages before terminal runs so directive validation sees their text. */
@@ -313,6 +399,56 @@ export function workflowRuntimeEvents(
   return [];
 }
 
+/**
+ * A v2 provider thread's background work as the `task.*` activities workflow reactors read to
+ * hold an agent that waits on it; without them they re-prompted it, stopping that work. `open`
+ * is what the activities already show running; null means the event carries no roster.
+ */
+export function workflowBackgroundTaskEvents(
+  stored: OrchestrationV2StoredEvent,
+  open: ReadonlySet<string>,
+): {
+  readonly events: ReadonlyArray<ProviderRuntimeEvent>;
+  readonly open: ReadonlySet<string>;
+} | null {
+  const event = stored.event;
+  if (event.type !== "provider-thread.updated") return null;
+  const roster = event.payload.pendingBackgroundTasks ?? [];
+  const base = {
+    threadId: event.threadId,
+    provider: event.driver ?? ProviderDriverKind.make("codex"),
+    ...(event.providerInstanceId === undefined
+      ? {}
+      : { providerInstanceId: event.providerInstanceId }),
+    createdAt: DateTime.formatIso(event.occurredAt),
+    ...(event.runId == null ? {} : { turnId: TurnId.make(event.runId) }),
+  };
+  const events: Array<ProviderRuntimeEvent> = [];
+  for (const task of roster) {
+    if (open.has(task.taskId)) continue;
+    events.push({
+      ...base,
+      eventId: EventId.make(`workflow:task:${event.id}:${task.taskId}:started`),
+      type: "task.started",
+      payload: {
+        taskId: RuntimeTaskId.make(task.taskId),
+        ...(task.description === undefined ? {} : { description: task.description }),
+      },
+    });
+  }
+  const running = new Set(roster.map((task) => task.taskId));
+  for (const taskId of open) {
+    if (running.has(taskId)) continue;
+    events.push({
+      ...base,
+      eventId: EventId.make(`workflow:task:${event.id}:${taskId}:ended`),
+      type: "task.completed",
+      payload: { taskId: RuntimeTaskId.make(taskId), status: "completed" },
+    });
+  }
+  return { events, open: running };
+}
+
 export class WorkflowThreadImportError extends Schema.TaggedError<WorkflowThreadImportError>()(
   "WorkflowThreadImportError",
   {
@@ -367,8 +503,9 @@ export const make = Effect.gen(function* () {
     readonly archived_at: string | null;
     readonly worktree_path: string | null;
     readonly branch: string | null;
+    readonly workflow_role: string | null;
   }>`
-    SELECT deleted_at, archived_at, worktree_path, branch FROM projection_threads WHERE thread_id = ${threadId} LIMIT 1
+    SELECT deleted_at, archived_at, worktree_path, branch, workflow_role FROM projection_threads WHERE thread_id = ${threadId} LIMIT 1
   `;
   // Subscribe during layer construction, before startup recovery can emit workflow commands.
   const commands = yield* engine.subscribeDomainEvents;
@@ -468,6 +605,9 @@ export const make = Effect.gen(function* () {
         workflowRole: thread.workflowRole ?? null,
         workflowContext: thread.workflowContext ?? null,
         workflowPreset: thread.workflowPreset ?? null,
+        ...(thread.workflowImplementationSettings === undefined
+          ? {}
+          : { workflowImplementationSettings: thread.workflowImplementationSettings }),
         createdAt: DateTime.formatIso(thread.createdAt),
         historyImport: true,
       });
@@ -492,6 +632,39 @@ export const make = Effect.gen(function* () {
       }),
     );
   };
+
+  // Each workflow thread's open background tasks, as its task activities state them.
+  // A restart forgets them, so the first roster after one reads them back.
+  const openBackgroundTasks = new Map<ThreadId, ReadonlySet<string>>();
+  const recordedOpenBackgroundTasks = Effect.fn(
+    "WorkflowRuntimeBridge.recordedOpenBackgroundTasks",
+  )(function* (threadId: ThreadId, occurredAt: DateTime.Utc) {
+    if (snapshots.listRecentTaskActivities === undefined) return new Set<string>();
+    const since = DateTime.formatIso(
+      DateTime.subtract(occurredAt, { milliseconds: STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS }),
+    );
+    const rows = yield* snapshots.listRecentTaskActivities({ threadIds: [threadId], since });
+    return openBackgroundTaskIds(rows.map((row) => row.activity));
+  });
+  const forwardBackgroundTasks = Effect.fn("WorkflowRuntimeBridge.forwardBackgroundTasks")(
+    function* (stored: OrchestrationV2StoredEvent) {
+      const event = stored.event;
+      if (event.type !== "provider-thread.updated") return;
+      const [record] = yield* workflowRecord(event.threadId);
+      if (record?.workflow_role == null || record.deleted_at !== null) return;
+      const open =
+        openBackgroundTasks.get(event.threadId) ??
+        (yield* recordedOpenBackgroundTasks(event.threadId, event.occurredAt));
+      const forwarded = workflowBackgroundTaskEvents(stored, open);
+      if (forwarded === null) return;
+      if (forwarded.events.length > 0) {
+        if (ingestion.ingest === undefined)
+          return yield* Effect.die(new Error("Workflow runtime ingestion is not configured"));
+        for (const runtime of forwarded.events) yield* ingestion.ingest(runtime);
+      }
+      openBackgroundTasks.set(event.threadId, forwarded.open);
+    },
+  );
 
   const observeNative = Effect.fn("WorkflowRuntimeBridge.observeNative")(function* (
     stored: OrchestrationV2StoredEvent,
@@ -535,6 +708,13 @@ export const make = Effect.gen(function* () {
           yield* mirrorNative({ type, commandId, threadId: event.threadId, reason: "user" });
         else yield* mirrorNative({ type, commandId, threadId: event.threadId });
       }
+    }
+    yield* forwardBackgroundTasks(stored);
+    // Only workflow threads: every mirrored checkpoint forces a pull request refresh.
+    const checkpointCommand = workflowCheckpointCommand(stored);
+    if (checkpointCommand !== null) {
+      const [record] = yield* workflowRecord(event.threadId);
+      if (record?.workflow_role != null) yield* mirrorNative(checkpointCommand);
     }
     if (event.type === "thread.metadata-updated" && event.payload.deletedAt === null) {
       const thread = event.payload;

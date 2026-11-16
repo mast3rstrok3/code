@@ -9,6 +9,8 @@ import {
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 
@@ -135,7 +137,7 @@ const seedHierarchyReadModel = Effect.map(seedReadModel, (readModel) => {
   };
 });
 
-it.layer(NodeServices.layer)("decider deletion flows", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("decider deletion flows", (it) => {
   it.effect("deletes active and archived descendants child-first without touching siblings", () =>
     Effect.gen(function* () {
       const readModel = yield* seedHierarchyReadModel;

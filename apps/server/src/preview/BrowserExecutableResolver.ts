@@ -1,11 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off - Browser discovery intentionally probes PATH and executable bits.
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeModule from "node:module";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import type { ServerPreviewBrowserStatus } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -298,29 +298,27 @@ export async function resolveFfmpegExecutablePromise(
   });
 }
 
-export const resolveFfmpegExecutable = (
-  input: FfmpegExecutableResolverInput,
-  adapter?: BrowserExecutableResolverAdapter,
-) =>
-  Effect.gen(function* () {
-    const hostPlatform = yield* HostProcessPlatform;
-    return yield* Effect.tryPromise({
-      try: () => resolveFfmpegExecutablePromise({ ...input, hostPlatform }, adapter),
-      catch: (cause) =>
-        isBrowserExecutableUnavailableError(cause)
-          ? cause
-          : new BrowserExecutableUnavailableError({
-              message: cause instanceof Error ? cause.message : String(cause),
-            }),
-    });
+export const resolveFfmpegExecutable = Effect.fn(
+  "BrowserExecutableResolver.resolveFfmpegExecutable",
+)(function* (input: FfmpegExecutableResolverInput, adapter?: BrowserExecutableResolverAdapter) {
+  const hostPlatform = yield* HostProcess.Platform;
+  return yield* Effect.tryPromise({
+    try: () => resolveFfmpegExecutablePromise({ ...input, hostPlatform }, adapter),
+    catch: (cause) =>
+      isBrowserExecutableUnavailableError(cause)
+        ? cause
+        : new BrowserExecutableUnavailableError({
+            message: cause instanceof Error ? cause.message : String(cause),
+          }),
   });
+});
 
 export const resolveFfmpegAvailability = (
   input: FfmpegExecutableResolverInput,
   adapter?: BrowserExecutableResolverAdapter,
 ) =>
   resolveFfmpegExecutable(input, adapter).pipe(
-    Effect.map(() => true),
+    Effect.as(true),
     Effect.orElseSucceed(() => false),
   );
 

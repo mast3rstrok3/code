@@ -1,3 +1,5 @@
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
@@ -22,6 +24,7 @@ import {
   IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS,
   IMPLEMENTATION_STAGE_MAX_LAUNCHES,
   MessageId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ProjectId,
   type OrchestrationImplementationRepository,
@@ -37,6 +40,7 @@ import {
   type T3ProjectFile,
   type VcsCreateWorktreeInput,
   type VcsRemoveWorktreeInput,
+  SourceControlProviderKind,
 } from "@t3tools/contracts";
 import { type DeepPartial } from "@t3tools/shared/Struct";
 import { implementationDefaultsForWorkflowPreset } from "@t3tools/shared/workflowPresets";
@@ -49,11 +53,11 @@ import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import { ChildProcessSpawner } from "effect/process";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
 import type * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { describe } from "vite-plus/test";
@@ -81,6 +85,7 @@ import {
   cleanDescendantAppReviewFailureCanRestart,
   implementationTicketReviewWarningLines,
   implementationAppReviewNeedsCodeReviewRecovery,
+  withFreshCodeReviewForAppReviewRepairs,
   implementationRunAcceptsNestedAppReviewUpdate,
   implementationReviewStageHasConflict,
   implementationAwaitsAppReviewRun,
@@ -98,12 +103,14 @@ import {
   workerReportedCurrentAttempt,
   workflowIdForRun,
   workflowIdsForRun,
+  finalGateValidationCommands,
   selectPublicationBaseBranch,
   summarizeTicketAppReviewHalt,
   deferredTicketAppReviewInstructions,
   buildBrowserAppReviewPrompt,
   workerValidationContext,
 } from "./ImplementationWorkflowReactor.ts";
+import { scheduledWorkflowMilestone } from "../ScheduledWorkflowReporter.ts";
 import {
   ORPHANED_PROVIDER_SESSION_ERROR,
   WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
@@ -115,6 +122,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import {
+  ImplementationRecoverySweepInterval,
   ImplementationWorkflowReactor,
   type ImplementationWorkflowReactorShape,
 } from "../Services/ImplementationWorkflowReactor.ts";
@@ -553,6 +561,47 @@ it("continues a terminal nested App Review to Code Review instead of launching i
   ).toBe(false);
 });
 
+it("gives App Review's repairs a fresh Final Code Review budget", () => {
+  const spent = {
+    codeReviewedHeadSha: null,
+    integrationHeadSha: "repaired-head",
+    finalCodeReviewGeneration: 6,
+    finalCodeReviewLaunchCount: 1,
+    finalCodeReviewPassCount: 5,
+    codeReviewExhaustedAt: null,
+    codeReviewExhaustionReason: null,
+  };
+
+  // Every cycle reviewed the HEAD before App Review's fixer committed.
+  expect(withFreshCodeReviewForAppReviewRepairs(spent, true)).toEqual({
+    ...spent,
+    finalCodeReviewGeneration: 7,
+    finalCodeReviewLaunchCount: 0,
+    finalCodeReviewPassCount: 0,
+  });
+  expect(
+    withFreshCodeReviewForAppReviewRepairs(
+      {
+        ...spent,
+        codeReviewExhaustedAt: "2026-01-01T00:00:00.000Z",
+        codeReviewExhaustionReason: "Final Code Review exhausted 5 cycles.",
+      },
+      true,
+    ),
+  ).toMatchObject({
+    finalCodeReviewPassCount: 0,
+    codeReviewExhaustedAt: null,
+    codeReviewExhaustionReason: null,
+  });
+  // App Review committed nothing, Code Review already accepted this HEAD, or
+  // no cycle was spent: the budget stays as it is.
+  expect(withFreshCodeReviewForAppReviewRepairs(spent, false)).toBe(spent);
+  const accepted = { ...spent, codeReviewedHeadSha: "repaired-head" };
+  expect(withFreshCodeReviewForAppReviewRepairs(accepted, true)).toBe(accepted);
+  const unspent = { ...spent, finalCodeReviewPassCount: 0 };
+  expect(withFreshCodeReviewForAppReviewRepairs(unspent, true)).toBe(unspent);
+});
+
 it("keeps a running replacement App Review ahead of historical completion markers", () => {
   const base = {
     status: "qa-reviewing",
@@ -884,7 +933,7 @@ function planningTicket(key: string, dependencyKeys: ReadonlyArray<string> = [])
 function makeTestLayer(
   calls: ImplementationCalls,
   serverSettings: DeepPartial<ServerSettings> = {},
-  failCreateWorktreeAfter?: number,
+  failCreateWorktreeCall?: number,
   failAutoCreate = false,
   failAutoCreateAttempts = 0,
   autoCreateFailureMessage = "compose file missing",
@@ -910,6 +959,7 @@ function makeTestLayer(
   }> = [{ name: "origin/main", remoteName: "origin", isDefault: true }],
   projectFile?: T3ProjectFile,
   failIntegratedSetup = false,
+  failTicketSetup = false,
   failDeleteStackAttempts = 0,
   autoCreateCreatedWorktrees: ReadonlyArray<AppStackCreatedWorktree> = [],
 ) {
@@ -928,7 +978,7 @@ function makeTestLayer(
     Layer.provideMerge(
       ServerConfig.layerTest(process.cwd(), { prefix: "implementation-reactor-" }),
     ),
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     Layer.provideMerge(ThreadBackgroundLiveness.layer),
     Layer.provideMerge(ThreadPlanProgress.layer),
     Layer.provideMerge(
@@ -951,7 +1001,7 @@ function makeTestLayer(
           runForThread: (input) =>
             Ref.update(calls.setupScriptInputs, (inputs) => [...inputs, input]).pipe(
               Effect.andThen(
-                failIntegratedSetup
+                (input.worktreePath.includes("-ticket-") ? failTicketSetup : failIntegratedSetup)
                   ? Effect.fail(
                       new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
                         threadId: input.threadId,
@@ -1008,7 +1058,7 @@ function makeTestLayer(
           createWorktree: (input) =>
             Ref.updateAndGet(calls.createWorktreeInputs, (inputs) => [...inputs, input]).pipe(
               Effect.flatMap((inputs) =>
-                failCreateWorktreeAfter !== undefined && inputs.length > failCreateWorktreeAfter
+                inputs.length === failCreateWorktreeCall
                   ? Effect.fail(
                       new GitCommandError({
                         operation: "GitVcsDriver.createWorktree",
@@ -1153,6 +1203,7 @@ function makeTestLayer(
               }
               return { commitSha: resolvedCommitSha };
             }),
+          readBranchBase: () => Effect.succeed(null),
           localStatus: (input) =>
             Effect.all([
               input.cwd.includes("-ticket-")
@@ -1263,7 +1314,7 @@ function makeTestLayer(
                     ),
               ),
               Effect.as({
-                provider: "github" as const,
+                provider: SourceControlProviderKind.make("github"),
                 number: 1,
                 title: "Implementation PR",
                 url: "https://example.test/pr/1",
@@ -1531,7 +1582,7 @@ function withSystem<A, E>(
   use: (system: ImplementationSystem) => Effect.Effect<A, E, Scope.Scope>,
   options?: {
     readonly serverSettings?: DeepPartial<ServerSettings>;
-    readonly failCreateWorktreeAfter?: number;
+    readonly failCreateWorktreeCall?: number;
     readonly failAutoCreate?: boolean;
     readonly failAutoCreateAttempts?: number;
     readonly autoCreateFailureMessage?: string;
@@ -1570,6 +1621,7 @@ function withSystem<A, E>(
     }>;
     readonly projectFile?: T3ProjectFile;
     readonly failIntegratedSetup?: boolean;
+    readonly failTicketSetup?: boolean;
     readonly failDeleteStackAttempts?: number;
     /** Worktrees the controller's bundle plan made Code create on each auto-create. */
     readonly autoCreateCreatedWorktrees?: ReadonlyArray<AppStackCreatedWorktree>;
@@ -1671,7 +1723,11 @@ function withSystem<A, E>(
         const query = yield* ProjectionSnapshotQuery;
         const reactor = yield* ImplementationWorkflowReactor;
         const ingestionBacklog = yield* ProviderIngestionBacklog;
-        if (options?.startReactor !== false) yield* reactor.start();
+        // Recovery runs by hand here; a clock jump would otherwise sweep every 30s it crosses.
+        if (options?.startReactor !== false)
+          yield* reactor
+            .start()
+            .pipe(Effect.provideService(ImplementationRecoverySweepInterval, Duration.infinity));
         return yield* use({
           ...calls,
           engine,
@@ -1685,7 +1741,7 @@ function withSystem<A, E>(
         makeTestLayer(
           calls,
           options?.serverSettings,
-          options?.failCreateWorktreeAfter,
+          options?.failCreateWorktreeCall,
           options?.failAutoCreate,
           options?.failAutoCreateAttempts,
           options?.autoCreateFailureMessage,
@@ -1707,6 +1763,7 @@ function withSystem<A, E>(
           options?.remoteRefs,
           options?.projectFile,
           options?.failIntegratedSetup,
+          options?.failTicketSetup,
           options?.failDeleteStackAttempts,
           options?.autoCreateCreatedWorktrees,
         ),
@@ -2426,6 +2483,44 @@ it("uses the remote default when a local workflow base was never published", () 
       },
     ]),
   ).toBe("dev");
+});
+
+it("publishes a local workflow base against the branch it recorded, before the default", () => {
+  const remote = (name: string, isDefault: boolean) => ({
+    name: `origin/${name}`,
+    remoteName: "origin",
+    isRemote: true,
+    current: false,
+    isDefault,
+    worktreePath: null,
+  });
+  const refs = [remote("main", true), remote("dev", false)];
+  expect(selectPublicationBaseBranch("w/local-thread", refs, "dev")).toBe("dev");
+  expect(selectPublicationBaseBranch("w/local-thread", refs, "gone")).toBe("main");
+  expect(selectPublicationBaseBranch("w/local-thread", refs)).toBe("main");
+  expect(selectPublicationBaseBranch("main", refs, "dev")).toBe("main");
+});
+
+it("runs the repository's checks at the final gate, not Code's built-ins or App Review's scope", () => {
+  const pinned = [
+    "vp check",
+    "vp run typecheck",
+    "APP_REVIEW_TEST_PLATFORMS=web pnpm check dev rudi",
+  ];
+  expect(finalGateValidationCommands(pinned, ["pnpm check dev"])).toEqual([
+    "pnpm check dev",
+    "pnpm check dev rudi",
+  ]);
+  expect(finalGateValidationCommands(["vp check", "vp run typecheck"], [])).toEqual([
+    "vp check",
+    "vp run typecheck",
+  ]);
+  expect(
+    finalGateValidationCommands(
+      ["APP_REVIEW_TEST_PLATFORMS=web pnpm check dev"],
+      ["pnpm check dev"],
+    ),
+  ).toEqual(["pnpm check dev"]);
 });
 
 it("ignores terminal updates from a superseded nested App Review", () => {
@@ -3837,7 +3932,7 @@ describe("ImplementationWorkflowReactor", () => {
         });
         yield* system.reactor.recoverIncompleteStages();
         return { run, worktreePath, fileSystem };
-      }).pipe(Effect.provide(NodeServices.layer));
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
     it.effect("deletes a succeeded ticket's checkout that git already unregistered", () =>
       withSystem(
@@ -4248,14 +4343,21 @@ describe("ImplementationWorkflowReactor", () => {
             { cwd: medicalRepository.worktreePath, refName: `${workers[2]?.branch}@commit` },
           ]);
           expect(
-            (yield* Ref.get(system.setupScriptInputs)).map((input) => [
-              input.projectId,
-              input.worktreePath,
-            ]),
+            (yield* Ref.get(system.setupScriptInputs))
+              .filter((input) => !input.worktreePath?.includes("-ticket-"))
+              .map((input) => [input.projectId, input.worktreePath]),
           ).toEqual([
             [projectId, run.orchestratorWorktreePath],
             [medicalProjectId, medicalRepository.worktreePath],
           ]);
+          // Each ticket is set up with its own repository's project.
+          expect(
+            new Set(
+              (yield* Ref.get(system.setupScriptInputs))
+                .filter((input) => input.worktreePath?.includes("-ticket-"))
+                .map((input) => input.projectId),
+            ),
+          ).toEqual(new Set([projectId, medicalProjectId]));
           const snapshot = yield* system.query.getSnapshot();
           const validator = snapshot.threads.find(
             (thread) => thread.workflowRole === "implementation-validator",
@@ -5234,11 +5336,11 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("halts when worker worktree creation fails", () =>
+  it.effect("halts when worker worktree creation fails, and starts the worker on rerun", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
-          const { run } = yield* launchRun(system);
+          const { run, ticket } = yield* launchRun(system);
           const snapshot = yield* system.query.getSnapshot();
           const workerThread = snapshot.threads.find(
             (thread) => thread.workflowRole === "implementation-worker",
@@ -5250,8 +5352,33 @@ describe("ImplementationWorkflowReactor", () => {
           expect(
             snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
           ).toHaveLength(0);
+
+          // The claim recorded a worker thread id that was never created.
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.rerun",
+            commandId: commandId("rerun-after-worktree-failure"),
+            threadId: sourceThreadId,
+            runId: run.id,
+            target: { kind: "ticket", ticketId: ticket.id, stage: "implementation" },
+            createdAt: "2026-01-01T00:05:00.000Z",
+          });
+          yield* system.reactor.drain;
+
+          const rerunSnapshot = yield* system.query.getSnapshot();
+          const rerun = rerunSnapshot.implementationRuns.find((entry) => entry.id === run.id);
+          const workers = rerunSnapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-worker",
+          );
+          expect(rerun?.automationHalt).toBeNull();
+          expect(rerun?.ticketStates[0]?.status).toBe("running");
+          expect(workers.map((thread) => thread.id)).toEqual([
+            rerun?.ticketStates[0]?.workerThreadId,
+          ]);
+          expect(workers[0]?.messages.at(-1)?.text).not.toContain(
+            "Continue the ticket from its existing durable state.",
+          );
         }),
-      { failCreateWorktreeAfter: 1 },
+      { failCreateWorktreeCall: 2 },
     ),
   );
 
@@ -5363,7 +5490,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("stops recovery when the durable Implementation thread is gone", () =>
+  it.effect("stops recovery when the durable Implementation thread is gone, until reset", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system);
@@ -5400,6 +5527,22 @@ describe("ImplementationWorkflowReactor", () => {
           initialState.implementationGeneration,
         );
         expect(recovered?.retryableFailure?.detail).toContain("durable Implementation thread");
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.reset",
+          commandId: commandId("reset-after-worker-deletion"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "ticket", ticketId: initialState.ticketId, stage: "implementation" },
+          createdAt: "2026-01-01T00:10:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const reset = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        );
+        expect(reset?.automationHalt).toBeNull();
+        expect(reset?.ticketStates[0]?.workerThreadId).not.toBe(initialState.workerThreadId);
       }),
     ),
   );
@@ -7271,19 +7414,67 @@ describe("ImplementationWorkflowReactor", () => {
         const { run } = yield* launchRun(system);
         yield* appendWorkerResult(system, { run, status: "succeeded" });
 
-        expect(yield* Ref.get(system.setupScriptInputs)).toEqual([
-          {
-            threadId: run.orchestratorThreadId,
-            projectId,
-            worktreePath: run.orchestratorWorktreePath,
-            observeCompletion: {},
-          },
-        ]);
+        expect(yield* Ref.get(system.setupScriptInputs)).toContainEqual({
+          threadId: run.orchestratorThreadId,
+          projectId,
+          worktreePath: run.orchestratorWorktreePath,
+          observeCompletion: {},
+        });
         const snapshot = yield* system.query.getSnapshot();
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
         ).toHaveLength(1);
       }),
+    ),
+  );
+
+  it.effect("sets up a ticket's worktree before its worker's first turn, once", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* launchRun(system);
+        const snapshot = yield* system.query.getSnapshot();
+        const worker = snapshot.threads.find(
+          (thread) => thread.workflowRole === "implementation-worker",
+        );
+        if (worker === undefined) throw new Error("Worker missing.");
+        expect(worker.messages.at(-1)?.role).toBe("user");
+        const ticketSetups = () =>
+          Ref.get(system.setupScriptInputs).pipe(
+            Effect.map((inputs) =>
+              inputs.filter((input) => input.worktreePath?.includes("-ticket-")),
+            ),
+          );
+        expect(yield* ticketSetups()).toEqual([
+          {
+            threadId: worker.id,
+            projectId,
+            worktreePath: worker.worktreePath,
+            observeCompletion: {},
+          },
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("holds a ticket's worker when its worktree setup fails", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const snapshot = yield* system.query.getSnapshot();
+          const blocked = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(blocked?.status).toBe("needs-human-attention");
+          expect(blocked?.retryableFailure).toMatchObject({
+            stage: "worker-setup",
+            humanBlocked: false,
+          });
+          expect(blocked?.retryableFailure?.detail).toContain("Worktree setup failed");
+          const worker = snapshot.threads.find(
+            (thread) => thread.workflowRole === "implementation-worker",
+          );
+          expect(worker?.messages ?? []).toHaveLength(0);
+        }),
+      { failTicketSetup: true },
     ),
   );
 
@@ -7355,7 +7546,7 @@ describe("ImplementationWorkflowReactor", () => {
             candidate.caller.implementationRunId === run.id &&
             candidate.caller.ticketId === undefined,
         );
-        expect(combinedReview?.cycleBudget).toBe(10);
+        expect(combinedReview?.cycleBudget).toBe(5);
         expect(
           snapshot.threads.filter(
             (thread) =>
@@ -7853,6 +8044,253 @@ describe("ImplementationWorkflowReactor", () => {
           ),
         ).toBe(false);
       }),
+    ),
+  );
+
+  it.effect("halts a run whose automatic retries leave it unchanged", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+
+        let snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        if (current === undefined) throw new Error("Run missing.");
+        // App Review passed on a HEAD Code Review never accepted, with every
+        // Final Code Review cycle spent: a retry publishes, and publishing
+        // returns without touching the run.
+        const failedAt = "2026-01-01T00:00:03.000Z";
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("seed-retry-that-changes-nothing"),
+          threadId: sourceThreadId,
+          run: {
+            ...current,
+            status: "needs-human-attention",
+            appReviewedHeadSha: current.integrationHeadSha,
+            codeReviewedHeadSha: null,
+            finalCodeReviewPassCount: IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
+            retryableFailure: {
+              stage: "code-review",
+              detail: "Cannot publish a change request before Code Review accepts an exact HEAD.",
+              failedAt,
+              attemptCount: 1,
+              maxAttempts: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+              humanBlocked: false,
+            },
+            automationHalt: null,
+            updatedAt: failedAt,
+          },
+          createdAt: failedAt,
+        });
+        yield* system.reactor.drain;
+
+        yield* system.reactor.recoverRetryableRuns();
+        yield* system.reactor.drain;
+        snapshot = yield* system.query.getSnapshot();
+        const retried = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(retried?.status).toBe("needs-human-attention");
+        expect(retried?.retryableFailure?.attemptCount).toBe(1);
+        expect(retried?.automationHalt).toBeNull();
+
+        yield* TestClock.adjust(Duration.minutes(21));
+        yield* system.reactor.recoverRetryableRuns();
+        yield* system.reactor.drain;
+        snapshot = yield* system.query.getSnapshot();
+        const halted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(halted?.automationHalt).toMatchObject({
+          stage: "final-code-review",
+          category: "retry-exhausted",
+        });
+        expect(halted?.automationHalt?.detail).toContain(
+          "Automatic retries of code-review have not changed this run",
+        );
+        expect(halted?.retryableFailure?.humanBlocked).toBe(true);
+        // The halt is what the root thread is told about.
+        expect(scheduledWorkflowMilestone(halted!)?.key).toBe(
+          `halt:${halted?.automationHalt?.haltedAt}`,
+        );
+      }),
+    ),
+  );
+
+  it.effect("continues once a stack that was still starting answers its probe", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+          yield* passMergeGate(system, run);
+          let snapshot = yield* system.query.getSnapshot();
+          expect(
+            snapshot.implementationRuns.find((entry) => entry.id === run.id)?.appDevStack.status,
+          ).toBe("ensuring");
+
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
+          snapshot = yield* system.query.getSnapshot();
+          const continued = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(continued?.appDevStack.status).toBe("ready");
+          expect(continued?.activeFixerThreadId).toBeNull();
+          expect(continued?.automationHalt).toBeNull();
+        }),
+      { backendProbeStatuses: [502, 200] },
+    ),
+  );
+
+  it.effect("waits for a stack whose probe fails instead of repairing it, then reports it", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+          yield* passMergeGate(system, run);
+
+          let snapshot = yield* system.query.getSnapshot();
+          const waiting = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(waiting?.status).toBe("qa-reviewing");
+          expect(waiting?.lastQaFailure).toBeNull();
+          expect(waiting?.retryableFailure).toBeNull();
+          expect(waiting?.appDevStack.status).toBe("ensuring");
+          const fixers = () =>
+            system.query
+              .getSnapshot()
+              .pipe(
+                Effect.map(
+                  (latest) =>
+                    latest.threads.filter(
+                      (thread) => thread.workflowRole === "implementation-fixer",
+                    ).length,
+                ),
+              );
+          expect(yield* fixers()).toBe(0);
+
+          yield* TestClock.adjust(Duration.minutes(21));
+          for (let sweep = 0; sweep < 4; sweep += 1) {
+            yield* system.reactor.recoverIncompleteStages();
+            yield* system.reactor.recoverRetryableRuns();
+            yield* system.reactor.drain;
+          }
+          snapshot = yield* system.query.getSnapshot();
+          // A stack that never answers is reported, not handed to a code repair.
+          expect(yield* fixers()).toBe(0);
+          expect(
+            snapshot.implementationRuns.find((entry) => entry.id === run.id)?.automationHalt,
+          ).toMatchObject({ stage: "app-review", category: "retry-exhausted" });
+        }),
+      { backendProbeStatus: 502 },
+    ),
+  );
+
+  it.effect("stops a fixer when the next repair replaces it", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+          yield* passMergeGate(system, run);
+          let snapshot = yield* system.query.getSnapshot();
+          const first = snapshot.implementationRuns.find(
+            (entry) => entry.id === run.id,
+          )?.activeFixerThreadId;
+          if (first == null) throw new Error("First repair missing.");
+
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId("first-repair-reported-nothing"),
+            threadId: first,
+            activity: {
+              id: eventId("first-repair-reported-nothing"),
+              tone: "error",
+              kind: "implementation-fix-result",
+              summary: "Implementation fix result was missing or malformed",
+              payload: {
+                type: "implementation-fix-result",
+                runId: run.id,
+                status: "blocked",
+                validations: [],
+                notesMarkdown: "QA fixer completed without the required directive.",
+              },
+              turnId: null,
+              createdAt: "2026-01-01T00:00:03.000Z",
+            },
+            createdAt: "2026-01-01T00:00:03.000Z",
+          });
+          yield* system.reactor.drain;
+
+          snapshot = yield* system.query.getSnapshot();
+          const second = snapshot.implementationRuns.find(
+            (entry) => entry.id === run.id,
+          )?.activeFixerThreadId;
+          expect(second).not.toBeNull();
+          expect(second).not.toBe(first);
+          const events = yield* Stream.runCollect(system.engine.readEvents(0));
+          expect(
+            [...events].some(
+              (event) =>
+                event.type === "thread.session-stop-requested" && event.aggregateId === first,
+            ),
+          ).toBe(true);
+        }),
+      { failAutoCreate: true },
+    ),
+  );
+
+  it.effect("runs the repository's own commands when a run pinned Code's built-in ones", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.update",
+            commandId: commandId("pinned-before-the-project-file-existed"),
+            threadId: sourceThreadId,
+            run: {
+              ...run,
+              status: "validating",
+              launchSummary: {
+                ...run.launchSummary,
+                validationCommands: [
+                  "vp check",
+                  "vp run typecheck",
+                  "APP_REVIEW_TEST_PLATFORMS=web pnpm check dev rudi",
+                ],
+              },
+              orchestratorBranch: "main",
+              orchestratorWorktreePath: "/tmp/implementation-reactor-review",
+              integrationHeadSha: "def456",
+              activeValidationKind: "final",
+              codeReviewedHeadSha: "def456",
+              updatedAt: now,
+            },
+            createdAt: now,
+          });
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.rerun",
+            commandId: commandId("rerun-final-gate-with-project-file"),
+            threadId: sourceThreadId,
+            runId: run.id,
+            target: { kind: "run", stage: "merge-gate" },
+            createdAt: "2026-01-01T00:00:05.000Z",
+          });
+          yield* system.reactor.drain;
+
+          const snapshot = yield* system.query.getSnapshot();
+          const gate = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(gate?.activeValidationKind).toBe("final");
+          expect(gate?.launchSummary.validationCommands).toEqual([
+            "pnpm check dev",
+            "pnpm check dev rudi",
+          ]);
+          const prompt = snapshot.threads
+            .find((thread) => thread.id === gate?.activeValidatorThreadId)
+            ?.messages.at(-1)?.text;
+          expect(prompt).toContain("- pnpm check dev\n");
+          expect(prompt).not.toContain("vp check");
+          expect(prompt).not.toContain("APP_REVIEW_TEST_PLATFORMS=web");
+        }),
+      { projectFile: { validationCommands: ["pnpm check dev"] } },
     ),
   );
 
@@ -8647,7 +9085,7 @@ describe("ImplementationWorkflowReactor", () => {
             activeCodeReviewHeadSha: null,
             activeCodeReviewThreadId: null,
             changeRequest: {
-              provider: "github",
+              provider: SourceControlProviderKind.make("github"),
               number: 70,
               title: "Implementation PR",
               url: "https://example.test/pr/70",
@@ -9509,7 +9947,16 @@ describe("ImplementationWorkflowReactor", () => {
             ),
           ).toBe(false);
         }),
-      { serverSettings: { providers: { codex: { enabled: false } } } },
+      {
+        serverSettings: {
+          providerInstances: {
+            [ProviderInstanceId.make("codex")]: {
+              driver: ProviderDriverKind.make("codex"),
+              enabled: false,
+            },
+          },
+        },
+      },
     ),
   );
   it.effect("a skipped ticket keeps its branch so dependents still build on it", () =>
@@ -10067,7 +10514,7 @@ describe("ImplementationWorkflowReactor", () => {
           // The two steps run the same agent. A budget on the run's App Review
           // must not reach the per-ticket reviews inside the ticket waves.
           const { nestedRun } = yield* launchTicketAppReview(system);
-          expect(nestedRun.cycleBudget).toBe(10);
+          expect(nestedRun.cycleBudget).toBe(5);
         }),
       {
         serverSettings: {
@@ -11238,7 +11685,7 @@ describe("ImplementationWorkflowReactor", () => {
           "preserve unknown files too",
         );
         expect(snapshot.implementationRuns[0]?.ticketStates[0]?.status).toBe("running");
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     ),
   );
 
@@ -13544,7 +13991,7 @@ it.effect(
               ServerConfig.layerTest("/tmp/implementation-reactor", {
                 prefix: "t3-native-git-test-",
               }),
-            ).pipe(Layer.provideMerge(NodeServices.layer)),
+            ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
           ),
         );
         const execute = (input: Parameters<typeof executeNativeVerification>[0]) =>
@@ -13580,7 +14027,7 @@ it.effect(
                   };
                 }),
             }),
-            Effect.provide(NodeServices.layer),
+            Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           );
         const target = { runId: run.id, ticketId: ticket.id };
         const rejected = yield* execute({
@@ -13624,11 +14071,11 @@ it.effect(
         if (!claimed) throw new Error("Missing claim");
         fetched = commitSha;
         const local = yield* execute({ operation: "checkout", handoff: claimed, projectId }).pipe(
-          Effect.provideService(HostProcessPlatform, "darwin"),
+          Effect.provideService(HostProcess.Platform, "darwin"),
         );
         expect(local.type).toBe("checkout");
         yield* execute({ operation: "checkout", handoff: claimed, projectId }).pipe(
-          Effect.provideService(HostProcessPlatform, "darwin"),
+          Effect.provideService(HostProcess.Platform, "darwin"),
         );
         const localThread = (yield* system.query.getSnapshot()).threads.find(
           (thread) => thread.id === claimed.claim?.threadId,

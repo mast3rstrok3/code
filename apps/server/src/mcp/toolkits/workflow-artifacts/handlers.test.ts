@@ -10,16 +10,20 @@ import {
   WorkflowId,
   type OrchestrationReadModel,
 } from "@t3tools/contracts";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { McpSchema, McpServer } from "effect/ai";
 
+import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { getWorkflowArtifactsForThread } from "../../../orchestration/workflowArtifacts.ts";
+import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { handlers, WorkflowArtifactsToolkitHandlersLive } from "./handlers.ts";
+import * as WorkflowArtifactsHandlers from "./handlers.ts";
 import { WorkflowArtifactsToolkit } from "./tools.ts";
+import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 
 const projectId = ProjectId.make("project-workflow-artifacts");
 const otherProjectId = ProjectId.make("project-other");
@@ -311,10 +315,8 @@ const mcpClient = McpSchema.McpServerClient.of({
   getClient: Effect.die("unused"),
 });
 const mcpLayer = (threadId = nestedReviewerThreadId) =>
-  // oxlint-disable-next-line t3code/no-raw-mcp-registration -- Tests exercise encoding with explicit invocation fixtures; production uses McpToolAccess.
-  McpServer.toolkit(WorkflowArtifactsToolkit).pipe(
-    Layer.provide(WorkflowArtifactsToolkitHandlersLive),
-    Layer.provideMerge(McpServer.McpServer.layer),
+  McpHttpServer.toolkitRegistration(WorkflowArtifactsToolkit, WorkflowArtifactsHandlers.layer).pipe(
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provideMerge(queryLayer),
     Layer.provideMerge(
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
@@ -332,6 +334,14 @@ const mcpLayer = (threadId = nestedReviewerThreadId) =>
       }),
     ),
     Layer.provideMerge(Layer.succeed(McpSchema.McpServerClient, mcpClient)),
+    Layer.provideMerge(Layer.mock(ThreadManagement.ThreadManagementService)({})),
+    Layer.provideMerge(Layer.mock(OrchestrationEngineService)({})),
+    Layer.provideMerge(
+      Layer.succeed(
+        SecureRandom.SecureRandom,
+        SecureRandom.make((size) => new Uint8Array(size).fill(7)),
+      ),
+    ),
   );
 const decodeReviews = Schema.decodeUnknownSync(
   Schema.Struct({ appReviews: Schema.Array(AppReviewRecord) }),
@@ -429,11 +439,12 @@ it.effect("returns empty histories and absent planning artifacts as MCP objects"
 describe("workflow-artifacts toolkit handlers", () => {
   it.effect("resolves canonical artifacts and many-to-many App Review links from a child", () =>
     Effect.gen(function* () {
-      const context = yield* handlers.workflow_context_get();
-      const { wayfinderMap } = yield* handlers.workflow_wayfinder_map_get();
-      const { spec } = yield* handlers.workflow_spec_get();
-      const { tickets } = yield* handlers.workflow_tickets_list();
-      const review = yield* handlers.workflow_app_review_get({
+      const context = yield* WorkflowArtifactsHandlers.handlers.workflow_context_get();
+      const { wayfinderMap } =
+        yield* WorkflowArtifactsHandlers.handlers.workflow_wayfinder_map_get();
+      const { spec } = yield* WorkflowArtifactsHandlers.handlers.workflow_spec_get();
+      const { tickets } = yield* WorkflowArtifactsHandlers.handlers.workflow_tickets_list();
+      const review = yield* WorkflowArtifactsHandlers.handlers.workflow_app_review_get({
         reviewId: AppReviewId.make("app-review-1"),
       });
 
@@ -450,7 +461,7 @@ describe("workflow-artifacts toolkit handlers", () => {
 
   it.effect("rejects cross-workflow artifact IDs and cross-project RPC context", () =>
     Effect.gen(function* () {
-      const ticketError = yield* handlers
+      const ticketError = yield* WorkflowArtifactsHandlers.handlers
         .workflow_ticket_get({ ticketId: "planning-ticket-other" })
         .pipe(Effect.flip);
       assert.strictEqual(ticketError._tag, "WorkflowArtifactAccessError");
@@ -466,10 +477,10 @@ describe("workflow-artifacts toolkit handlers", () => {
 
   it.effect("resolves planning artifacts through nested workflow ancestry", () =>
     Effect.gen(function* () {
-      const context = yield* handlers.workflow_context_get();
-      const { spec } = yield* handlers.workflow_spec_get();
-      const { tickets } = yield* handlers.workflow_tickets_list();
-      const ticket = yield* handlers.workflow_ticket_get({ ticketId });
+      const context = yield* WorkflowArtifactsHandlers.handlers.workflow_context_get();
+      const { spec } = yield* WorkflowArtifactsHandlers.handlers.workflow_spec_get();
+      const { tickets } = yield* WorkflowArtifactsHandlers.handlers.workflow_tickets_list();
+      const ticket = yield* WorkflowArtifactsHandlers.handlers.workflow_ticket_get({ ticketId });
 
       assert.strictEqual(context.workflowId, implementationWorkflowId);
       assert.strictEqual(context.parentWorkflowId, workflowId);
@@ -512,6 +523,41 @@ describe("workflow-artifacts toolkit handlers", () => {
     }).pipe(Effect.provide(queryLayer)),
   );
 
+  it.effect("shows a contextless planning root every workflow started under it", () => {
+    // A planning root has no workflow context of its own, and the
+    // Implementation Run it starts records no parent workflow.
+    const contextlessRootModel = {
+      ...readModel,
+      threads: readModel.threads.map((thread) =>
+        thread.id === rootThreadId
+          ? { ...thread, workflowContext: null }
+          : thread.id === implementationThreadId && thread.workflowContext
+            ? { ...thread, workflowContext: { ...thread.workflowContext, parentWorkflowId: null } }
+            : thread,
+      ),
+    } as OrchestrationReadModel;
+    return Effect.gen(function* () {
+      const snapshot = yield* getWorkflowArtifactsForThread({ threadId: rootThreadId });
+
+      assert.strictEqual(snapshot.context.rootThreadId, rootThreadId);
+      assert.strictEqual(snapshot.spec?.id, "spec-1");
+      assert.deepStrictEqual(
+        snapshot.appReviewWorkflowRuns.map((run) => String(run.id)),
+        [String(appReviewWorkflowId)],
+      );
+      assert.include(
+        snapshot.appReviews.map((review) => String(review.id)),
+        "app-review-nested",
+      );
+    }).pipe(
+      Effect.provide(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getCommandReadModel: () => Effect.succeed(contextlessRootModel),
+        }),
+      ),
+    );
+  });
+
   it.effect("does not authorize artifacts by shared root thread alone", () =>
     Effect.gen(function* () {
       const snapshot = yield* getWorkflowArtifactsForThread({ threadId: detachedThreadId });
@@ -524,13 +570,175 @@ describe("workflow-artifacts toolkit handlers", () => {
 
   it.effect("loads built-in workflow docs and rejects unknown IDs", () =>
     Effect.gen(function* () {
-      const doc = yield* handlers.workflow_doc_get({ docId: "glossary-format" });
+      const doc = yield* WorkflowArtifactsHandlers.handlers.workflow_doc_get({
+        docId: "glossary-format",
+      });
       assert.strictEqual(doc.path, "GLOSSARY-FORMAT.md");
       assert.match(doc.content, /# GLOSSARY\.md Format/);
 
-      const error = yield* handlers.workflow_doc_get({ docId: "missing" }).pipe(Effect.flip);
+      const error = yield* WorkflowArtifactsHandlers.handlers
+        .workflow_doc_get({ docId: "missing" })
+        .pipe(Effect.flip);
       assert.strictEqual(error._tag, "WorkflowArtifactAccessError");
       assert.match(error.message, /was not found/);
     }).pipe(Effect.provide(invocationLayer)),
   );
+
+  describe("workflow status and run control", () => {
+    const halt = {
+      ticketId,
+      stage: "code-review",
+      category: "retry-exhausted",
+      detail: "Ticket exhausted its Code Review launch budget.",
+      haltedAt: "2026-01-02T00:00:00.000Z",
+    } as const;
+    const haltedModel = {
+      ...readModel,
+      threads: readModel.threads.map((thread) =>
+        thread.id === implementationThreadId ? { ...thread, parentThreadId: rootThreadId } : thread,
+      ),
+      implementationRuns: [
+        {
+          ...readModel.implementationRuns[0],
+          status: "needs-human-attention",
+          automationHalt: halt,
+          retryableFailure: null,
+          skips: [],
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          ticketStates: [
+            {
+              ticketId,
+              status: "code-reviewing",
+              dependencyTicketIds: [],
+              workerThreadId: childThreadId,
+              updatedAt: "2026-01-01T12:00:00.000Z",
+            },
+          ],
+        },
+      ],
+    } as unknown as OrchestrationReadModel;
+    const callerLayer = (threadId: ThreadId) =>
+      Layer.succeed(McpInvocationContext.McpInvocationContext, {
+        environmentId: EnvironmentId.make("environment-1"),
+        capabilities: new Set(["workflow-artifacts"] as const),
+        issuedAt: 1,
+        thread: {
+          threadId,
+          providerSessionId: "provider-session-restart",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+        client: undefined,
+        requestNamespace: "workflow-test",
+      });
+    const restartLayer = (threadId: ThreadId, dispatched: Array<unknown>) =>
+      Layer.mergeAll(
+        Layer.mock(ProjectionSnapshotQuery)({
+          getCommandReadModel: () => Effect.succeed(haltedModel),
+        }),
+        callerLayer(threadId),
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            Effect.sync(() => {
+              dispatched.push(command);
+              return { sequence: 1, outcome: { type: "accepted" as const } };
+            }),
+        }),
+        Layer.succeed(
+          SecureRandom.SecureRandom,
+          SecureRandom.make((size) => new Uint8Array(size).fill(7)),
+        ),
+      );
+
+    it.effect("shows the halt and the ticket it froze", () =>
+      Effect.gen(function* () {
+        const { runs } = yield* WorkflowArtifactsHandlers.handlers.workflow_status_get();
+        assert.deepStrictEqual(runs[0]?.automationHalt, halt);
+        assert.deepInclude(runs[0]?.tickets[0], {
+          ticketId,
+          key: "TICKET-1",
+          status: "code-reviewing",
+          codeReviewThreadId: null,
+        });
+      }).pipe(Effect.provide(restartLayer(rootThreadId, []))),
+    );
+
+    it.effect("controls the run from the root thread with the panel's commands", () => {
+      const dispatched: Array<unknown> = [];
+      const target = { kind: "ticket", ticketId, stage: "code-review" } as const;
+      const runId = "implementation-run-1";
+      return Effect.gen(function* () {
+        const { handlers } = WorkflowArtifactsHandlers;
+        const result = yield* handlers.workflow_stage_restart({ runId, target, mode: "rerun" });
+        assert.deepStrictEqual(result.outcome, { type: "accepted" });
+        yield* handlers.workflow_stage_restart({ runId, target, mode: "reset" });
+        yield* handlers.workflow_stage_skip({ runId, target, skipped: true });
+        yield* handlers.workflow_pause({ threadId: implementationThreadId, paused: true });
+        yield* handlers.workflow_pause({ threadId: rootThreadId, paused: false });
+        yield* handlers.workflow_run_control({ runId, action: "retry" });
+        yield* handlers.workflow_run_control({ runId, action: "cancel", reason: "User asked" });
+        assert.deepStrictEqual(
+          dispatched.map((command) => {
+            const {
+              commandId: _commandId,
+              createdAt: _createdAt,
+              ...rest
+            } = command as Record<string, unknown>;
+            return rest;
+          }),
+          [
+            { type: "thread.implementation-run.rerun", threadId: rootThreadId, runId, target },
+            { type: "thread.implementation-run.reset", threadId: rootThreadId, runId, target },
+            {
+              type: "thread.implementation-run.skip",
+              threadId: rootThreadId,
+              runId,
+              target,
+              skipped: true,
+            },
+            { type: "thread.workflow.pause", threadId: implementationThreadId },
+            { type: "thread.workflow.resume", threadId: rootThreadId },
+            { type: "thread.implementation-run.retry", threadId: rootThreadId, runId },
+            {
+              type: "thread.implementation-run.cancel",
+              threadId: rootThreadId,
+              runId,
+              reason: "User asked",
+            },
+          ],
+        );
+      }).pipe(Effect.provide(restartLayer(rootThreadId, dispatched)));
+    });
+
+    it.effect("refuses stage threads and runs outside the workflow", () => {
+      const dispatched: Array<unknown> = [];
+      const input = {
+        runId: "implementation-run-1",
+        target: { kind: "ticket", ticketId, stage: "code-review" },
+        mode: "rerun",
+      } as const;
+      return Effect.gen(function* () {
+        const fromChild = yield* WorkflowArtifactsHandlers.handlers
+          .workflow_stage_restart(input)
+          .pipe(Effect.provide(restartLayer(childThreadId, dispatched)), Effect.flip);
+        assert.match(fromChild.message, /Only the workflow's root thread/);
+        const otherRun = yield* WorkflowArtifactsHandlers.handlers
+          .workflow_stage_restart({ ...input, runId: "implementation-run-other" })
+          .pipe(Effect.provide(restartLayer(rootThreadId, dispatched)), Effect.flip);
+        assert.match(otherRun.message, /is not in this workflow/);
+        const childPause = yield* WorkflowArtifactsHandlers.handlers
+          .workflow_pause({ threadId: implementationThreadId, paused: true })
+          .pipe(Effect.provide(restartLayer(childThreadId, dispatched)), Effect.flip);
+        assert.match(childPause.message, /Only the workflow's root thread/);
+        const selfPause = yield* WorkflowArtifactsHandlers.handlers
+          .workflow_pause({ threadId: rootThreadId, paused: true })
+          .pipe(Effect.provide(restartLayer(rootThreadId, dispatched)), Effect.flip);
+        assert.match(selfPause.message, /would stop this thread too/);
+        const outsidePause = yield* WorkflowArtifactsHandlers.handlers
+          .workflow_pause({ threadId: detachedThreadId, paused: true })
+          .pipe(Effect.provide(restartLayer(rootThreadId, dispatched)), Effect.flip);
+        assert.match(outsidePause.message, /is not in this workflow/);
+        assert.deepStrictEqual(dispatched, []);
+      });
+    });
+  });
 });

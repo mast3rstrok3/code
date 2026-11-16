@@ -1,17 +1,82 @@
+import {
+  OrchestratorMcpFailure,
+  WORKFLOW_AUTOMATION_RUNTIME_MODE,
+  type ProjectId,
+  type ScheduledTaskWorkflow,
+} from "@t3tools/contracts";
 import { OrchestratorToolkit } from "./tools.ts";
+import {
+  resolveProjectSettings,
+  resolveWorkflowModelSelection,
+} from "@t3tools/shared/projectSettings";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
+import { developmentWorktreeStrategy } from "../../../orchestration-v2/WorkflowLaunch.ts";
+import * as Project from "../../../project/ProjectService.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
+import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
+
+import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
+import * as PeerLinkRequests from "../../../peer/PeerLinkRequests.ts";
+import * as PeerLinks from "../../../peer/PeerLinks.ts";
+import * as RemoteDelegation from "../../../peer/RemoteDelegation.ts";
+import { readCaller } from "../../threadAccess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
 
+/**
+ * Resolves where an unbound task's runs start, a new worktree from the
+ * project's development branch, and the default models from settings.
+ * Without git, projects or settings it resolves nothing, and the task falls
+ * back to its old default.
+ */
+const scheduledTaskDefaults = Effect.gen(function* () {
+  const git = yield* Effect.serviceOption(GitVcsDriver.GitVcsDriver);
+  const projects = yield* Effect.serviceOption(Project.ProjectService);
+  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService).pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.succeed(null),
+        onSome: (service) => service.getSettings.pipe(Effect.orElseSucceed(() => null)),
+      }),
+    ),
+  );
+  return {
+    defaultModelSelection: (projectId: ProjectId) =>
+      settings === null
+        ? null
+        : resolveProjectSettings(settings, projectId).settings.defaultModelSelection,
+    workflowModelSelection: (projectId: ProjectId, workflow: ScheduledTaskWorkflow) =>
+      settings === null ? null : resolveWorkflowModelSelection(settings, projectId, workflow),
+    developmentWorktree: (projectId: ProjectId) =>
+      Option.isNone(git) || Option.isNone(projects)
+        ? Effect.succeed(null)
+        : projects.value.getById(projectId).pipe(
+            Effect.map(Option.getOrUndefined),
+            Effect.orElseSucceed(() => undefined),
+            Effect.flatMap((project) =>
+              project === undefined
+                ? Effect.succeed(null)
+                : developmentWorktreeStrategy({
+                    git: git.value,
+                    settings,
+                    workspaceRoot: project.workspaceRoot,
+                    projectId,
+                  }),
+            ),
+          ),
+  } satisfies OrchestratorMcpService.ScheduledTaskDefaults;
+});
+
 const handlers = {
-  orchestrator_capabilities: McpToolAccess.reads(() =>
+  orchestrator_capabilities: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-      return yield* service.capabilities(scope);
+      return yield* service.capabilities(scope, input);
     }),
   ),
   delegate_task: McpToolAccess.actsAsCaller((input) =>
@@ -35,28 +100,115 @@ const handlers = {
       return yield* service.cancelTask(scope, input);
     }),
   ),
-  schedule_task: McpToolAccess.startsThreads(
-    // A scheduled task runs with the caller's own modes.
-    () => ({}),
+  t3_workflow_stop: McpToolAccess.writesThreads(
+    (input) => [input.threadId],
     (input) =>
       Effect.gen(function* () {
-        const scope = yield* McpInvocationContext.McpInvocationContext;
-        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-        return yield* service.scheduleTask(scope, input);
+        const { threads } = yield* readCaller();
+        return yield* threads.stopWorkflow(input).pipe(
+          Effect.as({}),
+          Effect.mapError(
+            (cause) =>
+              new OrchestratorMcpFailure({
+                code:
+                  cause.reason === "unavailable" || cause.reason === "stop-failed"
+                    ? "orchestration_error"
+                    : "invalid_request",
+                message: cause.message,
+              }),
+          ),
+        );
       }),
+  ),
+  t3_background_wait: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const { scope, threads } = yield* readCaller();
+      const caller = yield* McpInvocationContext.requireThreadScope(scope, "t3_background_wait");
+      return yield* threads
+        .awaitBackgroundTasks({
+          threadId: caller.thread.threadId,
+          taskIds: input.taskIds,
+          awaited: input.waiting ?? true,
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new OrchestratorMcpFailure({
+                code:
+                  cause.reason === "unsupported" || cause.reason === "unmatched"
+                    ? "invalid_request"
+                    : "orchestration_error",
+                message: cause.message,
+              }),
+          ),
+        );
+    }),
+  ),
+  schedule_task: McpToolAccess.either(
+    (input) => input.scheduledTaskId === undefined,
+    McpToolAccess.startsThreads(
+      // A scheduled task runs with the caller's own modes; a workflow task's
+      // runs start unattended, so the caller has to allow full access.
+      (input) =>
+        input.workflow === undefined
+          ? {}
+          : { runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE, interactionMode: "default" as const },
+      ({ prompt, schedule, ...input }) =>
+        Effect.gen(function* () {
+          if (prompt === undefined || schedule === undefined) {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: "A new scheduled task needs `prompt` and `schedule`.",
+            });
+          }
+          const scope = yield* McpInvocationContext.McpInvocationContext;
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          return yield* service.scheduleTask(
+            scope,
+            { ...input, prompt, schedule },
+            yield* scheduledTaskDefaults,
+          );
+        }),
+      // A scheduled run starts long after its caller, with nothing to carry the link.
+      { refused: "schedule tasks in this environment" },
+    ),
+    McpToolAccess.writes(
+      ({
+        scheduledTaskId,
+        prompt,
+        title,
+        schedule,
+        enabled,
+        freshSession,
+        bindToCurrentThread,
+        workflow,
+      }) =>
+        Effect.gen(function* () {
+          if (scheduledTaskId === undefined) return yield* Effect.die("unreachable");
+          const scope = yield* McpInvocationContext.McpInvocationContext;
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          return yield* service.updateScheduledTask(
+            scope,
+            {
+              scheduledTaskId,
+              prompt,
+              title,
+              schedule,
+              enabled,
+              freshSession,
+              bindToCurrentThread,
+              workflow,
+            },
+            yield* scheduledTaskDefaults,
+          );
+        }),
+    ),
   ),
   list_scheduled_tasks: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
       return yield* service.listScheduledTasks(scope, input);
-    }),
-  ),
-  update_scheduled_task: McpToolAccess.writes((input) =>
-    Effect.gen(function* () {
-      const scope = yield* McpInvocationContext.McpInvocationContext;
-      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-      return yield* service.updateScheduledTask(scope, input);
     }),
   ),
   delete_scheduled_task: McpToolAccess.writes((input) =>
@@ -87,9 +239,6 @@ const handlers = {
       return yield* service.listThreads(scope, input);
     }),
   ),
-  // Reading a child's finished result also acknowledges its delivery to the
-  // reader's own thread. That is bookkeeping on the caller's own subagent, not
-  // a change to anything it reads, so this stays a read.
   t3_thread_read: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
@@ -106,13 +255,22 @@ const handlers = {
         return yield* service.update(scope, input);
       }),
   ),
-  t3_thread_send: McpToolAccess.writesThreads(
-    (input) => [input.threadId],
-    (input) =>
+  t3_thread_send: McpToolAccess.afterForwarding(
+    McpToolAccess.writesThreads(
+      (input) => [input.threadId],
+      (input) =>
+        Effect.gen(function* () {
+          const scope = yield* McpInvocationContext.McpInvocationContext;
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          return yield* service.sendToThread(scope, input);
+        }),
+    ),
+    // There the thread's parent is here, so only this side can make a follow-up a task.
+    (input, environmentId, sent) =>
       Effect.gen(function* () {
         const scope = yield* McpInvocationContext.McpInvocationContext;
-        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-        return yield* service.sendToThread(scope, input);
+        const remote = yield* RemoteDelegation.RemoteDelegation;
+        return yield* remote.followUp(scope, environmentId, input, sent);
       }),
   ),
   t3_thread_wait: McpToolAccess.reads((input) =>
@@ -120,6 +278,36 @@ const handlers = {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
       return yield* service.waitForThread(scope, input);
+    }),
+  ),
+  t3_environment_links: McpToolAccess.reads(() =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const forwarding = yield* PeerForwarding.PeerForwarding;
+      return yield* forwarding.links(scope);
+    }),
+  ),
+  // A link lets every agent here reach the other environment, so it is an
+  // environment setting: full access, and never for linked work.
+  t3_environment_link: McpToolAccess.writesEnvironment((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const requests = yield* PeerLinkRequests.PeerLinkRequests;
+      return yield* requests.request(scope, input);
+    }),
+  ),
+  t3_environment_unlink: McpToolAccess.writesEnvironment(({ environmentId }) =>
+    Effect.gen(function* () {
+      const links = yield* PeerLinks.PeerLinks;
+      const removed = yield* links
+        .unlink(environmentId)
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new OrchestratorMcpFailure({ code: "orchestration_error", message: error.message }),
+          ),
+        );
+      return { environmentId, removed };
     }),
   ),
   t3_thread_interrupt: McpToolAccess.writesThreads(

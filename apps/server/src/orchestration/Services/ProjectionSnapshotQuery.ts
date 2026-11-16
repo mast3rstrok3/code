@@ -17,6 +17,7 @@ export interface ProjectionThreadDetailQuery {
  */
 import type {
   AppReviewId,
+  AppReviewWorkflowRunId,
   AppReviewWorkflowRun,
   AgentSessionImportSource,
   ApprovalRequestId,
@@ -86,9 +87,16 @@ export type ProjectionThreadPullRequests = Pick<
  * ProjectionSnapshotQueryShape - Service API for read-model snapshots.
  */
 export interface ProjectionSnapshotQueryShape {
-  /** Find the owning review without loading unrelated threads or workflow runs. */
+  /**
+   * Find the owning review without loading unrelated threads or workflow runs. A thread finds
+   * only a running review; a review or run id finds it in any status.
+   */
   readonly getAppReviewWorkflowRun: (
-    input: ({ readonly threadId: ThreadId } | { readonly reviewId: AppReviewId }) & {
+    input: (
+      | { readonly threadId: ThreadId }
+      | { readonly reviewId: AppReviewId }
+      | { readonly runId: AppReviewWorkflowRunId }
+    ) & {
       readonly excludePaused?: boolean;
     },
   ) => Effect.Effect<Option.Option<AppReviewWorkflowRun>, ProjectionRepositoryError>;

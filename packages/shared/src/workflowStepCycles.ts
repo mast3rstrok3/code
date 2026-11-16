@@ -39,7 +39,7 @@ export const WORKFLOW_STEP_CYCLE_TARGETS: ReadonlyArray<WorkflowStepCycleTarget>
     label: "App Review cycles",
     description:
       "An E2E test, gap analysis, and fix. The review ends unresolved when the budget runs out.",
-    defaultCycles: 10,
+    defaultCycles: 5,
     maxCycles: 10,
   },
   {
@@ -50,14 +50,14 @@ export const WORKFLOW_STEP_CYCLE_TARGETS: ReadonlyArray<WorkflowStepCycleTarget>
     label: "Ticket App Review cycles",
     description:
       "The same three phases, for the App Review a single ticket runs before its Code Review.",
-    defaultCycles: 10,
+    defaultCycles: 5,
     maxCycles: 10,
   },
   {
     key: FEATURE_APP_REVIEW_CYCLE_KEY,
     label: "Feature App Review cycles",
     description:
-      "One recorded browser review of the running Feature plus the fix it asks for. The pull request lists the last findings when the budget runs out.",
+      "One run of the project's E2E suites on the running Feature, recorded flow by flow, plus the fix it asks for. The pull request lists the last findings when the budget runs out.",
     defaultCycles: 3,
     maxCycles: 10,
   },

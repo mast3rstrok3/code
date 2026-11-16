@@ -18,6 +18,7 @@ import { parseWorkflowDirectiveFromMarkdown } from "../workflowDirectives.ts";
 import {
   deferredTicketValidationCommands,
   finalAppReviewValidationCommands,
+  withoutAppReviewPlatformSelection,
 } from "../appReviewValidation.ts";
 import {
   type AppStackAutoCreateResult,
@@ -61,6 +62,7 @@ import {
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
   type WorkspaceUserId,
   type VcsRef,
+  type ProjectId,
 } from "@t3tools/contracts";
 import {
   resolveReviewTestPlatforms,
@@ -78,7 +80,7 @@ import { implementationWorkflowDefaultSkips } from "@t3tools/shared/workflowStep
 import { resolveImplementationValidationCommands } from "@t3tools/shared/t3ProjectFile";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import { HttpClient } from "effect/http";
@@ -116,6 +118,7 @@ import {
 } from "../implementationReviewBlocks.ts";
 import { readyTicketsWithinLimit, ticketIsPaused } from "../implementationTicketConcurrency.ts";
 import {
+  ImplementationRecoverySweepInterval,
   ImplementationWorkflowReactor,
   type ImplementationWorkflowReactorShape,
 } from "../Services/ImplementationWorkflowReactor.ts";
@@ -124,6 +127,7 @@ import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts"
 import {
   findWorkflowStepReviewParts,
   findWorkflowStepModels,
+  findWorkflowStepModelScope,
   resolveWorkflowStepModelSelection,
   resolveWorkflowSubagentSpawnDefinition,
 } from "../workflowSubagents.ts";
@@ -171,6 +175,7 @@ import {
   pendingIngestionThreadIds,
   ProviderIngestionBacklog,
 } from "../ProviderIngestionBacklog.ts";
+import { workflowHaltNotice } from "../workflowHaltNotice.ts";
 
 // Code Review owns its fixes; the final gate owns complete validation.
 
@@ -454,10 +459,13 @@ function remoteBranchName(ref: VcsRef): string {
 export function selectPublicationBaseBranch(
   configuredBaseBranch: string,
   refs: ReadonlyArray<VcsRef>,
+  recordedBaseBranch: string | null = null,
 ): string | null {
   const remoteRefs = refs.filter((ref) => ref.isRemote === true);
-  if (remoteRefs.some((ref) => remoteBranchName(ref) === configuredBaseBranch)) {
-    return configuredBaseBranch;
+  for (const branch of [configuredBaseBranch, recordedBaseBranch]) {
+    if (branch !== null && remoteRefs.some((ref) => remoteBranchName(ref) === branch)) {
+      return branch;
+    }
   }
   const defaultRef = remoteRefs.find((ref) => ref.isDefault);
   return defaultRef === undefined ? null : remoteBranchName(defaultRef);
@@ -671,6 +679,42 @@ function isFinalCodeReviewPass(run: OrchestrationImplementationRun): boolean {
     run.appReviewExhaustedAt !== null ||
     run.latestAppReviewWorkflowOutcome !== null
   );
+}
+
+/**
+ * Give App Review's repairs a fresh Final Code Review budget.
+ *
+ * The cycles spent so far reviewed code from before those repairs, and
+ * publishing needs Code Review to accept this exact HEAD. A re-run of App
+ * Review resets the budget the same way.
+ */
+export function withFreshCodeReviewForAppReviewRepairs<
+  Run extends Pick<
+    OrchestrationImplementationRun,
+    | "codeReviewedHeadSha"
+    | "integrationHeadSha"
+    | "finalCodeReviewGeneration"
+    | "finalCodeReviewLaunchCount"
+    | "finalCodeReviewPassCount"
+    | "codeReviewExhaustedAt"
+    | "codeReviewExhaustionReason"
+  >,
+>(run: Run, appReviewCommitted: boolean): Run {
+  if (
+    !appReviewCommitted ||
+    run.codeReviewedHeadSha === run.integrationHeadSha ||
+    (run.finalCodeReviewPassCount === 0 && run.codeReviewExhaustedAt === null)
+  ) {
+    return run;
+  }
+  return {
+    ...run,
+    finalCodeReviewGeneration: run.finalCodeReviewGeneration + 1,
+    finalCodeReviewLaunchCount: 0,
+    finalCodeReviewPassCount: 0,
+    codeReviewExhaustedAt: null,
+    codeReviewExhaustionReason: null,
+  };
 }
 
 export function automationHaltMatchesTicketRerun(input: {
@@ -945,6 +989,7 @@ function reopenTicketForRerun(input: {
   readonly updatedAt: string;
   readonly preserveImplementationAttemptCount?: boolean;
   readonly continuationMarkdown?: string | null;
+  readonly workerThreadDeleted?: boolean;
 }): OrchestrationImplementationRun {
   const queuedGeneration = (state: OrchestrationImplementationTicketState) =>
     state.stageExecutions.findLast(
@@ -1037,10 +1082,12 @@ function reopenTicketForRerun(input: {
     }
     // The worker starts another turn in its durable thread. Its reported
     // result stops standing for this ticket, while the thread, worktree,
-    // branch, partial changes, and conversation history survive.
+    // branch, partial changes, and conversation history survive. A deleted
+    // thread has nothing to continue, so the next claim makes a new one.
     const generation = queuedGeneration(state) ?? state.implementationGeneration + 1;
     return {
       ...withoutAppReview,
+      ...(input.workerThreadDeleted ? { workerThreadId: null } : {}),
       status: "ready" as const,
       workerResult: null,
       implementationGeneration: generation,
@@ -1936,6 +1983,26 @@ function fastFeatureArtifactMarkdown(input: {
 /** Required when the change touches native mobile files. */
 const NATIVE_MOBILE_VALIDATION_COMMAND = "vp run lint:mobile";
 
+/**
+ * The commands the final gate runs. A run pins Code's built-in commands when it launched before the
+ * repository had a project file, and those are not this repository's checks; the project file in
+ * the reviewed worktree replaces them. Commands App Review deferred keep their place.
+ */
+export function finalGateValidationCommands(
+  pinnedCommands: ReadonlyArray<string>,
+  projectCommands: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  const builtIn = resolveImplementationValidationCommands({});
+  return [
+    ...new Set([
+      ...projectCommands,
+      ...pinnedCommands
+        .filter((command) => projectCommands.length === 0 || !builtIn.includes(command))
+        .map(withoutAppReviewPlatformSelection),
+    ]),
+  ];
+}
+
 function completeValidationCommandsForFiles(
   run: OrchestrationImplementationRun,
   changedFiles: ReadonlyArray<string>,
@@ -2056,6 +2123,9 @@ function changeRequestFailure(input: {
  * read from. Anything past this window is a reactor that died mid-merge.
  */
 const INTEGRATION_STALL_GRACE_MS = 5 * 60 * 1_000;
+
+/** Below the stage claim's grace window, so recovery can't relaunch a ticket still in setup. */
+const TICKET_WORKTREE_SETUP_TIMEOUT_MS = STAGE_CLAIM_GRACE_MS - 60 * 1_000;
 
 /**
  * How long a run may hold a working status with nothing working before recovery
@@ -2410,7 +2480,7 @@ function errorDetail(error: unknown): string {
 }
 
 const make = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const workflowDrain = yield* Effect.serviceOption(WorkflowDrainCoordinator);
   const isDraining = Option.isSome(workflowDrain)
@@ -2440,9 +2510,9 @@ const make = Effect.gen(function* () {
   /**
    * Asks the frontend URL itself whether a reviewer could load it. Deliberately cheap and
    * fail-closed: anything other than a real answer below 400 blocks App Review on the retryable
-   * `app-dev-stack` stage, so a stack still coming up gets the sweep's retries before a human is
-   * involved. 4xx and 5xx both count as down — at an app root they mean Traefik has no route or no
-   * healthy backend, not a page worth reviewing.
+   * `app-dev-stack` stage. Services install dependencies for minutes after the controller reports
+   * them started, so a failed answer waits like a starting stack and only becomes a repair when
+   * the stack wait runs out.
    */
   const probeFrontend = Effect.fn("ImplementationWorkflowReactor.probeFrontend")(function* (
     url: string,
@@ -2458,7 +2528,6 @@ const make = Effect.gen(function* () {
     if (outcome.success.body.trim().toLowerCase() === APP_STACK_GATEWAY_UNAVAILABLE_BODY) {
       return {
         ok: false,
-        transitioning: true,
         detail: `returned HTTP ${outcome.success.response.status} with the App Stack gateway fallback '${APP_STACK_GATEWAY_UNAVAILABLE_BODY}'`,
       };
     }
@@ -2538,14 +2607,14 @@ const make = Effect.gen(function* () {
     );
 
   const serverCommandId = (tag: string) =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
-  const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
+    random.uuidV4().pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
+  const serverEventId = () => random.uuidV4().pipe(Effect.map(EventId.make));
   const serverMessageId = (tag: string) =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
+    random.uuidV4().pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
   const serverThreadId = (tag: string) =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
+    random.uuidV4().pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
   const serverAppReviewId = () =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => AppReviewId.make(`app-review-${uuid}`)));
+    random.uuidV4().pipe(Effect.map((uuid) => AppReviewId.make(`app-review-${uuid}`)));
 
   // Projection updates trail command dispatch by a small window. Keep the
   // latest run written by this single-worker reactor so two queued commands
@@ -2668,8 +2737,57 @@ const make = Effect.gen(function* () {
       run,
       writtenAtMs: yield* Clock.currentTimeMillis,
     });
+    yield* notifyRootOfHalt({
+      readModel,
+      previous: currentRun,
+      next: run,
+      createdAt: input.createdAt,
+    });
     return true;
   });
+
+  // The root thread is where the user steers the workflow, so a halt reaches
+  // an agent that can restart the stage instead of waiting for someone to look.
+  const notifyRootOfHalt = Effect.fn("ImplementationWorkflowReactor.notifyRootOfHalt")(
+    function* (input: {
+      readonly readModel: OrchestrationReadModel;
+      readonly previous: OrchestrationImplementationRun | null;
+      readonly next: OrchestrationImplementationRun;
+      readonly createdAt: string;
+    }) {
+      const ticketId = input.next.automationHalt?.ticketId;
+      const ticket =
+        ticketId === undefined
+          ? null
+          : (input.readModel.threads
+              .flatMap((thread) => thread.planningWorkflow?.tickets ?? [])
+              .find((candidate) => candidate.id === ticketId) ?? null);
+      const text = workflowHaltNotice({ previous: input.previous, next: input.next, ticket });
+      if (text === null) return;
+      const orchestratorThread = findThread(input.readModel, input.next.orchestratorThreadId);
+      const rootThreadId =
+        orchestratorThread?.workflowContext?.rootThreadId ?? orchestratorThread?.parentThreadId;
+      const rootThread = rootThreadId == null ? null : findThread(input.readModel, rootThreadId);
+      if (rootThread === null || rootThread.deletedAt !== null) return;
+      yield* orchestrationEngine.dispatch({
+        type: "thread.turn.start",
+        commandId: yield* serverCommandId("implementation-halt-notice"),
+        threadId: rootThread.id,
+        message: {
+          messageId: yield* serverMessageId("implementation-halt-notice"),
+          role: "user",
+          text,
+          attachments: [],
+        },
+        runtimeMode: rootThread.runtimeMode,
+        interactionMode: rootThread.interactionMode,
+        createdAt: input.createdAt,
+      });
+    },
+    Effect.catchCause((cause) =>
+      Effect.logWarning("implementation halt notice failed", { cause: Cause.pretty(cause) }),
+    ),
+  );
 
   /** A stage whose claim `updateRun` dropped is left for recovery to re-derive from fresh state. */
   const logSkippedLaunch = (input: {
@@ -2730,6 +2848,8 @@ const make = Effect.gen(function* () {
         : { stepWorkflowPromptId: input.stepWorkflowPromptId }),
       definition: resolveWorkflowSubagentSpawnDefinition(input.workflowPromptId),
       stepModels: findWorkflowStepModels(input.orchestratorThread, readModel.threads),
+      workflow:
+        findWorkflowStepModelScope(input.orchestratorThread, readModel.threads) ?? "engineering",
       parentModelSelection: input.orchestratorThread.modelSelection,
       settings,
     });
@@ -3268,6 +3388,51 @@ const make = Effect.gen(function* () {
     );
   });
 
+  /** Runs a worktree's project setup and waits for it to exit. No setup configured is a pass. */
+  const runWorktreeSetup = Effect.fn("ImplementationWorkflowReactor.runWorktreeSetup")(
+    function* (input: {
+      readonly threadId: ThreadId;
+      readonly projectId: ProjectId;
+      readonly worktreePath: string;
+      readonly preferredTerminalId?: string;
+    }) {
+      const result = yield* projectSetupScriptRunner.runForThread({
+        threadId: input.threadId,
+        projectId: input.projectId,
+        worktreePath: input.worktreePath,
+        ...(input.preferredTerminalId === undefined
+          ? {}
+          : { preferredTerminalId: input.preferredTerminalId }),
+        observeCompletion: {},
+      });
+      if (result.status !== "started" || !result.completion) return;
+      const completion = yield* result.completion;
+      if (completion.exitCode === 0) return;
+      return yield* new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
+        threadId: input.threadId,
+        worktreePath: input.worktreePath,
+        operation: "executeCommand",
+        cause: `Setup command exited with code ${completion.exitCode ?? "unknown"}.`,
+      });
+    },
+  );
+
+  const isWorkerThreadDeleted = Effect.fn("ImplementationWorkflowReactor.isWorkerThreadDeleted")(
+    function* (
+      readModel: OrchestrationReadModel,
+      run: OrchestrationImplementationRun,
+      ticketId: string,
+    ) {
+      const workerThreadId =
+        run.ticketStates.find((state) => state.ticketId === ticketId)?.workerThreadId ?? null;
+      if (workerThreadId === null) return false;
+      const thread =
+        findThread(readModel, workerThreadId) ??
+        Option.getOrNull(yield* projectionSnapshotQuery.getThreadDetailById(workerThreadId));
+      return thread !== null && thread.deletedAt !== null;
+    },
+  );
+
   const createWorker = Effect.fn("ImplementationWorkflowReactor.createWorker")(function* (input: {
     readonly sourceThreadId: ThreadId;
     readonly orchestratorThread: OrchestrationThread;
@@ -3478,16 +3643,15 @@ const make = Effect.gen(function* () {
     const durableWorkerThread =
       findThread(readModel, workerThreadId) ??
       Option.getOrNull(yield* projectionSnapshotQuery.getThreadDetailById(workerThreadId));
-    const isContinuation = input.claimedBeforeStart;
-    if (
-      isContinuation &&
-      (durableWorkerThread === null || durableWorkerThread.deletedAt !== null)
-    ) {
+    // A claim whose setup failed before the thread existed has no history to
+    // continue, so the worker starts fresh under the claimed id.
+    const isContinuation = input.claimedBeforeStart && durableWorkerThread !== null;
+    if (isContinuation && durableWorkerThread.deletedAt !== null) {
       return yield* new GitCommandError({
         operation: "ImplementationWorkflowReactor.createWorker",
         command: "continue durable implementation thread",
         cwd: plannedWorker.worktreePath,
-        detail: `Ticket '${input.ticketId}' cannot continue because its durable Implementation thread '${workerThreadId}' is missing or deleted. Human attention is required.`,
+        detail: `Ticket '${input.ticketId}' cannot continue because its durable Implementation thread '${workerThreadId}' was deleted. Reset the ticket's implementation to start it in a new thread.`,
       });
     }
     const sourceThread = findThread(readModel, input.sourceThreadId);
@@ -3535,6 +3699,27 @@ const make = Effect.gen(function* () {
         worktreePath: plannedWorker.worktreePath,
         createdAt: input.createdAt,
       });
+    }
+
+    // Before the worker's first turn, so it starts in a ready worktree instead of repairing tooling.
+    // The thread above holds the ticket's claim for less than the grace window this stays under.
+    if (durableWorkerThread === null || durableWorkerThread.latestTurn === null) {
+      yield* runWorktreeSetup({
+        threadId: workerThreadId,
+        projectId: repository?.projectId ?? input.orchestratorThread.projectId,
+        worktreePath: plannedWorker.worktreePath,
+      }).pipe(
+        Effect.timeout(Duration.millis(TICKET_WORKTREE_SETUP_TIMEOUT_MS)),
+        Effect.mapError(
+          (cause) =>
+            new GitCommandError({
+              operation: "ImplementationWorkflowReactor.createWorker",
+              command: "project worktree setup",
+              cwd: plannedWorker.worktreePath,
+              detail: `Worktree setup failed: ${errorDetail(cause)}`,
+            }),
+        ),
+      );
     }
 
     const resultProblem = isContinuation
@@ -4303,8 +4488,10 @@ const make = Effect.gen(function* () {
    * checkout fails partway, for example on files an App Stack container wrote as
    * root. Git then no longer answers for the directory, so it needs a plain delete.
    */
-  const isUnregisteredWorktreeLeftover = (worktreePath: string) =>
-    Effect.gen(function* () {
+  const isUnregisteredWorktreeLeftover = Effect.fn(
+    "ImplementationWorkflowReactor.isUnregisteredWorktreeLeftover",
+  )(
+    function* (worktreePath: string) {
       if (!(yield* fileSystem.exists(worktreePath))) return false;
       const dotGit = path.join(worktreePath, ".git");
       if (!(yield* fileSystem.exists(dotGit))) return true;
@@ -4312,7 +4499,9 @@ const make = Effect.gen(function* () {
       const gitdir = /^gitdir:\s*(.+)$/m.exec(yield* fileSystem.readFileString(dotGit))?.[1];
       if (gitdir === undefined) return false;
       return !(yield* fileSystem.exists(path.resolve(worktreePath, gitdir.trim())));
-    }).pipe(Effect.orElseSucceed(() => false));
+    },
+    Effect.orElseSucceed(() => false),
+  );
 
   const leftoverRemovalWarnings = new Set<string>();
 
@@ -5919,10 +6108,22 @@ const make = Effect.gen(function* () {
         });
         return;
       }
+      const gateCommands =
+        input.kind === "final"
+          ? finalGateValidationCommands(
+              input.run.launchSummary.validationCommands,
+              Option.getOrUndefined(
+                yield* projectFileLoader.load(input.run.orchestratorWorktreePath),
+              )?.validationCommands ?? [],
+            )
+          : input.run.launchSummary.validationCommands;
       const finalCommands =
         input.kind === "final"
           ? completeValidationCommandsForFiles(
-              input.run,
+              {
+                ...input.run,
+                launchSummary: { ...input.run.launchSummary, validationCommands: gateCommands },
+              },
               yield* gitWorkflow.listChangedFiles({
                 cwd: input.run.orchestratorWorktreePath,
                 baseRef: input.run.pinnedCommit,
@@ -5980,6 +6181,7 @@ const make = Effect.gen(function* () {
             : {}),
         })),
         status: "validating",
+        launchSummary: { ...input.run.launchSummary, validationCommands: gateCommands },
         ...(finalRegression
           ? {
               finalRegression: {
@@ -6306,35 +6508,14 @@ const make = Effect.gen(function* () {
       const setupResult = yield* Effect.forEach(
         setupTargets,
         (target) =>
-          projectSetupScriptRunner
-            .runForThread({
-              threadId: integratedRun.orchestratorThreadId,
-              projectId: target.projectId,
-              worktreePath: target.worktreePath,
-              ...(target.preferredTerminalId === undefined
-                ? {}
-                : { preferredTerminalId: target.preferredTerminalId }),
-              observeCompletion: {},
-            })
-            .pipe(
-              Effect.flatMap((result) => {
-                if (result.status !== "started" || !result.completion) return Effect.void;
-                return result.completion.pipe(
-                  Effect.flatMap((completion) =>
-                    completion.exitCode === 0
-                      ? Effect.void
-                      : Effect.fail(
-                          new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
-                            threadId: integratedRun.orchestratorThreadId,
-                            worktreePath: target.worktreePath,
-                            operation: "executeCommand",
-                            cause: `Setup command exited with code ${completion.exitCode ?? "unknown"}.`,
-                          }),
-                        ),
-                  ),
-                );
-              }),
-            ),
+          runWorktreeSetup({
+            threadId: integratedRun.orchestratorThreadId,
+            projectId: target.projectId,
+            worktreePath: target.worktreePath,
+            ...(target.preferredTerminalId === undefined
+              ? {}
+              : { preferredTerminalId: target.preferredTerminalId }),
+          }),
         { discard: true },
       ).pipe(Effect.result);
       if (setupResult._tag === "Failure") {
@@ -6668,7 +6849,6 @@ const make = Effect.gen(function* () {
           readonly label: string;
           readonly url: string;
           readonly detail: string;
-          readonly transitioning?: boolean;
         } | null = null;
         for (const probe of probes) {
           const serving = yield* probeFrontend(probe.url);
@@ -6695,33 +6875,14 @@ const make = Effect.gen(function* () {
                 lastErrorMarkdown: failedProbe.detail,
                 updatedAt: input.createdAt,
               },
-              lastQaFailure: failedProbe.transitioning
-                ? null
-                : {
-                    kind: "app-dev-stack",
-                    status:
-                      failedProbe.label === "frontend"
-                        ? "frontend-unreachable"
-                        : "backend-unreachable",
-                    detailMarkdown: diagnostics,
-                    reviewId: null,
-                    headSha,
-                    occurredAt: input.createdAt,
-                  },
+              lastQaFailure: null,
             },
             retryableStage: "app-dev-stack",
             automaticRecovery: true,
-            automaticRecoveryWaiting: failedProbe.transitioning === true,
+            automaticRecoveryWaiting: true,
             reasonMarkdown: diagnostics,
             updatedAt: input.createdAt,
           });
-          if (!failedProbe.transitioning) {
-            yield* requestRunRetry({
-              sourceThreadId: input.sourceThreadId,
-              runId: blocked.id,
-              createdAt: input.createdAt,
-            });
-          }
           return;
         }
       }
@@ -6893,10 +7054,6 @@ const make = Effect.gen(function* () {
                 workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
               },
               orchestratorThread,
-              fallbackCycles: Math.min(
-                IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
-                Math.max(1, cycleRun.launchSummary.finalAppReview.maxCycles),
-              ),
             }),
           ),
           modelSelection: yield* modelForStep({
@@ -7568,7 +7725,7 @@ const make = Effect.gen(function* () {
             "",
             "Finish with exactly one fenced JSON block:",
             "```json",
-            // @effect-diagnostics-next-line preferSchemaOverJson:off - fixed directive example for the agent prompt.
+            // @effect-diagnostics-next-line globalJsonInEffect:off - fixed directive example for the agent prompt.
             JSON.stringify(
               {
                 type: "implementation-change-request-babysit-result",
@@ -7612,6 +7769,10 @@ const make = Effect.gen(function* () {
   const resolvePublicationBaseBranch = Effect.fn(
     "ImplementationWorkflowReactor.resolvePublicationBaseBranch",
   )(function* (input: { readonly cwd: string; readonly baseBranch: string }) {
+    // A workflow's base is often a local worktree branch; it recorded what it branched from.
+    const recordedBaseBranch = yield* gitWorkflow
+      .readBranchBase(input.cwd, input.baseBranch)
+      .pipe(Effect.orElseSucceed(() => null));
     const remoteRefsResult = yield* gitWorkflow
       .listRefs({
         cwd: input.cwd,
@@ -7623,7 +7784,11 @@ const make = Effect.gen(function* () {
       .pipe(Effect.result);
     const fallbackRefsResult =
       remoteRefsResult._tag === "Success" &&
-      selectPublicationBaseBranch(input.baseBranch, remoteRefsResult.success.refs) === null
+      selectPublicationBaseBranch(
+        input.baseBranch,
+        remoteRefsResult.success.refs,
+        recordedBaseBranch,
+      ) === null
         ? yield* gitWorkflow
             .listRefs({
               cwd: input.cwd,
@@ -7635,7 +7800,11 @@ const make = Effect.gen(function* () {
         : remoteRefsResult;
     const branch =
       fallbackRefsResult._tag === "Success"
-        ? selectPublicationBaseBranch(input.baseBranch, fallbackRefsResult.success.refs)
+        ? selectPublicationBaseBranch(
+            input.baseBranch,
+            fallbackRefsResult.success.refs,
+            recordedBaseBranch,
+          )
         : null;
     const lookupFailure =
       fallbackRefsResult._tag === "Failure" ? ` ${errorDetail(fallbackRefsResult.failure)}` : "";
@@ -7798,7 +7967,7 @@ const make = Effect.gen(function* () {
         threadId: input.run.orchestratorThreadId,
         tone: "info",
         kind: "implementation-change-request-base-resolved",
-        summary: `Publishing against remote default branch ${publicationBaseBranch}`,
+        summary: `Publishing against remote branch ${publicationBaseBranch}`,
         payload: {
           runId: input.run.id,
           configuredBaseBranch: input.run.baseBranch,
@@ -7837,55 +8006,56 @@ const make = Effect.gen(function* () {
     }
     // A failed publication leaves the run for a human, keeping every pull
     // request already filed so a retry files only the rest.
-    const recordPublicationFailure = (run: OrchestrationImplementationRun, failure: unknown) =>
-      Effect.gen(function* () {
-        yield* updateRun({
-          sourceThreadId: input.sourceThreadId,
-          run: {
-            ...run,
-            status: "needs-human-attention",
-            changeRequestFailure: changeRequestFailure({
-              detail: errorDetail(failure),
-              failedAt: input.createdAt,
-            }),
-            retryableFailure: {
-              stage: "change-request",
-              detail: errorDetail(failure),
-              failedAt: input.createdAt,
-              attemptCount:
-                run.retryableFailure?.stage === "change-request"
-                  ? run.retryableFailure.attemptCount + 1
-                  : 1,
-              maxAttempts: 3,
-              humanBlocked: false,
-            },
-            updatedAt: input.createdAt,
-          },
-          createdAt: input.createdAt,
-          expectedChangeRequestClaim: {
-            status: "publishing-change-request",
-            changeRequestNumber: null,
-            activeBabysitterThreadId: null,
-          },
-        });
-        yield* appendActivity({
-          threadId: run.orchestratorThreadId,
-          tone: "error",
-          kind: "implementation-change-request-filed",
-          summary: "Change request publication failed",
-          payload: {
-            runId: run.id,
-            status: "failed",
+    const recordPublicationFailure = Effect.fn(
+      "ImplementationWorkflowReactor.recordPublicationFailure",
+    )(function* (run: OrchestrationImplementationRun, failure: unknown) {
+      yield* updateRun({
+        sourceThreadId: input.sourceThreadId,
+        run: {
+          ...run,
+          status: "needs-human-attention",
+          changeRequestFailure: changeRequestFailure({
             detail: errorDetail(failure),
+            failedAt: input.createdAt,
+          }),
+          retryableFailure: {
+            stage: "change-request",
+            detail: errorDetail(failure),
+            failedAt: input.createdAt,
+            attemptCount:
+              run.retryableFailure?.stage === "change-request"
+                ? run.retryableFailure.attemptCount + 1
+                : 1,
+            maxAttempts: 3,
+            humanBlocked: false,
           },
-          createdAt: input.createdAt,
-        });
+          updatedAt: input.createdAt,
+        },
+        createdAt: input.createdAt,
+        expectedChangeRequestClaim: {
+          status: "publishing-change-request",
+          changeRequestNumber: null,
+          activeBabysitterThreadId: null,
+        },
       });
-    const recordFiled = (
-      run: OrchestrationImplementationRun,
-      changeRequest: NonNullable<OrchestrationImplementationRun["changeRequest"]>,
-    ) =>
-      Effect.gen(function* () {
+      yield* appendActivity({
+        threadId: run.orchestratorThreadId,
+        tone: "error",
+        kind: "implementation-change-request-filed",
+        summary: "Change request publication failed",
+        payload: {
+          runId: run.id,
+          status: "failed",
+          detail: errorDetail(failure),
+        },
+        createdAt: input.createdAt,
+      });
+    });
+    const recordFiled = Effect.fn("ImplementationWorkflowReactor.recordChangeRequestFiled")(
+      function* (
+        run: OrchestrationImplementationRun,
+        changeRequest: NonNullable<OrchestrationImplementationRun["changeRequest"]>,
+      ) {
         yield* updateRun({
           sourceThreadId: input.sourceThreadId,
           run,
@@ -7910,7 +8080,8 @@ const make = Effect.gen(function* () {
           },
           createdAt: input.createdAt,
         });
-      });
+      },
+    );
 
     // Every other repository with changes gets its own pull request first, so
     // the orchestrator's can name them all.
@@ -8200,24 +8371,24 @@ const make = Effect.gen(function* () {
         createdAt: event.occurredAt,
       });
     }).pipe(
-      Effect.catchCause((cause) => {
-        if (Cause.hasInterruptsOnly(cause)) {
-          return Effect.failCause(cause);
-        }
-        return Effect.logWarning("implementation run launch failed; blocking run", {
-          runId: event.payload.run.id,
-          cause: Cause.pretty(cause),
-        }).pipe(
-          Effect.andThen(
-            blockRun({
-              sourceThreadId: event.payload.sourceThreadId,
-              run: runningRun,
-              reasonMarkdown: `Implementation run launch failed before workers could start.\n\n\`\`\`\n${Cause.pretty(cause)}\n\`\`\``,
-              updatedAt: event.occurredAt,
-            }),
-          ),
-        );
-      }),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) => {
+          return Effect.logWarning("implementation run launch failed; blocking run", {
+            runId: event.payload.run.id,
+            cause: Cause.pretty(cause),
+          }).pipe(
+            Effect.andThen(
+              blockRun({
+                sourceThreadId: event.payload.sourceThreadId,
+                run: runningRun,
+                reasonMarkdown: `Implementation run launch failed before workers could start.\n\n\`\`\`\n${Cause.pretty(cause)}\n\`\`\``,
+                updatedAt: event.occurredAt,
+              }),
+            ),
+          );
+        },
+      ),
     );
   });
 
@@ -9166,6 +9337,17 @@ const make = Effect.gen(function* () {
     if (!claimed) {
       yield* logSkippedLaunch({ runId: input.run.id, stage: "fixer" });
       return;
+    }
+
+    // A replaced fixer's session can wake on its own background work and keep changing the worktree
+    // and App Stack this repair now owns.
+    if (currentRun.activeFixerThreadId !== null) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.session.stop",
+        commandId: yield* serverCommandId("implementation-fixer-replaced-stop"),
+        threadId: currentRun.activeFixerThreadId,
+        createdAt: input.createdAt,
+      });
     }
 
     yield* orchestrationEngine.dispatch({
@@ -10789,16 +10971,16 @@ const make = Effect.gen(function* () {
     const sourceThreadId = findRunSourceThreadId({ readModel, run });
     if (sourceThreadId === null || run.retryableFailure === null) return;
     yield* resumeRetryableRun({ sourceThreadId, run, createdAt: event.occurredAt }).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
-          : blockRun({
-              sourceThreadId,
-              run,
-              retryableStage: run.retryableFailure?.stage ?? "worktree-setup",
-              reasonMarkdown: `Fast feature retry failed.\n\n\`\`\`\n${Cause.pretty(cause)}\n\`\`\``,
-              updatedAt: event.occurredAt,
-            }),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) =>
+          blockRun({
+            sourceThreadId,
+            run,
+            retryableStage: run.retryableFailure?.stage ?? "worktree-setup",
+            reasonMarkdown: `Fast feature retry failed.\n\n\`\`\`\n${Cause.pretty(cause)}\n\`\`\``,
+            updatedAt: event.occurredAt,
+          }),
       ),
     );
   });
@@ -11153,6 +11335,9 @@ const make = Effect.gen(function* () {
               : target.stage === "implementation" && run.automationHalt?.ticketId !== ticketId
                 ? (run.automationHalt?.detail ?? null)
                 : null,
+          workerThreadDeleted:
+            target.stage === "implementation" &&
+            (yield* isWorkerThreadDeleted(readModel, run, ticketId)),
         });
       }
       const latestBeforeRerun = yield* projectionSnapshotQuery.getCommandReadModel();
@@ -11275,6 +11460,9 @@ const make = Effect.gen(function* () {
       ticketId: target.ticketId,
       stage: target.stage,
       updatedAt: createdAt,
+      workerThreadDeleted:
+        target.stage === "implementation" &&
+        (yield* isWorkerThreadDeleted(readModel, run, target.ticketId)),
     });
     // A re-run wants the worker now; clearing wants it in turn. Every other
     // stage already rests on the status it resumes at.
@@ -11728,7 +11916,7 @@ const make = Effect.gen(function* () {
         rescueAbandonedWork: false,
         createdAt: event.occurredAt,
       });
-      const passedRun: OrchestrationImplementationRun = {
+      const handoffRun: OrchestrationImplementationRun = {
         ...withRepositoryHeads(linkedRun, "appReviewedHeadSha", repositoryHeads),
         // Claim the next stage before starting it. The nested run's terminal
         // event can arrive ahead of its read-model projection, and Code Review
@@ -11750,6 +11938,10 @@ const make = Effect.gen(function* () {
         retryableFailure: null,
         updatedAt: event.occurredAt,
       };
+      const passedRun = withFreshCodeReviewForAppReviewRepairs(
+        handoffRun,
+        nestedRun.cycles.some((cycle) => cycle.fixResult?.status === "succeeded"),
+      );
       yield* updateRun({ sourceThreadId, run: passedRun, createdAt: event.occurredAt });
       yield* startCodeReview({ sourceThreadId, run: passedRun, createdAt: event.occurredAt });
       return;
@@ -12279,15 +12471,15 @@ const make = Effect.gen(function* () {
 
   const processEventSafely = (event: ImplementationWorkflowEvent) =>
     processEvent(event).pipe(
-      Effect.catchCause((cause) => {
-        if (Cause.hasInterruptsOnly(cause)) {
-          return Effect.failCause(cause);
-        }
-        return Effect.logWarning("implementation workflow reactor failed to process event", {
-          eventType: event.type,
-          cause: Cause.pretty(cause),
-        });
-      }),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) => {
+          return Effect.logWarning("implementation workflow reactor failed to process event", {
+            eventType: event.type,
+            cause: Cause.pretty(cause),
+          });
+        },
+      ),
     );
 
   const worker = yield* makeDrainableWorker(processEventSafely);
@@ -12478,16 +12670,18 @@ const make = Effect.gen(function* () {
         },
         createdAt,
       }).pipe(
-        Effect.catchCause((cause) => {
-          if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
-          return blockRun({
-            sourceThreadId,
-            run: { ...run, status: "integrating" },
-            retryableStage: "integration",
-            reasonMarkdown: `Final branch integration recovery failed.\n\n\`\`\`\n${Cause.pretty(cause)}\n\`\`\``,
-            updatedAt: createdAt,
-          });
-        }),
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) => {
+            return blockRun({
+              sourceThreadId,
+              run: { ...run, status: "integrating" },
+              retryableStage: "integration",
+              reasonMarkdown: `Final branch integration recovery failed.\n\n\`\`\`\n${Cause.pretty(cause)}\n\`\`\``,
+              updatedAt: createdAt,
+            });
+          },
+        ),
       );
     }
   });
@@ -13870,10 +14064,18 @@ const make = Effect.gen(function* () {
     }
   });
 
+  // Run id → the run's `updatedAt` when the sweep began retrying it unchanged, and when.
+  const unchangedRetries = new Map<
+    string,
+    { readonly updatedAt: string; readonly sinceMs: number }
+  >();
+
   const recoverRetryableRuns = Effect.fn("ImplementationWorkflowReactor.recoverRetryableRuns")(
     function* () {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const createdAt = DateTime.formatIso(yield* DateTime.now);
+      const nowMs = Date.parse(createdAt);
+      const retrying = new Set<string>();
       for (const run of readModel.implementationRuns) {
         if (
           run.status !== "needs-human-attention" ||
@@ -13894,6 +14096,27 @@ const make = Effect.gen(function* () {
         }
         const sourceThreadId = findRunSourceThreadId({ readModel, run });
         if (sourceThreadId === null) continue;
+        retrying.add(run.id);
+        // A retry that changes nothing leaves the run waiting without a halt, so
+        // no one is told. Stop retrying it and halt, which reaches the root thread.
+        const unchanged = unchangedRetries.get(run.id);
+        if (unchanged === undefined || unchanged.updatedAt !== run.updatedAt) {
+          unchangedRetries.set(run.id, { updatedAt: run.updatedAt, sinceMs: nowMs });
+        } else if (nowMs - unchanged.sinceMs >= RUN_STALL_GRACE_MS) {
+          unchangedRetries.delete(run.id);
+          const failure = run.retryableFailure;
+          yield* blockRun({
+            sourceThreadId,
+            run,
+            ...(failure.ticketId === undefined ? {} : { ticketId: failure.ticketId }),
+            retryableStage: failure.stage,
+            reasonMarkdown: `Automatic retries of ${failure.stage} have not changed this run since ${run.updatedAt}.\n\n${failure.detail}`,
+            updatedAt: createdAt,
+            humanBlocked: true,
+            haltCategory: "retry-exhausted",
+          });
+          continue;
+        }
         yield* orchestrationEngine.dispatch({
           type: "thread.implementation-run.retry",
           commandId: yield* serverCommandId("implementation-auto-retry"),
@@ -13901,6 +14124,9 @@ const make = Effect.gen(function* () {
           runId: run.id,
           createdAt,
         });
+      }
+      for (const runId of unchangedRetries.keys()) {
+        if (!retrying.has(runId)) unchangedRetries.delete(runId);
       }
     },
   );
@@ -14353,6 +14579,7 @@ const make = Effect.gen(function* () {
       }),
     );
     if ((yield* ServerActivation) === undefined) yield* reconcileStartup();
+    const sweepInterval = yield* ImplementationRecoverySweepInterval;
     yield* Effect.forkScoped(
       Effect.gen(function* () {
         yield* reconcileCanonicalStageExecutions().pipe(
@@ -14383,7 +14610,7 @@ const make = Effect.gen(function* () {
             }),
           ),
         );
-      }).pipe(Effect.repeat(Schedule.spaced(Duration.seconds(30)))),
+      }).pipe(Effect.repeat(Schedule.spaced(sweepInterval))),
     );
   });
 

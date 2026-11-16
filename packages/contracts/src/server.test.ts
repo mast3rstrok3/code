@@ -3,10 +3,14 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
-  resolveEnvironmentMachineKind,
+  applyServerProviderDeltas,
+  OtlpEndpointCheckInput,
   ServerConfig,
+  resolveEnvironmentMachineKind,
+  ServerConfigProviderStatusDeltasPayload,
   ServerObservability,
   ServerProvider,
+  serverProviderDeltas,
   ServerProviders,
   ServerUpsertKeybindingResult,
   WorkflowCatalog,
@@ -18,7 +22,6 @@ const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
 const decodeServerProviders = Schema.decodeUnknownSync(ServerProviders);
 const decodeWorkflowPromptContract = Schema.decodeUnknownSync(WorkflowPromptContract);
 const decodeWorkflowCatalog = Schema.decodeUnknownSync(WorkflowCatalog);
-const decodeServerObservability = Schema.decodeUnknownSync(ServerObservability);
 const decodeUpsertKeybindingResult = Schema.decodeUnknownSync(ServerUpsertKeybindingResult);
 const decodeAvailableEditors = Schema.decodeUnknownSync(ServerConfig.fields.availableEditors);
 
@@ -210,28 +213,50 @@ describe("ServerProvider", () => {
     expect(parsed.continuation?.groupKey).toBe("codex:home:/Users/julius/.codex");
   });
 
-  it("decodes optional legacy model metadata", () => {
-    const parsed = decodeServerProvider({
-      instanceId: "codex",
-      driver: "codex",
-      enabled: true,
-      installed: true,
-      version: "1.0.0",
-      status: "ready",
-      auth: { status: "authenticated" },
-      checkedAt: "2026-04-10T00:00:00.000Z",
-      models: [
-        {
-          slug: "gpt-5.4",
-          name: "GPT-5.4",
-          isCustom: false,
-          isLegacy: true,
-          capabilities: null,
-        },
-      ],
-    });
+  it("preserves installed-version presence through the provider wire codec", () => {
+    const encode = Schema.encodeSync(ServerProvider);
+    for (const installation of [{}, { installedVersion: null }, { installedVersion: "1.2.3" }]) {
+      const decoded = decodeServerProvider({ ...baseProviderSnapshot, ...installation });
+      const wire = JSON.parse(JSON.stringify(encode(decoded)));
+      expect(wire).toMatchObject({ version: "1.0.0", ...installation });
+      expect(Object.hasOwn(wire, "installedVersion")).toBe(
+        Object.hasOwn(installation, "installedVersion"),
+      );
+      expect(decodeServerProvider(wire)).toEqual(decoded);
+    }
+  });
+});
 
-    expect(parsed.models[0]?.isLegacy).toBe(true);
+describe("provider status deltas", () => {
+  it("send a provider's lists only when they change and rebuild the full list", () => {
+    const codex = decodeServerProvider({
+      ...baseProviderSnapshot,
+      models: [{ slug: "gpt", name: "GPT", isCustom: false, capabilities: null }],
+      slashCommands: [{ name: "compact" }],
+      skills: [{ name: "review", path: "/skills/review", enabled: true }],
+    });
+    const claude = decodeServerProvider({ ...baseProviderSnapshot, instanceId: "claudeAgent" });
+    const previous = [codex];
+    const next = [
+      claude,
+      { ...codex, checkedAt: "2026-04-10T00:05:00.000Z", skills: [], message: "Checked" },
+    ];
+
+    const deltas = serverProviderDeltas(previous, next);
+    // Unchanged lists stay home; a provider the reader never saw travels whole.
+    expect(deltas[0]).toEqual(claude);
+    expect(deltas[1]).not.toHaveProperty("models");
+    expect(deltas[1]).not.toHaveProperty("slashCommands");
+    expect(deltas[1]).toMatchObject({ skills: [], message: "Checked" });
+
+    const codec = Schema.toCodecJson(ServerConfigProviderStatusDeltasPayload);
+    const wire = JSON.parse(JSON.stringify(Schema.encodeSync(codec)({ providers: deltas })));
+    const received = Schema.decodeUnknownSync(codec)(wire).providers;
+    // A decoding default would turn the absent slash commands into an empty list.
+    expect(received[1]).not.toHaveProperty("slashCommands");
+    expect(applyServerProviderDeltas(previous, received)).toEqual(next);
+    // Without the provider the delta builds on, its lists are unknown.
+    expect(applyServerProviderDeltas([], received)).toEqual([claude]);
   });
 });
 
@@ -256,12 +281,6 @@ describe("server config forward compatibility", () => {
     expect(parsed).toEqual(["zed", "vscode"]);
   });
 
-  // A provider status this build has never seen (a new ServerProviderState,
-  // ServerProviderAuthStatus, etc. member) previously failed the whole
-  // `providers` array, taking every other provider down with it and, since
-  // `providers` sits inside `ServerConfig`, failing the whole config decode —
-  // an older client would drop its connection over one provider it can't
-  // render. Dropping just that element keeps every other provider working.
   it("drops providers this build cannot decode instead of failing the whole array", () => {
     const decodedBase = decodeServerProvider(baseProviderSnapshot);
 
@@ -293,17 +312,19 @@ describe("server config forward compatibility", () => {
 });
 
 describe("ServerObservability", () => {
-  it("reads a server from before the log signal as exporting no logs", () => {
-    const parsed = decodeServerObservability({
-      logsDirectoryPath: "/tmp/t3/logs",
-      localTracingEnabled: true,
-      otlpTracesUrl: "https://collector.example.com/v1/traces",
-      otlpTracesEnabled: true,
-      otlpMetricsEnabled: false,
-    });
+  const decodeServerObservability = Schema.decodeUnknownSync(ServerObservability);
 
-    expect(parsed.otlpLogsEnabled).toBe(false);
-    expect(parsed.otlpLogsUrl).toBeUndefined();
+  it("rejects an unknown endpoint source", () => {
+    expect(() =>
+      decodeServerObservability({
+        logsDirectoryPath: "/tmp/t3/logs",
+        localTracingEnabled: true,
+        otlpTracesUrl: "https://collector.example.com/v1/traces",
+        otlpTracesSource: "cli",
+        otlpTracesEnabled: true,
+        otlpMetricsEnabled: false,
+      }),
+    ).toThrow();
   });
 });
 
@@ -328,31 +349,6 @@ describe("resolveEnvironmentMachineKind", () => {
     ).toBe("laptop");
   });
 
-  it("uses detection when nothing is picked", () => {
-    expect(
-      resolveEnvironmentMachineKind({
-        environment: descriptor({ machine: "mac-mini" }),
-        settings: decodeSettings({}),
-      }),
-    ).toBe("mac-mini");
-  });
-
-  it("uses detection from a bare descriptor before connecting", () => {
-    expect(resolveEnvironmentMachineKind({ environment: descriptor({ machine: "laptop" }) })).toBe(
-      "laptop",
-    );
-  });
-
-  it("falls back to a server for older servers and before connect", () => {
-    expect(
-      resolveEnvironmentMachineKind({
-        environment: descriptor({}),
-        settings: decodeSettings({}),
-      }),
-    ).toBe("server");
-    expect(resolveEnvironmentMachineKind(null)).toBe("server");
-  });
-
   it("drops a machine kind this build does not know instead of failing the descriptor", () => {
     const parsed = descriptor({ machine: "toaster" });
 
@@ -360,5 +356,18 @@ describe("resolveEnvironmentMachineKind", () => {
     expect(
       resolveEnvironmentMachineKind({ environment: parsed, settings: decodeSettings({}) }),
     ).toBe("server");
+  });
+});
+
+describe("OtlpEndpointCheckInput", () => {
+  const decode = Schema.decodeUnknownSync(OtlpEndpointCheckInput);
+
+  it("accepts HTTP receivers only", () => {
+    expect(decode({ signal: "traces", url: "https://collector.example.com/v1/traces" }).url).toBe(
+      "https://collector.example.com/v1/traces",
+    );
+    for (const url of ["data:text/plain,ok", "file:///etc/hosts", "collector:4318/v1/traces"]) {
+      expect(() => decode({ signal: "traces", url })).toThrow();
+    }
   });
 });

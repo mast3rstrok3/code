@@ -5,6 +5,7 @@ import {
   WorkflowContextGetTool,
   WorkflowAppReviewsListTool,
   WorkflowSpecGetTool,
+  WorkflowStatusGetTool,
   WorkflowTicketsListTool,
   WorkflowWayfinderMapGetTool,
 } from "./tools.ts";
@@ -16,6 +17,7 @@ it("publishes object parameter schemas for zero-argument workflow artifact tools
     WorkflowSpecGetTool,
     WorkflowTicketsListTool,
     WorkflowAppReviewsListTool,
+    WorkflowStatusGetTool,
   ];
 
   for (const tool of tools) {

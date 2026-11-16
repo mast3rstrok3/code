@@ -1,12 +1,18 @@
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import type {
+  AppReviewRetryCommand,
+  AppReviewTestPurpose,
   AppReviewTestRecording,
   AppReviewTestResult,
   AppReviewWorkflowCycle,
   AppReviewWorkflowFixResult,
+  OrchestrationPlanningTicket,
   ReviewTestPlatforms,
+  T3ProjectFile,
 } from "@t3tools/contracts";
 import {
   APP_REVIEW_ARTIFACT_DIR_ENV,
+  APP_REVIEW_BASE_REF_ENV,
   APP_REVIEW_PREVIEW_URL_ENV,
   APP_REVIEW_STACK_ID_ENV,
   APP_REVIEW_TEST_PLATFORMS_ENV,
@@ -15,9 +21,8 @@ import {
   APP_REVIEW_RECORDING_DIR_ENV,
   APP_REVIEW_TEST_RECORDING_SUFFIX,
 } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
-import * as Crypto from "effect/Crypto";
-import * as Data from "effect/Data";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Schema from "effect/Schema";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -36,8 +41,8 @@ const MAX_TEST_LOG_BYTES = 8 * 1024 * 1024;
 const prepareTestLogs = Effect.fn("prepareTestLogs")(function* (runDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
-  const id = yield* crypto.randomUUIDv4;
+  const random = yield* SecureRandom.SecureRandom;
+  const id = yield* random.uuidV4();
   yield* fs.makeDirectory(runDir, { recursive: true });
   const logs = {
     stdout: {
@@ -102,8 +107,8 @@ export const appReviewBuildArtifactsDir = (path: Path.Path, stateDir: string, ru
 const prepareTestRecording = Effect.fn("prepareTestRecording")(function* (runDir: string) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
-  const id = yield* crypto.randomUUIDv4;
+  const random = yield* SecureRandom.SecureRandom;
+  const id = yield* random.uuidV4();
   const incomingDir = path.join(runDir, `${id}.incoming`);
   yield* fileSystem.makeDirectory(incomingDir, { recursive: true });
   const scriptPath = path.join(runDir, "recorder.js");
@@ -155,6 +160,31 @@ export function completedAppReviewTests(
   });
 }
 
+/** Affected tests are nice-to-have, so the review never waits longer than this for them. */
+export const APP_REVIEW_AFFECTED_TEST_LIMIT_MINUTES = 30;
+
+export function appReviewTestTimeoutMinutes(
+  selection: Pick<AppReviewRetryCommand, "purpose">,
+  projectTimeoutMinutes: number | undefined,
+): number | undefined {
+  if (selection.purpose !== "affected") return projectTimeoutMinutes;
+  return Math.min(projectTimeoutMinutes ?? Infinity, APP_REVIEW_AFFECTED_TEST_LIMIT_MINUTES);
+}
+
+/** Affected tests are reported, but never fail a review or start a repair. */
+export function blockingAppReviewTestFailures(
+  execution: NonNullable<AppReviewWorkflowCycle["e2eExecution"]>,
+) {
+  const reportedOnly = new Set(
+    execution.commands.flatMap((selection) =>
+      selection.purpose === "affected" ? [selection.command] : [],
+    ),
+  );
+  return completedAppReviewTests(execution).filter(
+    (result) => result.status === "failed" && !reportedOnly.has(result.command),
+  );
+}
+
 /** A repair may narrow failed suites, but cannot reopen or replace other suites. */
 export function appReviewRetryCommandsFailure(
   cycle: Pick<AppReviewWorkflowCycle, "e2eExecution">,
@@ -188,28 +218,82 @@ export function appReviewTestCommands(
   run: {
     readonly cycles: ReadonlyArray<Pick<AppReviewWorkflowCycle, "e2eExecution" | "fixResult">>;
   },
-  commands: readonly string[],
-) {
+  commands: ReadonlyArray<string | AppReviewTestSelection>,
+): AppReviewRetryCommand[] {
   const previous = run.cycles.at(-1);
   if (!previous?.e2eExecution) {
-    return [...new Set(commands)].map((command) => ({ command, retryCommand: command }));
+    const selections = new Map<string, AppReviewRetryCommand>();
+    for (const entry of commands) {
+      const { command, purpose } = typeof entry === "string" ? { command: entry } : entry;
+      if (selections.has(command)) continue;
+      selections.set(command, {
+        command,
+        retryCommand: command,
+        ...(purpose === undefined ? {} : { purpose }),
+      });
+    }
+    return [...selections.values()];
   }
   const completed = completedAppReviewTests(previous.e2eExecution);
   return previous.e2eExecution.commands.flatMap((selection) => {
+    if (selection.purpose === "affected") return [];
     const result = completed.find((entry) => entry.command === selection.command);
     if (result?.status === "passed") return [];
     const retry = previous.fixResult?.retryCommands?.find(
       (entry) => entry.command === selection.command,
     );
-    return [
-      { command: selection.command, retryCommand: retry?.retryCommand ?? selection.retryCommand },
-    ];
+    return [{ ...selection, retryCommand: retry?.retryCommand ?? selection.retryCommand }];
   });
 }
 
-class AppReviewTestRestoreError extends Data.TaggedError("AppReviewTestRestoreError")<{
-  readonly message: string;
-}> {}
+export interface AppReviewTestSelection {
+  readonly command: string;
+  readonly purpose?: AppReviewTestPurpose | undefined;
+}
+
+/**
+ * The feature tests an implementation run's tickets planned, in ticket order.
+ * Commands are relative to the ticket's repository, so tickets that change
+ * another project stay with that project's review.
+ */
+export function implementationFeatureE2eCommands(input: {
+  readonly planningTicketIds: ReadonlyArray<string>;
+  readonly tickets: ReadonlyArray<OrchestrationPlanningTicket>;
+  readonly projectId: string;
+}): string[] {
+  const ticketsById = new Map(input.tickets.map((ticket) => [ticket.id as string, ticket]));
+  return input.planningTicketIds.flatMap((ticketId) => {
+    const ticket = ticketsById.get(ticketId);
+    if (ticket === undefined || ticket.appReviewEligible !== true) return [];
+    if (ticket.projectId !== undefined && ticket.projectId !== input.projectId) return [];
+    return ticket.appReviewCommands ?? [];
+  });
+}
+
+/**
+ * A final App Review runs the tickets' feature tests, then the project's
+ * affected-test commands. Without affected-test commands it keeps running the
+ * project's complete suites after the feature tests.
+ */
+export function finalAppReviewE2eSelections(input: {
+  readonly featureCommands: ReadonlyArray<string>;
+  readonly projectFile: Pick<T3ProjectFile, "e2eCommands" | "e2eAffectedCommands"> | undefined;
+}): AppReviewTestSelection[] {
+  const affected = input.projectFile?.e2eAffectedCommands;
+  return [
+    ...input.featureCommands.map((command) => ({ command, purpose: "feature" as const })),
+    ...(affected === undefined
+      ? (input.projectFile?.e2eCommands ?? []).map((command) => ({ command }))
+      : affected.map((command) => ({ command, purpose: "affected" as const }))),
+  ];
+}
+
+class AppReviewTestRestoreError extends Schema.TaggedError<AppReviewTestRestoreError>()(
+  "AppReviewTestRestoreError",
+  {
+    message: Schema.String,
+  },
+) {}
 
 /**
  * Undo what an E2E command wrote to the reviewed worktree. `paths` are relative
@@ -265,13 +349,14 @@ export const restoreAppReviewTestWrites = Effect.fn("restoreAppReviewTestWrites"
 );
 
 /** Cancellation closes ProcessRunner's scope and terminates its child process. */
-export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: {
+interface AppReviewTestInput {
   readonly command: string;
   readonly retryCommand: string;
   readonly cwd: string;
   readonly previewUrl: string | null;
   /** The App Stack serving `previewUrl`, when the reviewed worktree has one. */
   readonly stackId?: string | null | undefined;
+  readonly baseRef?: string | null | undefined;
   readonly testPlatforms?: typeof ReviewTestPlatforms.Type | undefined;
   readonly executionId: string;
   /** Directory for this run's test recordings; omitted where the server has no state dir. */
@@ -280,9 +365,36 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
   /** Extra environment the server grants every suite, such as its Stacks controller access. */
   readonly env?: Readonly<Record<string, string>> | undefined;
   readonly timeoutMinutes?: number | undefined;
-}) {
+  /** Run a failed command once more before reporting it, unless it timed out. */
+  readonly retryFailure?: boolean | undefined;
+}
+
+export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (
+  input: AppReviewTestInput,
+) {
+  const first = yield* runAppReviewTestOnce(input);
+  if (input.retryFailure !== true || first.result.status === "passed" || first.timedOut) {
+    return first.result;
+  }
+  const second = yield* runAppReviewTestOnce(input);
+  const recordings = [...(first.result.recordings ?? []), ...(second.result.recordings ?? [])];
+  return {
+    ...second.result,
+    outputMarkdown: [
+      second.result.status === "passed"
+        ? "The command failed, then passed when run again, so a test in it is flaky."
+        : "The command failed twice.",
+      `First run:\n\n${first.result.outputMarkdown}`,
+      `Second run:\n\n${second.result.outputMarkdown}`,
+    ].join("\n\n"),
+    ...(recordings.length === 0 ? {} : { recordings }),
+  } satisfies AppReviewTestResult;
+});
+
+// Untraced: runAppReviewTest's span already covers each attempt.
+const runAppReviewTestOnce = Effect.fnUntraced(function* (input: AppReviewTestInput) {
   const runner = yield* ProcessRunner;
-  const platform = yield* HostProcessPlatform;
+  const platform = yield* HostProcess.Platform;
   const timeoutMinutes = input.timeoutMinutes ?? 45;
   // Recording is evidence, not the test: a full disk must not fail the suite.
   const recording =
@@ -323,6 +435,7 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
           APP_REVIEW_EXECUTION_ID: input.executionId,
           APP_REVIEW_TEST_TIMEOUT_MS: String(timeoutMinutes * 60_000),
           ...(input.stackId == null ? {} : { [APP_REVIEW_STACK_ID_ENV]: input.stackId }),
+          ...(input.baseRef == null ? {} : { [APP_REVIEW_BASE_REF_ENV]: input.baseRef }),
           ...(recording === null
             ? {}
             : {
@@ -339,6 +452,7 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
       }),
     ),
     Effect.map((output) => ({
+      timedOut: output.timedOut,
       status: output.code === 0 && !output.timedOut ? ("passed" as const) : ("failed" as const),
       outputMarkdown: [
         output.timedOut
@@ -349,7 +463,7 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
       ].join("\n\n"),
     })),
     Effect.catch((error) =>
-      Effect.succeed({ status: "failed" as const, outputMarkdown: error.message }),
+      Effect.succeed({ timedOut: false, status: "failed" as const, outputMarkdown: error.message }),
     ),
   );
   const recordings =
@@ -359,10 +473,11 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
           Effect.tapError((error) => Effect.logWarning("E2E recordings not collected", error)),
           Effect.orElseSucceed(() => []),
         );
-  return {
+  const { timedOut, ...outcome } = result;
+  const testResult = {
     command: input.command,
     executedCommand: input.retryCommand,
-    ...result,
+    ...outcome,
     outputMarkdown: [
       result.outputMarkdown,
       logs?.describe() ?? "No test output logs were retained.",
@@ -373,4 +488,5 @@ export const runAppReviewTest = Effect.fn("runAppReviewTest")(function* (input: 
     ...(recordings.length === 0 ? {} : { recordings }),
     completedAt: DateTime.formatIso(yield* DateTime.now),
   } satisfies AppReviewTestResult;
+  return { result: testResult, timedOut };
 });

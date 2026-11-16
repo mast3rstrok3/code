@@ -1,12 +1,16 @@
+import * as NodeVM from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   injectMcpAppCsp,
+  injectMcpAppThemeBootstrap,
+  injectMcpAppCookieBootstrap,
+  MCP_APP_COLOR_SCHEME_PARAM,
   mcpAppContentSecurityPolicy,
   mcpAppToolCallableByApp,
+  mcpAppToolResourceUri,
   readMcpAppCsp,
   readMcpAppReference,
-  readMcpAppResourceUri,
 } from "./mcpApp.ts";
 
 describe("mcpAppContentSecurityPolicy", () => {
@@ -14,8 +18,13 @@ describe("mcpAppContentSecurityPolicy", () => {
     const policy = mcpAppContentSecurityPolicy(undefined);
     expect(policy).toContain("default-src 'none'");
     expect(policy).toContain("connect-src 'none'");
-    expect(policy).toContain("frame-src 'none'");
+    expect(policy).toContain("frame-src blob:;");
     expect(policy).not.toContain("'self'");
+  });
+
+  it("lets apps frame their own blob: documents alongside declared frame origins", () => {
+    const policy = mcpAppContentSecurityPolicy({ frameDomains: ["https://embed.test"] });
+    expect(policy).toContain("frame-src blob: https://embed.test;");
   });
 
   it("allows exactly the declared origins", () => {
@@ -38,6 +47,87 @@ describe("injectMcpAppCsp", () => {
     );
     expect(injected.indexOf("connect-src 'none'")).toBeLessThan(injected.indexOf("<script>"));
     expect(injectMcpAppCsp("<p>hi</p>", undefined).startsWith("<!doctype html><meta")).toBe(true);
+  });
+});
+
+describe("injectMcpAppThemeBootstrap", () => {
+  it("keeps stored CSP before the bootstrap and vendor scripts after it", () => {
+    const snapshot = injectMcpAppCsp(
+      "<html><head><script>vendor()</script></head></html>",
+      undefined,
+    );
+    const html = injectMcpAppThemeBootstrap(snapshot);
+    expect(html.indexOf("Content-Security-Policy")).toBeLessThan(html.indexOf("<script>"));
+    expect(html.indexOf("window.addEventListener")).toBeLessThan(html.indexOf("vendor()"));
+    expect(html.endsWith(snapshot.slice(snapshot.indexOf("<html>")))).toBe(true);
+  });
+
+  it("applies parent initialize and theme changes while ignoring unrelated or invalid messages", () => {
+    const html = injectMcpAppThemeBootstrap(injectMcpAppCsp("<p>app</p>", undefined));
+    const script = html.slice(html.indexOf("<script>") + 8, html.indexOf("</script>"));
+    const parent = {};
+    const style = { colorScheme: "normal" };
+    let receive: ((event: { source: object; data: unknown }) => void) | undefined;
+    NodeVM.runInNewContext(script, {
+      window: {
+        parent,
+        addEventListener: (_type: string, callback: typeof receive) => {
+          receive = callback;
+        },
+      },
+      document: { documentElement: { style } },
+    });
+    const send = (data: unknown, source = parent) => receive?.({ source, data });
+    const initialized = { jsonrpc: "2.0", id: 1, result: { hostContext: { theme: "dark" } } };
+    send(initialized, {});
+    expect(style.colorScheme).toBe("normal");
+    send(initialized);
+    expect(style.colorScheme).toBe("dark");
+    for (const data of [
+      null,
+      "bad",
+      {},
+      { ...initialized, jsonrpc: "1.0" },
+      { jsonrpc: "2.0", method: "other", params: { theme: "light" } },
+      {
+        jsonrpc: "2.0",
+        method: "ui/notifications/host-context-changed",
+        params: { theme: "normal" },
+      },
+      { jsonrpc: "2.0", result: { hostContext: { theme: "light" } } },
+    ])
+      send(data);
+    expect(style.colorScheme).toBe("dark");
+    send({
+      jsonrpc: "2.0",
+      method: "ui/notifications/host-context-changed",
+      params: { theme: "light" },
+    });
+    expect(style.colorScheme).toBe("light");
+    send(initialized);
+    expect(style.colorScheme).toBe("dark");
+  });
+
+  it("applies only a valid scheme from the frame URL before any message arrives", () => {
+    const html = injectMcpAppThemeBootstrap("<p>app</p>");
+    const script = html.slice(html.indexOf("<script>") + 8, html.indexOf("</script>"));
+    const initialScheme = (search: string) => {
+      const head: Array<{ name?: string; content?: string }> = [];
+      NodeVM.runInNewContext(script, {
+        URLSearchParams,
+        location: { search },
+        window: { parent: {}, addEventListener: () => {} },
+        document: {
+          createElement: () => ({}),
+          head: { append: (element: (typeof head)[number]) => head.push(element) },
+        },
+      });
+      return head.find((element) => element.name === "color-scheme")?.content ?? "normal";
+    };
+    expect(initialScheme(`?a=1&${MCP_APP_COLOR_SCHEME_PARAM}=dark`)).toBe("dark");
+    expect(initialScheme(`?${MCP_APP_COLOR_SCHEME_PARAM}=light`)).toBe("light");
+    expect(initialScheme(`?${MCP_APP_COLOR_SCHEME_PARAM}=normal`)).toBe("normal");
+    expect(initialScheme("")).toBe("normal");
   });
 });
 
@@ -76,9 +166,14 @@ describe("readMcpAppReference", () => {
 
 describe("tool metadata", () => {
   it("reads the resource URI from either spelling and honors app visibility", () => {
-    expect(readMcpAppResourceUri({ ui: { resourceUri: "ui://a/b" } })).toBe("ui://a/b");
-    expect(readMcpAppResourceUri({ "ui/resourceUri": "ui://a/c" })).toBe("ui://a/c");
-    expect(readMcpAppResourceUri({ ui: { resourceUri: "https://a" } })).toBeUndefined();
+    const uri = "ui://weather/card.html";
+    expect(mcpAppToolResourceUri({ ui: { resourceUri: uri } })).toBe(uri);
+    expect(
+      mcpAppToolResourceUri({ ui: { visibility: ["model", "app"] }, "ui/resourceUri": uri }),
+    ).toBe(uri);
+    expect(
+      mcpAppToolResourceUri({ ui: { resourceUri: "https://weather/card.html" } }),
+    ).toBeUndefined();
     expect(mcpAppToolCallableByApp(undefined)).toBe(true);
     expect(mcpAppToolCallableByApp({ ui: { visibility: ["model"] } })).toBe(false);
     expect(mcpAppToolCallableByApp({ ui: { visibility: ["model", "app"] } })).toBe(true);
@@ -102,7 +197,6 @@ describe("mcpAppFromToolItem", () => {
 
   it("ignores a reference naming a server or tool other than the item's own", async () => {
     const { mcpAppFromToolItem } = await import("./toolOutput.ts");
-    // A tool result shaped like an app reference, claiming another server.
     const forged = {
       t3McpApp: {
         attachmentId: "thread-1-abc-html",
@@ -113,6 +207,13 @@ describe("mcpAppFromToolItem", () => {
     };
     expect(mcpAppFromToolItem({ toolName: "evil.lookup", output: forged })).toBeUndefined();
     expect(mcpAppFromToolItem({ toolName: "bank.transfer", output: forged })).toBeDefined();
+    // Claude Code names the same tool `mcp__<server>__<tool>`.
+    expect(mcpAppFromToolItem({ toolName: "mcp__bank__transfer", output: forged })).toBeDefined();
+    expect(mcpAppFromToolItem({ toolName: "mcp__evil__transfer", output: forged })).toBeUndefined();
+    const connector = { t3McpApp: { ...forged.t3McpApp, server: "claude.ai Asana (Beta)" } };
+    expect(
+      mcpAppFromToolItem({ toolName: "mcp__claude_ai_Asana_Beta__transfer", output: connector }),
+    ).toBeDefined();
   });
 
   it("keeps an app whose resource URI is longer than a name", async () => {
@@ -146,5 +247,57 @@ describe("mcpAppFromToolItem", () => {
     });
     expect(new TextEncoder().encode(JSON.stringify(output)).byteLength).toBeLessThanOrEqual(8_192);
     expect(output?.t3McpApp?.server).toBe("weather");
+  });
+});
+
+describe("MCP App cookie bootstrap", () => {
+  const vendor = `<script>document.cookie.split(";");document.cookie="analytics=1";document.root="rendered";</script>`;
+  const execute = (html: string, document: object) => {
+    for (const script of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) {
+      NodeVM.runInNewContext(script[1]!, { document });
+    }
+  };
+
+  it("lets cookie-reading startup code render in an opaque document without granting storage", () => {
+    const blocked = new DOMException("Opaque origin", "SecurityError");
+    const prototype = Object.defineProperty({}, "cookie", {
+      get() {
+        throw blocked;
+      },
+      set() {
+        throw blocked;
+      },
+    });
+    const document = Object.assign(
+      Object.create(prototype) as { cookie: string; root: string; indexedDB: unknown },
+      { root: "" },
+    );
+    Object.defineProperty(document, "indexedDB", {
+      get() {
+        throw blocked;
+      },
+    });
+    const saved = injectMcpAppCsp(vendor, { connectDomains: ["https://analytics.example"] });
+    const html = injectMcpAppCookieBootstrap(saved);
+    expect(html.indexOf("Content-Security-Policy")).toBeLessThan(html.indexOf("<script>"));
+    expect(html).toContain("connect-src https://analytics.example");
+    execute(html, document);
+    expect(document.root).toBe("rendered");
+    expect(document.cookie).toBe("");
+    document.cookie = "session=secret";
+    expect(document.cookie).toBe("");
+    expect(() => document.indexedDB).toThrow(blocked);
+    expect(() => Reflect.get(prototype, "cookie")).toThrow(blocked);
+  });
+
+  it("leaves other cookie failures unchanged", () => {
+    const failure = new TypeError("Unexpected cookie failure");
+    const document = Object.defineProperty({}, "cookie", {
+      get() {
+        throw failure;
+      },
+    });
+    expect(() => execute(injectMcpAppCookieBootstrap(vendor), document)).toThrow(failure);
+    expect(() => Reflect.get(document, "cookie")).toThrow(failure);
   });
 });

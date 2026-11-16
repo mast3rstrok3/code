@@ -9,7 +9,7 @@ const CodexAppServerRequestOperation = Schema.Literals([
 ]);
 type CodexAppServerRequestOperation = typeof CodexAppServerRequestOperation.Type;
 
-export const CodexAppServerSchemaTicketKind = Schema.Literals([
+const CodexAppServerSchemaIssueKind = Schema.Literals([
   "Filter",
   "Encoding",
   "Pointer",
@@ -22,44 +22,42 @@ export const CodexAppServerSchemaTicketKind = Schema.Literals([
   "Forbidden",
   "OneOf",
 ]);
-export type CodexAppServerSchemaTicketKind = typeof CodexAppServerSchemaTicketKind.Type;
+type CodexAppServerSchemaIssueKind = typeof CodexAppServerSchemaIssueKind.Type;
 
-export interface CodexAppServerSchemaTicketDiagnostics {
-  readonly ticketCount: number;
-  readonly ticketKinds: ReadonlyArray<CodexAppServerSchemaTicketKind>;
+interface CodexAppServerSchemaIssueDiagnostics {
+  readonly issueCount: number;
+  readonly issueKinds: ReadonlyArray<CodexAppServerSchemaIssueKind>;
   readonly maximumPathDepth: number;
 }
 
-const schemaTicketDiagnostics = (
-  root: SchemaIssue.Issue,
-): CodexAppServerSchemaTicketDiagnostics => {
-  let ticketCount = 0;
+const schemaIssueDiagnostics = (root: SchemaIssue.Issue): CodexAppServerSchemaIssueDiagnostics => {
+  let issueCount = 0;
   let maximumPathDepth = 0;
-  const ticketKinds = new Set<CodexAppServerSchemaTicketKind>();
+  const issueKinds = new Set<CodexAppServerSchemaIssueKind>();
 
-  const visit = (ticket: SchemaIssue.Issue, pathDepth: number): void => {
-    ticketCount += 1;
-    ticketKinds.add(ticket._tag);
+  const visit = (issue: SchemaIssue.Issue, pathDepth: number): void => {
+    issueCount += 1;
+    issueKinds.add(issue._tag);
     maximumPathDepth = Math.max(maximumPathDepth, pathDepth);
-    switch (ticket._tag) {
+    switch (issue._tag) {
       case "Filter":
       case "Encoding":
-        visit(ticket.issue, pathDepth);
+        visit(issue.issue, pathDepth);
         break;
       case "Pointer":
-        visit(ticket.issue, pathDepth + ticket.path.length);
+        visit(issue.issue, pathDepth + issue.path.length);
         break;
       case "Composite":
       case "AnyOf":
-        for (const child of ticket.issues) visit(child, pathDepth);
+        for (const child of issue.issues) visit(child, pathDepth);
         break;
     }
   };
 
   visit(root, 0);
   return {
-    ticketCount,
-    ticketKinds: [...ticketKinds],
+    issueCount,
+    issueKinds: [...issueKinds],
     maximumPathDepth,
   };
 };
@@ -93,8 +91,8 @@ export interface CodexAppServerRequestDiagnostics {
   readonly requestId?: string;
   readonly operation?: CodexAppServerRequestOperation;
   readonly cause?: unknown;
-  readonly ticketCount?: number;
-  readonly ticketKinds?: ReadonlyArray<CodexAppServerSchemaTicketKind>;
+  readonly issueCount?: number;
+  readonly issueKinds?: ReadonlyArray<CodexAppServerSchemaIssueKind>;
   readonly maximumPathDepth?: number;
   readonly payloadKind?: CodexAppServerPayloadKind;
 }
@@ -111,19 +109,10 @@ export type CodexAppServerProtocolParseOperation = typeof CodexAppServerProtocol
 
 export const CodexAppServerTransportOperation = Schema.Literals([
   "read-input-stream",
+  "write-output-stream",
   "read-process-exit-status",
 ]);
 export type CodexAppServerTransportOperation = typeof CodexAppServerTransportOperation.Type;
-
-export const CodexAppServerIdentifierPurpose = Schema.Literals([
-  "provider-event",
-  "command-approval-request",
-  "file-change-approval-request",
-  "mcp-elicitation-request",
-  "app-permission-approval-request",
-  "user-input-request",
-]);
-export type CodexAppServerIdentifierPurpose = typeof CodexAppServerIdentifierPurpose.Type;
 
 export interface CodexAppServerProtocolErrorShape {
   readonly code: number;
@@ -150,13 +139,16 @@ export class CodexAppServerProcessExitedError extends Schema.TaggedError<CodexAp
   {
     code: Schema.optional(Schema.Number),
     pid: Schema.optionalKey(Schema.Int),
+    stderr: Schema.optionalKey(Schema.String),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message() {
-    return this.code === undefined
-      ? "Codex App Server process exited"
-      : `Codex App Server process exited with code ${this.code}`;
+    const base =
+      this.code === undefined
+        ? "Codex App Server process exited"
+        : `Codex App Server process exited with code ${this.code}`;
+    return this.stderr ? `${base}: ${this.stderr}` : base;
   }
 }
 
@@ -168,8 +160,8 @@ export class CodexAppServerProtocolParseError extends Schema.TaggedError<CodexAp
     requestId: Schema.optionalKey(Schema.String),
     payloadKind: Schema.optionalKey(CodexAppServerPayloadKind),
     presentFields: Schema.optionalKey(Schema.Array(CodexAppServerProtocolMessageField)),
-    ticketCount: Schema.optionalKey(Schema.Number),
-    ticketKinds: Schema.optionalKey(Schema.Array(CodexAppServerSchemaTicketKind)),
+    issueCount: Schema.optionalKey(Schema.Number),
+    issueKinds: Schema.optionalKey(Schema.Array(CodexAppServerSchemaIssueKind)),
     maximumPathDepth: Schema.optionalKey(Schema.Number),
     cause: Schema.optional(Schema.Defect()),
   },
@@ -187,7 +179,7 @@ export class CodexAppServerProtocolParseError extends Schema.TaggedError<CodexAp
     return new CodexAppServerProtocolParseError({
       operation,
       ...context,
-      ...schemaTicketDiagnostics(cause.issue),
+      ...schemaIssueDiagnostics(cause.issue),
       cause,
     });
   }
@@ -200,8 +192,8 @@ export class CodexAppServerProtocolParseError extends Schema.TaggedError<CodexAp
     return new CodexAppServerProtocolParseError({
       operation,
       method,
-      ...(cause.ticketCount === undefined ? {} : { ticketCount: cause.ticketCount }),
-      ...(cause.ticketKinds === undefined ? {} : { ticketKinds: cause.ticketKinds }),
+      ...(cause.issueCount === undefined ? {} : { issueCount: cause.issueCount }),
+      ...(cause.issueKinds === undefined ? {} : { issueKinds: cause.issueKinds }),
       ...(cause.maximumPathDepth === undefined ? {} : { maximumPathDepth: cause.maximumPathDepth }),
       cause,
     });
@@ -246,18 +238,6 @@ export class CodexAppServerTransportError extends Schema.TaggedError<CodexAppSer
   }
 }
 
-export class CodexAppServerIdentifierGenerationError extends Schema.TaggedError<CodexAppServerIdentifierGenerationError>()(
-  "CodexAppServerIdentifierGenerationError",
-  {
-    purpose: CodexAppServerIdentifierPurpose,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message() {
-    return `Failed to generate Codex App Server identifier for ${this.purpose}.`;
-  }
-}
-
 export class CodexAppServerInputStreamEndedError extends Schema.TaggedError<CodexAppServerInputStreamEndedError>()(
   "CodexAppServerInputStreamEndedError",
   {},
@@ -276,8 +256,8 @@ export class CodexAppServerRequestError extends Schema.TaggedError<CodexAppServe
     method: Schema.optionalKey(Schema.String),
     requestId: Schema.optionalKey(Schema.String),
     operation: Schema.optionalKey(CodexAppServerRequestOperation),
-    ticketCount: Schema.optionalKey(Schema.Number),
-    ticketKinds: Schema.optionalKey(Schema.Array(CodexAppServerSchemaTicketKind)),
+    issueCount: Schema.optionalKey(Schema.Number),
+    issueKinds: Schema.optionalKey(Schema.Array(CodexAppServerSchemaIssueKind)),
     maximumPathDepth: Schema.optionalKey(Schema.Number),
     payloadKind: Schema.optionalKey(CodexAppServerPayloadKind),
     cause: Schema.optionalKey(Schema.Defect()),
@@ -318,39 +298,10 @@ export class CodexAppServerRequestError extends Schema.TaggedError<CodexAppServe
     );
   }
 
-  static parseError(message = "Parse error", data?: unknown) {
-    return new CodexAppServerRequestError({
-      code: -32700,
-      errorMessage: message,
-      ...(data !== undefined ? { data } : {}),
-    });
-  }
-
-  static invalidRequest(message = "Invalid request", data?: unknown) {
-    return new CodexAppServerRequestError({
-      code: -32600,
-      errorMessage: message,
-      ...(data !== undefined ? { data } : {}),
-    });
-  }
-
   static methodNotFound(method: string) {
     return new CodexAppServerRequestError({
       code: -32601,
       errorMessage: `Method not found: ${method}`,
-    });
-  }
-
-  static invalidParams(
-    message = "Invalid params",
-    data?: unknown,
-    diagnostics: CodexAppServerRequestDiagnostics = {},
-  ) {
-    return new CodexAppServerRequestError({
-      code: -32602,
-      errorMessage: message,
-      ...(data !== undefined ? { data } : {}),
-      ...diagnostics,
     });
   }
 
@@ -359,7 +310,7 @@ export class CodexAppServerRequestError extends Schema.TaggedError<CodexAppServe
     operation: "decode-payload" | "encode-payload",
     cause: Schema.SchemaError,
   ) {
-    const diagnostics = schemaTicketDiagnostics(cause.issue);
+    const diagnostics = schemaIssueDiagnostics(cause.issue);
     return new CodexAppServerRequestError({
       code: -32602,
       errorMessage: `Invalid payload for method '${method}' during '${operation}'`,
@@ -423,7 +374,6 @@ export const CodexAppServerError = Schema.Union([
   CodexAppServerProcessExitedError,
   CodexAppServerProtocolParseError,
   CodexAppServerTransportError,
-  CodexAppServerIdentifierGenerationError,
   CodexAppServerInputStreamEndedError,
 ]);
 

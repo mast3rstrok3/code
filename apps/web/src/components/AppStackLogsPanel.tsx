@@ -29,7 +29,7 @@ import {
   stackLogTailSelectionToReadLimit,
   type StackLogTailSelection,
   stackPodLogOwnerLabel,
-} from "./AppStackLogsPanel.logic";
+} from "@t3tools/client-runtime/app-stack-logs";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "./ui/input-group";

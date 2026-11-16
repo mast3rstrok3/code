@@ -1,10 +1,11 @@
 import { IsoDateTime, OrchestratorMcpFailure, TrimmedNonEmptyString } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/ai";
+import { McpSchema, Tool, Toolkit } from "effect/ai";
 
 import * as BuildBatchService from "../../../buildBatch/BuildBatchService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { hiddenFromOutsideClients } from "../../McpInvocationContext.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -37,7 +38,8 @@ const BuildBatchStartTool = Tool.make("build_batch_start", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const BuildBatchFinishTool = Tool.make("build_batch_finish", {
   description:
@@ -51,7 +53,8 @@ const BuildBatchFinishTool = Tool.make("build_batch_finish", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const BuildBatchListTool = Tool.make("build_batch_list", {
   description:
@@ -74,7 +77,8 @@ const BuildBatchListTool = Tool.make("build_batch_list", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 export const BuildBatchToolkit = Toolkit.make(
   BuildBatchStartTool,

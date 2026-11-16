@@ -1,5 +1,5 @@
-import { randomUuidV4 } from "../orchestration-v2/RandomUuid.ts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import {
   CommandId,
   EventId,
@@ -88,7 +88,7 @@ export const executeNativeVerification = Effect.fn("NativeVerification.execute")
     });
   const driver = driverOption.value;
   const path = yield* Path.Path;
-  const hostPlatform = yield* HostProcessPlatform;
+  const hostPlatform = yield* HostProcess.Platform;
   const now = DateTime.formatIso(yield* DateTime.now);
   const readModel = yield* query.getCommandReadModel();
   const fail = (message: string) => new NativeVerificationError({ message });

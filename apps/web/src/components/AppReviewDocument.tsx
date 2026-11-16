@@ -9,6 +9,7 @@ import type {
   EnvironmentId,
 } from "@t3tools/contracts";
 import { APP_REVIEW_RECORDING_EVIDENCE_ID } from "@t3tools/contracts";
+import { groupAppReviewTestResults } from "@t3tools/client-runtime/app-review";
 import { CheckCircle2, Circle, CircleDot, Info, XCircle } from "lucide-react";
 import { Suspense, lazy, useMemo, useState } from "react";
 
@@ -393,7 +394,7 @@ export function AppReviewCycleDocument(props: {
           <h3 className="px-4 pt-3 text-sm font-semibold">End-to-end tests</h3>
           <TestRecordingsList
             runId={props.runId}
-            results={testResults}
+            execution={props.cycle.e2eExecution}
             environmentId={props.environmentId}
           />
         </section>
@@ -417,18 +418,75 @@ export function AppReviewCycleDocument(props: {
 }
 
 /**
- * Every test the cycle's commands recorded, replayable in place. A fleet run
- * yields hundreds, so a row mints its URL and mounts the player only while open.
+ * Every test the cycle's commands recorded, replayable in place. The tickets'
+ * feature tests come first; the other suites fold away behind them.
  */
 function TestRecordingsList(props: {
+  runId: AppReviewWorkflowRunId;
+  execution: NonNullable<AppReviewWorkflowCycle["e2eExecution"]>;
+  environmentId: EnvironmentId;
+}) {
+  const [otherOpen, setOtherOpen] = useState(false);
+  if (props.execution.results.length === 0) {
+    return <p className="px-4 py-3 text-sm text-muted-foreground">No test command has finished.</p>;
+  }
+  const groups = groupAppReviewTestResults(props.execution);
+  const hasFeatureTests = props.execution.commands.some((entry) => entry.purpose === "feature");
+  if (!hasFeatureTests) {
+    return (
+      <TestResultList
+        runId={props.runId}
+        results={props.execution.results}
+        environmentId={props.environmentId}
+      />
+    );
+  }
+  return (
+    <div>
+      <h4 className="px-4 pt-3 text-xs font-semibold">Feature tests</h4>
+      {groups.feature.length > 0 ? (
+        <TestResultList
+          runId={props.runId}
+          results={groups.feature}
+          environmentId={props.environmentId}
+        />
+      ) : (
+        <p className="px-4 py-3 text-sm text-muted-foreground">No feature test has finished.</p>
+      )}
+      {groups.other.length > 0 ? (
+        <>
+          <button
+            type="button"
+            aria-expanded={otherOpen}
+            onClick={() => setOtherOpen(!otherOpen)}
+            className="flex w-full cursor-pointer items-center justify-between px-4 py-2 text-left text-xs font-semibold"
+          >
+            <span>{groups.otherLabel}</span>
+            <span className="font-normal text-muted-foreground">
+              {groups.other.filter((result) => result.status === "failed").length} failed ·{" "}
+              {otherOpen ? "Collapse" : "Expand"}
+            </span>
+          </button>
+          {otherOpen ? (
+            <TestResultList
+              runId={props.runId}
+              results={groups.other}
+              environmentId={props.environmentId}
+            />
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/** A fleet run yields hundreds, so a row mints its URL and mounts the player only while open. */
+function TestResultList(props: {
   runId: AppReviewWorkflowRunId;
   results: ReadonlyArray<AppReviewTestResult>;
   environmentId: EnvironmentId;
 }) {
   const [openRecordingId, setOpenRecordingId] = useState<string | null>(null);
-  if (props.results.length === 0) {
-    return <p className="px-4 py-3 text-sm text-muted-foreground">No test command has finished.</p>;
-  }
   return (
     <ul className="space-y-3 px-4 py-3">
       {props.results.map((result) => (

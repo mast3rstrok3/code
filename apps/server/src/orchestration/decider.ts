@@ -1,5 +1,12 @@
 import { threadHasQueuedTurnStart as shellHasQueuedTurnStart } from "./ThreadSettlementPolicy.ts";
 import { projectEvent } from "./projector.ts";
+import {
+  legacyThreadPullRequestKey,
+  normalizeThreadPullRequestKey,
+  threadPullRequestKeysEqual,
+} from "../sourceControl/threadPullRequests.ts";
+import { compareDateTimeStrings } from "./dateTime.ts";
+import { legacyLinkedPullRequestOf } from "./legacyLinkedPullRequest.ts";
 import { nativeVerificationIsOpen, transitionNativeVerification } from "./nativeVerification.ts";
 import {
   type AppReviewDocument,
@@ -37,15 +44,8 @@ import {
   type ThreadPullRequestLink,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
-import {
-  legacyLinkedPullRequestOf,
-  legacyThreadPullRequestKey,
-  normalizeThreadPullRequestKey,
-  threadPullRequestKeysEqual,
-} from "@t3tools/shared/threadPullRequests";
-import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 import * as DateTime from "effect/DateTime";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
@@ -1011,11 +1011,6 @@ function liveAppReviewCallerThreadId(input: {
   return null;
 }
 
-// Session adoption takes seconds; a user message still unadopted after this
-// window is a failed/stale start, not pending work. Mirrors the client's
-// QUEUED_TURN_START_GRACE_MS in client-runtime threadSettled.ts.
-const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
-
 /**
  * Blocked-on-you work derived from the thread's retained activities: an
  * approval or user-input request with no later resolution for the same
@@ -1158,11 +1153,11 @@ function withEventBase(
 ): Effect.Effect<
   Omit<OrchestrationEvent, "sequence" | "type" | "payload">,
   PlatformError.PlatformError,
-  Crypto.Crypto
+  SecureRandom.SecureRandom
 > {
-  return Crypto.Crypto.pipe(
-    Effect.flatMap((crypto) =>
-      crypto.randomUUIDv4.pipe(
+  return SecureRandom.SecureRandom.pipe(
+    Effect.flatMap((random) =>
+      random.uuidV4().pipe(
         Effect.map((eventId) => ({
           eventId: EventId.make(eventId),
           aggregateKind: input.aggregateKind,
@@ -1195,7 +1190,7 @@ const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
   | OrchestrationCommandInvariantError
   | OrchestrationThreadSettleBlockedError
   | PlatformError.PlatformError,
-  Crypto.Crypto
+  SecureRandom.SecureRandom
 > {
   let nextReadModel = readModel;
   let nextSequence = readModel.snapshotSequence;
@@ -1233,7 +1228,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
   | OrchestrationCommandInvariantError
   | OrchestrationThreadSettleBlockedError
   | PlatformError.PlatformError,
-  Crypto.Crypto
+  SecureRandom.SecureRandom
 > {
   switch (command.type) {
     case "project.create": {
@@ -2064,7 +2059,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadOverrides: boundedMaxCycles === null ? [] : [{ ...key, maxCycles: boundedMaxCycles }],
       });
       for (const run of readModel.appReviewWorkflowRuns ?? []) {
-        if (run.status !== "running" || run.cycleBudget === budget) continue;
+        if (!["running", "exhausted"].includes(run.status) || run.cycleBudget === budget) continue;
         // A review-only run is one cycle by definition, so a budget set for the
         // step it shares does not reach it.
         if (run.reviewOnly === true) continue;
@@ -2919,10 +2914,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     case "thread.composer-mode.set": {
       const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
       const occurredAt = yield* nowIso;
-      // A Feature root owns the App Stacks its turns start; the workflow id is what tags
-      // them for teardown once its pull request is linked.
+      // Every step thread and sub-run joins the root's workflow id, and a Feature root's
+      // App Stacks are tagged with it for teardown once its pull request is linked.
       const workflowContext =
-        command.workflowPreset === "fast-plan" &&
+        command.workflowPreset != null &&
         thread.workflowRole === null &&
         thread.workflowContext == null
           ? {
@@ -2993,8 +2988,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // in the conversation; the stage event stamps the workflow context the
       // planning-orchestrator child used to carry. The preset is pinned so the
       // thread still reads as a product root once its interaction mode flips.
-      const crypto = yield* Crypto.Crypto;
-      const messageUuid = yield* crypto.randomUUIDv4;
+      const random = yield* SecureRandom.SecureRandom;
+      const messageUuid = yield* random.uuidV4();
       const productContextOnly = productRootThread.workflowPreset === "product-planning";
       const messageId = MessageId.make(
         `message-product-${productContextOnly ? "context" : "engineering-grill"}-${messageUuid}`,
@@ -3123,8 +3118,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
 
-      const crypto = yield* Crypto.Crypto;
-      const messageUuid = yield* crypto.randomUUIDv4;
+      const random = yield* SecureRandom.SecureRandom;
+      const messageUuid = yield* random.uuidV4();
       const messageId = MessageId.make(`message-planning-${command.stage}-stage-${messageUuid}`);
       const stage =
         command.stage === "grill"
@@ -3310,9 +3305,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Thread '${command.threadId}' already has a Spec for this Planning Workflow.`,
         });
       }
-      const crypto = yield* Crypto.Crypto;
-      const specUuid = yield* crypto.randomUUIDv4;
-      const ticketMessageUuid = yield* crypto.randomUUIDv4;
+      const random = yield* SecureRandom.SecureRandom;
+      const specUuid = yield* random.uuidV4();
+      const ticketMessageUuid = yield* random.uuidV4();
       const spec = buildPlanningSpecFromArtifact({
         specId:
           existingArtifact?.id ??
@@ -3429,9 +3424,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             createdAt: command.createdAt,
           },
         });
-        const crypto = yield* Crypto.Crypto;
+        const random = yield* SecureRandom.SecureRandom;
         const generatedTicketIds = yield* Effect.forEach(command.tickets, () =>
-          crypto.randomUUIDv4.pipe(Effect.map((uuid) => `planning-ticket-${uuid}`)),
+          random.uuidV4().pipe(Effect.map((uuid) => `planning-ticket-${uuid}`)),
         );
         const tickets = resolvePlanningTicketProjects(
           readModel,
@@ -3496,9 +3491,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Planning Tickets artifact targets unknown planning artifact '${command.specId}'.`,
         });
       }
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
       const generatedTicketIds = yield* Effect.forEach(command.tickets, () =>
-        crypto.randomUUIDv4.pipe(Effect.map((uuid) => `planning-ticket-${uuid}`)),
+        random.uuidV4().pipe(Effect.map((uuid) => `planning-ticket-${uuid}`)),
       );
       const tickets = resolvePlanningTicketProjects(
         readModel,
@@ -3599,9 +3594,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Planning ticket review is limited to ${PLANNING_REVIEW_MAX_CYCLES} cycles.`,
         });
       }
-      const crypto = yield* Crypto.Crypto;
-      const reviewerThreadUuid = yield* crypto.randomUUIDv4;
-      const reviewerMessageUuid = yield* crypto.randomUUIDv4;
+      const random = yield* SecureRandom.SecureRandom;
+      const reviewerThreadUuid = yield* random.uuidV4();
+      const reviewerMessageUuid = yield* random.uuidV4();
       const reviewerThreadId = ThreadId.make(`thread-planning-reviewer-${reviewerThreadUuid}`);
       const reviewerMessageId = MessageId.make(`message-planning-reviewer-${reviewerMessageUuid}`);
       const { cycleNumber, mode, targetPlanningTicketIds, previousCycle } = reviewRequest;
@@ -3816,10 +3811,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: "A passing reviewer verdict cannot contain failing Planning Ticket ids.",
         });
       }
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
       const generatedTicketIds = yield* Effect.forEach(edits, (edit) =>
         edit.type === "create"
-          ? crypto.randomUUIDv4.pipe(Effect.map((uuid) => `planning-ticket-${uuid}`))
+          ? random.uuidV4().pipe(Effect.map((uuid) => `planning-ticket-${uuid}`))
           : Effect.succeed(""),
       );
       const editedTickets = resolvePlanningTicketProjects(
@@ -4031,9 +4026,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Planning Ticket '${unplacedTicket.id}' changes project '${unplacedTicket.projectId}', but the launch prepared no worktree for it.`,
         });
       }
-      const crypto = yield* Crypto.Crypto;
-      const runUuid = yield* crypto.randomUUIDv4;
-      const orchestratorThreadUuid = yield* crypto.randomUUIDv4;
+      const random = yield* SecureRandom.SecureRandom;
+      const runUuid = yield* random.uuidV4();
+      const orchestratorThreadUuid = yield* random.uuidV4();
       const orchestratorThreadId = ThreadId.make(
         `thread-implementation-orchestrator-${orchestratorThreadUuid}`,
       );

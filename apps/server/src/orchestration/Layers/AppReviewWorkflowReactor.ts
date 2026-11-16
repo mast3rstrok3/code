@@ -1,3 +1,4 @@
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { appStackServiceBlocksReadiness } from "@t3tools/shared/appStack";
 import {
   type AppStackStatus,
@@ -38,11 +39,10 @@ import {
   type AppReviewParts,
 } from "@t3tools/shared/appReviewParts";
 import { makeDrainableWorker, type DrainableWorker } from "@t3tools/shared/DrainableWorker";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { extractPreviewUrls } from "@t3tools/shared/preview";
 import { resolveAppReviewE2eCommands } from "@t3tools/shared/t3ProjectFile";
 import * as Cause from "effect/Cause";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -51,11 +51,16 @@ import * as Scope from "effect/Scope";
 import {
   appReviewRetryCommandsFailure,
   appReviewTestCommands,
+  blockingAppReviewTestFailures,
   appReviewTestRecordingsDir,
+  appReviewTestTimeoutMinutes,
   appReviewBuildArtifactsDir,
   completedAppReviewTests,
+  finalAppReviewE2eSelections,
+  implementationFeatureE2eCommands,
   restoreAppReviewTestWrites,
   runAppReviewTest,
+  type AppReviewTestSelection,
 } from "../appReviewTestRunner.ts";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -74,7 +79,11 @@ import {
   isImplementationAppReview,
   reusableAppReviewFixValidations,
 } from "../appReviewValidation.ts";
-import { APP_REVIEW_PREFLIGHT_RETRY_MS, runAppReviewPreflight } from "../appReviewPreflight.ts";
+import {
+  APP_REVIEW_PREFLIGHT_RETRY_MS,
+  APP_REVIEW_PREFLIGHT_WAIT_LIMIT_MS,
+  runAppReviewPreflight,
+} from "../appReviewPreflight.ts";
 
 import { AppStackManager } from "../../appStack/AppStackManager.ts";
 import { ServerConfig } from "../../config.ts";
@@ -101,6 +110,7 @@ import {
   type WorkflowNudgeThread,
 } from "../workflowNudge.ts";
 import {
+  lastBackgroundTaskEndedAt,
   openBackgroundTaskActivityAt,
   STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS,
 } from "../stageClaim.ts";
@@ -110,6 +120,7 @@ import { appReviewWaitsForAdmission } from "../implementationTicketConcurrency.t
 import { parseWorkflowDirectiveFromMarkdown } from "../workflowDirectives.ts";
 import {
   findWorkflowStepModels,
+  findWorkflowStepModelScope,
   findWorkflowStepReviewParts,
   resolveWorkflowStepModelSelection,
   resolveWorkflowSubagentSpawnDefinition,
@@ -547,6 +558,13 @@ export function phaseTurnCompleted(thread: {
 }
 
 /**
+ * How long a phase still waits after its last background task ended. The task's
+ * end reaches the workflow before the provider's turn that reports on it, and
+ * re-prompting in that gap starts a second turn beside the provider's own.
+ */
+export const BACKGROUND_TASK_REINVOKE_GRACE_MS = 60_000;
+
+/**
  * A phase agent that ended its turn with a background task still open (an E2E
  * run, a device lease) is waiting for that task: the provider re-invokes it
  * when the task ends. Treating that turn as final re-prompts and interrupts the
@@ -555,9 +573,11 @@ export function phaseTurnCompleted(thread: {
  */
 export function phaseAwaitingBackgroundTask(thread: WorkflowNudgeThread, nowMs: number): boolean {
   const lastTaskActivityMs = openBackgroundTaskActivityAt(thread);
-  return (
-    lastTaskActivityMs !== null && nowMs - lastTaskActivityMs < STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS
-  );
+  if (lastTaskActivityMs !== null) {
+    return nowMs - lastTaskActivityMs < STAGE_CLAIM_BACKGROUND_TASK_GRACE_MS;
+  }
+  const endedMs = lastBackgroundTaskEndedAt(thread);
+  return endedMs !== null && nowMs - endedMs < BACKGROUND_TASK_REINVOKE_GRACE_MS;
 }
 
 /**
@@ -1632,7 +1652,7 @@ export function buildAppReviewFixPrompt(input: {
       "For product defects, write the test each ticket names, watch it fail, then repair. For coverage gaps, add the missing executable test or assertion and run it; it may pass immediately when the product already works. Repair any defects it exposes. Missing test code is repair work, not an external prerequisite. Address every actionable finding together, preserve unrelated work, and run focused validation. Do not ask the user questions.",
       APP_REVIEW_FIXER_IMPLEMENTATION_ONLY_INSTRUCTION,
       WORKFLOW_PARALLEL_VALIDATION_INSTRUCTION,
-      `Set ${APP_REVIEW_TEST_PLATFORMS_ENV}=${(input.run.testPlatforms ?? ["web"]).join(",")} for repair validation commands. Require evidence for every selected platform; report omitted platforms as unrun.`,
+      `Set ${APP_REVIEW_TEST_PLATFORMS_ENV}=${(input.run.testPlatforms ?? ["web"]).join(",")} for E2E repair validation commands, and leave it out of the repository's complete check commands. Require evidence for every selected platform; report omitted platforms as unrun.`,
       "Before declaring a test prerequisite unavailable, inspect this worktree's supported test setup and assigned App Stack. Use an existing authorized test service when available, verify its identity and required permissions, and pass its configuration only to the test processes. A missing environment variable alone does not establish that the service is unavailable. Never use another worktree's database, expose credentials, or provision services without authorization. Record reusable setup instructions without secret values so the next reviewer can recover the same environment.",
       ...(isImplementationAppReview(input.run) && !input.cycle.e2eExecution
         ? [
@@ -1830,7 +1850,7 @@ export function terminalReviewEvidenceFailure(
 const make = Effect.gen(function* () {
   const scope = yield* Scope.Scope;
   const testProcesses = new Map<string, { id: string; fiber: Fiber.Fiber<void, never> }>();
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const workflowDrain = yield* Effect.serviceOption(WorkflowDrainCoordinator);
   const isDraining = Option.isSome(workflowDrain)
@@ -1850,13 +1870,13 @@ const make = Effect.gen(function* () {
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const serverCommandId = (tag: string) =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
+    random.uuidV4().pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverMessageId = (tag: string) =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
+    random.uuidV4().pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
   const serverThreadId = (tag: string) =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
+    random.uuidV4().pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
   const serverReviewId = () =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => AppReviewId.make(`app-review-${uuid}`)));
+    random.uuidV4().pipe(Effect.map((uuid) => AppReviewId.make(`app-review-${uuid}`)));
 
   const resolveThread = (threadId: ThreadId) =>
     projectionSnapshotQuery.getThreadDetailById(threadId).pipe(Effect.map(Option.getOrUndefined));
@@ -1889,11 +1909,11 @@ const make = Effect.gen(function* () {
   });
 
   /** Load E2E configuration without hiding invalid files behind missing-command errors. */
-  const e2eCommandsForCwd = Effect.fn("AppReviewWorkflowReactor.e2eCommandsForCwd")(function* (
+  const e2eSelectionsForCwd = Effect.fn("AppReviewWorkflowReactor.e2eSelectionsForCwd")(function* (
     cwd: string | null,
     run: AppReviewWorkflowRun,
   ) {
-    if (cwd === null) return [] as ReadonlyArray<string>;
+    if (cwd === null) return [] as ReadonlyArray<AppReviewTestSelection>;
     const requiresE2e = (yield* reviewSettingsForRun(run)).scope !== "browser";
     const projectFile = yield* (
       requiresE2e ? projectFileLoader.loadStrict(cwd) : projectFileLoader.load(cwd)
@@ -1910,8 +1930,33 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
-    return resolveAppReviewE2eCommands(Option.getOrUndefined(projectFile));
+    const project = Option.getOrUndefined(projectFile);
+    if (!isImplementationAppReview(run) || isTicketAppReview(run)) {
+      return resolveAppReviewE2eCommands(project).map((command) => ({ command }));
+    }
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const implementationRun = readModel.implementationRuns.find(
+      (entry) =>
+        run.caller.type === "implementation" && entry.id === run.caller.implementationRunId,
+    );
+    const orchestrator = readModel.threads.find(
+      (thread) => thread.id === implementationRun?.orchestratorThreadId,
+    );
+    const featureCommands =
+      implementationRun === undefined || orchestrator === undefined
+        ? []
+        : implementationFeatureE2eCommands({
+            planningTicketIds: implementationRun.planningTicketIds,
+            tickets: readModel.threads.flatMap((thread) => thread.planningWorkflow?.tickets ?? []),
+            projectId: orchestrator.projectId,
+          });
+    return finalAppReviewE2eSelections({ featureCommands, projectFile: project });
   });
+
+  const e2eCommandsForCwd = (cwd: string | null, run: AppReviewWorkflowRun) =>
+    e2eSelectionsForCwd(cwd, run).pipe(
+      Effect.map((selections) => selections.map((selection) => selection.command)),
+    );
 
   /**
    * The scope this run's next cycle actually reviews with, or null when
@@ -2118,9 +2163,17 @@ const make = Effect.gen(function* () {
     const lookup = yield* appStackManager
       .getByWorktree({ worktreePath: cwd })
       .pipe(Effect.orElseSucceed(() => null));
+    const caller = run.caller;
+    const baseRef =
+      caller.type === "implementation"
+        ? ((yield* projectionSnapshotQuery.getCommandReadModel()).implementationRuns.find(
+            (entry) => entry.id === caller.implementationRunId,
+          )?.pinnedCommit ?? null)
+        : null;
     return {
       previewUrl,
       stackId: appReviewStackIdForTarget({ lookup, previewUrl }),
+      baseRef,
       testPlatforms: run.testPlatforms,
       env: e2eEnvironment,
       artifactsDir:
@@ -2162,7 +2215,7 @@ const make = Effect.gen(function* () {
         : "The test readiness command could not run successfully.",
       config.blockedReason,
       result === "waiting"
-        ? "Only the readiness check will retry, once per minute. This phase will resume automatically when it passes. No repair cycle is spent while waiting."
+        ? `Only the readiness check will retry, once per minute, for up to ${String(APP_REVIEW_PREFLIGHT_WAIT_LIMIT_MS / 60_000)} minutes. This phase will resume automatically when it passes. No repair cycle is spent while waiting.`
         : "Fix e2ePreflight in t3.json, then rerun this phase. Exit 0 means ready; exit 1 means a prerequisite is unavailable. Other exit codes stop automatic checks.",
     ].join("\n\n");
     if (result === "error") {
@@ -2307,6 +2360,8 @@ const make = Effect.gen(function* () {
       inheritStepPin: stepWorkflowPromptId !== WORKFLOW_PROMPT_IDS.implementationTddCodex,
       definition: resolveWorkflowSubagentSpawnDefinition(workflowPromptId),
       stepModels: findWorkflowStepModels(parent, readModel.threads),
+      // App Review runs inside Engineering unless its root says otherwise.
+      workflow: findWorkflowStepModelScope(parent, readModel.threads) ?? "engineering",
       parentModelSelection: parent.modelSelection,
       settings,
     }).modelSelection;
@@ -2568,7 +2623,11 @@ const make = Effect.gen(function* () {
                 serverConfig === undefined
                   ? undefined
                   : appReviewTestRecordingsDir(path, serverConfig.stateDir, run.id),
-              timeoutMinutes: projectFile?.e2eTimeoutMinutes,
+              timeoutMinutes: appReviewTestTimeoutMinutes(
+                selection,
+                projectFile?.e2eTimeoutMinutes,
+              ),
+              retryFailure: selection.purpose === "feature",
             }).pipe(
               Effect.flatMap((result) =>
                 restoreE2eWrites(target.cwd, before).pipe(
@@ -2639,7 +2698,7 @@ const make = Effect.gen(function* () {
       text: buildE2eReviewPrompt({
         run,
         cycle,
-        hostPlatform: yield* HostProcessPlatform,
+        hostPlatform: yield* HostProcess.Platform,
         e2eCommands,
         priorFindingIds: prior.findingIds,
       }),
@@ -2779,11 +2838,12 @@ const make = Effect.gen(function* () {
       return;
     }
     const includesE2e = reviewScope === "e2e" || reviewScope === "both";
-    const e2eCommands = includesE2e
+    const e2eSelections: ReadonlyArray<AppReviewTestSelection> = includesE2e
       ? isTicketAppReview(run) || run.serialE2e
-        ? (run.e2eCommands ?? [])
-        : yield* e2eCommandsForCwd(cwd, run)
+        ? (run.e2eCommands ?? []).map((command) => ({ command }))
+        : yield* e2eSelectionsForCwd(cwd, run)
       : [];
+    const e2eCommands = e2eSelections.map((selection) => selection.command);
     if (includesE2e && e2eCommands.length === 0) {
       yield* failRun({
         run,
@@ -2825,10 +2885,10 @@ const make = Effect.gen(function* () {
       ...(includesE2e
         ? {
             e2eExecution: {
-              id: yield* crypto.randomUUIDv4,
+              id: yield* random.uuidV4(),
               commands: rerunAllTests
-                ? appReviewTestCommands({ cycles: [] }, e2eCommands)
-                : appReviewTestCommands(run, e2eCommands),
+                ? appReviewTestCommands({ cycles: [] }, e2eSelections)
+                : appReviewTestCommands(run, e2eSelections),
               results: [],
             },
           }
@@ -2856,7 +2916,6 @@ const make = Effect.gen(function* () {
     };
     const reviewingRun: AppReviewWorkflowRun = {
       ...previewRun,
-      cycleBudget: includesE2e ? Math.min(run.cycleBudget, 5) : run.cycleBudget,
       cyclesUsed: cycleNumber,
       cycles: [...run.cycles, cycle],
       activePhase: includesE2e ? "e2e" : "review",
@@ -3235,7 +3294,7 @@ const make = Effect.gen(function* () {
             "",
             "Finish with exactly one fenced JSON block:",
             "```json",
-            // @effect-diagnostics-next-line preferSchemaOverJson:off - embeds a fixed example in the agent prompt.
+            // @effect-diagnostics-next-line globalJsonInEffect:off - embeds a fixed example in the agent prompt.
             JSON.stringify(
               {
                 type: "app-review-repair-tickets",
@@ -3294,7 +3353,7 @@ const make = Effect.gen(function* () {
       if (target === null) return;
       const stable = yield* assertStableRevision(run, target.cwd, occurredAt);
       if (stable === null) return;
-      const failed = results.filter((result) => result.status === "failed");
+      const failed = blockingAppReviewTestFailures(execution);
       const verdict = failed.length ? ("failed" as const) : ("passed" as const);
       const completed = {
         ...stable,
@@ -4553,32 +4612,32 @@ ${result.outputMarkdown}`,
 
   const processEventSafely = (event: AppReviewWorkflowEvent) =>
     processEvent(event).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
-          : Effect.gen(function* () {
-              if (yield* isDraining) return;
-              const run = yield* runForEvent(event).pipe(Effect.orElseSucceed(() => null));
-              if (run !== null && run.status === "running") {
-                const latest = yield* projectionSnapshotQuery.getCommandReadModel();
-                if (
-                  isWorkflowThreadPaused(latest.threads, run.controllerThreadId) ||
-                  appReviewWaitsForAdmission(run, latest)
-                )
-                  return;
-                yield* failRun({
-                  run,
-                  reason: "automation-unavailable",
-                  detailMarkdown: `App Review automation failed while processing ${event.type}.\n\n${Cause.pretty(cause)}`,
-                  occurredAt: event.occurredAt,
-                }).pipe(Effect.catch(() => Effect.void));
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) =>
+          Effect.gen(function* () {
+            if (yield* isDraining) return;
+            const run = yield* runForEvent(event).pipe(Effect.orElseSucceed(() => null));
+            if (run !== null && run.status === "running") {
+              const latest = yield* projectionSnapshotQuery.getCommandReadModel();
+              if (
+                isWorkflowThreadPaused(latest.threads, run.controllerThreadId) ||
+                appReviewWaitsForAdmission(run, latest)
+              )
                 return;
-              }
-              yield* Effect.logWarning("App Review workflow reactor failed to process event", {
-                eventType: event.type,
-                cause: Cause.pretty(cause),
-              });
-            }),
+              yield* failRun({
+                run,
+                reason: "automation-unavailable",
+                detailMarkdown: `App Review automation failed while processing ${event.type}.\n\n${Cause.pretty(cause)}`,
+                occurredAt: event.occurredAt,
+              }).pipe(Effect.ignore);
+              return;
+            }
+            yield* Effect.logWarning("App Review workflow reactor failed to process event", {
+              eventType: event.type,
+              cause: Cause.pretty(cause),
+            });
+          }),
       ),
     );
 
@@ -4898,7 +4957,16 @@ ${result.outputMarkdown}`,
         appReviewWaitsForAdmission(run, latest)
       )
         return true;
-      if (result === "waiting") return true;
+      if (result === "waiting") {
+        // Nothing restarts what the check waits for, so an endless wait would be a silent stop.
+        const waitedMs = Date.parse(occurredAt) - Date.parse(run.failure?.failedAt ?? occurredAt);
+        if (waitedMs >= APP_REVIEW_PREFLIGHT_WAIT_LIMIT_MS) {
+          yield* stopChecking(
+            `Test prerequisites stayed unavailable for ${String(APP_REVIEW_PREFLIGHT_WAIT_LIMIT_MS / 60_000)} minutes.\n\n${config.blockedReason}`,
+          );
+        }
+        return true;
+      }
       if (result === "error") {
         yield* stopChecking(
           "The test readiness command failed to run. Use exit 1 for unavailable prerequisites; other errors require intervention.",
@@ -4977,24 +5045,24 @@ ${result.outputMarkdown}`,
           ? yield* renewActivePhaseLease(run, run.activeThreadId, occurredAt)
           : run;
       yield* reconcileRun(currentRun, occurredAt).pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.failCause(cause)
-            : Effect.gen(function* () {
-                if (yield* isDraining) return;
-                const latest = yield* projectionSnapshotQuery.getCommandReadModel();
-                if (
-                  isWorkflowThreadPaused(latest.threads, run.controllerThreadId) ||
-                  appReviewWaitsForAdmission(run, latest)
-                )
-                  return;
-                yield* failRun({
-                  run,
-                  reason: "automation-unavailable",
-                  detailMarkdown: `App Review automation was unavailable during restart recovery.\n\n${Cause.pretty(cause)}`,
-                  occurredAt,
-                }).pipe(Effect.catch(() => Effect.void));
-              }),
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) =>
+            Effect.gen(function* () {
+              if (yield* isDraining) return;
+              const latest = yield* projectionSnapshotQuery.getCommandReadModel();
+              if (
+                isWorkflowThreadPaused(latest.threads, run.controllerThreadId) ||
+                appReviewWaitsForAdmission(run, latest)
+              )
+                return;
+              yield* failRun({
+                run,
+                reason: "automation-unavailable",
+                detailMarkdown: `App Review automation was unavailable during restart recovery.\n\n${Cause.pretty(cause)}`,
+                occurredAt,
+              }).pipe(Effect.ignore);
+            }),
         ),
       );
     }
@@ -5203,9 +5271,10 @@ export const programmaticReviewRecord = (
     ),
   ];
   const failed =
+    cycle.e2eExecution === undefined ||
     results.length === 0 ||
-    results.length !== cycle.e2eExecution?.commands.length ||
-    results.some((result) => result.status === "failed");
+    results.length !== cycle.e2eExecution.commands.length ||
+    blockingAppReviewTestFailures(cycle.e2eExecution).length > 0;
   const verdict = failed ? ("failed" as const) : ("passed" as const);
   return {
     id: cycle.e2eReviewId ?? cycle.reviewId,

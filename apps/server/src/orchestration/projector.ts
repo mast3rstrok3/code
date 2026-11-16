@@ -17,19 +17,18 @@ import {
   OrchestrationPlanningWorkflow,
   OrchestrationSession,
   OrchestrationThread,
-  WORKTREE_SETUP_ACTIVITY_KIND,
 } from "@t3tools/contracts";
-import {
-  legacyLinkedPullRequestOf,
-  legacyThreadPullRequestKey,
-  threadPullRequestKeysEqual,
-} from "@t3tools/shared/threadPullRequests";
-import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
 
+import {
+  legacyThreadPullRequestKey,
+  threadPullRequestKeysEqual,
+} from "../sourceControl/threadPullRequests.ts";
+import { compareDateTimeStrings } from "./dateTime.ts";
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
+import { legacyLinkedPullRequestOf } from "./legacyLinkedPullRequest.ts";
 import {
   normalizeAppReviewPhaseExecution,
   normalizeImplementationRunExecutions,
@@ -120,7 +119,7 @@ function retainThreadActivities(activities: OrchestrationThread["activities"]) {
       // The worktree setup record is upserted under one id for the thread's
       // whole life and is the only durable copy of a running setup; an async
       // setup script can outlast a chatty first turn.
-      activity.kind === WORKTREE_SETUP_ACTIVITY_KIND,
+      activity.kind === "worktree-setup",
   );
 }
 

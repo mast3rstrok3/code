@@ -2,7 +2,11 @@ import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
 import type { WorkflowPresetSubStep } from "@t3tools/shared/workflowPresets";
 import { createModelSelection } from "@t3tools/shared/model";
-import { useMemo } from "react";
+import {
+  workflowModelPinKey,
+  type SetWorkflowStepModel,
+  type WorkflowModelPinKey,
+} from "@t3tools/client-runtime/workflow-step-models";
 
 import { cn } from "~/lib/utils";
 import { getProviderModelPickerChoices } from "../modelSelection";
@@ -10,25 +14,6 @@ import { primaryServerProvidersAtom, serverEnvironment } from "../state/server";
 import { useEnvironmentSettings } from "../hooks/useSettings";
 import { ProviderModelPicker } from "./chat/ProviderModelPicker";
 import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
-
-/**
- * A pin is identified by the step it belongs to and, for a sub-step, the agent
- * within it. `stepWorkflowPromptId` is undefined for a step's own pin.
- */
-export interface WorkflowModelPinKey {
-  readonly workflowPromptId: string;
-  readonly stepWorkflowPromptId?: string | undefined;
-}
-
-export type SetWorkflowStepModel = (
-  key: WorkflowModelPinKey,
-  selection: ModelSelection | null,
-) => void;
-
-export function workflowModelPinKey(key: WorkflowModelPinKey): string {
-  // NUL separates the two ids so no prompt id can forge another pair's key.
-  return `${key.stepWorkflowPromptId ?? ""}\u0000${key.workflowPromptId}`;
-}
 
 /**
  * Providers and models the workflow's own environment can offer.
@@ -44,23 +29,23 @@ export function useWorkflowModelChoices(environmentId: EnvironmentId) {
   const providers = environmentConfig?.providers ?? primaryProviders;
   const settings = useEnvironmentSettings(environmentId);
 
-  const { instanceEntries, modelOptionsByInstance } = useMemo(
-    () => getProviderModelPickerChoices(settings, providers),
-    [providers, settings],
+  const { instanceEntries, modelOptionsByInstance } = getProviderModelPickerChoices(
+    settings,
+    providers,
   );
 
   const describeSelection = (selection: ModelSelection): string => {
     const option = modelOptionsByInstance
       .get(selection.instanceId)
       ?.find((candidate) => candidate.slug === selection.model);
-    const modelName = option ? getTriggerDisplayModelName(option) : selection.model;
-    const instanceName = instanceEntries.find(
-      (entry) => entry.instanceId === selection.instanceId,
-    )?.displayName;
-    return instanceName === undefined ? modelName : `${instanceName} · ${modelName}`;
+    const instance = instanceEntries.find((entry) => entry.instanceId === selection.instanceId);
+    const modelName = option
+      ? getTriggerDisplayModelName(option, instance?.driverKind)
+      : selection.model;
+    return instance === undefined ? modelName : `${instance.displayName} · ${modelName}`;
   };
 
-  return { instanceEntries, modelOptionsByInstance, describeSelection };
+  return { environmentId, instanceEntries, modelOptionsByInstance, describeSelection };
 }
 
 export type WorkflowModelChoices = ReturnType<typeof useWorkflowModelChoices>;
@@ -115,6 +100,7 @@ export function WorkflowModelPinControls(props: {
       ) : (
         <>
           <ProviderModelPicker
+            environmentId={props.choices.environmentId}
             activeInstanceId={active.instanceId}
             model={active.model}
             lockedProvider={null}

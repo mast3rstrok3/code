@@ -8,6 +8,8 @@ import { ProductWorkflowReactorLive } from "./Layers/ProductWorkflowReactor.ts";
 import { PreviewLifecycleReactorLive } from "./Layers/PreviewLifecycleReactor.ts";
 import * as AppStackLifecycleReactor from "./AppStackLifecycleReactor.ts";
 import * as FeatureWorkflowReactor from "./FeatureWorkflowReactor.ts";
+import * as GrillJudgeReactor from "./GrillJudgeReactor.ts";
+import * as ScheduledWorkflowReporter from "./ScheduledWorkflowReporter.ts";
 import * as WorkflowRuntimeBridge from "./WorkflowRuntimeBridge.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -28,6 +30,8 @@ export const layer = OrchestrationReactorLive.pipe(
       PreviewLifecycleReactorLive,
       AppStackLifecycleReactor.layer,
       FeatureWorkflowReactor.layer,
+      GrillJudgeReactor.layer,
+      ScheduledWorkflowReporter.layer,
     ),
   ),
   Layer.provideMerge(OrchestrationLayerLive),

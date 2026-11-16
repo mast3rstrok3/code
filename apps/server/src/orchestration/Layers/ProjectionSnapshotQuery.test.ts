@@ -15,6 +15,7 @@ import {
   TurnId,
   ProviderInstanceId,
   ModelSelection,
+  SourceControlProviderKind,
   OrchestrationMessageContext,
   WorkspaceUserId,
 } from "@t3tools/contracts";
@@ -3566,7 +3567,7 @@ it.effect("omits foreign-host PRs from legacy snapshots while preserving native 
         resolve: () =>
           Effect.succeed({
             canonicalKey: "github.com/acme/web",
-            provider: "github",
+            provider: SourceControlProviderKind.make("github"),
             displayName: "acme/web",
             locator: {
               source: "git-remote" as const,
@@ -3690,7 +3691,7 @@ it.effect("reads one sweep thread and its projects like the shell snapshot", () 
         resolve: () =>
           Effect.succeed({
             canonicalKey: "github.com/acme/web",
-            provider: "github",
+            provider: SourceControlProviderKind.make("github"),
             displayName: "acme/web",
             locator: {
               source: "git-remote" as const,

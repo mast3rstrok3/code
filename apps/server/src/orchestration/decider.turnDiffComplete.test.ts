@@ -10,9 +10,11 @@ import {
   type OrchestrationCheckpointSummary,
   type OrchestrationReadModel,
 } from "@t3tools/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Exit from "effect/Exit";
 
 import { decideOrchestrationCommand } from "./decider.ts";
@@ -92,43 +94,46 @@ function placeholderCommand() {
   } as const;
 }
 
-it.layer(NodeServices.layer)("turn diff complete decider", (it) => {
-  it.effect("rejects a placeholder when the turn already has a captured checkpoint", () =>
-    Effect.gen(function* () {
-      const exit = yield* Effect.exit(
-        decideOrchestrationCommand({
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "turn diff complete decider",
+  (it) => {
+    it.effect("rejects a placeholder when the turn already has a captured checkpoint", () =>
+      Effect.gen(function* () {
+        const exit = yield* Effect.exit(
+          decideOrchestrationCommand({
+            command: placeholderCommand(),
+            readModel: makeReadModel([makeCheckpoint("ready")]),
+          }),
+        );
+        expect(Exit.isFailure(exit)).toBe(true);
+      }),
+    );
+
+    it.effect("accepts a placeholder when the turn only has a placeholder", () =>
+      Effect.gen(function* () {
+        const event = yield* decideOrchestrationCommand({
           command: placeholderCommand(),
-          readModel: makeReadModel([makeCheckpoint("ready")]),
-        }),
-      );
-      expect(Exit.isFailure(exit)).toBe(true);
-    }),
-  );
+          readModel: makeReadModel([makeCheckpoint("missing")]),
+        });
+        const events = Array.isArray(event) ? event : [event];
+        expect(events).toHaveLength(1);
+        expect(events[0]?.type).toBe("thread.turn-diff-completed");
+      }),
+    );
 
-  it.effect("accepts a placeholder when the turn only has a placeholder", () =>
-    Effect.gen(function* () {
-      const event = yield* decideOrchestrationCommand({
-        command: placeholderCommand(),
-        readModel: makeReadModel([makeCheckpoint("missing")]),
-      });
-      const events = Array.isArray(event) ? event : [event];
-      expect(events).toHaveLength(1);
-      expect(events[0]?.type).toBe("thread.turn-diff-completed");
-    }),
-  );
-
-  it.effect("lets a captured checkpoint replace an earlier placeholder", () =>
-    Effect.gen(function* () {
-      const event = yield* decideOrchestrationCommand({
-        command: {
-          ...placeholderCommand(),
-          checkpointRef: CheckpointRef.make("refs/t3/checkpoints/turn-1"),
-          status: "ready",
-        },
-        readModel: makeReadModel([makeCheckpoint("missing")]),
-      });
-      const events = Array.isArray(event) ? event : [event];
-      expect(events[0]?.type).toBe("thread.turn-diff-completed");
-    }),
-  );
-});
+    it.effect("lets a captured checkpoint replace an earlier placeholder", () =>
+      Effect.gen(function* () {
+        const event = yield* decideOrchestrationCommand({
+          command: {
+            ...placeholderCommand(),
+            checkpointRef: CheckpointRef.make("refs/t3/checkpoints/turn-1"),
+            status: "ready",
+          },
+          readModel: makeReadModel([makeCheckpoint("missing")]),
+        });
+        const events = Array.isArray(event) ? event : [event];
+        expect(events[0]?.type).toBe("thread.turn-diff-completed");
+      }),
+    );
+  },
+);

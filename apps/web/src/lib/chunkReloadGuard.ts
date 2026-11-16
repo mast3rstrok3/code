@@ -1,29 +1,22 @@
 import { reloadApp } from "./reloadApp";
 
-// A deploy can remove old chunks, and cached responses can be incomplete.
-// Refresh assets before one reload. The guard prevents a persistent failure
-// from looping and clears after a successful boot.
+// Deploys and desktop server swaps can invalidate lazy chunks, and cached responses can be
+// incomplete. Refresh assets before one reload of the fresh index.
+// Keyed by build and kept across boots: a chunk loaded after boot can fail on every visit.
 const CHUNK_RELOAD_GUARD_KEY = "t3code:chunk-load-reloaded";
-// A previous plain reload did not repair cached chunks, so allow the new recovery once.
-const CHUNK_RELOAD_GUARD_VALUE = "refresh-assets";
 
-/**
- * Called from the `vite:preloadError` listener. Reloads at most once per
- * failure streak and returns whether it did, so the caller knows whether to
- * swallow the event or let the error surface through the normal paths.
- */
 export function reloadOnceForChunkLoadError(
   getStorage: () => Storage = () => window.sessionStorage,
   reload: () => void = () => void reloadApp(),
+  build = import.meta.env.APP_VERSION,
 ): boolean {
   let alreadyReloaded: boolean;
   try {
     const storage = getStorage();
-    alreadyReloaded = storage.getItem(CHUNK_RELOAD_GUARD_KEY) === CHUNK_RELOAD_GUARD_VALUE;
-    if (!alreadyReloaded) storage.setItem(CHUNK_RELOAD_GUARD_KEY, CHUNK_RELOAD_GUARD_VALUE);
+    alreadyReloaded = storage.getItem(CHUNK_RELOAD_GUARD_KEY) === build;
+    if (!alreadyReloaded) storage.setItem(CHUNK_RELOAD_GUARD_KEY, build);
   } catch {
-    // Without storage the guard cannot survive a reload, so a persistent
-    // failure would loop forever. Let the error surface instead.
+    // Without storage, the reload guard cannot prevent an infinite loop.
     return false;
   }
   if (alreadyReloaded) return false;
@@ -31,11 +24,16 @@ export function reloadOnceForChunkLoadError(
   return true;
 }
 
-/** Clears the guard after a successful boot so a later stale deploy can reload again. */
-export function clearChunkReloadGuard(getStorage: () => Storage = () => window.sessionStorage) {
-  try {
-    getStorage().removeItem(CHUNK_RELOAD_GUARD_KEY);
-  } catch {
-    // Blocked storage never held the flag.
-  }
+// Browsers cache a failed dynamic import per document, so only a reload can retry it.
+const CHUNK_LOAD_ERROR_PREFIXES = [
+  "Failed to fetch dynamically imported module", // Chromium
+  "error loading dynamically imported module", // Firefox
+  "Importing a module script failed", // Safari
+];
+
+export function isChunkLoadError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : undefined;
+  return (
+    message !== undefined && CHUNK_LOAD_ERROR_PREFIXES.some((prefix) => message.startsWith(prefix))
+  );
 }

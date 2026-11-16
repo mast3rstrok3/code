@@ -3,23 +3,22 @@ import type {
   GithubOwnerTokenVerificationInput,
   WorkspaceUser,
 } from "@t3tools/contracts";
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import type { SourceControlCredentialContext } from "./sourceControl/SourceControlProvider.ts";
+import type { SourceControlCredentialContext } from "@t3tools/source-control-core/server/SourceControlProvider";
+
+export {
+  WORKSPACE_USER_PATH_PREFIX,
+  WorkspaceUserEnvironment,
+  withWorkspaceUserEnvironment,
+} from "@t3tools/provider-core/server/workspaceUserEnvironment";
 
 export class WorkspaceUserCredentialsError extends Schema.TaggedError<WorkspaceUserCredentialsError>()(
   "WorkspaceUserCredentialsError",
   { message: Schema.String },
 ) {}
-
-/** Scoped to one provider launch. Never persist this value in a session or event. */
-export const WorkspaceUserEnvironment = Context.Reference<NodeJS.ProcessEnv>(
-  "t3/WorkspaceUserEnvironment",
-  { defaultValue: () => ({}) },
-);
 
 const GithubIdentity = Schema.Struct({
   id: Schema.Int,
@@ -182,13 +181,14 @@ export const resolveWorkspaceUserCredentials = Effect.fn("resolveWorkspaceUserCr
         }),
     }).pipe(
       Effect.timeout("15 seconds"),
-      Effect.catchTag("TimeoutError", () =>
-        Effect.fail(
-          new WorkspaceUserCredentialsError({
-            message: "GitHub identity lookup timed out. Retry the action.",
-          }),
-        ),
-      ),
+      Effect.catchTags({
+        TimeoutError: () =>
+          Effect.fail(
+            new WorkspaceUserCredentialsError({
+              message: "GitHub identity lookup timed out. Retry the action.",
+            }),
+          ),
+      }),
     );
     const account = yield* decodeGithubIdentity(identity).pipe(
       Effect.mapError(
@@ -345,17 +345,6 @@ export const ensureGithubCliShim = Effect.fn("ensureGithubCliShim")(function* (s
 });
 
 /** Set in a workspace user environment to prepend a directory to the provider's PATH. */
-export const WORKSPACE_USER_PATH_PREFIX = "T3CODE_WORKSPACE_USER_PATH_PREFIX";
-
-/** Layers the thread owner's environment over a provider's, prepending the owner's tools to PATH. */
-export function withWorkspaceUserEnvironment(
-  base: NodeJS.ProcessEnv,
-  owner: NodeJS.ProcessEnv,
-): NodeJS.ProcessEnv {
-  const { [WORKSPACE_USER_PATH_PREFIX]: prefix, ...rest } = owner;
-  if (!prefix) return { ...base, ...rest };
-  return { ...base, ...rest, PATH: base.PATH ? `${prefix}:${base.PATH}` : prefix };
-}
 
 export function workspaceUserProviderEnvironment(
   credentials: SourceControlCredentialContext | undefined,

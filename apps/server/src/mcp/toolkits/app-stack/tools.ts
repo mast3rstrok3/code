@@ -18,17 +18,20 @@ import {
   AppStackGetPodLogsInput,
   AppStackGetPodLogsResult,
   AppStackListPodsResult,
+  AppStackRestartServicesInput,
+  AppStackRestartServicesResult,
   AppStackOmittedServices,
   AppStackVariant,
   IsoDateTime,
+  ThreadId,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/ai";
+import { McpSchema, Tool, Toolkit } from "effect/ai";
 
 import { AppStackManager } from "../../../appStack/AppStackManager.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { McpInvocationContext } from "../../McpInvocationContext.ts";
+import { McpInvocationContext, hiddenFromOutsideClients } from "../../McpInvocationContext.ts";
 
 const dependencies = [
   ThreadManagementService,
@@ -36,7 +39,15 @@ const dependencies = [
   ProjectionSnapshotQuery,
   AppStackManager,
 ];
-const WorkspaceInput = Schema.Struct({ variant: Schema.optionalKey(AppStackVariant) });
+const WorkspaceInput = Schema.Struct({
+  variant: Schema.optionalKey(AppStackVariant),
+  threadId: Schema.optionalKey(
+    ThreadId.annotate({
+      description:
+        "A thread below this one, such as a workflow worker or fixer, whose workspace stack to use. Default: this thread. Other threads are rejected.",
+    }),
+  ),
+});
 export type WorkspaceInput = typeof WorkspaceInput.Type;
 const StartInput = Schema.Struct({
   ...WorkspaceInput.fields,
@@ -63,6 +74,13 @@ const PodLogsInput = Schema.Struct({
   tailLines: AppStackGetPodLogsInput.fields.tailLines,
 });
 export type PodLogsInput = typeof PodLogsInput.Type;
+const RestartServicesInput = Schema.Struct({
+  ...MemberInput.fields,
+  services: AppStackRestartServicesInput.fields.services.annotate({
+    description: "Compose service names, as app_stack_get lists them, such as backend.",
+  }),
+});
+export type RestartServicesInput = typeof RestartServicesInput.Type;
 
 const DeviceInput = Schema.Struct({
   ...WorkspaceInput.fields,
@@ -99,7 +117,8 @@ const AppStackDeviceStartTool = Tool.make("app_stack_device_start", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackDeviceStatusTool = Tool.make("app_stack_device_status", {
   description:
@@ -117,7 +136,8 @@ const AppStackDeviceStatusTool = Tool.make("app_stack_device_status", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackDeviceStopTool = Tool.make("app_stack_device_stop", {
   description:
@@ -131,7 +151,8 @@ const AppStackDeviceStopTool = Tool.make("app_stack_device_stop", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackGetTool = Tool.make("app_stack_get", {
   description:
@@ -152,7 +173,8 @@ const AppStackGetTool = Tool.make("app_stack_get", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackStartTool = Tool.make("app_stack_start", {
   description:
@@ -166,7 +188,8 @@ const AppStackStartTool = Tool.make("app_stack_start", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackBundlePlanTool = Tool.make("app_stack_bundle_plan", {
   description:
@@ -180,7 +203,8 @@ const AppStackBundlePlanTool = Tool.make("app_stack_bundle_plan", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackCreateWorktreesTool = Tool.make("app_stack_create_worktrees", {
   description:
@@ -194,11 +218,12 @@ const AppStackCreateWorktreesTool = Tool.make("app_stack_create_worktrees", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackStopTool = Tool.make("app_stack_stop", {
   description:
-    "Stop this thread's workspace App Stack, keeping its namespace for restart. Defaults to dev. Explicit stops also stop protected stacks. A bundled stack stops with every stack of its bundle. Resolves the stack from the authenticated thread; cannot target another workspace.",
+    "Stop this thread's workspace App Stack, keeping its namespace for restart. Defaults to dev. Explicit stops also stop protected stacks. A bundled stack stops with every stack of its bundle. Resolves the stack from the authenticated thread, or from threadId for a thread below it, such as a workflow child.",
   parameters: WorkspaceInput,
   success: AppStack,
   failure: Schema.Union([AppStackError, OrchestratorMcpFailure]),
@@ -208,7 +233,8 @@ const AppStackStopTool = Tool.make("app_stack_stop", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackRestartTool = Tool.make("app_stack_restart", {
   description:
@@ -222,7 +248,23 @@ const AppStackRestartTool = Tool.make("app_stack_restart", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
+
+const AppStackRestartServicesTool = Tool.make("app_stack_restart_services", {
+  description:
+    "Restart named services of this thread's workspace App Stack. Their pods are replaced while the rest of the stack keeps running. Use it to bring back a crashed or stuck service, or to reload one that hot reload missed. Defaults to dev. Pass app for another app of this stack's bundle. Acts on that one stack, never on device guests. Use app_stack_restart for the whole stack, and app_stack_list_pods afterwards to check readiness.",
+  parameters: RestartServicesInput,
+  success: AppStackRestartServicesResult,
+  failure: Schema.Union([AppStackError, OrchestratorMcpFailure]),
+  dependencies,
+})
+  .annotate(Tool.Title, "Restart services of this workspace's App Stack")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, true)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackDeleteTool = Tool.make("app_stack_delete", {
   description:
@@ -236,7 +278,8 @@ const AppStackDeleteTool = Tool.make("app_stack_delete", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackListPodsTool = Tool.make("app_stack_list_pods", {
   description:
@@ -250,11 +293,12 @@ const AppStackListPodsTool = Tool.make("app_stack_list_pods", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 const AppStackLogsTool = Tool.make("app_stack_logs", {
   description:
-    "Read recent logs from a pod in this thread's workspace App Stack. Defaults to dev and the last 200 lines; tailLines accepts 1 to 5000. Pass app to read another app of this stack's bundle, which a platform workspace needs. Use app_stack_list_pods to find pod and container names. Cannot read another workspace's logs.",
+    "Read recent logs from a pod in this thread's workspace App Stack. Defaults to dev and the last 200 lines; tailLines accepts 1 to 5000. Pass app to read another app of this stack's bundle, which a platform workspace needs. Use app_stack_list_pods to find pod and container names. Cannot read logs outside this thread and the threads below it.",
   parameters: PodLogsInput,
   success: AppStackGetPodLogsResult,
   failure: Schema.Union([AppStackError, OrchestratorMcpFailure]),
@@ -264,7 +308,8 @@ const AppStackLogsTool = Tool.make("app_stack_logs", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, hiddenFromOutsideClients);
 
 export const AppStackToolkit = Toolkit.make(
   AppStackGetTool,
@@ -273,6 +318,7 @@ export const AppStackToolkit = Toolkit.make(
   AppStackCreateWorktreesTool,
   AppStackStopTool,
   AppStackRestartTool,
+  AppStackRestartServicesTool,
   AppStackDeleteTool,
   AppStackListPodsTool,
   AppStackLogsTool,

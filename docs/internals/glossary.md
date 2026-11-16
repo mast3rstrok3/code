@@ -36,6 +36,8 @@ Terms whose meaning matters across T3 Code. Architecture and lifecycle constrain
 | Provider            | The agent runtime T3 Code controls, such as Codex or Claude Code.                                            |
 | Driver              | The integration for a provider kind.                                                                         |
 | Provider instance   | One configured provider, with its own settings and lifecycle. Multiple instances can use the same driver.    |
+| Text generation     | App-owned one-shot writing, such as thread titles, commit messages, and transcript cleanup.                  |
+| Text generator      | A model API used only for text generation. Its id fills a model selection; agent surfaces never list it.     |
 | Adapter             | The boundary translating a provider's native protocol into T3 Code operations and events.                    |
 | Session             | The provider runtime attached to a thread. A session can be stopped and resumed without deleting the thread. |
 | Runtime mode        | The thread's permission policy. See [permission modes](../user/permission-modes.md).                         |
@@ -150,7 +152,7 @@ One orchestrated execution of a Spec's tickets: a dedicated worktree, dependency
 
 #### Workflow nudge
 
-The provider-facing part of stage recovery. It resumes the primary model once, resolves the run or standing `workflow.recovery-fallback` pin, and can replace the provider-native session while retaining the T3 thread and workspace. Usage limits then park until `retryAt` or five hours and may repeat without an attempt ceiling. Transport failures remain bounded to eight hours. Unknown historical failures keep two compatibility attempts. Authentication, configuration, pauses, live turns, approvals, user-input waits, and deliberate interruptions do not enter automatic retry. [StaleTurnReconciler.ts][32] records provider evidence; the stage execution owns the canonical recovery state.
+The provider-facing part of stage recovery. It resumes the primary model once and keeps the T3 thread and workspace. A workflow agent thread limited on a model other than its root's continues on the root's model instead of waiting. Usage limits then park until `retryAt` or five hours and may repeat without an attempt ceiling. Transport failures remain bounded to eight hours. Unknown historical failures keep two compatibility attempts. Authentication, configuration, pauses, live turns, approvals, user-input waits, and deliberate interruptions do not enter automatic retry. [StaleTurnReconciler.ts][32] records provider evidence; the stage execution owns the canonical recovery state.
 
 #### App stack
 

@@ -78,8 +78,8 @@ const toWorkflowUserInputAnswers = (
   });
 
 export const handlers = {
-  workflow_request_user_input: (input) =>
-    Effect.gen(function* () {
+  workflow_request_user_input: Effect.fn("WorkflowUserInputToolkit.requestUserInput")(
+    function* (input) {
       const scope = yield* McpInvocationContext.requireThreadMcpCapability("user-input");
       const threadId = scope.thread.threadId;
       const engine = yield* OrchestrationEngineService;
@@ -123,12 +123,12 @@ export const handlers = {
         input.questions.map((question) => ({ ...question, multiSelect: false })),
       );
 
-      const appendActivity = (activity: {
-        readonly kind: "user-input.requested" | "user-input.resolved";
-        readonly summary: string;
-        readonly payload: Record<string, unknown>;
-      }) =>
-        Effect.gen(function* () {
+      const appendActivity = Effect.fn("WorkflowUserInputToolkit.appendActivity")(
+        function* (activity: {
+          readonly kind: "user-input.requested" | "user-input.resolved";
+          readonly summary: string;
+          readonly payload: Record<string, unknown>;
+        }) {
           const createdAt = yield* nowIso;
           const activityId = nextId(scope.thread.providerSessionId);
           yield* engine
@@ -152,7 +152,8 @@ export const handlers = {
                 dispatchError(`Failed to append ${activity.kind} activity.`, cause),
               ),
             );
-        });
+        },
+      );
 
       const resolveCard = (summary: string, answers: ProviderUserInputAnswers) =>
         appendActivity({ kind: "user-input.resolved", summary, payload: { answers } });
@@ -224,7 +225,8 @@ export const handlers = {
         status: "answered" as const,
         answers: toWorkflowUserInputAnswers(questions, outcome.answers),
       };
-    }),
+    },
+  ),
 } satisfies Parameters<typeof WorkflowUserInputToolkit.toLayer>[0];
 
 export const layer = McpToolAccess.toLayer(WorkflowUserInputToolkit, {

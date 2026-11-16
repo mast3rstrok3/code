@@ -1,4 +1,4 @@
-import type { AppReviewWorkflowRun } from "@t3tools/contracts";
+import { APP_REVIEW_TEST_PLATFORMS_ENV, type AppReviewWorkflowRun } from "@t3tools/contracts";
 
 import { currentWorkflowValidations } from "./workflowValidation.ts";
 
@@ -8,6 +8,12 @@ export function isTicketAppReview(run: Pick<AppReviewWorkflowRun, "caller">): bo
 
 export function isImplementationAppReview(run: Pick<AppReviewWorkflowRun, "caller">): boolean {
   return run.caller.type === "implementation";
+}
+
+/** Platform selection scopes App Review's E2E runs; a complete gate checks what the repository says. */
+export function withoutAppReviewPlatformSelection(command: string): string {
+  const prefix = `${APP_REVIEW_TEST_PLATFORMS_ENV}=`;
+  return command.startsWith(prefix) ? command.replace(/^\S+\s+/u, "") : command;
 }
 
 export function deferredTicketValidationCommands(
@@ -27,7 +33,7 @@ export function deferredTicketValidationCommands(
         validation.status !== "passed" &&
         (validation.scope === "project" || commands.has(validation.command.trim())),
     )
-    .map((validation) => validation.command.trim());
+    .map((validation) => withoutAppReviewPlatformSelection(validation.command.trim()));
 }
 
 export function finalAppReviewValidationCommands(run: AppReviewWorkflowRun) {

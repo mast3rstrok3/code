@@ -7,9 +7,11 @@ import {
   ThreadId,
   type OrchestrationReadModel,
 } from "@t3tools/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
 import { decideOrchestrationCommand } from "./decider.ts";
@@ -85,75 +87,81 @@ const readModel = {
   ],
 } as unknown as OrchestrationReadModel;
 
-it.layer(NodeServices.layer)("Implementation retry decider", (it) => {
-  it.effect("rejects an automatic retry after a manual rerun queued the stage", () =>
-    Effect.gen(function* () {
-      const error = yield* decideOrchestrationCommand({
-        command: {
-          type: "thread.implementation-run.retry",
-          commandId: CommandId.make("implementation-auto-retry"),
-          threadId: sourceThreadId,
-          runId: "implementation-run-1",
-          createdAt: "2026-01-01T00:00:01.000Z",
-        },
-        readModel,
-      }).pipe(Effect.flip);
-
-      expect(error._tag).toBe("OrchestrationCommandInvariantError");
-      expect(String(error)).toContain("already has a stage queued or starting");
-    }),
-  );
-});
-
-for (const stage of ["implementation", "app-review", "code-review"] as const) {
-  it.layer(NodeServices.layer)(`Concurrent ${stage} rerun`, (it) => {
-    it.effect("rejects an older snapshot after accepting a ticket rerun", () =>
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "Implementation retry decider",
+  (it) => {
+    it.effect("rejects an automatic retry after a manual rerun queued the stage", () =>
       Effect.gen(function* () {
-        const ticket = yield* decodeTicket({
-          ticketId: "ticket-a",
-          status: "failed",
-          updatedAt: now,
-        });
-        const oldRun = {
-          ...readModel.implementationRuns[0]!,
-          ticketStates: [ticket],
-          updatedAt: now,
-        };
-        const queued = queueImplementationRerun({
-          run: oldRun,
-          target: { kind: "ticket", ticketId: ticket.ticketId, stage },
-          executionId: "manual-ticket-rerun",
-          createdAt: "2026-01-01T00:00:02.000Z",
-        });
         const error = yield* decideOrchestrationCommand({
           command: {
-            type: "thread.implementation-run.update",
-            commandId: CommandId.make("stale-update"),
+            type: "thread.implementation-run.retry",
+            commandId: CommandId.make("implementation-auto-retry"),
             threadId: sourceThreadId,
-            run: oldRun,
+            runId: "implementation-run-1",
             createdAt: "2026-01-01T00:00:01.000Z",
           },
-          readModel: { ...readModel, implementationRuns: [queued.run] },
+          readModel,
         }).pipe(Effect.flip);
-        expect(error._tag).toBe("OrchestrationCommandInvariantError");
-        expect(String(error)).toContain("overwrite newer ticket state");
 
-        const result = yield* decideOrchestrationCommand({
-          command: {
-            type: "thread.implementation-run.update",
-            commandId: CommandId.make("fresh-update"),
-            threadId: sourceThreadId,
-            run: { ...queued.run, updatedAt: "2026-01-01T00:00:03.000Z" },
-            createdAt: "2026-01-01T00:00:03.000Z",
-          },
-          readModel: { ...readModel, implementationRuns: [queued.run] },
-        });
-        const event = Array.isArray(result) ? result[0] : result;
-        expect(event).toMatchObject({
-          type: "thread.implementation-run-updated",
-          payload: { run: { ticketStates: [{ stageExecutions: [queued.execution] }] } },
-        });
+        expect(error._tag).toBe("OrchestrationCommandInvariantError");
+        expect(String(error)).toContain("already has a stage queued or starting");
       }),
     );
-  });
+  },
+);
+
+for (const stage of ["implementation", "app-review", "code-review"] as const) {
+  it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+    `Concurrent ${stage} rerun`,
+    (it) => {
+      it.effect("rejects an older snapshot after accepting a ticket rerun", () =>
+        Effect.gen(function* () {
+          const ticket = yield* decodeTicket({
+            ticketId: "ticket-a",
+            status: "failed",
+            updatedAt: now,
+          });
+          const oldRun = {
+            ...readModel.implementationRuns[0]!,
+            ticketStates: [ticket],
+            updatedAt: now,
+          };
+          const queued = queueImplementationRerun({
+            run: oldRun,
+            target: { kind: "ticket", ticketId: ticket.ticketId, stage },
+            executionId: "manual-ticket-rerun",
+            createdAt: "2026-01-01T00:00:02.000Z",
+          });
+          const error = yield* decideOrchestrationCommand({
+            command: {
+              type: "thread.implementation-run.update",
+              commandId: CommandId.make("stale-update"),
+              threadId: sourceThreadId,
+              run: oldRun,
+              createdAt: "2026-01-01T00:00:01.000Z",
+            },
+            readModel: { ...readModel, implementationRuns: [queued.run] },
+          }).pipe(Effect.flip);
+          expect(error._tag).toBe("OrchestrationCommandInvariantError");
+          expect(String(error)).toContain("overwrite newer ticket state");
+
+          const result = yield* decideOrchestrationCommand({
+            command: {
+              type: "thread.implementation-run.update",
+              commandId: CommandId.make("fresh-update"),
+              threadId: sourceThreadId,
+              run: { ...queued.run, updatedAt: "2026-01-01T00:00:03.000Z" },
+              createdAt: "2026-01-01T00:00:03.000Z",
+            },
+            readModel: { ...readModel, implementationRuns: [queued.run] },
+          });
+          const event = Array.isArray(result) ? result[0] : result;
+          expect(event).toMatchObject({
+            type: "thread.implementation-run-updated",
+            payload: { run: { ticketStates: [{ stageExecutions: [queued.execution] }] } },
+          });
+        }),
+      );
+    },
+  );
 }

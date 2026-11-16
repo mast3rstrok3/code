@@ -105,45 +105,16 @@ describe("PreviewCoordinator", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("navigates server-hosted Chromium with the normalized manager URL", () => {
-    const harness = makeHarness();
-    return Effect.gen(function* () {
-      const coordinator = yield* PreviewCoordinator.PreviewCoordinator;
-      const threadId = ThreadId.make("thread-navigate");
-      const opened = yield* coordinator.open({ threadId });
-
-      const snapshot = yield* coordinator.navigate({
-        threadId,
-        tabId: opened.tabId,
-        url: "example.com/path",
-      });
-
-      expect(snapshot.navStatus._tag).toBe("Loading");
-      expect(harness.navigateCalls).toHaveLength(1);
-      expect(harness.navigateCalls[0]).toMatchObject({
-        threadId,
-        tabId: opened.tabId,
-        url: "https://example.com/path",
-      });
-    }).pipe(Effect.provide(harness.layer));
-  });
-
   it.effect("fails invalid URLs before invoking server browser navigation", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const coordinator = yield* PreviewCoordinator.PreviewCoordinator;
       const threadId = ThreadId.make("thread-invalid-url");
-      const opened = yield* coordinator.open({ threadId });
 
-      const error = yield* Effect.flip(
-        coordinator.navigate({
-          threadId,
-          tabId: opened.tabId,
-          url: "   ",
-        }),
-      );
+      const error = yield* Effect.flip(coordinator.open({ threadId, url: "   " }));
 
       expect(error._tag).toBe("PreviewInvalidUrlError");
+      expect(harness.ensureTabCalls).toEqual([]);
       expect(harness.navigateCalls).toEqual([]);
     }).pipe(Effect.provide(harness.layer));
   });

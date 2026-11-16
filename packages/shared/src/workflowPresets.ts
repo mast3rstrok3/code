@@ -1,5 +1,6 @@
 import type {
   ImplementationWorkflowSettings,
+  LaunchableWorkflow,
   ProviderInteractionMode,
   WorkflowPreset,
 } from "@t3tools/contracts";
@@ -26,6 +27,8 @@ export interface WorkflowPresetHelpStep {
   readonly skillId?: string;
   readonly threadBoundary?: "same thread" | "new thread" | "new child thread" | "new review thread";
   readonly note?: string;
+  /** The panel section the step sits under; absent reads as "Implementation". */
+  readonly phase?: "Planning";
   /**
    * The agents this step starts, when it starts more than the one its own
    * `skillId` names. Absent means the step is its own single agent.
@@ -79,16 +82,22 @@ const APP_REVIEW_SUB_STEPS: ReadonlyArray<WorkflowPresetSubStep> = [
 
 const FEATURE_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
   {
-    label: "Plan",
+    label: "Instruction",
     skillId: "planning.fast-feature.codex",
     threadBoundary: "same thread",
-    note: "uses native CLI Plan mode and answers planning questions automatically",
+    note: "your message runs in Build mode and writes the user intent, guardrails, and goal",
   },
   {
-    label: "Implement",
+    label: "TDD implementation",
     skillId: "implementation.feature.codex",
     threadBoundary: "same thread",
-    note: "runs the repository's checks and commits; starts an App Stack only when a check needs a running app",
+    note: "test-first, with end-to-end tests for the user flows; runs the repository's checks and commits",
+  },
+  {
+    label: "App Review",
+    skillId: "implementation.browser-app-review.codex",
+    threadBoundary: "new review thread",
+    note: "starts the worktree's App Stack and runs the project's E2E suites on it, recording each flow as an rrweb replay; a recorded browser review when the project has no suites; the Feature thread fixes failures; three cycles by default",
   },
   {
     label: "Code Review",
@@ -97,16 +106,10 @@ const FEATURE_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
     note: "one reviewer thread per cycle; the Feature thread fixes its findings; stops clean or after five cycles by default",
   },
   {
-    label: "App Review",
-    skillId: "implementation.browser-app-review.codex",
-    threadBoundary: "new review thread",
-    note: "starts the worktree's App Stack; a reviewer tests the change in the preview browser and records it for the App Review panel; the Feature thread fixes failures; three cycles by default",
-  },
-  {
     label: "Create PR",
     skillId: "implementation.feature-pull-request.codex",
     threadBoundary: "same thread",
-    note: "opens the pull request into the base branch and lists findings Code Review or App Review left unresolved",
+    note: "opens the pull request into the base branch with the instruction, the recorded flows, and any findings App Review or Code Review left unresolved",
   },
 ];
 
@@ -174,9 +177,9 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     id: "fast-plan",
     label: "Feature",
     description:
-      "Plan with the provider CLI, implement and review the change, test it in the running app with a recorded App Review, then open a pull request from the same thread.",
+      "Write the instruction from your message, implement it test-first, test it in the running app with recorded end-to-end flows, review the code, then open a pull request from the same thread.",
     route: "product",
-    interactionMode: "plan",
+    interactionMode: "default",
     workflowPromptId: "planning.fast-feature.codex",
     helpSteps: FEATURE_HELP_STEPS,
     group: "plan",
@@ -361,7 +364,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Run App Review",
         skillId: "implementation.browser-app-review.codex",
         threadBoundary: "new review thread",
-        note: "automated E2E execution, then gap analysis and repair threads; five test cycles maximum",
+        note: "automated E2E execution, then gap analysis and repair threads; five test cycles by default",
         subSteps: APP_REVIEW_SUB_STEPS,
       },
       {
@@ -397,27 +400,38 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     availability: "available",
     implementationDefaults: FULL_IMPLEMENTATION_DEFAULTS,
     helpSteps: [
-      { label: "Prepare shared worktree", note: "automatic" },
+      { label: "Prepare shared worktree", phase: "Planning", note: "automatic" },
       {
         label: "Grill with Docs",
+        phase: "Planning",
         skillId: "planning.grill-stage.codex",
         threadBoundary: "same thread",
-        note: "human-guided",
+        note: "human-guided, or answered by an LLM judge",
+        subSteps: [
+          {
+            label: "LLM judge",
+            workflowPromptId: "planning.grill-judge.codex",
+            note: "answers the Grill's questions in one judge thread when the run's Grill is set to the LLM judge",
+          },
+        ],
       },
       {
         label: "Spec authoring",
+        phase: "Planning",
         skillId: "planning.spec.codex",
         threadBoundary: "same thread",
         note: "automatic",
       },
       {
         label: "Ticket authoring",
+        phase: "Planning",
         skillId: "planning.tickets.codex",
         threadBoundary: "same thread",
         note: "automatic",
       },
       {
         label: "Ticket review and revision",
+        phase: "Planning",
         skillId: "planning.ticket-reviewer.codex",
         threadBoundary: "new review thread",
         note: "automatic; five cycles by default and five at most",
@@ -451,7 +465,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Final App Review",
         skillId: "implementation.browser-app-review.codex",
         threadBoundary: "new review thread",
-        note: "automatic; tests the merged branch with all E2E suites, gap analysis and repairs; five test cycles maximum",
+        note: "automatic; tests the merged branch with all E2E suites, gap analysis and repairs; five test cycles by default",
         subSteps: APP_REVIEW_SUB_STEPS,
       },
       {
@@ -524,6 +538,20 @@ export function workflowPresetStepCanPinModel(
 
 export function interactionModeForWorkflowPreset(preset: WorkflowPreset): ProviderInteractionMode {
   return WORKFLOW_PRESET_DEFINITION_BY_ID[preset].interactionMode;
+}
+
+/** Which workflow's standing step models a preset's runs read; null reads only unscoped ones. */
+export function workflowStepModelScopeForPreset(
+  preset: WorkflowPreset | null | undefined,
+): LaunchableWorkflow | null {
+  switch (preset) {
+    case "fast-plan":
+      return "feature";
+    case "planning":
+      return "engineering";
+    default:
+      return null;
+  }
 }
 
 export function workflowPromptIdForPreset(

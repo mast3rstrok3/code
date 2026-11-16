@@ -1203,12 +1203,12 @@ export const makeNativeAppStackService = (
   const readStack = (operation: string, resolved: ResolvedNativeAppStackConfig) =>
     nativeOperation(operation, () => buildStack(resolved, runKubectl));
 
-  const readStackPodLogsForResolved = (
-    operation: string,
-    resolved: ResolvedNativeAppStackConfig,
-    tailLines: number | null,
-  ) =>
-    Effect.gen(function* () {
+  const readStackPodLogsForResolved = Effect.fn("NativeAppStackManager.readStackPodLogs")(
+    function* (
+      operation: string,
+      resolved: ResolvedNativeAppStackConfig,
+      tailLines: number | null,
+    ) {
       const pods = yield* nativeOperation(operation, () => readPods(resolved, runKubectl));
       const podContainers = pods.flatMap((pod) =>
         pod.containers.map((container) => ({ pod, container })),
@@ -1245,7 +1245,8 @@ export const makeNativeAppStackService = (
         entries,
         fetchedAt: DateTime.formatIso(DateTime.nowUnsafe()),
       };
-    });
+    },
+  );
 
   return {
     status: Effect.succeed({
@@ -1501,63 +1502,64 @@ export const makeNativeAppStackService = (
           }),
         ),
       ),
-    getAllStackPodLogs: (input) =>
-      Effect.gen(function* () {
-        const limit = normalizeAllStackLogLimit(input.limit);
-        const tailLines = tailLinesFromLimit(limit);
-        const resolvedStacks = yield* nativeOperation("getAllStackPodLogs", discoverAppStacks);
-        const stacks = yield* Effect.forEach(
-          resolvedStacks,
-          (resolved) =>
-            readStackPodLogsForResolved("getAllStackPodLogs", resolved, tailLines).pipe(
-              Effect.map(({ pods, entries, fetchedAt }) => {
-                const namespace = knownNamespaceMetadata.get(resolved.namespace);
-                const managedBy =
-                  labelValue(namespace?.metadata?.labels, APP_STACK_MANAGED_BY_LABEL) ?? null;
-                return {
-                  stackId: resolved.id,
-                  namespace: resolved.namespace,
-                  displayName: resolved.displayName,
-                  displaySlug: resolved.displaySlug ?? null,
-                  repoName: resolved.repoName ?? null,
-                  branchName: resolved.branchName ?? null,
-                  worktreePath: resolved.worktreePath,
-                  managedBy,
-                  limit,
-                  pods,
-                  entries,
-                  error: null,
-                  fetchedAt,
-                };
-              }),
-              Effect.catch((error) => {
-                const namespace = knownNamespaceMetadata.get(resolved.namespace);
-                const managedBy =
-                  labelValue(namespace?.metadata?.labels, APP_STACK_MANAGED_BY_LABEL) ?? null;
-                return Effect.succeed({
-                  stackId: resolved.id,
-                  namespace: resolved.namespace,
-                  displayName: resolved.displayName,
-                  displaySlug: resolved.displaySlug ?? null,
-                  repoName: resolved.repoName ?? null,
-                  branchName: resolved.branchName ?? null,
-                  worktreePath: resolved.worktreePath,
-                  managedBy,
-                  limit,
-                  pods: [],
-                  entries: [],
-                  error: error.message,
-                  fetchedAt: DateTime.formatIso(DateTime.nowUnsafe()),
-                });
-              }),
-            ),
-          { concurrency: STACK_LOG_FETCH_CONCURRENCY },
-        );
-        return {
-          limit,
-          stacks,
-          fetchedAt: DateTime.formatIso(DateTime.nowUnsafe()),
-        };
-      }),
+    getAllStackPodLogs: Effect.fn("NativeAppStackManager.getAllStackPodLogs")(function* (
+      input: AppStackGetAllStackPodLogsInput,
+    ) {
+      const limit = normalizeAllStackLogLimit(input.limit);
+      const tailLines = tailLinesFromLimit(limit);
+      const resolvedStacks = yield* nativeOperation("getAllStackPodLogs", discoverAppStacks);
+      const stacks = yield* Effect.forEach(
+        resolvedStacks,
+        (resolved) =>
+          readStackPodLogsForResolved("getAllStackPodLogs", resolved, tailLines).pipe(
+            Effect.map(({ pods, entries, fetchedAt }) => {
+              const namespace = knownNamespaceMetadata.get(resolved.namespace);
+              const managedBy =
+                labelValue(namespace?.metadata?.labels, APP_STACK_MANAGED_BY_LABEL) ?? null;
+              return {
+                stackId: resolved.id,
+                namespace: resolved.namespace,
+                displayName: resolved.displayName,
+                displaySlug: resolved.displaySlug ?? null,
+                repoName: resolved.repoName ?? null,
+                branchName: resolved.branchName ?? null,
+                worktreePath: resolved.worktreePath,
+                managedBy,
+                limit,
+                pods,
+                entries,
+                error: null,
+                fetchedAt,
+              };
+            }),
+            Effect.catch((error) => {
+              const namespace = knownNamespaceMetadata.get(resolved.namespace);
+              const managedBy =
+                labelValue(namespace?.metadata?.labels, APP_STACK_MANAGED_BY_LABEL) ?? null;
+              return Effect.succeed({
+                stackId: resolved.id,
+                namespace: resolved.namespace,
+                displayName: resolved.displayName,
+                displaySlug: resolved.displaySlug ?? null,
+                repoName: resolved.repoName ?? null,
+                branchName: resolved.branchName ?? null,
+                worktreePath: resolved.worktreePath,
+                managedBy,
+                limit,
+                pods: [],
+                entries: [],
+                error: error.message,
+                fetchedAt: DateTime.formatIso(DateTime.nowUnsafe()),
+              });
+            }),
+          ),
+        { concurrency: STACK_LOG_FETCH_CONCURRENCY },
+      );
+      return {
+        limit,
+        stacks,
+        fetchedAt: DateTime.formatIso(DateTime.nowUnsafe()),
+      };
+    }),
   };
 };

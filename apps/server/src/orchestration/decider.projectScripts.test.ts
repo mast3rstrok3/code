@@ -12,6 +12,8 @@ import {
 import { createModelSelection } from "@t3tools/shared/model";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { decideOrchestrationCommand } from "./decider.ts";
@@ -20,7 +22,7 @@ import { createEmptyReadModel, projectEvent } from "./projector.ts";
 const asEventId = (value: string): EventId => EventId.make(value);
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
-it.layer(NodeServices.layer)("decider project scripts", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("decider project scripts", (it) => {
   it.effect("emits empty scripts on project.create", () =>
     Effect.gen(function* () {
       const now = "2026-01-01T00:00:00.000Z";

@@ -1,29 +1,4 @@
-import {
-  buildPlanImplementationPrompt,
-  proposedPlanTitle,
-} from "@t3tools/shared/orchestrationPlanning";
-
-export {
-  buildPlanImplementationPrompt,
-  buildPlanImplementationThreadTitle,
-  proposedPlanTitle,
-} from "@t3tools/shared/orchestrationPlanning";
-
-export function stripDisplayedPlanMarkdown(planMarkdown: string): string {
-  const lines = planMarkdown.trimEnd().split(/\r?\n/);
-  const sourceLines = lines[0] && /^\s{0,3}#{1,6}\s+/.test(lines[0]) ? lines.slice(1) : [...lines];
-  while (sourceLines[0]?.trim().length === 0) {
-    sourceLines.shift();
-  }
-  const firstHeadingMatch = sourceLines[0]?.match(/^\s{0,3}#{1,6}\s+(.+)$/);
-  if (firstHeadingMatch?.[1]?.trim().toLowerCase() === "summary") {
-    sourceLines.shift();
-    while (sourceLines[0]?.trim().length === 0) {
-      sourceLines.shift();
-    }
-  }
-  return sourceLines.join("\n");
-}
+import { stripDisplayedPlanMarkdown, proposedPlanTitle } from "@t3tools/shared/proposedPlanText";
 
 export function buildCollapsedProposedPlanPreviewMarkdown(
   planMarkdown: string,
@@ -76,23 +51,7 @@ function sanitizePlanFileSegment(input: string): string {
   return sanitized.length > 0 ? sanitized : "plan";
 }
 
-export function resolvePlanFollowUpSubmission(input: { draftText: string; planMarkdown: string }): {
-  text: string;
-  interactionMode: "default" | "plan";
-} {
-  const trimmedDraftText = input.draftText.trim();
-  if (trimmedDraftText.length > 0) {
-    return {
-      text: trimmedDraftText,
-      interactionMode: "plan",
-    };
-  }
-
-  return {
-    text: buildPlanImplementationPrompt(input.planMarkdown),
-    interactionMode: "default",
-  };
-}
+export const PLAN_IMPLEMENTATION_PROMPT_PREFIX = "PLEASE IMPLEMENT THIS PLAN:\n";
 
 export function buildProposedPlanMarkdownFilename(planMarkdown: string): string {
   const title = proposedPlanTitle(planMarkdown);
@@ -114,5 +73,3 @@ export function downloadPlanAsTextFile(filename: string, contents: string): void
     URL.revokeObjectURL(url);
   }, 0);
 }
-
-export const PLAN_IMPLEMENTATION_PROMPT_PREFIX = "PLEASE IMPLEMENT THIS PLAN:\n";

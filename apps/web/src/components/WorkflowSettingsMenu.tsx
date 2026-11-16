@@ -1,5 +1,6 @@
 import type {
   EnvironmentId,
+  GrillAnswerer,
   ImplementationWorkflowSettings,
   ModelSelection,
   WorkflowPreset,
@@ -7,11 +8,11 @@ import type {
   WorkflowStepModelOverride,
   WorkflowStepReviewPartsOverride,
 } from "@t3tools/contracts";
-import { WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN } from "@t3tools/contracts";
 import {
   WORKFLOW_PRESET_DEFINITION_BY_ID,
   type WorkflowPresetHelpStep,
   workflowPresetStepCanPinModel,
+  workflowStepModelScopeForPreset,
 } from "@t3tools/shared/workflowPresets";
 import { SlidersHorizontal } from "lucide-react";
 import { useState } from "react";
@@ -27,14 +28,12 @@ import {
   WorkflowStepReviewPartPins,
   type SetWorkflowStepReviewParts,
 } from "./WorkflowStepReviewParts";
+import { standingWorkflowStepModel } from "@t3tools/client-runtime/workflow-step-models";
+import { useWorkflowModelChoices, WorkflowStepModelPins } from "./WorkflowModelPins";
 import {
-  useWorkflowModelChoices,
-  workflowModelPinKey,
-  WorkflowModelPinControls,
-  WorkflowStepModelPins,
   type SetWorkflowStepModel,
   type WorkflowModelPinKey,
-} from "./WorkflowModelPins";
+} from "@t3tools/client-runtime/workflow-step-models";
 import {
   setWorkflowStepModelsOneAtATime,
   WorkflowModelQuickPins,
@@ -89,10 +88,6 @@ function PlanWorkflowStageControls(props: {
   );
 }
 
-const RECOVERY_BACKUP_PIN_KEY: WorkflowModelPinKey = {
-  workflowPromptId: WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN,
-};
-
 export function WorkflowSettingsBody(props: {
   readonly maxParallelTickets?: number | undefined;
   readonly maxParallelAppReviews?: number | undefined;
@@ -118,9 +113,20 @@ export function WorkflowSettingsBody(props: {
     | ((settings: ImplementationWorkflowSettings) => void)
     | undefined;
   readonly implementationSettingsScope?: "defaults" | "run" | undefined;
+  /** A running workflow's Grill answerer; without it the choice follows `implementationSettings`. */
+  readonly grillAnswerer?: GrillAnswerer | undefined;
+  readonly onSetGrillAnswerer?: ((answerer: GrillAnswerer) => void) | undefined;
 }) {
   const choices = useWorkflowModelChoices(props.environmentId);
   const { implementationSettings, onSetImplementationSettings } = props;
+  const grillAnswerer =
+    props.grillAnswerer ?? implementationSettings?.grillAnswerer ?? ("human" as const);
+  const onSetGrillAnswerer =
+    props.onSetGrillAnswerer ??
+    (implementationSettings && onSetImplementationSettings
+      ? (answerer: GrillAnswerer) =>
+          onSetImplementationSettings({ ...implementationSettings, grillAnswerer: answerer })
+      : undefined);
   const onSetConcurrency =
     props.onSetMaxParallelTickets ??
     (implementationSettings && onSetImplementationSettings
@@ -143,37 +149,16 @@ export function WorkflowSettingsBody(props: {
   ) : null;
   const steps = pinnableSteps(props.preset);
   const defaultPinFor = (key: WorkflowModelPinKey): ModelSelection | null =>
-    props.defaultStepModels?.find(
-      (entry) => workflowModelPinKey(entry) === workflowModelPinKey(key),
-    )?.modelSelection ?? null;
-  const recoveryBackup = props.pinFor(RECOVERY_BACKUP_PIN_KEY);
-  const defaultRecoveryBackup = defaultPinFor(RECOVERY_BACKUP_PIN_KEY);
-  const recoveryInheritedSelection = defaultRecoveryBackup ?? props.rootModelSelection;
-  const recoveryBackupControl = (
-    <section className="space-y-2 border-b border-border/70 pb-4">
-      <h3 className="text-xs font-semibold text-foreground">Recovery backup</h3>
-      <WorkflowModelPinControls
-        pinKey={RECOVERY_BACKUP_PIN_KEY}
-        label="Backup provider and model"
-        note="Used only after one recovery attempt on the primary model fails. An identical choice stays on the primary."
-        pinnedSelection={recoveryBackup}
-        inheritedSelection={recoveryInheritedSelection}
-        inheritedLabel={
-          defaultRecoveryBackup === null
-            ? "Auto has no standing backup. Recovery stays on the primary model."
-            : `Auto follows Settings (${choices.describeSelection(defaultRecoveryBackup)})`
-        }
-        choices={choices}
-        onSetStepModel={props.onSetStepModel}
-      />
-    </section>
-  );
+    standingWorkflowStepModel(
+      props.defaultStepModels ?? [],
+      key,
+      workflowStepModelScopeForPreset(props.preset),
+    );
 
   if (steps.length === 0) {
     return (
       <div className="space-y-3 px-3 py-2">
         {concurrencyControl}
-        {recoveryBackupControl}
         <p className="text-2xs leading-relaxed text-muted-foreground">
           This workflow has no other agent model settings.
         </p>
@@ -190,7 +175,6 @@ export function WorkflowSettingsBody(props: {
       <ScrollArea className="max-h-[min(42rem,75vh)]">
         <div className="space-y-4 px-3 py-2">
           {concurrencyControl}
-          {recoveryBackupControl}
           <p className="text-2xs leading-relaxed text-muted-foreground">
             {props.description ??
               "Set models, cycle budgets, and App Review parts in workflow order. App Review stops at 10 cycles. Ticket and Final Code Review stop clean or run at most five cycles. Recovery continues the current cycle thread. Changes apply to the next agent each step starts."}
@@ -215,6 +199,8 @@ export function WorkflowSettingsBody(props: {
             implementationSettings={props.implementationSettings}
             onSetImplementationSettings={props.onSetImplementationSettings}
             implementationSettingsScope={props.implementationSettingsScope}
+            grillAnswerer={grillAnswerer}
+            onSetGrillAnswerer={onSetGrillAnswerer}
           />
         </div>
       </ScrollArea>
@@ -225,7 +211,6 @@ export function WorkflowSettingsBody(props: {
     <ScrollArea className="max-h-[26rem]">
       <div className="space-y-3 px-3 py-2">
         {concurrencyControl}
-        {recoveryBackupControl}
         <p className="text-2xs leading-relaxed text-muted-foreground">
           {props.description ??
             "Set models for steps that start separate threads, cycle budgets, and the parts an App Review verifies. App Review stops at 10 cycles. Ticket and Final Code Review stop clean or run at most five cycles. Recovery continues the current cycle thread. Shared-thread steps use the workflow composer model. Changes apply to the next agent a step starts."}
@@ -324,6 +309,9 @@ export function WorkflowSettingsMenu(props: {
   readonly stepReviewParts?: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
   readonly defaultStepReviewParts?: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
   readonly onSetStepReviewParts?: SetWorkflowStepReviewParts | undefined;
+  /** The run's Grill with Docs answerer, switchable while the Grill runs. */
+  readonly grillAnswerer?: GrillAnswerer | undefined;
+  readonly onSetGrillAnswerer?: ((answerer: GrillAnswerer) => void) | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const { onSetStepModel } = props;
@@ -373,6 +361,8 @@ export function WorkflowSettingsMenu(props: {
             stepReviewParts={props.stepReviewParts}
             defaultStepReviewParts={props.defaultStepReviewParts}
             onSetStepReviewParts={props.onSetStepReviewParts}
+            grillAnswerer={props.grillAnswerer}
+            onSetGrillAnswerer={props.onSetGrillAnswerer}
           />
         ) : null}
       </PopoverPopup>

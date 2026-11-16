@@ -3,7 +3,6 @@ import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
-import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { runMigrations } from "../persistence/Migrations.ts";
@@ -32,7 +31,12 @@ import { OrchestrationEvent, OrchestrationV2StoredEvent } from "@t3tools/contrac
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 import { emptyProjection } from "../orchestration-v2/ProjectionStore.ts";
-import { workflowControlCommands, workflowRuntimeEvents } from "./WorkflowRuntimeBridge.ts";
+import {
+  workflowBackgroundTaskEvents,
+  workflowCheckpointCommand,
+  workflowControlCommands,
+  workflowRuntimeEvents,
+} from "./WorkflowRuntimeBridge.ts";
 
 const at = "2026-10-07T00:00:00.000Z";
 const decodeLegacy = Schema.decodeUnknownSync(OrchestrationEvent);
@@ -121,6 +125,68 @@ describe("workflow commands on the native runtime", () => {
       },
     ]);
     expect(workflowControlCommands(event, projection)).toEqual([]);
+  });
+
+  it("mirrors a workflow_request_user_input card into a native runtime request", () => {
+    const activity = (kind: string, payload: unknown) =>
+      decodeLegacy({
+        ...legacyBase,
+        type: "thread.activity-appended",
+        payload: {
+          threadId: "thread",
+          activity: {
+            id: "activity",
+            tone: "info",
+            kind,
+            summary: "User input",
+            payload,
+            turnId: "run:thread:ordinal:1",
+            createdAt: at,
+          },
+        },
+      });
+    const question = {
+      id: "voice",
+      header: "Voice app",
+      question: "Fold Voice into Phone?",
+      options: [
+        { label: "Fold", description: "Phone owns it." },
+        { label: "Keep", description: "Voice stays." },
+      ],
+      recommendation: { optionLabel: "Fold", rationale: "One runtime." },
+      multiSelect: false,
+    };
+    const record = {
+      type: "workflow_user_input.record",
+      commandId: "workflow:execute:event",
+      threadId: "thread",
+      runId: "run:thread:ordinal:1",
+      requestId: "workflow-user-input-1",
+    };
+    expect(
+      workflowControlCommands(
+        activity("user-input.requested", {
+          requestId: "workflow-user-input-1",
+          questions: [question],
+        }),
+        projection,
+      ),
+    ).toEqual([{ ...record, questions: [question], status: "pending" }]);
+    expect(
+      workflowControlCommands(
+        activity("user-input.resolved", {
+          requestId: "workflow-user-input-1",
+          answers: { voice: ["Fold"] },
+        }),
+        projection,
+      ),
+    ).toEqual([{ ...record, questions: [], status: "resolved", answers: { voice: ["Fold"] } }]);
+    expect(
+      workflowControlCommands(
+        activity("user-input.resolved", { requestId: "workflow-user-input-1", answers: {} }),
+        projection,
+      ),
+    ).toEqual([{ ...record, questions: [], status: "cancelled" }]);
   });
 
   it("uses stable native command IDs and sends one provider message per workflow request", () => {
@@ -240,6 +306,210 @@ it("passes complete assistant text to directive ingestion before its completion"
   }
 });
 
+it("gives a native run's checkpoint to its legacy turn so App Review can advance", () => {
+  const captured = (runId: string | null, status: string) =>
+    decodeNative({
+      sequence: 3,
+      commandId: null,
+      event: {
+        id: "native:checkpoint",
+        threadId: "thread",
+        occurredAt: nativeAt,
+        type: "checkpoint.captured",
+        payload: {
+          id: "checkpoint",
+          threadId: "thread",
+          scopeId: "scope",
+          runId,
+          nodeId: "node",
+          parentCheckpointId: null,
+          ordinalWithinScope: 1,
+          appRunOrdinal: 1,
+          ref: "refs/t3/checkpoints/1",
+          status,
+          files: [{ path: "a.ts", kind: "modified", additions: 1, deletions: 0 }],
+          capturedAt: nativeAt,
+        },
+      },
+    });
+  expect(workflowCheckpointCommand(captured("run", "ready"))).toEqual({
+    type: "thread.turn.diff.complete",
+    commandId: "workflow:observe:native:checkpoint",
+    threadId: "thread",
+    turnId: "run",
+    completedAt: at,
+    checkpointRef: "refs/t3/checkpoints/1",
+    status: "ready",
+    files: [{ path: "a.ts", kind: "modified", additions: 1, deletions: 0 }],
+    checkpointTurnCount: 1,
+    createdAt: at,
+  });
+  // The thread's baseline belongs to no turn, and a stale ref is no checkpoint.
+  expect(workflowCheckpointCommand(captured(null, "ready"))).toBeNull();
+  expect(workflowCheckpointCommand(captured("run", "stale"))).toBeNull();
+});
+
+const rosterEvent = (
+  sequence: number,
+  tasks: ReadonlyArray<{
+    readonly taskId: string;
+    readonly kind: string;
+    readonly description?: string;
+  }>,
+) =>
+  decodeNative({
+    sequence,
+    commandId: null,
+    event: {
+      id: `native:roster:${sequence}`,
+      threadId: "thread-fixer",
+      runId: "run-1",
+      driver: "claudeAgent",
+      providerInstanceId: "claudeAgent",
+      occurredAt: nativeAt,
+      type: "provider-thread.updated",
+      payload: {
+        id: "provider-thread",
+        driver: "claudeAgent",
+        providerInstanceId: "claudeAgent",
+        providerSessionId: null,
+        appThreadId: "thread-fixer",
+        ownerNodeId: null,
+        nativeThreadRef: null,
+        nativeConversationHeadRef: null,
+        status: "active",
+        firstRunOrdinal: 1,
+        lastRunOrdinal: 1,
+        handoffIds: [],
+        forkedFrom: null,
+        pendingBackgroundTasks: tasks,
+        createdAt: nativeAt,
+        updatedAt: nativeAt,
+      },
+    },
+  });
+
+it("states a native thread's background work as the task activities workflows wait on", () => {
+  const started = workflowBackgroundTaskEvents(
+    rosterEvent(1, [{ taskId: "check", kind: "command", description: "pnpm check dev rudi" }]),
+    new Set(),
+  );
+  expect(started?.events).toMatchObject([
+    {
+      eventId: "workflow:task:native:roster:1:check:started",
+      threadId: "thread-fixer",
+      turnId: "run-1",
+      type: "task.started",
+      payload: { taskId: "check", description: "pnpm check dev rudi" },
+    },
+  ]);
+  expect([...(started?.open ?? [])]).toEqual(["check"]);
+  // The same roster again says nothing new.
+  expect(
+    workflowBackgroundTaskEvents(
+      rosterEvent(2, [{ taskId: "check", kind: "command" }]),
+      new Set(["check"]),
+    )?.events,
+  ).toEqual([]);
+  const ended = workflowBackgroundTaskEvents(rosterEvent(3, []), new Set(["check"]));
+  expect(ended?.events).toMatchObject([
+    { type: "task.completed", payload: { taskId: "check", status: "completed" } },
+  ]);
+  expect(ended?.open.size).toBe(0);
+  expect(workflowBackgroundTaskEvents(nativeThread, new Set())).toBeNull();
+});
+
+effectIt.effect(
+  "gives a workflow thread's background work to the reactors, and ends work a restart forgot",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const received: ProviderRuntimeEvent[] = [];
+        let stored: ReadonlyArray<OrchestrationV2StoredEvent> = [
+          rosterEvent(1, [{ taskId: "check", kind: "command" }]),
+          rosterEvent(2, [{ taskId: "check", kind: "command" }]),
+          rosterEvent(3, []),
+        ];
+        let recorded: ReadonlyArray<unknown> = [];
+        const afterRestart = [
+          {
+            threadId: ThreadId.make("thread-fixer"),
+            activity: {
+              id: "activity-rerun",
+              tone: "info",
+              kind: "task.started",
+              summary: "Task started",
+              payload: { taskId: "rerun" },
+              turnId: null,
+              createdAt: at,
+            },
+          },
+        ];
+        const dependencies = Layer.mergeAll(
+          Layer.mock(OrchestrationEngineService)({
+            subscribeDomainEvents: Effect.succeed(Stream.never),
+            readEvents: () => Stream.empty,
+          }),
+          Layer.mock(ProjectionSnapshotQuery)({
+            getThreadShellById: () => Effect.succeedNone,
+            listRecentTaskActivities: () => Effect.succeed(recorded as never),
+          }),
+          Layer.mock(OrchestratorV2)({ streamStoredEventsFrom: () => Stream.never }),
+          Layer.mock(EventStoreV2)({
+            latestSequence: () => Effect.succeed(stored.at(-1)?.sequence ?? 0),
+            read: () => Stream.fromIterable(stored),
+          }),
+          Layer.mock(ProjectService)({}),
+          Layer.mock(ServerSettingsService)({}),
+          Layer.mock(ProviderInstanceRegistry)({}),
+          Layer.mock(WorkflowUserInputBroker)({}),
+          Layer.mock(ProviderRuntimeIngestionService)({
+            start: () => Effect.void,
+            drain: Effect.void,
+            ingest: (event) =>
+              Effect.sync(() => {
+                received.push(event);
+              }),
+          }),
+          layerProviderEvents,
+        );
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* runMigrations();
+          yield* sql`
+            INSERT INTO projection_threads (
+              thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+              created_at, updated_at, workflow_role
+            ) VALUES (
+              'thread-fixer', 'project', 'App Review implementation', '{}', 'full-access', 'default',
+              ${at}, ${at}, 'app-review-fixer'
+            )
+          `;
+          const first = yield* make;
+          yield* first.start;
+          yield* first.drain;
+          expect(
+            received.map((event) => [event.type, (event.payload as { taskId: string }).taskId]),
+          ).toEqual([
+            ["task.started", "check"],
+            ["task.completed", "check"],
+          ]);
+
+          // After a restart the bridge reads back the task the activities still show running.
+          received.length = 0;
+          recorded = afterRestart;
+          stored = [rosterEvent(4, [])];
+          const restarted = yield* make;
+          yield* restarted.start;
+          yield* restarted.drain;
+          expect(
+            received.map((event) => [event.type, (event.payload as { taskId: string }).taskId]),
+          ).toEqual([["task.completed", "rerun"]]);
+        }).pipe(Effect.provide(dependencies));
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+    ),
+);
+
 effectIt.effect("replays native completions once even when a crash loses the cursor update", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -277,7 +547,7 @@ effectIt.effect("replays native completions once even when a crash loses the cur
           readEvents: () => Stream.empty,
         }),
         Layer.mock(ProjectionSnapshotQuery)({
-          getThreadShellById: () => Effect.succeed(Option.none()),
+          getThreadShellById: () => Effect.succeedNone,
         }),
         Layer.mock(OrchestratorV2)({
           getThreadProjection: () => Effect.succeed(projection),
@@ -289,7 +559,7 @@ effectIt.effect("replays native completions once even when a crash loses the cur
         }),
         Layer.mock(ProjectService)({}),
         Layer.mock(ServerSettingsService)({ getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS) }),
-        Layer.mock(ProviderInstanceRegistry)({ getInstance: () => Effect.succeed(undefined) }),
+        Layer.mock(ProviderInstanceRegistry)({ getInstance: () => Effect.undefined }),
         Layer.mock(WorkflowUserInputBroker)({
           respond: () => Effect.succeed(false),
           cancelThread: () => Effect.void,
@@ -352,7 +622,7 @@ effectIt.effect("reopens archived workflow metadata without recreating its threa
             }),
         }),
         Layer.mock(ProjectionSnapshotQuery)({
-          getThreadShellById: () => Effect.succeed(Option.none()),
+          getThreadShellById: () => Effect.succeedNone,
         }),
         Layer.mock(OrchestratorV2)({ streamStoredEventsFrom: () => Stream.never }),
         Layer.mock(EventStoreV2)({
@@ -432,6 +702,15 @@ effectIt.effect("skips a native observation the workflow engine refuses", () =>
   ),
 );
 
+const launchedSettings = {
+  grillAnswerer: "judge" as const,
+  ticketAppReviewEnabled: false,
+  appReviewEnabled: true,
+  finalCodeReviewEnabled: true,
+  pullRequestCreationEnabled: true,
+  pullRequestBabysittingEnabled: true,
+};
+
 // The first workflow RPC must work even before the native subscription imports the launch.
 effectIt.effect("imports a newly launched native thread before applying its workflow mode", () =>
   Effect.scoped(
@@ -454,24 +733,28 @@ effectIt.effect("imports a newly launched native thread before applying its work
         Layer.mock(ProjectionSnapshotQuery)({
           getCommandReadModel: () => Effect.succeed(createEmptyReadModel(at)),
         }),
-        Layer.mock(OrchestratorV2)({ getThreadProjection: () => Effect.succeed(projection) }),
+        Layer.mock(OrchestratorV2)({
+          getThreadProjection: () =>
+            Effect.succeed({
+              ...projection,
+              thread: { ...projection.thread, workflowImplementationSettings: launchedSettings },
+            }),
+        }),
         Layer.mock(EventStoreV2)({}),
         Layer.mock(ProjectService)({
           getById: () =>
-            Effect.succeed(
-              Option.some({
-                id: ProjectId.make("project"),
-                title: "Project",
-                workspaceRoot: "/workspace",
-                repositoryIdentity: null,
-                faviconPath: null,
-                defaultModelSelection: null,
-                scripts: [],
-                createdAt: at,
-                updatedAt: at,
-                deletedAt: null,
-              }),
-            ),
+            Effect.succeedSome({
+              id: ProjectId.make("project"),
+              title: "Project",
+              workspaceRoot: "/workspace",
+              repositoryIdentity: null,
+              faviconPath: null,
+              defaultModelSelection: null,
+              scripts: [],
+              createdAt: at,
+              updatedAt: at,
+              deletedAt: null,
+            }),
         }),
         Layer.mock(ServerSettingsService)({}),
         Layer.mock(ProviderInstanceRegistry)({}),
@@ -506,6 +789,8 @@ effectIt.effect("imports a newly launched native thread before applying its work
         expect(commands[1]).toMatchObject({
           worktreePath: "/workspace/feature",
           historyImport: true,
+          // Stage settings a launch pinned on the native root reach the workflow engine.
+          workflowImplementationSettings: launchedSettings,
         });
         yield* bridge.dispatchCommand({ ...command, commandId: CommandId.make("mode-again") });
         expect(commands.filter((command) => command.type === "thread.create")).toHaveLength(1);

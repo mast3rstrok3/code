@@ -16,7 +16,7 @@ import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "~/hooks/us
 import { useWorkflowCatalog } from "~/workflowCatalogState";
 import { ComposerModeCatalogDialog } from "./ComposerModeCatalogDialog";
 import type { ComposerModeCatalog, ComposerModeControls } from "./ComposerModePicker";
-import { isPlanningWorkflowAvailableForProvider } from "./composerPlanningWorkflow";
+import { isPlanningWorkflowAvailableForProvider } from "@t3tools/client-runtime/workflow-composer-mode";
 
 export function useComposerWorkflowControls(input: {
   environmentId: EnvironmentId;

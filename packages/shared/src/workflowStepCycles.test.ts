@@ -19,7 +19,7 @@ const TICKET_CODE_REVIEW = {
 };
 
 it("falls back to the step's own default when nothing is set", () => {
-  expect(resolveWorkflowStepCycleBudget({ key: APP_REVIEW })).toBe(10);
+  expect(resolveWorkflowStepCycleBudget({ key: APP_REVIEW })).toBe(5);
   expect(
     resolveWorkflowStepCycleBudget({
       key: { workflowPromptId: "planning.ticket-reviewer.codex" },
@@ -70,7 +70,7 @@ it("keeps a ticket App Review budget separate from the run's own App Review", ()
   expect(
     resolveWorkflowStepCycleBudget({ key: TICKET_APP_REVIEW, threadOverrides: overrides }),
   ).toBe(2);
-  expect(resolveWorkflowStepCycleBudget({ key: APP_REVIEW, threadOverrides: overrides })).toBe(10);
+  expect(resolveWorkflowStepCycleBudget({ key: APP_REVIEW, threadOverrides: overrides })).toBe(5);
 });
 
 it("clamps a budget written outside the step's bounds", () => {

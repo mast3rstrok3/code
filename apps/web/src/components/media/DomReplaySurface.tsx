@@ -8,7 +8,7 @@
  * `@rrweb/replay` is large and most reviews are never opened, so `AppReviewDocument`
  * loads this module lazily. Import it through `React.lazy`, never directly.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PauseIcon, PlayIcon } from "lucide-react";
 
 // This whole module is lazily imported, so rrweb's styles load lazily with it.
@@ -19,6 +19,9 @@ import { Button } from "~/components/ui/button";
 
 /** rrweb's Meta event carries the viewport the review was recorded at. */
 const META_EVENT_TYPE = 4;
+
+/** How often the scrubber samples the replayer's clock while playing. */
+const CLOCK_SAMPLE_MS = 250;
 
 interface RecordedViewport {
   readonly width: number;
@@ -72,6 +75,7 @@ export default function DomReplaySurface({
     play: (offset?: number) => void;
     pause: () => void;
     destroy: () => void;
+    getCurrentTime: () => number;
     getMetaData: () => { readonly totalTime: number };
     on: (event: string, handler: (payload: unknown) => void) => void;
   } | null>(null);
@@ -100,10 +104,10 @@ export default function DomReplaySurface({
 
         const replayer = new Replayer(events as never, { root: stage, speed: 1 });
         replayerRef.current = replayer as unknown as typeof replayerRef.current;
-        replayer.on("ui-update-current-time", (payload: unknown) => {
-          setCurrentTime((payload as { readonly payload?: number }).payload ?? 0);
+        replayer.on("finish", () => {
+          setPlaying(false);
+          setCurrentTime(replayer.getMetaData().totalTime);
         });
-        replayer.on("finish", () => setPlaying(false));
 
         setViewport(recordedViewport(events));
         setTotalTime(replayer.getMetaData().totalTime);
@@ -134,25 +138,36 @@ export default function DomReplaySurface({
     return () => observer.disconnect();
   }, [viewport]);
 
-  const toggle = useCallback(() => {
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- rrweb's core Replayer emits no time events, so the scrubber samples its clock while it plays.
+  useEffect(() => {
+    const replayer = replayerRef.current;
+    if (!playing || !replayer) return;
+    const timer = window.setInterval(() => {
+      setCurrentTime(Math.min(replayer.getCurrentTime(), totalTime));
+    }, CLOCK_SAMPLE_MS);
+    return () => window.clearInterval(timer);
+  }, [playing, totalTime]);
+
+  const toggle = () => {
     const replayer = replayerRef.current;
     if (!replayer) return;
     if (playing) {
       replayer.pause();
+      setCurrentTime(Math.min(replayer.getCurrentTime(), totalTime));
       setPlaying(false);
     } else {
-      replayer.play(currentTime);
+      replayer.play(currentTime >= totalTime ? 0 : currentTime);
       setPlaying(true);
     }
-  }, [currentTime, playing]);
+  };
 
-  const seek = useCallback((offset: number) => {
+  const seek = (offset: number) => {
     const replayer = replayerRef.current;
     if (!replayer) return;
     setCurrentTime(offset);
     replayer.play(offset);
     setPlaying(true);
-  }, []);
+  };
 
   if (error) {
     return (

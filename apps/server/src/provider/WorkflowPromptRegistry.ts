@@ -19,6 +19,7 @@ export const WORKFLOW_PROMPT_IDS = {
   sharedGrillingCodex: "shared.grilling.codex",
   planningGrillStageCodex: "planning.grill-stage.codex",
   planningAutomaticEngineeringGrillCodex: "planning.engineering-grill-automatic.codex",
+  planningGrillJudgeCodex: "planning.grill-judge.codex",
   planningProductContextCodex: "planning.product-context.codex",
   planningSpecCodex: "planning.spec.codex",
   planningTicketsCodex: "planning.tickets.codex",
@@ -96,6 +97,7 @@ export function listWorkflowPromptContracts(): WorkflowPromptContract[] {
 }
 
 const VISIBLE_T3_SKILL_IDS = new Set<string>([
+  WORKFLOW_PROMPT_IDS.planningGrillJudgeCodex,
   WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex,
   WORKFLOW_PROMPT_IDS.planningFastFeatureCodex,
   WORKFLOW_PROMPT_IDS.implementationFeatureCodex,
@@ -160,9 +162,8 @@ function buildWorkflowCatalog(): WorkflowCatalog {
     description: definition.description,
     interactionMode: definition.interactionMode,
     steps: definition.helpSteps.map((step) => {
-      // Engineering's App Review runs the end-to-end suites; Feature's is a browser review.
+      // Workflow App Reviews run the end-to-end suites.
       const workflowPromptId =
-        definition.id !== "fast-plan" &&
         step.skillId === WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex
           ? WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex
           : step.skillId;

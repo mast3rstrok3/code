@@ -18,6 +18,8 @@ import {
   workspaceUserProviderEnvironment,
 } from "./workspaceUserCredentials.ts";
 
+const HOST_PATH = process.env.PATH;
+
 const user: WorkspaceUser = {
   id: WorkspaceUserId.make("ada"),
   displayName: "Ada",
@@ -195,7 +197,7 @@ describe("routing by repository owner", () => {
   const scratch = () => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-owner-tokens-"));
   // Isolated from the host's git config and gh login, so only the generated config answers.
   const isolatedEnvironment = (home: string): NodeJS.ProcessEnv => ({
-    PATH: process.env.PATH,
+    PATH: HOST_PATH,
     HOME: home,
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: NodePath.join(home, "gitconfig"),
@@ -266,7 +268,7 @@ describe("routing by repository owner", () => {
         { mode: 0o700 },
       );
       const env = withWorkspaceUserEnvironment(
-        { ...isolatedEnvironment(root), PATH: `${realBin}:${process.env.PATH}` },
+        { ...isolatedEnvironment(root), PATH: `${realBin}:${HOST_PATH}` },
         {
           ...workspaceUserProviderEnvironment(credentials),
           [WORKSPACE_USER_PATH_PREFIX]: shimDirectory,

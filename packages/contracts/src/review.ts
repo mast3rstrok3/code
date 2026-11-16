@@ -40,13 +40,15 @@ export const APP_REVIEW_STACK_ID_ENV = "APP_REVIEW_STACK_ID";
 export const APP_REVIEW_ARTIFACT_DIR_ENV = "APP_REVIEW_ARTIFACT_DIR";
 
 /**
- * Recording contract for `e2eCommands`. The suite launches its own browsers, so
- * the server cannot attach a recorder to them. A suite that wants its tests
- * replayable adds the script at `APP_REVIEW_RECORDER_SCRIPT` to each browser
- * context as an init script, exposes a binding named
- * `APP_REVIEW_RECORDER_BINDING` that appends every event of the batch it
- * receives as one JSON line to `<APP_REVIEW_RECORDING_DIR>/<test name>.rrweb.jsonl`,
- * and returns nothing. The server collects that directory when the command exits.
+ * The commit an implementation run branched from, set for E2E commands of its
+ * App Reviews so `e2eAffectedCommands` can select the tests its changes affect.
+ */
+export const APP_REVIEW_BASE_REF_ENV = "APP_REVIEW_BASE_REF";
+
+/**
+ * `e2eCommands` recording contract: add `APP_REVIEW_RECORDER_SCRIPT` as an init
+ * script and expose `APP_REVIEW_RECORDER_BINDING`, which appends each batch as a
+ * JSON line to `<APP_REVIEW_RECORDING_DIR>/<test name>.rrweb.jsonl`.
  */
 export const APP_REVIEW_RECORDING_DIR_ENV = "APP_REVIEW_RECORDING_DIR";
 export const APP_REVIEW_RECORDER_SCRIPT_ENV = "APP_REVIEW_RECORDER_SCRIPT";
@@ -62,7 +64,7 @@ export const AppReviewScope = Schema.Literals(["e2e", "browser", "both"]);
 export type AppReviewScope = typeof AppReviewScope.Type;
 
 /** Default and hard limit for complete review, gap-analysis, and implementation cycles. */
-export const APP_REVIEW_WORKFLOW_DEFAULT_CYCLES = 10;
+export const APP_REVIEW_WORKFLOW_DEFAULT_CYCLES = 5;
 export const APP_REVIEW_WORKFLOW_MAX_CYCLES = 10;
 
 export const AppReviewWorkflowRunId = TrimmedNonEmptyString.pipe(
@@ -132,10 +134,19 @@ export const AppReviewWorkflowFixValidation = Schema.Struct({
 });
 export type AppReviewWorkflowFixValidation = typeof AppReviewWorkflowFixValidation.Type;
 
+/**
+ * Why a final App Review runs a command: a ticket's own feature tests, or the
+ * project's selection of tests the change affects. Absent means a complete suite.
+ */
+export const AppReviewTestPurpose = Schema.Literals(["feature", "affected"]);
+export type AppReviewTestPurpose = typeof AppReviewTestPurpose.Type;
+
 export const AppReviewRetryCommand = Schema.Struct({
   command: TrimmedNonEmptyString,
   retryCommand: TrimmedNonEmptyString,
+  purpose: Schema.optionalKey(AppReviewTestPurpose),
 });
+export type AppReviewRetryCommand = typeof AppReviewRetryCommand.Type;
 /** One test's rrweb event log, collected from the command's recording directory. */
 export const AppReviewTestRecording = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -381,12 +392,8 @@ export const AppReviewVerdict = Schema.Literals(["pending", "passed", "failed"])
 export type AppReviewVerdict = typeof AppReviewVerdict.Type;
 
 /**
- * One acceptance check in a review's matrix.
- *
- * `carriedFromCycle` names the earlier cycle of the same run whose browser pass
- * still stands, and is set only when this cycle did not exercise the check
- * again. E2E checks use `reusedValidation` for verified post-repair evidence,
- * rather than carrying a browser verdict.
+ * `carriedFromCycle` names the earlier cycle whose browser pass still stands when
+ * this cycle did not re-run the check. E2E checks use `reusedValidation` instead.
  */
 export const AppReviewCheck = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -535,23 +542,60 @@ export class AppReviewError extends Schema.TaggedError<AppReviewError>()("AppRev
 export const ReviewDiffPreviewInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   baseRef: Schema.optional(TrimmedNonEmptyString),
+  commitSha: Schema.optional(TrimmedNonEmptyString),
   ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
+  sourceKind: Schema.optionalKey(Schema.Literals(["working-tree", "branch-range"])),
+  trackedOnly: Schema.optionalKey(Schema.Boolean),
+  metadataOnly: Schema.optionalKey(Schema.Boolean),
   file: Schema.optionalKey(
     Schema.Struct({
       path: Schema.NonEmptyString,
       previousPath: Schema.NullOr(Schema.NonEmptyString),
-      sourceKind: Schema.Literals(["working-tree", "branch-range"]),
+      sourceKind: Schema.Literals(["working-tree", "branch-range", "commit"]),
     }),
   ),
 });
 export type ReviewDiffPreviewInput = typeof ReviewDiffPreviewInput.Type;
 
-export const ReviewDiffPreviewSourceKind = Schema.Literals(["working-tree", "branch-range"]);
+export const ReviewBranchCommitsInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  baseRef: Schema.optional(TrimmedNonEmptyString),
+});
+export type ReviewBranchCommitsInput = typeof ReviewBranchCommitsInput.Type;
+
+export const ReviewBranchCommitsResult = Schema.Struct({
+  commits: Schema.Array(
+    Schema.Struct({
+      sha: Schema.String,
+      subject: Schema.String,
+      committedAt: Schema.String,
+    }),
+  ),
+  truncated: Schema.Boolean,
+});
+export type ReviewBranchCommitsResult = typeof ReviewBranchCommitsResult.Type;
+
+export const ReviewDiffPreviewSourceKind = Schema.Literals([
+  "working-tree",
+  "branch-range",
+  "commit",
+]);
 export type ReviewDiffPreviewSourceKind = typeof ReviewDiffPreviewSourceKind.Type;
+
+export const ReviewDiffChangeType = Schema.Literals([
+  "change",
+  "rename-pure",
+  "rename-changed",
+  "new",
+  "deleted",
+]);
+export type ReviewDiffChangeType = typeof ReviewDiffChangeType.Type;
 
 export const ReviewDiffFileStat = Schema.Struct({
   path: Schema.String,
   previousPath: Schema.NullOr(Schema.String),
+  // Older servers omit it.
+  changeType: Schema.optionalKey(ReviewDiffChangeType),
   additions: Schema.Number,
   deletions: Schema.Number,
 });
@@ -561,12 +605,13 @@ export const ReviewDiffPreviewSource = Schema.Struct({
   id: TrimmedNonEmptyString,
   kind: ReviewDiffPreviewSourceKind,
   title: TrimmedNonEmptyString,
+  commitSubject: Schema.optionalKey(TrimmedNonEmptyString),
   baseRef: Schema.NullOr(TrimmedNonEmptyString),
   headRef: Schema.NullOr(TrimmedNonEmptyString),
   diff: Schema.String,
   diffHash: TrimmedNonEmptyString,
   truncated: Schema.Boolean,
-  /** Complete statistics, independent of patch limits. Absent on older servers. */
+  patchesDeferred: Schema.optionalKey(Schema.Boolean),
   files: Schema.optionalKey(Schema.Array(ReviewDiffFileStat)),
 });
 export type ReviewDiffPreviewSource = typeof ReviewDiffPreviewSource.Type;
@@ -574,7 +619,7 @@ export type ReviewDiffPreviewSource = typeof ReviewDiffPreviewSource.Type;
 export const ReviewDiffFileContentsInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   sourceKind: ReviewDiffPreviewSourceKind,
-  changeType: Schema.Literals(["change", "rename-pure", "rename-changed", "new", "deleted"]),
+  changeType: ReviewDiffChangeType,
   baseRef: Schema.NullOr(TrimmedNonEmptyString),
   headRef: Schema.NullOr(TrimmedNonEmptyString),
   oldPath: TrimmedNonEmptyString,
@@ -592,6 +637,7 @@ export const ReviewDiffPreviewResult = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   generatedAt: Schema.DateTimeUtc,
   sources: Schema.Array(ReviewDiffPreviewSource),
+  incomplete: Schema.optionalKey(Schema.Boolean),
 });
 export type ReviewDiffPreviewResult = typeof ReviewDiffPreviewResult.Type;
 
