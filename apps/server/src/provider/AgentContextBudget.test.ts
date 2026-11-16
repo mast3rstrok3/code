@@ -8,6 +8,7 @@ import * as Layer from "effect/Layer";
 import { McpServer } from "effect/ai";
 
 import { AppStackManager } from "../appStack/AppStackManager.ts";
+import { BuildBatchService } from "../buildBatch/BuildBatchService.ts";
 import { AssetSigner } from "../assets/AssetSigner.ts";
 import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 import { ServerConfig } from "../config.ts";
@@ -56,6 +57,7 @@ import budget from "./agentContextBudget.json" with { type: "json" };
 const toolHandlerServices = Layer.mergeAll(
   Layer.mock(AppStackManager)({}),
   Layer.mock(AssetSigner)({}),
+  Layer.mock(BuildBatchService)({}),
   Layer.mock(DeviceService)({}),
   Layer.mock(DocumentText)({}),
   Layer.mock(EnvironmentThemeService)({}),
