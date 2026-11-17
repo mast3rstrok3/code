@@ -43,6 +43,7 @@ import { useSelectWorkspaceTab } from "../layout/workspace/useSelectWorkspaceTab
 import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 import { WorkspaceListEmptyDetail } from "../layout/workspace/WorkspaceListEmptyDetail";
 import { WorkspaceListHeader } from "../layout/workspace/WorkspaceListHeader";
+import { useWizardThreadFilter } from "./useWizardThreadFilter";
 import { buildHomeListFilterMenuItems } from "./home-list-filter-menu";
 
 export function HomeRouteScreen() {
@@ -133,6 +134,7 @@ export function HomeRouteScreen() {
     setSelectedProjectKey,
   } = useHomeListOptions(availableEnvironmentIds);
   const selectedEnvironmentId = listOptions.selectedEnvironmentId;
+  const wizardFilter = useWizardThreadFilter();
   const { userScopes, onUserScopeChange } = useWorkspaceUserMenu(
     environments,
     selectedEnvironmentId,
@@ -188,6 +190,7 @@ export function HomeRouteScreen() {
           }}
           filter={{
             customized:
+              wizardFilter.active ||
               selectedEnvironmentId !== null ||
               selectedProjectKey !== null ||
               workspaceUserMenuIsCustomized(userScopes),
@@ -200,6 +203,7 @@ export function HomeRouteScreen() {
               onEnvironmentChange: setSelectedEnvironmentId,
               onProjectChange: setSelectedProjectKey,
               onUserScopeChange,
+              wizard: wizardFilter,
             }),
           }}
         />

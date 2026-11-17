@@ -309,6 +309,8 @@ export function threadListV2RowAccessibilityLabel(input: {
   readonly providerNameLabel: string | null;
   readonly hasQueuedMessages: boolean;
   readonly regeneratingTitle: boolean;
+  /** The person who started the thread through the Wizard API. */
+  readonly wizardName?: string | null;
 }): string {
   // Mirrors the row's meta line: a card shows Woke, else its status, else the time.
   const meta =
@@ -321,6 +323,7 @@ export function threadListV2RowAccessibilityLabel(input: {
     input.title,
     meta,
     input.providerNameLabel,
+    input.wizardName ? `Wizard ${input.wizardName}` : null,
     input.hasQueuedMessages ? "messages queued to send" : null,
     input.regeneratingTitle ? "regenerating title" : null,
   ]

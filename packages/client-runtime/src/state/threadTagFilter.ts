@@ -4,9 +4,20 @@ import {
   type OrchestrationV2ThreadShell,
   type ScopedThreadRef,
   type ThreadId,
+  WIZARD_THREAD_TAG,
 } from "@t3tools/contracts";
+import { Atom } from "effect/reactivity";
 
 import { threadKey } from "./entities.ts";
+
+/** The "only these tags" filter that shows only threads the Wizard API started. */
+export const WIZARD_THREAD_FILTER: ReadonlyArray<string> = [WIZARD_THREAD_TAG];
+
+/** This client's "only threads with these tags" filter; null while off. Web and mobile share it. */
+export const requiredThreadTagsAtom = Atom.make<ReadonlyArray<string> | null>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("required-thread-tags"),
+);
 
 type FilterableThread = Pick<
   OrchestrationV2ThreadShell,

@@ -9,6 +9,7 @@ import type {
 import {
   isListedThreadLineage,
   isProviderNativeSubagentThread,
+  isWizardThread,
   OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -607,6 +608,11 @@ export function createEnvironmentThreadShellAtoms(input: {
     return previousThreadShells;
   }).pipe(Atom.withLabel("environment-thread-shell-list"));
 
+  /** Whether any loaded thread came from the Wizard API, so lists offer the Wizard filter. */
+  const hasWizardThreadsAtom = Atom.make((get) =>
+    get(threadShellsAtom).some((thread) => isWizardThread(thread.source.tags)),
+  ).pipe(Atom.withLabel("environment-has-wizard-threads"));
+
   // Point reads and threadShellsAtom stay complete, so code that asks whether a thread
   // exists (outboxes, drafts, removals) never mistakes a hidden thread for a missing one.
   let previousHiddenThreadKeys: ReadonlySet<string> = NO_HIDDEN_THREADS;
@@ -743,6 +749,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     visibleThreadShellsAtom,
     hiddenThreadKeysAtom,
     anyEnvironmentHidingAtom,
+    hasWizardThreadsAtom,
     quietThreadShellsAtom,
     navigationThreadShellsAtom,
     delegatedUnderParentAtom,

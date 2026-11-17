@@ -5,12 +5,13 @@ import {
   type ArchivedSnapshotEntry,
   createArchivedThreadSnapshotsAtomFamily,
   makeArchivedThreadsEnvironmentKey,
+  requiredThreadTagsAtom,
 } from "@t3tools/client-runtime/state/threads";
 import type { EnvironmentId } from "@t3tools/contracts";
 
 import { orchestrationEnvironment } from "../state/orchestration";
 import { serverEnvironment } from "../state/server";
-import { environmentThreadShells, requiredThreadTagsAtom } from "../state/threads";
+import { environmentThreadShells } from "../state/threads";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { activeWorkspaceUserViewAtom } from "../state/shell";
 

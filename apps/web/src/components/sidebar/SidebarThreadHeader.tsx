@@ -1,4 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
+import {
+  requiredThreadTagsAtom,
+  WIZARD_THREAD_FILTER,
+} from "@t3tools/client-runtime/state/threads";
 import { FolderPlusIcon, SearchIcon, SquarePenIcon, WandIcon, XIcon } from "lucide-react";
 import {
   type ComponentProps,
@@ -10,11 +14,7 @@ import {
 
 import { cn } from "~/lib/utils";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
-import {
-  hasWizardThreadsAtom,
-  requiredThreadTagsAtom,
-  WIZARD_THREAD_FILTER,
-} from "../../state/threads";
+import { environmentThreadShells } from "../../state/threads";
 import { Button } from "../ui/button";
 import { SidebarInput, SidebarMenuButton } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -140,7 +140,7 @@ export function SidebarThreadHeader({
 
 /** Shows only threads the Wizard API started; offered once this browser has seen one. */
 function SidebarWizardFilterButton() {
-  const hasWizardThreads = useAtomValue(hasWizardThreadsAtom);
+  const hasWizardThreads = useAtomValue(environmentThreadShells.hasWizardThreadsAtom);
   const active = useAtomValue(requiredThreadTagsAtom) !== null;
   if (!hasWizardThreads && !active) return null;
   return (

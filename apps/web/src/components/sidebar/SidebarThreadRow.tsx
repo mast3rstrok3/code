@@ -1078,9 +1078,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   // The person who started the thread through the Wizard API.
   const wizardBadge =
     wizardName === null ? null : (
-      <span
-        className="flex max-w-28 shrink-0 items-center gap-1 text-xs text-muted-foreground"
-      >
+      <span className="flex max-w-28 shrink-0 items-center gap-1 text-xs text-muted-foreground">
         <WandIcon className="size-3 shrink-0" aria-hidden />
         <span className="sr-only">Wizard: </span>
         <span className="truncate">{wizardName}</span>
