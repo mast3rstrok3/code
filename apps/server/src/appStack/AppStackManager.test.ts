@@ -977,7 +977,7 @@ it.effect("asks the controller for the requested variant's stack", () => {
   }).pipe(Effect.provide(layer));
 });
 
-it.effect("derives the variant from the compose file name for listed stacks", () => {
+it.effect("fills the variant and test password that older controllers omit", () => {
   const layer = makeLayer({
     requests: [],
     response: () =>
@@ -988,6 +988,7 @@ it.effect("derives the variant from the compose file name for listed stacks", ()
           id: "33333333-3333-3333-3333-333333333333",
           uuid: "33333333-3333-3333-3333-333333333333",
           composePath: "infra/compose/compose.app-prod.yml",
+          testPassword: "stack-only-secret",
         },
       ]),
   });
@@ -996,8 +997,11 @@ it.effect("derives the variant from the compose file name for listed stacks", ()
     const manager = yield* AppStackManager;
     const { stacks } = yield* manager.list({});
     assert.deepEqual(
-      stacks.map((stack) => stack.variant),
-      ["dev", "prod"],
+      stacks.map((stack) => [stack.variant, stack.testPassword]),
+      [
+        ["dev", null],
+        ["prod", "stack-only-secret"],
+      ],
     );
   }).pipe(Effect.provide(layer));
 });

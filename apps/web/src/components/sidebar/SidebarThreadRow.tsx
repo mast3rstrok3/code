@@ -32,6 +32,7 @@ import {
   type EnvironmentId,
   type EnvironmentMachineKind,
   type ScopedThreadRef,
+  wizardNameFromTags,
 } from "@t3tools/contracts";
 
 import type { TimestampFormat } from "@t3tools/contracts/settings";
@@ -54,6 +55,7 @@ import {
   TerminalIcon,
   Undo2Icon,
   UserRoundIcon,
+  WandIcon,
   XIcon,
 } from "lucide-react";
 import {
@@ -1072,6 +1074,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       {thread.title}
     </span>
   );
+  const wizardName = wizardNameFromTags(thread.source.tags);
+  // The person who started the thread through the Wizard API.
+  const wizardBadge =
+    wizardName === null ? null : (
+      <span className="flex max-w-28 shrink-0 items-center gap-1 text-xs text-muted-foreground">
+        <WandIcon className="size-3 shrink-0" aria-hidden />
+        <span className="sr-only">Wizard: </span>
+        <span className="truncate">{wizardName}</span>
+      </span>
+    );
 
   const prBadgeShape = supportsMultiplePullRequests
     ? resolveThreadPullRequestBadge(thread.pullRequests)
@@ -1276,6 +1288,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               )}
               {draftIndicator}
               {title}
+              {wizardBadge}
               {multiline ? titleLineIcons : null}
               {pinIndicator}
               {multiline ? null : terminalStatusIcon}

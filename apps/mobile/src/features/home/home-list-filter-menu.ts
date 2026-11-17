@@ -13,6 +13,13 @@ export interface HomeListFilterMenuProject {
   readonly label: string;
 }
 
+/** The "only Wizard threads" filter, offered once a Wizard thread is loaded. */
+export interface HomeListWizardFilter {
+  readonly offered: boolean;
+  readonly active: boolean;
+  readonly onChange: (active: boolean) => void;
+}
+
 export function buildHomeListFilterMenuItems(props: {
   readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
   readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
@@ -22,8 +29,34 @@ export function buildHomeListFilterMenuItems(props: {
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
   readonly onUserScopeChange: (environmentId: EnvironmentId, key: string) => void;
+  readonly wizard?: HomeListWizardFilter;
 }): AppBarMenuItem[] {
+  const wizard = props.wizard;
   const items: AppBarMenuItem[] = [
+    ...(wizard !== undefined && (wizard.offered || wizard.active)
+      ? [
+          {
+            id: "wizard",
+            title: "Wizard",
+            items: [
+              {
+                id: "wizard:all",
+                title: "All threads",
+                selected: !wizard.active,
+                onPress: () => wizard.onChange(false),
+              },
+              {
+                id: "wizard:only",
+                title: "Only Wizard threads",
+                subtitle: "Threads the Wizard API started",
+                icon: "wand.and.stars",
+                selected: wizard.active,
+                onPress: () => wizard.onChange(true),
+              },
+            ],
+          },
+        ]
+      : []),
     ...props.userScopes.map((scope) => ({
       id: `workspace-user:${scope.environmentId}`,
       title: scope.title,

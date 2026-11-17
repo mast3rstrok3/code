@@ -91,6 +91,27 @@ describe("hiddenThreadKeys", () => {
     expect(keys(null, null)).toEqual([]);
   });
 
+  it("shows only threads with a required tag, and their subagents and linked tasks", () => {
+    const required = hiddenThreadKeys([
+      { environmentId: local, threads: localThreads, hiddenTags: null, requiredTags: ["private"] },
+      {
+        environmentId: linked,
+        threads: linkedThreads,
+        hiddenTags: null,
+        requiredTags: ["private"],
+      },
+    ]);
+    // A fork is its own thread; a tagged side chat follows its untagged parent.
+    expect([...required].toSorted()).toEqual(
+      [
+        key(local, "private-fork"),
+        key(local, "plain"),
+        key(local, "plain-private-side-chat"),
+        key(linked, "linked-client"),
+      ].toSorted(),
+    );
+  });
+
   it("applies each environment's own tags", () => {
     expect(hiddenIds(null, ["client", "private"])).toEqual([key(linked, "linked-client")]);
   });

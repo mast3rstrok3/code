@@ -46,6 +46,7 @@ import { useThreadListSearchMatches } from "./useThreadListSearchMatches";
 import { useHomeListOptions } from "../home/home-list-options";
 import { useWorkspaceUserMenu } from "../workspace-users/useWorkspaceUserMenu";
 import { workspaceUserMenuIsCustomized } from "../workspace-users/workspaceUserMenu";
+import { useWizardThreadFilter } from "../home/useWizardThreadFilter";
 import { buildHomeListFilterMenuItems } from "../home/home-list-filter-menu";
 import {
   buildHomeProjectScopes,
@@ -163,6 +164,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   );
   const { options, setSelectedEnvironmentId, setSelectedProjectKey } =
     useHomeListOptions(availableEnvironmentIds);
+  const wizardFilter = useWizardThreadFilter();
   const { userScopes, onUserScopeChange } = useWorkspaceUserMenu(
     environments,
     options.selectedEnvironmentId,
@@ -547,6 +549,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       }}
       filter={{
         customized:
+          wizardFilter.active ||
           options.selectedEnvironmentId !== null ||
           selectedProjectKey !== null ||
           workspaceUserMenuIsCustomized(userScopes),
@@ -559,6 +562,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
           onEnvironmentChange: setSelectedEnvironmentId,
           onProjectChange: setSelectedProjectKey,
           onUserScopeChange,
+          wizard: wizardFilter,
         }),
       }}
       sidebar={{

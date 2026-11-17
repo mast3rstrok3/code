@@ -21,6 +21,7 @@ import {
   ExternalLinkIcon,
   FolderIcon,
   InfoIcon,
+  KeyRoundIcon,
   LoaderIcon,
   PanelRightIcon,
   PlayIcon,
@@ -258,6 +259,23 @@ function StackServices({ stack }: { readonly stack: AppStack }) {
 }
 
 /** The apps a platform record started, each with its status and frontend. */
+// Copies the password of the stack's seeded test users without showing it.
+function StackTestPasswordButton(props: { readonly password: string; readonly stackName: string }) {
+  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "test password" });
+  return (
+    <Button
+      size="xs"
+      variant="ghost"
+      onClick={() => copyToClipboard(props.password)}
+      aria-label={`Copy the test users' password for ${props.stackName}`}
+      title="Password of this stack's seeded test users, unique to this stack"
+    >
+      {isCopied ? <CheckIcon className="size-3.5" /> : <KeyRoundIcon className="size-3.5" />}
+      Test password
+    </Button>
+  );
+}
+
 function PlatformMembers(props: { readonly members: ReadonlyArray<AppStack> }) {
   if (props.members.length === 0) {
     return <div className="text-xs text-muted-foreground">No apps reported.</div>;
@@ -1333,6 +1351,9 @@ export function AppStackPanel(props: AppStackPanelProps) {
                     </Button>
                   ) : null}
                 </>
+              ) : null}
+              {stack.testPassword ? (
+                <StackTestPasswordButton password={stack.testPassword} stackName={stackName} />
               ) : null}
               {isPlatform ? null : (
                 <Button

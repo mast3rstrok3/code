@@ -29,6 +29,7 @@ import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
   type EnvironmentMachineKind,
+  wizardNameFromTags,
 } from "@t3tools/contracts";
 import { toServerClock } from "@t3tools/client-runtime/clock";
 import type { SnoozePresetSetting } from "@t3tools/contracts/settings";
@@ -783,6 +784,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       : workingLabel) ?? (isUnread ? DONE_STATUS_LABEL : undefined);
   const recede = shouldRecedeThreadRow({ status, selected });
   const isRegeneratingTitle = thread.titleRegeneration != null;
+  const wizardName = wizardNameFromTags(thread.source.tags);
   const timeLabel = props.timeLabel;
   const rowAccessibilityLabel = threadListV2RowAccessibilityLabel({
     title: thread.title,
@@ -796,7 +798,24 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     providerNameLabel,
     hasQueuedMessages: props.hasQueuedMessages === true,
     regeneratingTitle: isRegeneratingTitle,
+    wizardName,
   });
+  const wizardLabel =
+    wizardName === null ? null : (
+      <ThreadWizardLabel
+        name={wizardName}
+        textClassName={
+          selected
+            ? selectedThreadRowColors.mutedForegroundClassName
+            : rowAppearance.tertiaryForegroundClassName
+        }
+        iconTintClassName={
+          selected
+            ? selectedThreadRowColors.mutedIconTintClassName
+            : rowAppearance.tertiaryIconTintClassName
+        }
+      />
+    );
 
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   const handleAcknowledgeWoke = useCallback(() => {
@@ -1311,6 +1330,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         </View>
       ) : null}
       <View className="mt-1 flex-row items-center gap-2" style={{ paddingLeft: titleTextInset }}>
+        {wizardLabel}
         {(rawStatus === "failed" || rawStatus === "limited") && thread.runtime?.lastError ? (
           <Text
             className={cn(
@@ -1536,6 +1556,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                 {providerNameLabel}
               </Text>
             ) : null}
+            {wizardLabel}
             {props.searchMatch ? (
               <ThreadSearchMatchExcerpt
                 sidebar={sidebarPane}
@@ -1605,3 +1626,24 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     </View>
   );
 });
+
+/** The person who started the thread through the Wizard API. */
+function ThreadWizardLabel(props: {
+  readonly name: string;
+  readonly textClassName: string;
+  readonly iconTintClassName: string;
+}) {
+  return (
+    <View className="max-w-[45%] shrink-0 flex-row items-center gap-1">
+      <SymbolView
+        name="wand.and.stars"
+        size={11}
+        tintColorClassName={props.iconTintClassName}
+        type="monochrome"
+      />
+      <Text className={cn("shrink text-xs", props.textClassName)} numberOfLines={1}>
+        {props.name}
+      </Text>
+    </View>
+  );
+}

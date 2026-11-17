@@ -3,6 +3,7 @@ import {
   type ArchivedSnapshotEntry,
   createArchivedThreadSnapshotsAtomFamily,
   makeArchivedThreadsEnvironmentKey,
+  requiredThreadTagsAtom,
 } from "@t3tools/client-runtime/state/threads";
 import { DEFAULT_WORKSPACE_USER_VIEW, type EnvironmentId } from "@t3tools/contracts";
 import { isOwnedByWorkspaceUserView } from "@t3tools/shared/workspaceUsers";
@@ -40,6 +41,7 @@ const archivedSnapshotAtom = Atom.family((environmentId: EnvironmentId) =>
 const archivedSnapshotsAtom = createArchivedThreadSnapshotsAtomFamily({
   getSnapshotAtom: archivedSnapshotAtom,
   hiddenThreadTagsAtom: serverEnvironment.hiddenThreadTagsAtom,
+  requiredThreadTagsAtom,
   hiddenThreadKeysAtom: environmentThreadShells.hiddenThreadKeysAtom,
   liveThreadRefsAtom: environmentThreadShells.threadRefsAtom,
   anyEnvironmentHidingAtom: environmentThreadShells.anyEnvironmentHidingAtom,

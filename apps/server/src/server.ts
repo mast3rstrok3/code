@@ -220,6 +220,8 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as EnvironmentAuthPolicy from "./auth/EnvironmentAuthPolicy.ts";
 import * as CloudHttp from "./cloud/http.ts";
 import * as GuestHttp from "./guest/http.ts";
+import * as WizardHttp from "./wizard/http.ts";
+import * as WizardService from "./wizard/WizardService.ts";
 import * as CloudLink from "./cloud/CloudLink.ts";
 import * as ConnectReachability from "./cloud/ConnectReachability.ts";
 import { pendingServiceUpdateExists } from "./cloud/updateHandoff.ts";
@@ -890,6 +892,11 @@ const layerMakeRoutes = Layer.mergeAll(
   ServerHttp.layerAssetRoute,
   ServerHttp.layerAttachmentUploadRoute,
   GuestHttp.layer,
+  // Off unless T3CODE_WIZARD_API_TOKEN is set; its bearer token reaches only these routes.
+  WizardHttp.layer.pipe(
+    Layer.provide(WizardService.layer),
+    Layer.provide(WizardService.layerConfigFromEnv),
+  ),
   DeviceHubProxy.layer,
   ServerBrowserStream.routeLayer,
   ServerHttp.layerStaticAndDevRoute,

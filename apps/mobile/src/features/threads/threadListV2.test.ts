@@ -258,6 +258,12 @@ describe("threadListV2RowAccessibilityLabel", () => {
       }),
     ).toBe("Fix login, in 2h, Codex");
   });
+
+  it("names the Wizard who started the thread", () => {
+    expect(threadListV2RowAccessibilityLabel({ ...row, wizardName: "Dr. Anna Weber" })).toBe(
+      "Fix login, 5m, Codex, Wizard Dr. Anna Weber",
+    );
+  });
 });
 
 describe("resolveThreadListV2SwipeActions", () => {
