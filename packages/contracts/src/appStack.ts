@@ -138,6 +138,14 @@ export const AppStack = Schema.Struct({
   // pods and has no namespace, and its id is the bundleId of the apps it
   // started. Stop, restart and delete belong on it. Older controllers omit it.
   platform: Schema.optionalKey(Schema.Boolean),
+  // The password of the stack's seeded test users, unique to the stack.
+  // Older controllers omit it; the server reports that as null.
+  testPassword: Schema.optionalKey(
+    NullableString.annotate({
+      description:
+        "The password of this stack's seeded test users (Rudi: testuser@ivelion.com and the other realm users), unique to this stack. Give it to the person who will sign in. Never commit it or paste it into files, PRs or logs. Null when the stack has none or its controller does not report one.",
+    }),
+  ),
 });
 export type AppStack = typeof AppStack.Type;
 

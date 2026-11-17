@@ -268,10 +268,12 @@ export class AppStackManager extends Context.Service<
 
       // The controller does not report the variant; its compose file name is
       // the record, the same rule the controller applies on restart.
-      const withVariant = (stack: AppStack): AppStack =>
-        stack.variant === undefined
-          ? { ...stack, variant: appStackVariantForComposePath(stack.composePath) }
-          : stack;
+      // Fills what older controllers omit: the variant, and testPassword as null.
+      const normalizeStack = (stack: AppStack): AppStack => ({
+        ...stack,
+        variant: stack.variant ?? appStackVariantForComposePath(stack.composePath),
+        testPassword: stack.testPassword ?? null,
+      });
 
       const oidcConfigDescription = () =>
         `${OIDC_TOKEN_URL_ENV} or ${OIDC_ISSUER_ENV}, ${OIDC_CLIENT_ID_ENV}, and ${OIDC_CLIENT_SECRET_ENV} (or ${CODE_OIDC_ISSUER_ENV}, ${CODE_OIDC_CLIENT_ID_ENV}, and ${CODE_OIDC_CLIENT_SECRET_ENV})`;
@@ -507,7 +509,7 @@ export class AppStackManager extends Context.Service<
           HttpClientRequest.get(url.toString()),
           Schema.Array(AppStack),
         );
-        return { stacks: stacks.map(withVariant) };
+        return { stacks: stacks.map(normalizeStack) };
       });
 
       const getByWorktree = Effect.fn("AppStackManager.getByWorktree")(function* (input: {
@@ -523,7 +525,7 @@ export class AppStackManager extends Context.Service<
           HttpClientRequest.get(url.toString()),
           AppStackByWorktreeResult,
         );
-        return { ...result, stack: result.stack === null ? null : withVariant(result.stack) };
+        return { ...result, stack: result.stack === null ? null : normalizeStack(result.stack) };
       });
 
       const get = Effect.fn("AppStackManager.get")(function* (input: AppStackGetInput) {
@@ -533,7 +535,7 @@ export class AppStackManager extends Context.Service<
           HttpClientRequest.get(appStackUrl(base, `/${encodeURIComponent(input.stackId)}`)),
           AppStack,
         );
-        return withVariant(stack);
+        return normalizeStack(stack);
       });
 
       const requestBundlePlan = Effect.fn("AppStackManager.requestBundlePlan")(function* (
@@ -651,8 +653,8 @@ export class AppStackManager extends Context.Service<
         yield* requireOmittedServicesSupport(input, [result.stack, ...(result.bundle ?? [])]);
         return {
           ...result,
-          stack: result.stack === null ? null : withVariant(result.stack),
-          bundle: result.bundle?.map(withVariant) ?? null,
+          stack: result.stack === null ? null : normalizeStack(result.stack),
+          bundle: result.bundle?.map(normalizeStack) ?? null,
           createdWorktreePaths: createdWorktrees.map((worktree) => worktree.worktreePath),
           createdWorktrees,
         };
@@ -727,7 +729,7 @@ export class AppStackManager extends Context.Service<
           AppStackAutoCreateResult,
         );
         yield* requireOmittedServicesSupport(input, [result.stack]);
-        return { ...result, stack: result.stack === null ? null : withVariant(result.stack) };
+        return { ...result, stack: result.stack === null ? null : normalizeStack(result.stack) };
       });
 
       const getAutoCreateSemaphore = (key: string) =>
@@ -775,7 +777,7 @@ export class AppStackManager extends Context.Service<
           HttpClientRequest.post(appStackUrl(base, `/${encodeURIComponent(input.stackId)}/stop`)),
           AppStack,
         );
-        return withVariant(stack);
+        return normalizeStack(stack);
       });
 
       const setProtected = Effect.fn("AppStackManager.setProtected")(function* (
@@ -789,7 +791,7 @@ export class AppStackManager extends Context.Service<
           ).pipe(HttpClientRequest.bodyJsonUnsafe({ protected: input.protected })),
           AppStack,
         );
-        return withVariant(stack);
+        return normalizeStack(stack);
       });
 
       const workflowTeardown = Effect.fn("AppStackManager.workflowTeardown")(function* (
