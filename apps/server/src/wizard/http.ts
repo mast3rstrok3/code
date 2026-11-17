@@ -176,6 +176,18 @@ const interruptRoute = route(
   ),
 );
 
+const archiveRoute = route(
+  "POST",
+  `${WIZARD_ROUTE_PREFIX}/threads/:threadId/archive`,
+  guarded(
+    Effect.gen(function* () {
+      const wizard = yield* WizardService;
+      yield* wizard.archive(yield* threadIdParam);
+      return json(202, { accepted: true });
+    }),
+  ),
+);
+
 const transcriptRoute = route(
   "GET",
   `${WIZARD_ROUTE_PREFIX}/threads/:threadId/transcript`,
@@ -200,6 +212,7 @@ const routes = [
   getRoute,
   messageRoute,
   interruptRoute,
+  archiveRoute,
   transcriptRoute,
 ];
 

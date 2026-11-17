@@ -1,6 +1,7 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
 import {
+  type AppStack,
   EnvironmentId,
   MessageId,
   type OrchestrationV2ServerCommand,
@@ -141,8 +142,40 @@ const assistantItem = (id: string, text: string, streaming: boolean): Orchestrat
     streaming,
   }) as OrchestrationV2TurnItem;
 
+const stackRecord = (fields: Partial<AppStack> & { readonly id: string }): AppStack =>
+  ({
+    uuid: fields.id,
+    userId: "wizard",
+    worktreePath: "/worktrees/unused",
+    composePath: "infra/compose/compose.app-dev.yml",
+    displayName: null,
+    description: null,
+    status: "running",
+    services: null,
+    serviceCount: 0,
+    lastError: null,
+    errorCount: 0,
+    createdAt: "2026-11-17T09:00:00.000Z",
+    updatedAt: "2026-11-17T09:00:00.000Z",
+    testPassword: "stack-password",
+    ...fields,
+  }) as AppStack;
+
 const makeHarness = Effect.gen(function* () {
   const shells = new Map<string, OrchestrationV2ThreadShell>();
+  const stacks = {
+    byWorktree: {
+      stack: stackRecord({
+        id: "stack-1",
+        previewUrls: { frontend: "https://stack.example" },
+      }) as AppStack | null,
+      frontendUrl: "https://stack.example" as string | null,
+      frontendServiceName: "frontend" as string | null,
+    },
+    all: [] as AppStack[],
+    stopped: [] as string[],
+    lookups: [] as string[],
+  };
   const turnItems: OrchestrationV2TurnItem[] = [];
   const launches: ThreadLaunch.ThreadLaunchInput[] = [];
   const commands: OrchestrationV2ServerCommand[] = [];
@@ -160,6 +193,10 @@ const makeHarness = Effect.gen(function* () {
       dispatch: (command) =>
         Effect.sync(() => {
           commands.push(command);
+          if (command.type === "thread.archive") {
+            const shell = shells.get(command.threadId)!;
+            shells.set(command.threadId, { ...shell, archivedAt: NOW });
+          }
           if (command.type === "thread.tag.set") {
             const shell = shells.get(command.threadId)!;
             const tags = shell.tags ?? [];
@@ -210,23 +247,26 @@ const makeHarness = Effect.gen(function* () {
       listLocalBranchNames: () => Effect.succeed(["dev", "wizard/dr-anna-weber/fix-the-login"]),
     }),
     Layer.mock(AppStackManager.AppStackManager)({
-      getByWorktree: () =>
-        Effect.succeed({
-          stack: {
-            id: "stack-1",
-            status: "running",
-            previewUrls: { frontend: "https://stack.example" },
-            testPassword: "stack-password",
-          },
-          frontendUrl: "https://stack.example",
-          frontendServiceName: "frontend",
-        } as never),
+      status: Effect.succeed({ enabled: true, backendUrl: "https://stacks.example" }),
+      getByWorktree: (input) =>
+        Effect.sync(() => {
+          stacks.lookups.push(`${input.worktreePath}:${input.variant ?? "dev"}`);
+          return (input.variant ?? "dev") === "dev"
+            ? stacks.byWorktree
+            : { stack: null, frontendUrl: null, frontendServiceName: null };
+        }),
+      list: () => Effect.sync(() => ({ stacks: [...stacks.all] })),
+      stop: (input) =>
+        Effect.sync(() => {
+          stacks.stopped.push(input.stackId);
+          return stacks.byWorktree.stack!;
+        }),
     }),
   );
   const service = yield* WizardService.WizardService.pipe(
     Effect.provide(WizardService.layer.pipe(Layer.provide(dependencies))),
   );
-  return { service, shells, turnItems, launches, commands, events };
+  return { service, shells, turnItems, launches, commands, events, stacks };
 });
 
 const wizard = { id: "user-17", name: "Dr. Anna Weber" };
@@ -354,5 +394,120 @@ it.effect("lists models with their effort options and the project default", () =
       })
       .pipe(Effect.flip);
     assert.strictEqual(refused.code, "invalid_model");
+  }),
+);
+
+it.effect("archives once: stops the turn and the stack, then refuses messages with 409", () =>
+  Effect.gen(function* () {
+    const { service, commands, stacks } = yield* makeHarness;
+    const created = yield* service.createThread({ wizard, message: "Hi", clientRequestId: "a" });
+    // The harness records commands; it applies thread.archive to the shell as the server would.
+    const archiveCommands = () =>
+      commands.filter((c) => c.type === "thread.stop" || c.type === "thread.archive");
+
+    yield* service.archive(created.threadId);
+    assert.deepStrictEqual(
+      archiveCommands().map((command) => command.type),
+      ["thread.stop", "thread.archive"],
+    );
+    assert.deepStrictEqual(stacks.stopped, ["stack-1"]);
+    assert.deepStrictEqual(stacks.lookups, [
+      `/worktrees/${created.threadId}:dev`,
+      `/worktrees/${created.threadId}:dev`,
+      `/worktrees/${created.threadId}:prod`,
+    ]);
+
+    const archived = yield* service.getThread(created.threadId);
+    assert.strictEqual(archived.state, "archived");
+    // Worktree and branch stay, so an open pull request stays intact.
+    assert.strictEqual(archived.branch, "wizard/dr-anna-weber/hi");
+
+    // Repeating it changes nothing.
+    yield* service.archive(created.threadId);
+    assert.strictEqual(archiveCommands().length, 2);
+    assert.deepStrictEqual(stacks.stopped, ["stack-1"]);
+
+    const refused = yield* service
+      .sendMessage(created.threadId, { message: "More", clientRequestId: "m1" })
+      .pipe(Effect.flip);
+    assert.deepStrictEqual([refused.status, refused.code], [409, "archived"]);
+  }),
+);
+
+it.effect("archives an idle thread without a Stop and leaves stopped or protected stacks", () =>
+  Effect.gen(function* () {
+    const { service, shells, commands, stacks } = yield* makeHarness;
+    const created = yield* service.createThread({ wizard, message: "Hi", clientRequestId: "b" });
+    shells.set(created.threadId, { ...shells.get(created.threadId)!, status: "completed" });
+    stacks.byWorktree = {
+      ...stacks.byWorktree,
+      stack: stackRecord({ id: "stack-1", protected: true }),
+    };
+    yield* service.archive(created.threadId);
+    assert.deepStrictEqual(
+      commands.filter((c) => c.type === "thread.stop").map((c) => c.type),
+      [],
+    );
+    assert.deepStrictEqual(stacks.stopped, []);
+    assert.strictEqual((yield* service.getThread(created.threadId)).state, "archived");
+  }),
+);
+
+it.effect("keys a platform stack's URLs by its members' service names", () =>
+  Effect.gen(function* () {
+    const { service, stacks } = yield* makeHarness;
+    stacks.byWorktree = {
+      // A healthcare-platform worktree's record runs no pods and has no preview URLs.
+      stack: stackRecord({ id: "bundle-1", bundleId: "bundle-1", platform: true }),
+      frontendUrl: "https://rudi.example",
+      frontendServiceName: "frontend",
+    };
+    stacks.all = [
+      stackRecord({ id: "bundle-1", bundleId: "bundle-1", platform: true }),
+      stackRecord({
+        id: "mr-1",
+        app: "medical-repository",
+        bundleId: "bundle-1",
+        previewUrls: { api: "https://mr.example" },
+      }),
+      stackRecord({
+        id: "rudi-1",
+        app: "rudi",
+        bundleId: "bundle-1",
+        previewUrls: {
+          frontend: "https://rudi.example",
+          backend: "https://rudi-api.example",
+          metro: "https://metro.example",
+        },
+      }),
+      stackRecord({
+        id: "other",
+        app: "cortex",
+        bundleId: "bundle-2",
+        previewUrls: { frontend: "https://cortex.example" },
+      }),
+    ];
+    const created = yield* service.createThread({ wizard, message: "Hi", clientRequestId: "c" });
+    assert.deepStrictEqual(created.stack, {
+      stackId: "bundle-1",
+      status: "running",
+      urls: {
+        frontend: "https://rudi.example",
+        backend: "https://rudi-api.example",
+        metro: "https://metro.example",
+        "medical-repository/api": "https://mr.example",
+      },
+      testPassword: "stack-password",
+    });
+
+    // An app stack names its frontend service itself, here Study Network's `web`.
+    stacks.byWorktree = {
+      stack: stackRecord({ id: "sn-1", previewUrls: { web: "https://sn.example" } }),
+      frontendUrl: "https://sn.example",
+      frontendServiceName: "web",
+    };
+    assert.deepStrictEqual((yield* service.getThread(created.threadId)).stack?.urls, {
+      web: "https://sn.example",
+    });
   }),
 );

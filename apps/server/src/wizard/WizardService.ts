@@ -1,4 +1,7 @@
 import {
+  type AppStack,
+  type AppStackByWorktreeResult,
+  type AppStackVariant,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   isProviderAvailable,
@@ -91,6 +94,8 @@ export class WizardApiError extends Schema.TaggedError<WizardApiError>()("Wizard
 const fail = (status: number, code: string, message: string) =>
   Effect.fail(new WizardApiError({ status, code, message }));
 const notFound = () => fail(404, "not_found", "No Wizard thread has this id.");
+const archivedRefusal = () =>
+  fail(409, "archived", "The thread is archived and takes no more messages.");
 const unavailable = (message: string) => (cause: unknown) =>
   Effect.logWarning("Wizard API request failed", { cause }).pipe(
     Effect.andThen(fail(503, "unavailable", message)),
@@ -121,6 +126,8 @@ export class WizardService extends Context.Service<
       input: WizardSendMessageRequest,
     ) => Effect.Effect<void, WizardApiError>;
     readonly interrupt: (threadId: string) => Effect.Effect<void, WizardApiError>;
+    /** Stops the turn and the worktree's App Stack, then archives; an archived thread is a no-op. */
+    readonly archive: (threadId: string) => Effect.Effect<void, WizardApiError>;
     readonly transcript: (input: {
       readonly threadId: string;
       readonly after: number;
@@ -230,6 +237,37 @@ function wizardThreadState(shell: OrchestrationV2ThreadShell): WizardThreadState
   }
 }
 
+/**
+ * The stack's preview URLs, keyed by the controller's service names. A platform record (the
+ * root of a healthcare-platform worktree) runs no pods, so its bundle members' URLs stand in:
+ * the member that serves the frontend keeps plain service names (`frontend`, `backend`,
+ * `metro`, …), every other member's carry its app id (`medical-repository/api`).
+ */
+function wizardStackUrls(
+  result: AppStackByWorktreeResult & { readonly stack: AppStack },
+  members: ReadonlyArray<AppStack>,
+): Record<string, string> {
+  const urls = new Map<string, string>();
+  const add = (name: string, url: string) => {
+    if (!urls.has(name)) urls.set(name, url);
+  };
+  for (const [name, url] of Object.entries(result.stack.previewUrls ?? {})) add(name, url);
+  const frontendUrl = result.frontendUrl;
+  const frontendMember =
+    frontendUrl === null
+      ? undefined
+      : members.find((member) => Object.values(member.previewUrls ?? {}).includes(frontendUrl));
+  for (const [name, url] of Object.entries(frontendMember?.previewUrls ?? {})) add(name, url);
+  if (frontendUrl !== null) add(result.frontendServiceName ?? "frontend", frontendUrl);
+  for (const member of members) {
+    if (member === frontendMember) continue;
+    for (const [name, url] of Object.entries(member.previewUrls ?? {})) {
+      add(`${member.app ?? member.id}/${name}`, url);
+    }
+  }
+  return Object.fromEntries(urls);
+}
+
 function pullRequestOf(shell: OrchestrationV2ThreadShell): WizardThread["pullRequest"] {
   const link = shell.pullRequests?.findLast((candidate) => candidate.source !== "stack-dismissed");
   if (link !== undefined) {
@@ -291,6 +329,29 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  /** A platform record's members, so their URLs can stand in for the record's own. */
+  const bundleMembers = (stack: AppStack) =>
+    stack.platform !== true
+      ? Effect.succeed([] as ReadonlyArray<AppStack>)
+      : appStacks.list({}).pipe(
+          Effect.map(({ stacks }) =>
+            stacks.filter((member) => member.bundleId === stack.id && member.id !== stack.id),
+          ),
+          Effect.orElseSucceed((): ReadonlyArray<AppStack> => []),
+        );
+
+  const stackOf = Effect.fn("WizardService.stackOf")(function* (worktreePath: string) {
+    const result = yield* appStacks.getByWorktree({ worktreePath });
+    const stack = result.stack;
+    if (stack === null) return null;
+    return {
+      stackId: stack.id,
+      status: stack.status,
+      urls: wizardStackUrls({ ...result, stack }, yield* bundleMembers(stack)),
+      testPassword: stack.testPassword ?? null,
+    } satisfies WizardThread["stack"];
+  });
+
   const toWizardThread = Effect.fn("WizardService.toWizardThread")(function* (
     shell: OrchestrationV2ThreadShell,
   ) {
@@ -298,20 +359,7 @@ const make = Effect.gen(function* () {
     const stack =
       shell.worktreePath === null
         ? null
-        : yield* appStacks.getByWorktree({ worktreePath: shell.worktreePath }).pipe(
-            Effect.map((result) =>
-              result.stack === null
-                ? null
-                : {
-                    stackId: result.stack.id,
-                    status: result.stack.status,
-                    urls: {
-                      ...(result.frontendUrl === null ? {} : { frontend: result.frontendUrl }),
-                      ...result.stack.previewUrls,
-                    },
-                    testPassword: result.stack.testPassword ?? null,
-                  },
-            ),
+        : yield* stackOf(shell.worktreePath).pipe(
             // No stack controller, or none reachable, is "no stack" to a Wizard.
             Effect.orElseSucceed(() => null),
           );
@@ -484,6 +532,7 @@ const make = Effect.gen(function* () {
     input: WizardSendMessageRequest,
   ) {
     const shell = yield* shellOf(threadId);
+    if (shell.archivedAt !== null) return yield* archivedRefusal();
     const modelSelection =
       input.model === undefined
         ? undefined
@@ -505,6 +554,7 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.catchTags({
           ThreadManagementThreadNotFoundError: () => notFound(),
+          ThreadManagementThreadArchivedError: () => archivedRefusal(),
           ThreadManagementProviderInstanceDisabledError: (error) =>
             fail(400, "invalid_model", error.message),
         }),
@@ -527,6 +577,66 @@ const make = Effect.gen(function* () {
         reason: "The Wizard stopped the turn.",
       })
       .pipe(Effect.catch(unavailable("The turn could not be stopped.")));
+  });
+
+  /** Stops the worktree's dev and prod stacks; a stack its owner protected keeps running. */
+  const stopStacks = Effect.fn("WizardService.stopStacks")(function* (worktreePath: string) {
+    if (!(yield* appStacks.status).enabled) return;
+    for (const variant of ["dev", "prod"] satisfies ReadonlyArray<AppStackVariant>) {
+      const { stack } = yield* appStacks
+        .getByWorktree({ worktreePath, variant })
+        .pipe(Effect.catch(unavailable("The thread's App Stack could not be read.")));
+      if (
+        stack === null ||
+        stack.status === "stopped" ||
+        stack.status === "stopping" ||
+        stack.protected === true
+      ) {
+        continue;
+      }
+      // Stopping a platform record or any bundle member stops the whole bundle.
+      yield* appStacks
+        .stop({ stackId: stack.id })
+        .pipe(Effect.catch(unavailable("The thread's App Stack could not be stopped.")));
+    }
+  });
+
+  const archive = Effect.fn("WizardService.archive")(function* (threadId: string) {
+    const shell = yield* shellOf(threadId);
+    if (shell.archivedAt !== null) return;
+    const key = yield* requestKey("archive", shell.id, String(yield* Clock.currentTimeMillis));
+    const state = wizardThreadState(shell);
+    if (state === "starting" || state === "working" || state === "waiting") {
+      // The Stop button's command: ends the turn and the thread's delegated tasks.
+      yield* threads
+        .dispatch({
+          type: "thread.stop",
+          commandId: CommandId.make(`wizard:archive:stop:${key}`),
+          threadId: shell.id,
+          reason: "The Wizard archived the thread.",
+        })
+        .pipe(Effect.catch(unavailable("The turn could not be stopped.")));
+    }
+    if (shell.worktreePath !== null) yield* stopStacks(shell.worktreePath);
+    // Archive keeps the worktree and branch, so an open pull request stays intact.
+    yield* threads
+      .dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make(`wizard:archive:${key}`),
+        threadId: shell.id,
+      })
+      .pipe(
+        Effect.catch((error) =>
+          // A concurrent archive won the race: the thread is archived either way.
+          shellOf(threadId).pipe(
+            Effect.flatMap((current) =>
+              current.archivedAt !== null
+                ? Effect.void
+                : unavailable("The thread could not be archived yet. Try again.")(error),
+            ),
+          ),
+        ),
+      );
   });
 
   const readTranscript = Effect.fn("WizardService.readTranscript")(function* (
@@ -592,6 +702,7 @@ const make = Effect.gen(function* () {
     }),
     sendMessage,
     interrupt,
+    archive,
     transcript,
   });
 });

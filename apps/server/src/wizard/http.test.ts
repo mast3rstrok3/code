@@ -5,7 +5,7 @@ import * as Redacted from "effect/Redacted";
 import * as HttpRouter from "effect/http/HttpRouter";
 
 import * as WizardHttp from "./http.ts";
-import { WizardConfig, WizardService } from "./WizardService.ts";
+import { WizardApiError, WizardConfig, WizardService } from "./WizardService.ts";
 
 const TOKEN = "wizard-test-token-0123456789";
 
@@ -18,6 +18,15 @@ const handlerFor = (token: string | null, calls: string[] = []) =>
             calls.push("models");
             return { models: [], default: { provider: "codex", model: "gpt-5.4" } };
           }),
+          archive: (threadId) =>
+            Effect.suspend(() => {
+              calls.push(`archive:${threadId}`);
+              return threadId === "missing"
+                ? Effect.fail(
+                    new WizardApiError({ status: 404, code: "not_found", message: "No thread." }),
+                  )
+                : Effect.void;
+            }),
           transcript: (input) =>
             Effect.sync(() => {
               calls.push(`transcript:${input.threadId}:${input.after}:${input.waitMs}`);
@@ -102,6 +111,33 @@ it.effect("rejects an invalid body or cursor with 400", () => {
         );
         expect(transcript.status).toBe(200);
         expect(calls).toEqual(["transcript:t1:7:100"]);
+      }),
+    ({ dispose }) => Effect.promise(dispose),
+  );
+});
+
+it.effect("archives with 202 and passes the service's 404 through", () => {
+  const calls: string[] = [];
+  return Effect.acquireUseRelease(
+    Effect.sync(() => handlerFor(TOKEN, calls)),
+    ({ handler }) =>
+      Effect.promise(async () => {
+        const post = (path: string, authorization?: string) =>
+          handler(
+            new Request(`http://127.0.0.1${path}`, {
+              method: "POST",
+              headers: authorization === undefined ? {} : { authorization },
+            }),
+          );
+        const refused = await post("/api/wizard/threads/t1/archive");
+        expect(refused.status).toBe(401);
+        const archived = await post("/api/wizard/threads/t1/archive", `Bearer ${TOKEN}`);
+        expect(archived.status).toBe(202);
+        expect(await archived.json()).toEqual({ accepted: true });
+        const missing = await post("/api/wizard/threads/missing/archive", `Bearer ${TOKEN}`);
+        expect(missing.status).toBe(404);
+        expect(await missing.json()).toMatchObject({ error: "not_found" });
+        expect(calls).toEqual(["archive:t1", "archive:missing"]);
       }),
     ({ dispose }) => Effect.promise(dispose),
   );
