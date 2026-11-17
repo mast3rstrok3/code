@@ -374,7 +374,8 @@ it.effect("bounds a stuck lookup without releasing a device", () =>
 );
 
 it.effect("registers workspace tools, validates inputs, and returns results through MCP", () => {
-  const test = harness({ stack });
+  const withPassword = { ...stack, testPassword: "stack-only-secret" };
+  const test = harness({ stack: withPassword, createdStack: withPassword });
   const layer = toolkitRegistration(AppStackToolkit, AppStackHandlers.layer).pipe(
     Layer.provideMerge(layerInProcessMcpServer),
     Layer.provideMerge(test.layer),
@@ -414,7 +415,7 @@ it.effect("registers workspace tools, validates inputs, and returns results thro
         worktreePath: "/repo/rudi",
         variant: "dev",
         enabled: true,
-        stack: { id: stack.id },
+        stack: { id: stack.id, testPassword: "stack-only-secret" },
       });
       const created = yield* server.callTool({
         name: "app_stack_start",
@@ -423,7 +424,7 @@ it.effect("registers workspace tools, validates inputs, and returns results thro
       expect(created.isError).not.toBe(true);
       expect(created.structuredContent).toMatchObject({
         created: false,
-        stack: { id: stack.id },
+        stack: { id: stack.id, testPassword: "stack-only-secret" },
       });
       for (const tailLines of [0, -1, 5001, 1.5]) {
         const invalid = yield* server
@@ -473,6 +474,17 @@ it.effect("registers workspace tools, validates inputs, and returns results thro
       expect(test.operations.at(-1)).toEqual({
         operation: "startDevice",
         input: { stackId: stack.id, platform: "android", leaseId },
+      });
+      // A bundle always reaches the controller's auto-create.
+      const bundled = yield* server.callTool({
+        name: "app_stack_start",
+        arguments: { bundle: ["cortex"] },
+      });
+      expect(bundled.isError).not.toBe(true);
+      expect(test.operations.at(-1)?.operation).toBe("autoCreate");
+      expect(bundled.structuredContent).toMatchObject({
+        created: true,
+        stack: { id: stack.id, testPassword: "stack-only-secret" },
       });
     }),
   ).pipe(
