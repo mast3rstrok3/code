@@ -9,6 +9,7 @@ import type {
 import {
   isListedThreadLineage,
   isProviderNativeSubagentThread,
+  isWizardThread,
   OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -16,7 +17,7 @@ import { Atom } from "effect/reactivity";
 
 import type { EnvironmentThreadShell, PendingSubagentRequest } from "./models.ts";
 import { presentThreadShell, threadRuntimeIsActive } from "./models.ts";
-import { hiddenThreadKeys, NO_HIDDEN_THREADS } from "./threadTagFilter.ts";
+import { hiddenThreadKeys, isTagFiltering, NO_HIDDEN_THREADS } from "./threadTagFilter.ts";
 import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
 import {
   arrayElementsEqual,
@@ -216,6 +217,8 @@ export function createEnvironmentThreadShellAtoms(input: {
   readonly hiddenThreadTagsAtom: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<ReadonlyArray<string> | null>;
+  /** This client's "only threads with these tags" filter, such as Wizard threads; null while off. */
+  readonly requiredThreadTagsAtom?: Atom.Atom<ReadonlyArray<string> | null>;
 }) {
   // Point reads and aggregate lists share values without keeping an atom alive
   // for every listed thread. Replaced source objects can be collected.
@@ -605,19 +608,28 @@ export function createEnvironmentThreadShellAtoms(input: {
     return previousThreadShells;
   }).pipe(Atom.withLabel("environment-thread-shell-list"));
 
+  /** Whether any loaded thread came from the Wizard API, so lists offer the Wizard filter. */
+  const hasWizardThreadsAtom = Atom.make((get) =>
+    get(threadShellsAtom).some((thread) => isWizardThread(thread.source.tags)),
+  ).pipe(Atom.withLabel("environment-has-wizard-threads"));
+
   // Point reads and threadShellsAtom stay complete, so code that asks whether a thread
   // exists (outboxes, drafts, removals) never mistakes a hidden thread for a missing one.
   let previousHiddenThreadKeys: ReadonlySet<string> = NO_HIDDEN_THREADS;
+  const requiredTagsOf = (get: Atom.AtomContext) =>
+    input.requiredThreadTagsAtom === undefined ? null : get(input.requiredThreadTagsAtom);
   const hiddenThreadKeysAtom = Atom.make((get) => {
+    const requiredTags = requiredTagsOf(get);
     const environments = Array.from(
       enabledEnvironmentIds(get(input.catalogValueAtom)),
       (environmentId) => ({
         environmentId,
         hiddenTags: get(input.hiddenThreadTagsAtom(environmentId)),
+        requiredTags,
       }),
     );
     // Read shells only while some environment hides tags, so streaming ticks cost nothing otherwise.
-    if (!environments.some((environment) => environment.hiddenTags !== null)) {
+    if (!environments.some(isTagFiltering)) {
       previousHiddenThreadKeys = NO_HIDDEN_THREADS;
       return NO_HIDDEN_THREADS;
     }
@@ -637,10 +649,12 @@ export function createEnvironmentThreadShellAtoms(input: {
     return next;
   }).pipe(Atom.withLabel("environment-hidden-thread-keys"));
 
-  const anyEnvironmentHidingAtom = Atom.make((get) =>
-    Array.from(enabledEnvironmentIds(get(input.catalogValueAtom))).some(
-      (environmentId) => get(input.hiddenThreadTagsAtom(environmentId)) !== null,
-    ),
+  const anyEnvironmentHidingAtom = Atom.make(
+    (get) =>
+      requiredTagsOf(get) !== null ||
+      Array.from(enabledEnvironmentIds(get(input.catalogValueAtom))).some(
+        (environmentId) => get(input.hiddenThreadTagsAtom(environmentId)) !== null,
+      ),
   ).pipe(Atom.withLabel("environment-any-hiding-thread-tags"));
 
   /** threadShellsAtom without the threads the tag filter hides, for pickers and palettes. */
@@ -735,6 +749,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     visibleThreadShellsAtom,
     hiddenThreadKeysAtom,
     anyEnvironmentHidingAtom,
+    hasWizardThreadsAtom,
     quietThreadShellsAtom,
     navigationThreadShellsAtom,
     delegatedUnderParentAtom,

@@ -50,6 +50,8 @@ export function createArchivedThreadSnapshotsAtomFamily<E>(options: {
   readonly hiddenThreadTagsAtom: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<ReadonlyArray<string> | null>;
+  /** This client's "only threads with these tags" filter; null while off. */
+  readonly requiredThreadTagsAtom?: Atom.Atom<ReadonlyArray<string> | null>;
   /** Live threads the tag filter hides, so archived children of hidden parents stay hidden. */
   readonly hiddenThreadKeysAtom: Atom.Atom<ReadonlySet<string>>;
   /** Live threads, so archived children of loaded, visible parents stay visible. */
@@ -64,6 +66,8 @@ export function createArchivedThreadSnapshotsAtomFamily<E>(options: {
       const environments: TagFilteredEnvironment[] = [];
       let error: string | null = null;
       let isLoading = false;
+      const requiredTags =
+        options.requiredThreadTagsAtom === undefined ? null : get(options.requiredThreadTagsAtom);
 
       for (const environmentId of parseArchivedThreadsEnvironmentKey(environmentKey)) {
         const result = get(options.getSnapshotAtom(environmentId));
@@ -78,6 +82,7 @@ export function createArchivedThreadSnapshotsAtomFamily<E>(options: {
           environmentId,
           threads: snapshot?.threads ?? [],
           hiddenTags: get(options.hiddenThreadTagsAtom(environmentId)),
+          requiredTags,
         });
 
         if (error === null && result._tag === "Failure") {

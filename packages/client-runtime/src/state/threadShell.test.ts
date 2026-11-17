@@ -17,6 +17,7 @@ import { v2Now, v2ShellSnapshot, v2ThreadShell } from "./orchestrationV2TestFixt
 import { applyShellStreamEvent } from "./shellReducer.ts";
 import { isThreadWorking } from "./threadInbox.ts";
 import { childThreadInputsTitle, createEnvironmentThreadShellAtoms } from "./threadShell.ts";
+import { requiredThreadTagsAtom, WIZARD_THREAD_FILTER } from "./threadTagFilter.ts";
 
 const environmentId = EnvironmentId.make("environment-v2");
 const remoteEnvironmentId = EnvironmentId.make("remote-environment-v2");
@@ -52,11 +53,39 @@ function makeHarness(environmentIds: ReadonlyArray<EnvironmentId> = [environment
       catalogValueAtom,
       snapshotAtom,
       hiddenThreadTagsAtom: () => Atom.make(null),
+      requiredThreadTagsAtom,
     }),
   };
 }
 
 describe("v2 thread shell lists", () => {
+  it("offers the Wizard filter once a Wizard thread loads and then lists only those", () => {
+    const { registry, threads, snapshotAtom } = makeHarness();
+    const owner = { ...v2ThreadShell, id: ThreadId.make("owner") };
+    registry.set(snapshotAtom(environmentId), { ...v2ShellSnapshot, threads: [owner] });
+    const dispose = registry.mount(threads.navigationThreadShellsAtom);
+    expect(registry.get(threads.hasWizardThreadsAtom)).toBe(false);
+
+    const wizard = {
+      ...v2ThreadShell,
+      id: ThreadId.make("wizard-thread"),
+      tags: ["wizard", "wizard:user-17", "wizard-name:Dr. Anna Weber"],
+    };
+    registry.set(snapshotAtom(environmentId), { ...v2ShellSnapshot, threads: [owner, wizard] });
+    expect(registry.get(threads.hasWizardThreadsAtom)).toBe(true);
+
+    registry.set(requiredThreadTagsAtom, WIZARD_THREAD_FILTER);
+    expect(registry.get(threads.navigationThreadShellsAtom).map((thread) => thread.id)).toEqual([
+      wizard.id,
+    ]);
+    // Point reads stay complete, so a hidden thread is never mistaken for a missing one.
+    expect(registry.get(threads.threadShellsAtom)).toHaveLength(2);
+    registry.set(requiredThreadTagsAtom, null);
+    expect(registry.get(threads.navigationThreadShellsAtom)).toHaveLength(2);
+    dispose();
+    registry.dispose();
+  });
+
   it("preserves ordered reference arrays when a middle thread changes", () => {
     const { registry, threads, snapshotAtom } = makeHarness();
     const snapshot = {

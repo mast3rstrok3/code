@@ -5,6 +5,7 @@ import {
   type ArchivedSnapshotEntry,
   createArchivedThreadSnapshotsAtomFamily,
   makeArchivedThreadsEnvironmentKey,
+  requiredThreadTagsAtom,
 } from "@t3tools/client-runtime/state/threads";
 import type { EnvironmentId } from "@t3tools/contracts";
 
@@ -40,6 +41,7 @@ function archivedSnapshotAtom(environmentId: EnvironmentId) {
 const archivedSnapshotsAtom = createArchivedThreadSnapshotsAtomFamily({
   getSnapshotAtom: archivedSnapshotAtom,
   hiddenThreadTagsAtom: serverEnvironment.hiddenThreadTagsAtom,
+  requiredThreadTagsAtom,
   hiddenThreadKeysAtom: environmentThreadShells.hiddenThreadKeysAtom,
   liveThreadRefsAtom: environmentThreadShells.threadRefsAtom,
   anyEnvironmentHidingAtom: environmentThreadShells.anyEnvironmentHidingAtom,

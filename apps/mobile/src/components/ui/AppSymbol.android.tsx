@@ -135,6 +135,7 @@ import IconUserX from "@tabler/icons-react-native/IconUserX";
 import IconUserQuestion from "@tabler/icons-react-native/IconUserQuestion";
 import IconUserPlus from "@tabler/icons-react-native/IconUserPlus";
 import IconUsers from "@tabler/icons-react-native/IconUsers";
+import IconWand from "@tabler/icons-react-native/IconWand";
 import IconWifi from "@tabler/icons-react-native/IconWifi";
 import IconWifiOff from "@tabler/icons-react-native/IconWifiOff";
 import IconWorld from "@tabler/icons-react-native/IconWorld";
@@ -289,6 +290,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "tray.and.arrow.down": IconDownload,
   "tray.and.arrow.up": IconUpload,
   trash: IconTrash,
+  "wand.and.stars": IconWand,
   wifi: IconWifi,
   "wifi.slash": IconWifiOff,
   "wrench.and.screwdriver": IconTool,
