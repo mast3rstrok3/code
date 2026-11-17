@@ -1,4 +1,5 @@
-import { FolderPlusIcon, SearchIcon, SquarePenIcon, XIcon } from "lucide-react";
+import { useAtomValue } from "@effect/atom-react";
+import { FolderPlusIcon, SearchIcon, SquarePenIcon, WandIcon, XIcon } from "lucide-react";
 import {
   type ComponentProps,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -8,6 +9,12 @@ import {
 } from "react";
 
 import { cn } from "~/lib/utils";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
+import {
+  hasWizardThreadsAtom,
+  requiredThreadTagsAtom,
+  WIZARD_THREAD_FILTER,
+} from "../../state/threads";
 import { Button } from "../ui/button";
 import { SidebarInput, SidebarMenuButton } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -97,6 +104,7 @@ export function SidebarThreadHeader({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center">
+        <SidebarWizardFilterButton />
         {hasProjects ? (
           <>
             {projectScope}
@@ -127,6 +135,24 @@ export function SidebarThreadHeader({
         </SidebarHeaderIconButton>
       </div>
     </div>
+  );
+}
+
+/** Shows only threads the Wizard API started; offered once this browser has seen one. */
+function SidebarWizardFilterButton() {
+  const hasWizardThreads = useAtomValue(hasWizardThreadsAtom);
+  const active = useAtomValue(requiredThreadTagsAtom) !== null;
+  if (!hasWizardThreads && !active) return null;
+  return (
+    <SidebarHeaderIconButton
+      label={active ? "Show all threads" : "Show only Wizard threads"}
+      aria-pressed={active}
+      onClick={() =>
+        appAtomRegistry.set(requiredThreadTagsAtom, active ? null : WIZARD_THREAD_FILTER)
+      }
+    >
+      <WandIcon className={active ? "text-primary" : undefined} />
+    </SidebarHeaderIconButton>
   );
 }
 

@@ -12,7 +12,13 @@ import {
   createThreadEnvironmentAtoms,
   createThreadFamilyAtoms,
 } from "@t3tools/client-runtime/state/threads";
-import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  isWizardThread,
+  type OrchestrationV2ThreadShell,
+  type ThreadId,
+  WIZARD_THREAD_TAG,
+} from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 
@@ -37,11 +43,24 @@ const environmentThreads = createEnvironmentThreadStateAtoms(connectionAtomRunti
 export const environmentThreadDetails = createEnvironmentThreadDetailAtoms(
   environmentThreads.stateAtom,
 );
+/** This browser's "only these tags" thread filter; the sidebar sets it to show Wizard threads. */
+export const requiredThreadTagsAtom = Atom.make<ReadonlyArray<string> | null>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("web-required-thread-tags"),
+);
+export const WIZARD_THREAD_FILTER: ReadonlyArray<string> = [WIZARD_THREAD_TAG];
 export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: threadEnvironment.snapshotAtom,
   hiddenThreadTagsAtom: serverEnvironment.hiddenThreadTagsAtom,
+  requiredThreadTagsAtom,
 });
+/** Whether any loaded thread came from the Wizard API, so the sidebar offers its filter. */
+export const hasWizardThreadsAtom = Atom.make((get) =>
+  get(environmentThreadShells.threadShellsAtom).some((thread) =>
+    isWizardThread(thread.source.tags),
+  ),
+).pipe(Atom.withLabel("web-has-wizard-threads"));
 export const childThreadApprovalsAtom = createChildThreadApprovalsAtom({
   childThreadInputsAtom: environmentThreadShells.childThreadInputsAtom,
   pendingRequestsAtom: environmentThreadDetails.pendingRequestsAtom,

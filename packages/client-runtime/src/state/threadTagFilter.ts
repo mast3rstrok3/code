@@ -18,6 +18,15 @@ export interface TagFilteredEnvironment {
   readonly threads: ReadonlyArray<FilterableThread>;
   /** Tags this environment hides, or null while its filter is off. */
   readonly hiddenTags: ReadonlyArray<string> | null;
+  /** Only threads with one of these tags show; null or absent while that filter is off. */
+  readonly requiredTags?: ReadonlyArray<string> | null;
+}
+
+/** Whether either tag filter is on for the environment. */
+export function isTagFiltering(
+  environment: Pick<TagFilteredEnvironment, "hiddenTags" | "requiredTags">,
+): boolean {
+  return environment.hiddenTags !== null || (environment.requiredTags ?? null) !== null;
 }
 
 export const NO_HIDDEN_THREADS: ReadonlySet<string> = new Set();
@@ -55,11 +64,17 @@ export function visibleLinkedThreads<Row extends { readonly id: ThreadId }>(
   );
 }
 
-function hasHiddenTag(
+function isFilteredOut(
   tags: ReadonlyArray<string> | undefined,
-  hiddenTags: ReadonlyArray<string> | null,
+  environment: TagFilteredEnvironment,
 ): boolean {
-  return hiddenTags?.some((tag) => tags?.includes(tag) === true) === true;
+  const { hiddenTags, requiredTags } = environment;
+  if (hiddenTags?.some((tag) => tags?.includes(tag) === true) === true) return true;
+  return (
+    requiredTags !== undefined &&
+    requiredTags !== null &&
+    !requiredTags.some((tag) => tags?.includes(tag) === true)
+  );
 }
 
 /**
@@ -72,7 +87,7 @@ export function hiddenThreadKeys(
   environments: ReadonlyArray<TagFilteredEnvironment>,
   alreadyHidden: ReadonlySet<string> = NO_HIDDEN_THREADS,
   loadedElsewhere: ReadonlySet<string> = NO_HIDDEN_THREADS,
-  hidingAnywhere: boolean = environments.some((environment) => environment.hiddenTags !== null),
+  hidingAnywhere: boolean = environments.some(isTagFiltering),
 ): ReadonlySet<string> {
   if (alreadyHidden.size === 0 && !hidingAnywhere) return NO_HIDDEN_THREADS;
   const byKey = new Map<
@@ -107,7 +122,7 @@ export function hiddenThreadKeys(
       return true;
     }
     if (!followsParent) {
-      const hidden = hasHiddenTag(thread.tags, environment.hiddenTags);
+      const hidden = isFilteredOut(thread.tags, environment);
       hiddenByKey.set(key, hidden);
       return hidden;
     }
