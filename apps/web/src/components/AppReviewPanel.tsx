@@ -57,7 +57,7 @@ export function AppReviewPanel(props: { mode: DiffPanelMode; threadRef: ScopedTh
                   type="button"
                   size="sm"
                   variant="outline"
-                  disabled={reviews.isPending}
+                  disabled={reviews.data === undefined}
                   onClick={askAgent}
                 >
                   Ask the agent for an App Review

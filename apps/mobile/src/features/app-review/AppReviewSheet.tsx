@@ -68,10 +68,10 @@ export function AppReviewSheet({ route }: StaticScreenProps<AppReviewSheetTarget
         {newest === undefined && reviews.error === null ? (
           <EmptyState
             variant="plain"
-            title={reviews.isPending ? "Loading App Reviews…" : "No App Review yet"}
+            title={reviews.data === undefined ? "Loading App Reviews…" : "No App Review yet"}
             detail="The agent runs the end-to-end tests, tries the app in the browser, and records what it sees here."
             action={
-              reviews.isPending ? undefined : (
+              reviews.data === undefined ? undefined : (
                 <Button
                   tone="primary"
                   icon="checkmark.circle"

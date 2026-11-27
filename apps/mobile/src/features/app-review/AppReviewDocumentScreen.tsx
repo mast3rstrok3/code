@@ -35,7 +35,7 @@ export function AppReviewDocumentScreen({ route }: StaticScreenProps<AppReviewDo
           <AppReviewRecordDocument record={record} environmentId={target.environmentId} />
         ) : (
           <Text className="pt-6 text-center text-sm text-foreground-muted">
-            {reviews.isPending ? "Loading the review…" : "This review is no longer available."}
+            {reviews.data === undefined ? "Loading the review…" : "This review is no longer available."}
           </Text>
         )}
       </ScrollView>
