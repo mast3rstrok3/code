@@ -107,6 +107,7 @@ const derivedPaths = {
   environmentIdPath: "/tmp/t3-app-dev-stack-manager-test/state/environment-id",
   serverRuntimeStatePath: "/tmp/t3-app-dev-stack-manager-test/state/server-runtime.json",
   secretsDir: "/tmp/t3-app-dev-stack-manager-test/state/secrets",
+  workflowsDir: "/tmp/t3-app-dev-stack-manager-test/state/workflows",
 } satisfies ServerConfig.ServerDerivedPaths;
 
 const makeConfigLayer = (input?: {

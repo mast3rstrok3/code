@@ -30,6 +30,15 @@ export async function runCliCommand() {
     if (mode !== "discover" && mode !== "model") throw new Error("Unknown speech worker mode.");
     const { runNativeSpeechWorker } = await import("./speech/native.ts");
     await runNativeSpeechWorker(mode, process.argv[4]);
+  } else if (command === "__cursor-sdk-worker") {
+    const [NodeServices, { runCursorSdkWorker }, { withCursorSessionEnvironment }] =
+      await Promise.all([
+        import("@effect/platform-node/NodeServices"),
+        import("@t3tools/provider-cursor/server/worker"),
+        // Patches spawn so the SDK's shells get each session's workspace-user credentials.
+        import("./provider/cursorSessionEnvironment.ts"),
+      ]);
+    await runCursorSdkWorker(NodeServices.layer, { run: withCursorSessionEnvironment });
   } else {
     enableCliCompileCache();
     // Windows desktop launches without stdin; attach before reading, except on fast paths using pipes.

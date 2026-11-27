@@ -64,6 +64,7 @@ const project: ProjectStore.ProjectRow = {
   title: "Rudi",
   hasCustomTitle: false,
   workspaceRoot: "/repo/rudi",
+  trackedFolders: [],
   defaultModelSelection: null,
   defaultThreadEnvMode: null,
   autoPull: false,

@@ -1,3 +1,4 @@
+import { msg } from "gt-react";
 import {
   type AppStack,
   type AppStackBundlePlanMember,
@@ -257,7 +258,13 @@ function StackServices({ stack }: { readonly stack: AppStack }) {
 /** The apps a platform record started, each with its status and frontend. */
 // Copies the password of the stack's seeded test users without showing it.
 function StackTestPasswordButton(props: { readonly password: string; readonly stackName: string }) {
-  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "test password" });
+  const { copyToClipboard, isCopied } = useCopyToClipboard({
+    target: {
+      target: "test password",
+      unavailableMessage: msg("Clipboard API is unavailable while copying test password."),
+      failureMessage: msg("Failed to copy test password to the clipboard."),
+    },
+  });
   return (
     <Button
       size="xs"
@@ -382,7 +389,13 @@ function StackKubernetesInspect(props: {
   readonly onSelectContainer: (containerName: string) => void;
   readonly onRefresh: () => void;
 }) {
-  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "pod logs" });
+  const { copyToClipboard, isCopied } = useCopyToClipboard({
+    target: {
+      target: "pod logs",
+      unavailableMessage: msg("Clipboard API is unavailable while copying pod logs."),
+      failureMessage: msg("Failed to copy pod logs to the clipboard."),
+    },
+  });
   const selectedPod =
     props.pods.find((pod) => pod.name === props.selectedPodName) ?? props.pods[0] ?? null;
   const selectedContainerName =

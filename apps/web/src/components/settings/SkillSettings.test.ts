@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { SETTINGS_NAV_GROUPS, SETTINGS_SECTION_LABELS } from "./settingsSearch";
+import { settingsNavGroups } from "./settingsSearch";
 import { resolveCatalogFocusId } from "./SkillSettings";
 import {
   detectCatalogContentKind,
@@ -12,13 +12,10 @@ import {
 describe("skill catalog settings", () => {
   it("publishes skill and doc navigation entries", () => {
     expect(
-      SETTINGS_NAV_GROUPS.flatMap((group) => group.paths)
-        .filter((to) => ["Skills", "Docs"].includes(SETTINGS_SECTION_LABELS[to]))
-        .map((to) => [SETTINGS_SECTION_LABELS[to], to]),
-    ).toEqual([
-      ["Skills", "/settings/skills"],
-      ["Docs", "/settings/docs"],
-    ]);
+      settingsNavGroups(false)
+        .flatMap((group) => group.paths)
+        .filter((to) => to === "/settings/skills" || to === "/settings/docs"),
+    ).toEqual(["/settings/skills", "/settings/docs"]);
   });
 
   it("accepts valid catalog deep links and ignores stale IDs", () => {

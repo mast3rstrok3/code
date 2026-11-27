@@ -1,9 +1,9 @@
 import { CodeIcon, TextIcon } from "lucide-react";
+import { T, useGT, Var } from "gt-react";
 import { useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 
 import { cn } from "../../lib/utils";
+import ChatMarkdown from "../ChatMarkdown";
 import { Button } from "../ui/button";
 import { parseCatalogContent } from "./catalogContentParsing";
 
@@ -24,6 +24,7 @@ export function SkillMarkdown({
   label: string;
   maxHeightClassName: string;
 }) {
+  const gt = useGT();
   const parsed = parseCatalogContent(text);
   const [showRaw, setShowRaw] = useState(false);
   const rendered = parsed.kind === "markdown" && !showRaw;
@@ -40,12 +41,17 @@ export function SkillMarkdown({
             aria-pressed={showRaw}
           >
             {showRaw ? <TextIcon /> : <CodeIcon />}
-            {showRaw ? "Show formatted" : "Show raw"}
+            {showRaw ? gt("Show formatted") : gt("Show raw")}
           </Button>
           {parsed.envelopeTag && !showRaw ? (
             <span className="text-2xs text-muted-foreground">
-              Wrapped in <code className="font-mono">{`<${parsed.envelopeTag}>`}</code> when sent to
-              the agent
+              <T>
+                Wrapped in{" "}
+                <code className="font-mono">
+                  <Var>{`<${parsed.envelopeTag}>`}</Var>
+                </code>{" "}
+                when sent to the agent
+              </T>
             </span>
           ) : null}
         </div>
@@ -53,12 +59,12 @@ export function SkillMarkdown({
       {rendered ? (
         <div
           className={cn(
-            "chat-markdown overflow-auto rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs leading-relaxed text-foreground/85",
+            "overflow-auto rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs leading-relaxed text-foreground/85",
             maxHeightClassName,
           )}
           aria-label={label}
         >
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{parsed.body}</ReactMarkdown>
+          <ChatMarkdown text={parsed.body} cwd={undefined} parseRawHtml={false} />
         </div>
       ) : (
         <pre className={cn(RAW_CLASS_NAME, maxHeightClassName)} aria-label={label}>
