@@ -114,9 +114,6 @@ vi.mock("../../state/workspace-users", () => ({
   useActingWorkspaceUserIds: () => new Map(),
   readActingWorkspaceUserId: () => undefined,
 }));
-vi.mock("../../state/workflows", () => ({
-  workflowSettingsValueAtom: () => Atom.make({ implementation: null }),
-}));
 
 import { NewTaskFlowProvider, useNewTaskFlow } from "./new-task-flow-provider";
 

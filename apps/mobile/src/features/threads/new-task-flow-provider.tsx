@@ -7,11 +7,9 @@ import React, { useEffect, useRef, useState } from "react";
 import type {
   EnvironmentId,
   ModelSelection,
-  ProviderInteractionMode,
   ProviderOptionSelection,
   RuntimeMode,
   ServerProvider,
-  WorkflowPreset,
 } from "@t3tools/contracts";
 import {
   CommandId,
@@ -89,16 +87,6 @@ import {
   type HomeProjectScope,
 } from "../home/homeThreadList";
 import { useMobileProjectGroupingSettings } from "../../state/project-grouping";
-import { isPlanningWorkflowAvailableForProvider } from "@t3tools/client-runtime/workflow-composer-mode";
-import { workflowPresetStartsInDedicatedWorkspace } from "@t3tools/shared/orchestrationImplementation";
-import {
-  applyComposerModeChoice,
-  composerWorkflowSendForQueue,
-  resolveComposerInteractionMode,
-  resolveComposerWorkflowSend,
-  type ComposerModeChoice,
-} from "../../state/composer-workflow";
-import { workflowSettingsValueAtom } from "../../state/workflows";
 import {
   resolveNewTaskDraftWorkspace,
   resolveNewTaskBranchWorktreePath,
@@ -170,11 +158,6 @@ type NewTaskFlowContextValue = {
   readonly availableBranches: ReadonlyArray<VcsRef>;
   readonly currentCheckoutBranchName: string | null;
   readonly runtimeMode: RuntimeMode;
-  readonly interactionMode: ProviderInteractionMode;
-  /** The workflow the task starts, or null for a Build turn. */
-  readonly workflowPreset: WorkflowPreset | null;
-  readonly lastWorkflowPreset: WorkflowPreset | null;
-  readonly workflowAvailable: boolean;
   readonly expandedProvider: string | null;
   readonly environments: ReadonlyArray<{
     readonly environmentId: EnvironmentId;
@@ -229,7 +212,6 @@ type NewTaskFlowContextValue = {
   readonly setSubmitting: (value: boolean) => void;
   readonly loadBranches: () => void;
   readonly setRuntimeMode: (value: RuntimeMode) => void;
-  readonly setComposerMode: (choice: ComposerModeChoice) => void;
   readonly setSelectedModelOptions: (
     value: ReadonlyArray<ProviderOptionSelection> | undefined,
   ) => void;
@@ -514,12 +496,6 @@ export function NewTaskFlowProvider(
     selectedEnvironmentServerConfig?.providers.find(
       (provider) => provider.instanceId === selectedModel?.instanceId,
     ) ?? null;
-  const workflowAvailable = isPlanningWorkflowAvailableForProvider(selectedProviderStatus?.driver);
-  const workflowPreset = workflowAvailable ? (selectedProjectDraft.workflow?.preset ?? null) : null;
-  const interactionMode = resolveComposerInteractionMode({
-    interactionMode: selectedProjectDraft.interactionMode,
-    workflowPreset,
-  });
   const setSelectedModelKey = (
     key: string | null,
     options?: ReadonlyArray<ProviderOptionSelection>,
@@ -534,19 +510,7 @@ export function NewTaskFlowProvider(
     const selection = withRememberedModelOptions(
       options ? { ...option.selection, options } : option.selection,
     );
-    const provider = selectedEnvironmentServerConfig?.providers.find(
-      (candidate) => candidate.instanceId === selection.instanceId,
-    );
-    // A provider without workflows cannot keep one the draft chose for another.
-    const dropsWorkflow =
-      !isPlanningWorkflowAvailableForProvider(provider?.driver) &&
-      (getComposerDraftSnapshot(selectedProjectDraftKey).workflow?.preset ?? null) !== null;
-    updateComposerDraftSettings(selectedProjectDraftKey, {
-      modelSelection: selection,
-      ...(dropsWorkflow
-        ? { interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE, workflow: undefined }
-        : {}),
-    });
+    updateComposerDraftSettings(selectedProjectDraftKey, { modelSelection: selection });
     setStickyComposerModelSelection(selection);
   };
   const setSelectedModelOptions = (options: ReadonlyArray<ProviderOptionSelection> | undefined) => {
@@ -773,33 +737,6 @@ export function NewTaskFlowProvider(
       updateComposerDraftSettings(selectedProjectDraftKey, { runtimeMode: value });
     }
   };
-  const setComposerMode = (choice: ComposerModeChoice) => {
-    if (!selectedProjectDraftKey || !selectedProject) {
-      return;
-    }
-    const next = applyComposerModeChoice({
-      choice,
-      current: getComposerDraftSnapshot(selectedProjectDraftKey).workflow,
-      threadPreset: null,
-      standingImplementation: appAtomRegistry.get(
-        workflowSettingsValueAtom(selectedProject.environmentId),
-      ).implementation,
-    });
-    updateComposerDraftSettings(selectedProjectDraftKey, {
-      interactionMode: next.interactionMode,
-      workflow: next.workflow,
-    });
-    // Like the web composer, a workflow that owns its workspace starts in a worktree.
-    if (
-      choice.kind === "workflow" &&
-      workflowPresetStartsInDedicatedWorkspace(choice.preset) &&
-      canChooseWorkspace &&
-      isGitRepo &&
-      workspaceMode === "local"
-    ) {
-      setWorkspaceMode("worktree");
-    }
-  };
 
   const buildPendingTaskMessage = (
     metadata: TurnCommandMetadata,
@@ -831,19 +768,6 @@ export function NewTaskFlowProvider(
     }
     const workspaceSelection = resolveWorkspaceSelection(draft.workspaceSelection);
     const mode = workspaceSelection.mode;
-    const draftProvider = selectedEnvironmentServerConfig?.providers.find(
-      (candidate) => candidate.instanceId === draftModelSelection.instanceId,
-    );
-    const workflow = composerWorkflowSendForQueue(
-      resolveComposerWorkflowSend({
-        draftWorkflow: draft.workflow,
-        threadPreset: null,
-        provider: draftProvider?.driver,
-        standingImplementation: appAtomRegistry.get(
-          workflowSettingsValueAtom(selectedProject.environmentId),
-        ).implementation,
-      }),
-    );
     return {
       environmentId: selectedProject.environmentId,
       threadId: ThreadId.make(metadata.threadId),
@@ -858,11 +782,7 @@ export function NewTaskFlowProvider(
         defaultRuntimeMode,
         managedPolicy,
       ),
-      interactionMode: resolveComposerInteractionMode({
-        interactionMode: draft.interactionMode,
-        workflowPreset: workflow?.workflowPreset ?? null,
-      }),
-      ...(workflow === undefined ? {} : { workflow }),
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
       creation: {
         projectId: selectedProject.id,
         ownerUserId: readActingWorkspaceUserId(selectedProject.environmentId),
@@ -972,10 +892,6 @@ export function NewTaskFlowProvider(
     availableBranches,
     currentCheckoutBranchName,
     runtimeMode,
-    interactionMode,
-    workflowPreset,
-    lastWorkflowPreset: selectedProjectDraft.workflow?.lastPreset ?? null,
-    workflowAvailable,
     expandedProvider,
     environments,
     selectedProject,
@@ -1016,7 +932,6 @@ export function NewTaskFlowProvider(
     },
     loadBranches,
     setRuntimeMode,
-    setComposerMode,
     setSelectedModelOptions,
     setExpandedProvider: (value: string | null) => updateFlow({ expandedProvider: value }),
   } satisfies NewTaskFlowContextValue;

@@ -1879,6 +1879,54 @@ describe("mobile composer drafts", () => {
     });
   });
 
+  it("loads drafts and signed-out queues saved with an Engineering workflow as plain ones", () => {
+    const workflow = {
+      workflowPreset: "fast-feature",
+      workflowPromptId: null,
+      workflowImplementationSettings: {},
+      clearWorkflowMode: false,
+    };
+    const decoded = decodePersistedComposerState({
+      schemaVersion: 1,
+      drafts: {
+        "environment-1:thread-1": {
+          text: "Build it",
+          attachments: [],
+          interactionMode: "product-workflow",
+          workflow: {
+            preset: "fast-feature",
+            lastPreset: "fast-feature",
+            implementationSettings: null,
+          },
+        },
+      },
+      signedOutDrafts: {
+        account: {
+          drafts: {},
+          queuedMessages: [
+            {
+              schemaVersion: 3,
+              environmentId: "environment-1",
+              threadId: "thread-1",
+              messageId: "message-1",
+              commandId: "command-1",
+              text: "Build it",
+              attachments: [],
+              interactionMode: "product-workflow",
+              workflow,
+              createdAt: "2026-06-08T10:00:00.000Z",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(decoded.drafts).toEqual({
+      "environment-1:thread-1": { text: "Build it", attachments: [] },
+    });
+    expect(decoded.cloudDrafts.signedOut).toEqual({ account: { drafts: {}, queuedMessages: [] } });
+  });
+
   it("keeps share-import receipts on otherwise contentless new-task drafts", () => {
     const receiptDraft: ComposerDraft = {
       text: "",

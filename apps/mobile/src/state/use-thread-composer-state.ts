@@ -34,9 +34,7 @@ import {
   type ModelSelection,
   type RuntimeMode,
   type ScopedThreadRef,
-  type ServerProvider,
   type ThreadId,
-  type WorkflowPreset,
 } from "@t3tools/contracts";
 
 import {
@@ -56,17 +54,6 @@ import {
   describeUnavailableModelSelection,
   isModelSelectionUnavailable,
 } from "../lib/modelOptions";
-import { isPlanningWorkflowAvailableForProvider } from "@t3tools/client-runtime/workflow-composer-mode";
-import {
-  applyComposerModeChoice,
-  composerWorkflowSendForQueue,
-  leaveComposerWorkflow,
-  resolveComposerInteractionMode,
-  resolveComposerWorkflowPreset,
-  resolveComposerWorkflowSend,
-  type ComposerModeChoice,
-} from "./composer-workflow";
-import { workflowSettingsValueAtom } from "./workflows";
 
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
 import { scopedThreadKey } from "../lib/scopedEntities";
@@ -99,7 +86,6 @@ import {
   scheduleUnusedComposerAttachmentCleanup,
   setComposerDraftText,
   setFreshSessionPending,
-  updateComposerDraftSettings,
   useComposerDraft,
   useComposerDraftSettings,
 } from "./use-composer-drafts";
@@ -209,33 +195,6 @@ export function useThreadDraftForThread(input: {
     draftContext: draft.context,
     draftAttachments: draft.attachments,
   };
-}
-
-/** A provider without workflows starts plain turns, so the draft leaves the thread's workflow. */
-export function leaveThreadDraftWorkflowForModel(
-  threadKey: string,
-  value: ModelSelection,
-  providers: ReadonlyArray<ServerProvider>,
-  threadWorkflowPreset: WorkflowPreset | null | undefined,
-): void {
-  const provider = providers.find((candidate) => candidate.instanceId === value.instanceId);
-  if (isPlanningWorkflowAvailableForProvider(provider?.driver)) return;
-  const currentWorkflow = getComposerDraftSnapshot(threadKey).workflow;
-  if (
-    resolveComposerWorkflowPreset({
-      draftWorkflow: currentWorkflow,
-      threadPreset: threadWorkflowPreset,
-    }) === null
-  ) {
-    return;
-  }
-  updateComposerDraftSettings(threadKey, {
-    interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-    workflow: leaveComposerWorkflow({
-      current: currentWorkflow,
-      threadPreset: threadWorkflowPreset,
-    }),
-  });
 }
 
 export function useThreadComposerState(input: {
@@ -370,24 +329,8 @@ export function useThreadComposerState(input: {
     serverConfig?.providers ?? [],
   );
   const runtimeMode = selectedDraft.runtimeMode ?? selectedThread?.runtimeMode ?? null;
-  const selectedProvider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
-    (provider) => provider.instanceId === modelSelection?.instanceId,
-  );
-  const workflowAvailable = isPlanningWorkflowAvailableForProvider(selectedProvider?.driver);
-  const workflowPreset = selectedThread
-    ? resolveComposerWorkflowPreset({
-        draftWorkflow: selectedDraft.workflow,
-        threadPreset: selectedThread.workflowPreset,
-      })
-    : null;
-  const lastWorkflowPreset = selectedDraft.workflow?.lastPreset ?? null;
-  // Plan mode is not offered to users; a send runs in build mode unless a workflow chose its mode.
-  const interactionMode = selectedThread
-    ? resolveComposerInteractionMode({
-        interactionMode: selectedDraft.interactionMode ?? selectedThread.interactionMode,
-        workflowPreset,
-      })
-    : null;
+  // Plan mode is not offered to users; every send runs in build mode.
+  const interactionMode = selectedThread ? DEFAULT_PROVIDER_INTERACTION_MODE : null;
   const canSwitchThreadProvider = threadAllowsProviderSwitch({
     thread: selectedThreadShell,
     projection: selectedThreadProjection?.projection,
@@ -812,7 +755,6 @@ export function useThreadComposerState(input: {
         JSON.stringify(current.modelSelection) !== JSON.stringify(draft.modelSelection) ||
         current.runtimeMode !== draft.runtimeMode ||
         current.interactionMode !== draft.interactionMode ||
-        JSON.stringify(current.workflow) !== JSON.stringify(draft.workflow) ||
         current.attachments.length !== attachments.length ||
         current.attachments.some((attachment, index) => attachment.id !== attachments[index]?.id)
       )
@@ -867,26 +809,7 @@ export function useThreadComposerState(input: {
       context: draft.context,
       modelSelection,
       runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
-      interactionMode: resolveComposerInteractionMode({
-        interactionMode: draft.interactionMode ?? thread.interactionMode,
-        workflowPreset: resolveComposerWorkflowPreset({
-          draftWorkflow: draft.workflow,
-          threadPreset: thread.workflowPreset,
-        }),
-      }),
-      ...(() => {
-        const workflow = composerWorkflowSendForQueue(
-          resolveComposerWorkflowSend({
-            draftWorkflow: draft.workflow,
-            threadPreset: thread.workflowPreset,
-            provider: provider?.driver,
-            standingImplementation: appAtomRegistry.get(
-              workflowSettingsValueAtom(thread.environmentId),
-            ).implementation,
-          }),
-        );
-        return workflow === undefined ? {} : { workflow };
-      })(),
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
       ...(compactBeforeSend
         ? { compactBeforeSend, dispatchMode: "queue" as const }
         : followUpDispatchMode === null
@@ -970,24 +893,6 @@ export function useThreadComposerState(input: {
     removeComposerDraftAttachment(threadKey, imageId);
   };
 
-  const onUpdateComposerMode = (choice: ComposerModeChoice) => {
-    if (!selectedThreadKey || !selectedThread) {
-      return;
-    }
-    const next = applyComposerModeChoice({
-      choice,
-      current: getComposerDraftSnapshot(selectedThreadKey).workflow,
-      threadPreset: selectedThread.workflowPreset,
-      standingImplementation: appAtomRegistry.get(
-        workflowSettingsValueAtom(selectedThread.environmentId),
-      ).implementation,
-    });
-    updateComposerDraftSettings(selectedThreadKey, {
-      interactionMode: next.interactionMode,
-      workflow: next.workflow,
-    });
-  };
-
   return {
     feedbackSubmissions,
     dismissFeedback,
@@ -1028,16 +933,6 @@ export function useThreadComposerState(input: {
     canSwitchThreadProvider,
     runtimeMode,
     interactionMode,
-    composerMode:
-      interactionMode === null
-        ? null
-        : {
-            interactionMode,
-            workflowPreset,
-            lastWorkflowPreset,
-            workflowAvailable,
-            onSelect: onUpdateComposerMode,
-          },
     activeThreadBusy,
     interruptibleRunId,
     onChangeDraftMessage,
@@ -1047,7 +942,6 @@ export function useThreadComposerState(input: {
     onNativePasteText,
     onRemoveDraftImage,
     onSendMessage,
-    onUpdateComposerMode,
     sideChatUnavailableReason,
   };
 }

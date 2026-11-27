@@ -52,14 +52,6 @@ const SETTINGS_SEARCH_TERMS = {
   ],
   SettingsScheduledTasks: ["automations", "schedule", "cron", "recurring", "webhook"],
   SettingsUsers: ["people", "add user", "github tokens", "token owner", "rename user"],
-  SettingsWorkflows: [
-    "feature workflow",
-    "engineering workflow",
-    "starting model",
-    "parallel tickets",
-    "app review",
-    "default steps",
-  ],
   SettingsProjectOverview: ["project", "overview", "checkouts", "delete project"],
   SettingsOrganization: [
     "project grouping",

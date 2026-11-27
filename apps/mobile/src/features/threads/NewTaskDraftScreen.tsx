@@ -33,6 +33,7 @@ import { KeyboardController } from "react-native-keyboard-controller";
 
 import {
   AuthOrchestrationOperateScope,
+  DEFAULT_PROVIDER_INTERACTION_MODE,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
@@ -956,7 +957,7 @@ export function NewTaskDraftScreen(props: {
     threadId: ThreadId.make(creationMetadata.threadId),
     modelSelection: flow.selectedModel,
     runtimeMode: flow.runtimeMode,
-    interactionMode: flow.interactionMode,
+    interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
     branch: flow.selectedBranchName,
     worktreePath: flow.selectedWorktreePath,
     createdAt: creationMetadata.createdAt,
@@ -1029,13 +1030,6 @@ export function NewTaskDraftScreen(props: {
         offersSideChat={false}
         onReconnectEnvironment={() => onReconnectEnvironment(selectedProject.environmentId)}
         canSwitchThreadProvider
-        composerMode={{
-          interactionMode: flow.interactionMode,
-          workflowPreset: flow.workflowPreset,
-          lastWorkflowPreset: flow.lastWorkflowPreset,
-          workflowAvailable: flow.workflowAvailable,
-          onSelect: flow.setComposerMode,
-        }}
         onRespondToApproval={async () => {}}
         onSelectUserInputOption={() => {}}
         onChangeUserInputCustomAnswer={() => {}}

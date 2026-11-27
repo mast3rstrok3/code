@@ -15,7 +15,6 @@ import {
   threadTitleTextFromPrompt,
 } from "@t3tools/client-runtime/operations";
 
-import type { ComposerWorkflowSend } from "../state/composer-workflow";
 import type { UploadedMobileAttachment } from "./attachmentUpload";
 
 export interface ProjectThreadStartTurnSpec {
@@ -34,7 +33,6 @@ export interface ProjectThreadStartTurnSpec {
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
-  readonly workflow?: ComposerWorkflowSend | undefined;
   readonly workspaceMode: "local" | "worktree";
   readonly branch: string | null;
   readonly worktreePath: string | null;
@@ -63,7 +61,6 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
     titleSeed: title,
     runtimeMode: spec.runtimeMode,
     interactionMode: spec.interactionMode,
-    ...spec.workflow,
     bootstrap: {
       createThread: {
         projectId: spec.projectId,

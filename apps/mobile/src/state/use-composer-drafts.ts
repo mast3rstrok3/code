@@ -12,8 +12,6 @@ import {
   ProviderInteractionMode as ProviderInteractionModeSchema,
   ProviderOptionSelection as ProviderOptionSelectionSchema,
   RuntimeMode as RuntimeModeSchema,
-  ImplementationWorkflowSettings as ImplementationWorkflowSettingsSchema,
-  WorkflowPreset as WorkflowPresetSchema,
   type EnvironmentId,
   type ModelSelection,
   type ProjectId,
@@ -69,11 +67,9 @@ import {
 import {
   decodeQueuedThreadMessage,
   encodeQueuedThreadMessage,
-  QueuedThreadMessageSchema,
   type QueuedThreadMessage,
 } from "./thread-outbox-model";
 import { flushThreadOutbox, threadOutboxManager } from "./thread-outbox";
-import type { ComposerDraftWorkflow } from "./composer-workflow";
 import { composerDraftEnvironmentId } from "../lib/composerAttachmentUploadQueue";
 
 const COMPOSER_DRAFTS_SCHEMA_VERSION = 1;
@@ -448,7 +444,6 @@ export interface ComposerDraft {
   readonly modelSelection?: ModelSelection;
   readonly runtimeMode?: RuntimeMode;
   readonly interactionMode?: ProviderInteractionMode;
-  readonly workflow?: ComposerDraftWorkflow;
   /** `/clear` armed this draft: its next message starts a fresh provider session. */
   readonly freshContext?: boolean;
   readonly workspaceSelection?: ComposerDraftWorkspaceSelection;
@@ -487,17 +482,10 @@ export type ComposerDraftSettingsUpdate = Pick<
   | "modelSelection"
   | "runtimeMode"
   | "interactionMode"
-  | "workflow"
   | "freshContext"
   | "workspaceSelection"
   | "project"
 >;
-
-const ComposerDraftWorkflowSchema = Schema.Struct({
-  preset: Schema.NullOr(WorkflowPresetSchema),
-  lastPreset: Schema.NullOr(WorkflowPresetSchema),
-  implementationSettings: Schema.NullOr(ImplementationWorkflowSettingsSchema),
-});
 
 const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
   mode: Schema.Literals(["local", "worktree"]),
@@ -528,7 +516,6 @@ const ComposerDraftSchema = Schema.Struct({
   modelSelection: Schema.optional(ModelSelectionSchema),
   runtimeMode: Schema.optional(RuntimeModeSchema),
   interactionMode: Schema.optional(ProviderInteractionModeSchema),
-  workflow: Schema.optional(ComposerDraftWorkflowSchema),
   freshContext: Schema.optional(Schema.Boolean),
   workspaceSelection: Schema.optional(ComposerDraftWorkspaceSelectionSchema),
   project: Schema.optional(ComposerDraftProjectSchema),
@@ -550,7 +537,7 @@ const PersistedComposerDraftsSchema = Schema.Struct({
       Schema.String,
       Schema.Struct({
         drafts: Schema.Record(Schema.String, ComposerDraftSchema),
-        queuedMessages: Schema.Array(QueuedThreadMessageSchema),
+        queuedMessages: Schema.Array(Schema.Unknown),
       }),
     ),
   ),
@@ -709,7 +696,6 @@ function isEmptyDraft(draft: ComposerDraft): boolean {
     draft.modelSelection === undefined &&
     draft.runtimeMode === undefined &&
     draft.interactionMode === undefined &&
-    draft.workflow === undefined &&
     draft.freshContext !== true &&
     draft.workspaceSelection === undefined
   );
@@ -734,12 +720,19 @@ function newDraftId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+// Engineering workflow modes were removed; drafts saved in one load in the default mode.
+function withoutWorkflowInteractionMode(draft: ComposerDraft): ComposerDraft {
+  if (!draft.interactionMode?.endsWith("-workflow")) return draft;
+  const { interactionMode: _, ...rest } = draft;
+  return rest;
+}
+
 export function migrateLegacyNewTaskDraft(
   key: string,
   draft: ComposerDraft,
   now: string,
 ): readonly [key: string, draft: ComposerDraft] {
-  const restored = restoreMissingComposerFileReferences(draft);
+  const restored = restoreMissingComposerFileReferences(withoutWorkflowInteractionMode(draft));
   const legacy = draft.project === undefined ? parseLegacyNewTaskDraftKey(key) : null;
   if (legacy === null) {
     return [key, restored];
@@ -777,7 +770,6 @@ export function decodePersistedComposerState(value: unknown): {
               draft.attachments.length === 0 &&
               draft.runtimeMode === undefined &&
               draft.interactionMode === undefined &&
-              draft.workflow === undefined &&
               draft.workspaceSelection === undefined
               ? { ...draft, modelSelection: undefined }
               : draft,
@@ -802,7 +794,9 @@ export function decodePersistedComposerState(value: unknown): {
                 migrateLegacyNewTaskDraft(key, draft, now),
               ),
             ),
-            queuedMessages: saved.queuedMessages.map(decodeQueuedThreadMessage),
+            queuedMessages: saved.queuedMessages.flatMap(
+              (message) => decodeQueuedThreadMessage(message) ?? [],
+            ),
           },
         ]),
       ),
@@ -1267,14 +1261,12 @@ export async function removeDeliveredCloudQueuedMessage(
         archived.modelSelection,
         archived.runtimeMode,
         archived.interactionMode,
-        archived.workflow,
         archived.creation,
       ]) !==
       JSON.stringify([
         message.modelSelection,
         message.runtimeMode,
         message.interactionMode,
-        message.workflow,
         message.creation,
       ])
     )
@@ -1891,7 +1883,6 @@ export function sameComposerDraftState(a: ComposerDraft, b: ComposerDraft): bool
     a.modelSelection === b.modelSelection &&
     a.runtimeMode === b.runtimeMode &&
     a.interactionMode === b.interactionMode &&
-    a.workflow === b.workflow &&
     a.freshContext === b.freshContext &&
     a.workspaceSelection === b.workspaceSelection
   );
@@ -1922,7 +1913,6 @@ export function undoComposerDraftMergeState(
       | "modelSelection"
       | "runtimeMode"
       | "interactionMode"
-      | "workflow"
       | "freshContext"
       | "workspaceSelection",
   >(
@@ -1944,7 +1934,6 @@ export function undoComposerDraftMergeState(
     modelSelection: undoSetting("modelSelection"),
     runtimeMode: undoSetting("runtimeMode"),
     interactionMode: undoSetting("interactionMode"),
-    workflow: undoSetting("workflow"),
     freshContext: undoSetting("freshContext"),
     workspaceSelection: undoSetting("workspaceSelection"),
   };
@@ -2196,7 +2185,7 @@ export const composerDraftUploadSourcesAtom = Atom.make((get): ComposerDraftUplo
 
 type ComposerDraftSettings = Pick<
   ComposerDraft,
-  "modelSelection" | "runtimeMode" | "interactionMode" | "workflow" | "freshContext"
+  "modelSelection" | "runtimeMode" | "interactionMode" | "freshContext"
 >;
 const EMPTY_DRAFT_SETTINGS: ComposerDraftSettings = {};
 const composerDraftSettingsAtom = Atom.family((draftKey: string) =>
@@ -2206,7 +2195,6 @@ const composerDraftSettingsAtom = Atom.family((draftKey: string) =>
       modelSelection: draft.modelSelection,
       runtimeMode: draft.runtimeMode,
       interactionMode: draft.interactionMode,
-      workflow: draft.workflow,
       freshContext: draft.freshContext,
     };
   }).pipe(
@@ -2215,7 +2203,6 @@ const composerDraftSettingsAtom = Atom.family((draftKey: string) =>
         a.modelSelection === b.modelSelection &&
         a.runtimeMode === b.runtimeMode &&
         a.interactionMode === b.interactionMode &&
-        a.workflow === b.workflow &&
         a.freshContext === b.freshContext,
     ),
   ),
