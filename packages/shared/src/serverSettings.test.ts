@@ -19,7 +19,7 @@ import { createModelSelection } from "./model.ts";
 import { resolveProjectScripts } from "./projectScripts.ts";
 import {
   normalizePersistedServerSettingString,
-  appendWorkflowSkillInstructions,
+  appendSkillAdditions,
   applyServerSettingsPatch,
   fallbackTextGenerationModelSelection,
   modelPreferencesMigrationPatch,
@@ -94,19 +94,19 @@ describe("fallbackTextGenerationModelSelection", () => {
 });
 
 describe("serverSettings helpers", () => {
-  it("composes skill and step defaults once for previews and provider input", () => {
-    const instructions = {
-      skill: "  Use isolated fixtures.  ",
-      step: "Verify keyboard navigation.",
-      other: "Unrelated instructions.",
-    };
-    expect(appendWorkflowSkillInstructions("Base", "skill", "skill", instructions)).toBe(
-      "Base\n\n<user-workflow-instructions>\nUse isolated fixtures.\n</user-workflow-instructions>",
+  it("appends a skill's saved additions, reading legacy matt-pocock keys", () => {
+    expect(appendSkillAdditions("Base\n", "tdd", { tdd: "  Use isolated fixtures.  " })).toBe(
+      "Base\n\n<user-skill-additions>\nUse isolated fixtures.\n</user-skill-additions>\n",
     );
-    expect(appendWorkflowSkillInstructions("Base", "skill", "step", instructions)).toBe(
-      "Base\n\n<user-workflow-instructions>\nUse isolated fixtures.\n\nVerify keyboard navigation.\n</user-workflow-instructions>",
+    expect(appendSkillAdditions("Base\n", "tdd", { "matt-pocock.tdd": "Legacy." })).toContain(
+      "Legacy.",
     );
-    expect(appendWorkflowSkillInstructions("Base", "skill", "step", { step: "  " })).toBe("Base");
+    expect(
+      appendSkillAdditions("Base\n", "tdd", { tdd: "Current.", "matt-pocock.tdd": "Legacy." }),
+    ).not.toContain("Legacy.");
+    expect(appendSkillAdditions("Base\n", "tdd", { tdd: "  ", other: "Unrelated." })).toBe(
+      "Base\n",
+    );
   });
 
   it("normalizes optional persisted strings", () => {

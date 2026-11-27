@@ -398,8 +398,7 @@ import {
   ServerSignalProcessResult,
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
-  WorkflowPromptContracts,
-  WorkflowCatalog,
+  SkillCatalog,
 } from "./server.ts";
 import {
   HostResourcesSnapshot,
@@ -627,8 +626,7 @@ export const WS_METHODS = {
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
   serverVerifyGithubOwnerToken: "server.verifyGithubOwnerToken",
-  serverGetWorkflowPrompts: "server.getWorkflowPrompts",
-  serverGetWorkflowCatalog: "server.getWorkflowCatalog",
+  serverGetSkillCatalog: "server.getSkillCatalog",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverCheckSecretSource: "server.checkSecretSource",
   serverSearchAcpRegistry: "server.searchAcpRegistry",
@@ -991,15 +989,9 @@ const WsServerVerifyGithubOwnerTokenRpc = Rpc.make(WS_METHODS.serverVerifyGithub
   error: EnvironmentAuthorizationError,
 });
 
-export const WsServerGetWorkflowPromptsRpc = Rpc.make(WS_METHODS.serverGetWorkflowPrompts, {
+export const WsServerGetSkillCatalogRpc = Rpc.make(WS_METHODS.serverGetSkillCatalog, {
   payload: Schema.Struct({}),
-  success: WorkflowPromptContracts,
-  error: EnvironmentAuthorizationError,
-});
-
-export const WsServerGetWorkflowCatalogRpc = Rpc.make(WS_METHODS.serverGetWorkflowCatalog, {
-  payload: Schema.Struct({}),
-  success: WorkflowCatalog,
+  success: SkillCatalog,
   error: EnvironmentAuthorizationError,
 });
 
@@ -2458,8 +2450,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerReclaimDatabaseSpaceRpc,
   WsServerUpdateSettingsRpc,
   WsServerVerifyGithubOwnerTokenRpc,
-  WsServerGetWorkflowPromptsRpc,
-  WsServerGetWorkflowCatalogRpc,
+  WsServerGetSkillCatalogRpc,
   WsPeerLinksListRpc,
   WsPeerLinksLinkRpc,
   WsPeerLinksUnlinkRpc,

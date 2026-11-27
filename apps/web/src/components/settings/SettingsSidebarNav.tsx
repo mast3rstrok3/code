@@ -33,7 +33,6 @@ import {
   SmartphoneIcon,
   PuzzleIcon,
   UsersIcon,
-  WorkflowIcon,
   WrenchIcon,
   XIcon,
 } from "lucide-react";
@@ -103,7 +102,6 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/keybindings": KeyboardIcon,
   "/settings/snap-shot": SnapShotIcon,
   "/settings/providers": BotIcon,
-  "/settings/workflows": WorkflowIcon,
   "/settings/skills": PuzzleIcon,
   "/settings/docs": BookOpenIcon,
   "/settings/threads": MessagesSquareIcon,

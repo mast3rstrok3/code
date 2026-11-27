@@ -89,6 +89,7 @@ import * as ServerConfig from "../../config.ts";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import { T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH } from "@t3tools/provider-core/server/orchestrationInstructions";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as SkillsPlugin from "../../skills/SkillsPlugin.ts";
 import { PreviewControlsToolkit } from "../../mcp/toolkits/previewControls/tools.ts";
 import { HtmlToolkit } from "../../mcp/toolkits/html/tools.ts";
 import { MessageToolkit } from "../../mcp/toolkits/message/tools.ts";
@@ -4212,6 +4213,43 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       yield* harness.runtime.startTurn(turn(2, latest()));
       assert.equal(harness.processQueues.length, 2);
       assert.equal(harness.getOpenedOptions()?.resume, "cleared-native-session");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          NodeCrypto.layer,
+        ),
+      ),
+    ),
+  );
+
+  it.effect("loads the bundled skills plugin into the Claude session", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarness.pipe(
+        Effect.provideService(
+          SkillsPlugin.SkillsPlugin,
+          SkillsPlugin.SkillsPlugin.of({
+            catalog: { pluginName: "t3", skills: [], docs: [] },
+            directory: Effect.succeed("/state/skills-plugin/0123456789abcdef"),
+          }),
+        ),
+      );
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: DateTime.makeUnsafe(0),
+          attemptId: RunAttemptId.make("skills-plugin-1"),
+          text: "Hello.",
+          attachments: [],
+        }),
+      );
+      assert.deepEqual(harness.getOpenedOptions()?.plugins, [
+        { type: "local", path: "/state/skills-plugin/0123456789abcdef" },
+      ]);
     }).pipe(
       Effect.scoped,
       Effect.provide(

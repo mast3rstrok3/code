@@ -3,6 +3,7 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import * as PreviewCoordinator from "./preview/PreviewCoordinator.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as AppStackManager from "./appStack/AppStackManager.ts";
+import * as SkillsPlugin from "./skills/SkillsPlugin.ts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { WebSocket } from "@effect/platform-node/NodeWS";
@@ -894,6 +895,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(WorkspaceEntries.WorkspaceEntries)({}),
   Layer.mock(WorkspaceFileSystem.WorkspaceFileSystem)({}),
   Layer.mock(AppStackManager.AppStackManager)({}),
+  Layer.mock(SkillsPlugin.SkillsPlugin)({ catalog: { pluginName: "t3", skills: [], docs: [] } }),
   Layer.mock(OrchestrationEngine.OrchestrationEngineService)({}),
   Layer.mock(PreviewCoordinator.PreviewCoordinator)({}),
   Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({}),

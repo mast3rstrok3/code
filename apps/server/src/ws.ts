@@ -10,10 +10,7 @@ import { getWorkflowArtifactsForThread } from "./orchestration/workflowArtifacts
 import { AppStackManager } from "./appStack/AppStackManager.ts";
 import { appStackWorkflowConflicts } from "./appStack/workflowOwnership.ts";
 import { verifyGithubOwnerToken } from "./workspaceUserCredentials.ts";
-import {
-  listWorkflowCatalog,
-  listWorkflowPromptContracts,
-} from "./provider/WorkflowPromptRegistry.ts";
+import * as SkillsPlugin from "./skills/SkillsPlugin.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- A synchronous digest inside the pure provider mapping.
 import * as NodeCrypto from "node:crypto";
@@ -1564,6 +1561,7 @@ export const layerWsRpc = (
       const storageCleanup = yield* StorageCleanup.StorageCleanup;
       const databaseStorage = yield* DatabaseStorage.DatabaseStorage;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const skillsPlugin = yield* SkillsPlugin.SkillsPlugin;
       const workflowEngine = yield* OrchestrationEngineService;
       const workflowBridge = yield* WorkflowRuntimeBridge.WorkflowRuntimeBridge;
       const workflowPath = yield* Path.Path;
@@ -2084,8 +2082,7 @@ export const layerWsRpc = (
           previewAutomationBroker.focusHost(input),
         [WS_METHODS.workflowArtifactsGet]: (input) => getWorkflowArtifactsForThread(input),
         [WS_METHODS.serverVerifyGithubOwnerToken]: (input) => verifyGithubOwnerToken(input),
-        [WS_METHODS.serverGetWorkflowPrompts]: () => Effect.succeed(listWorkflowPromptContracts()),
-        [WS_METHODS.serverGetWorkflowCatalog]: () => Effect.succeed(listWorkflowCatalog()),
+        [WS_METHODS.serverGetSkillCatalog]: () => Effect.succeed(skillsPlugin.catalog),
         [WS_METHODS.appStackStatus]: () => appStackManager.status,
         [WS_METHODS.appStackList]: Effect.fn("ws.appStackList")(function* (
           input: AppStackListInput,

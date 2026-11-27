@@ -45,6 +45,7 @@ Terms whose meaning matters across T3 Code. Architecture and lifecycle constrain
 | Checkpoint          | A saved workspace state used for diffs and restore, stored as a hidden Git ref.                              |
 | Checkpoint baseline | The workspace state captured before the work being compared.                                                 |
 | Turn diff           | The workspace changes attributed to one turn.                                                                |
+| Bundled skill       | A skill T3 Code ships to every Claude session in its `t3` plugin. See [skills](../user/skills.md).           |
 
 ### Workflows
 

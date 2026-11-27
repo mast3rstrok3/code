@@ -12,6 +12,7 @@ import { parse as parseYamlDocument } from "yaml";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 
+import * as SkillsPlugin from "../../skills/SkillsPlugin.ts";
 import { claudeAccountConfigPath, readClaudeOauthAccount } from "../claudeResetCredits.ts";
 
 type ClaudeSkillScope = "user" | "project";
@@ -485,8 +486,12 @@ const expandInlinePluginDirectory = Effect.fn("expandInlinePluginDirectory")(fun
   );
 });
 
-/** Plugin folders Claude Code loads inline from CLAUDE_CODE_PLUGIN_DIRS, and their plugin names. */
+/**
+ * Plugin folders Claude Code loads inline, from the SDK's `plugins` option (`--plugin-dir`)
+ * and then CLAUDE_CODE_PLUGIN_DIRS, and their plugin names.
+ */
 const discoverInlinePluginSkillRoots = Effect.fn("discoverInlinePluginSkillRoots")(function* (
+  sessionPluginDirectories: ReadonlyArray<string>,
   pluginDirectories: string | undefined,
   enabledPlugins: ReadonlyMap<string, boolean>,
   managedPluginNames: ReadonlySet<string>,
@@ -497,7 +502,10 @@ const discoverInlinePluginSkillRoots = Effect.fn("discoverInlinePluginSkillRoots
   const roots: Array<ClaudeSkillRoot> = [];
   const names = new Set<string>();
   const seen = new Set<string>();
-  for (const entry of (pluginDirectories ?? "").split(platform === "win32" ? ";" : ":")) {
+  for (const entry of [
+    ...sessionPluginDirectories,
+    ...(pluginDirectories ?? "").split(platform === "win32" ? ";" : ":"),
+  ]) {
     const directory = expandHomePath(entry.trim(), home);
     // Claude skips relative entries rather than resolving them against its cwd.
     if (!directory || !path.isAbsolute(directory)) continue;
@@ -743,7 +751,12 @@ export const discoverClaudeSkills = Effect.fn("discoverClaudeSkills")(function* 
   const inlinePluginDirectories =
     (yield* readClaudeSettingsEnv(config, cwd, env)).CLAUDE_CODE_PLUGIN_DIRS ??
     env.CLAUDE_CODE_PLUGIN_DIRS;
+  const bundledPlugin = yield* Effect.serviceOption(SkillsPlugin.SkillsPlugin);
+  const bundledPluginDirectory = Option.isSome(bundledPlugin)
+    ? yield* bundledPlugin.value.directory
+    : undefined;
   const inlinePlugins = yield* discoverInlinePluginSkillRoots(
+    bundledPluginDirectory === undefined ? [] : [bundledPluginDirectory],
     inlinePluginDirectories,
     enabledPlugins,
     managedPluginNames,

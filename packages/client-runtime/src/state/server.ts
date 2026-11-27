@@ -1364,14 +1364,9 @@ export function createServerEnvironmentAtoms<R, E>(
   });
 
   return {
-    workflowCatalog: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "server:workflow-catalog",
-      tag: WS_METHODS.serverGetWorkflowCatalog,
-      staleTimeMs: 300_000,
-    }),
-    workflowPrompts: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "server:workflow-prompts",
-      tag: WS_METHODS.serverGetWorkflowPrompts,
+    skillCatalog: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "server:skill-catalog",
+      tag: WS_METHODS.serverGetSkillCatalog,
       staleTimeMs: 300_000,
     }),
     verifyGithubOwnerToken: createEnvironmentRpcCommand(runtime, {

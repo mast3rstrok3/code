@@ -1,0 +1,40 @@
+{
+  "name": "t3",
+  "version": "1.0.0",
+  "description": "Skills bundled with T3 Code: Matt Pocock's engineering and productivity skills, plus the T3 workflow and App Review skills.",
+  "author": {
+    "name": "T3 Code"
+  },
+  "license": "MIT",
+  "skills": [
+    "./skills/ask-matt",
+    "./skills/diagnosing-bugs",
+    "./skills/grill-with-docs",
+    "./skills/triage",
+    "./skills/improve-codebase-architecture",
+    "./skills/setup-matt-pocock-skills",
+    "./skills/tdd",
+    "./skills/to-spec",
+    "./skills/to-tickets",
+    "./skills/wayfinder",
+    "./skills/implement",
+    "./skills/implement-spec",
+    "./skills/prototype",
+    "./skills/research",
+    "./skills/domain-modeling",
+    "./skills/codebase-design",
+    "./skills/code-review",
+    "./skills/pr",
+    "./skills/retro",
+    "./skills/wizard",
+    "./skills/grill-me",
+    "./skills/grilling",
+    "./skills/handoff",
+    "./skills/teach",
+    "./skills/to-questionnaire",
+    "./skills/wait-what",
+    "./skills/writing-for-agents",
+    "./skills/workflow",
+    "./skills/app-review"
+  ]
+}

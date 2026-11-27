@@ -1578,7 +1578,7 @@ export const ServerSettings = Schema.Struct({
   sourceControlWriterModelSelection: Schema.NullOr(ModelSelection).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-  /** User additions keyed by catalog skill or exact workflow prompt. */
+  /** Default additions appended to a bundled skill, keyed by skill name or legacy `matt-pocock.<name>`. */
   workflowStepInstructions: Schema.Record(
     TrimmedNonEmptyString,
     TrimmedString.check(Schema.isMaxLength(20_000)),
