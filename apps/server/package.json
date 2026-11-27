@@ -101,7 +101,6 @@
     "@types/yauzl": "^3.4.0",
     "effect-acp": "workspace:*",
     "effect-codex-app-server": "workspace:*",
-    "fast-check": "^4.9.0",
     "graphql": "16.14.1",
     "vite-plus": "catalog:"
   },

@@ -1,4 +1,3 @@
-import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   resolveWorkspaceUserCredentials,
   workspaceUserGitEnvironment,
@@ -3616,7 +3615,6 @@ export const make = Effect.gen(function* () {
     };
   });
 
-  const projectionQuery = yield* Effect.serviceOption(ProjectionSnapshotQuery);
   const runStackedAction: GitManager["Service"]["runStackedAction"] = Effect.fn("runStackedAction")(
     function* (input, options) {
       const progress = yield* createProgressEmitter(input, options);
@@ -3651,7 +3649,7 @@ export const make = Effect.gen(function* () {
         const wantsPr = input.action === "create_pr" || input.action === "commit_push_pr";
         let credentials = options?.credentials;
         if (input.threadId !== undefined) {
-          const nativeThread = yield* threads.getThreadShell(input.threadId).pipe(
+          const thread = yield* threads.getThreadShell(input.threadId).pipe(
             Effect.mapError(
               (cause) =>
                 new GitManagerError({
@@ -3662,22 +3660,6 @@ export const make = Effect.gen(function* () {
                 }),
             ),
           );
-          const thread =
-            nativeThread ??
-            (Option.isSome(projectionQuery)
-              ? yield* projectionQuery.value.getThreadShellById(input.threadId).pipe(
-                  Effect.map(Option.getOrNull),
-                  Effect.mapError(
-                    (cause) =>
-                      new GitManagerError({
-                        operation: "resolveThreadOwner",
-                        cwd: input.cwd,
-                        detail: "Could not read the thread owner.",
-                        cause,
-                      }),
-                  ),
-                )
-              : null);
           if (thread === null) {
             return yield* new GitManagerError({
               operation: "resolveThreadOwner",

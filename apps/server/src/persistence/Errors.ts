@@ -118,8 +118,3 @@ export type PullRequestFilesViewedRepositoryError = PersistenceSqlError | Persis
 export type PullRequestReviewGuideRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 
 export type ProjectionRepositoryError = PersistenceSqlError | PersistenceDecodeError;
-
-export const isPersistenceError = (
-  value: unknown,
-): value is PersistenceSqlError | PersistenceDecodeError =>
-  Schema.is(PersistenceSqlError)(value) || Schema.is(PersistenceDecodeError)(value);

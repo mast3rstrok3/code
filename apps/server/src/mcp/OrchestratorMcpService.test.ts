@@ -3549,97 +3549,70 @@ describe("OrchestratorMcpService provider resolution", () => {
       }),
     );
 
-    it.effect("lets only a full-access caller turn a task into a workflow", () =>
+    it.effect("starts an unbound task's runs on the development branch", () =>
       Effect.gen(function* () {
-        const upserted = yield* Ref.make(0);
+        const saved = yield* Ref.make<ReadonlyArray<ScheduledTaskUpsertInput>>([]);
+        const bound = task({ threadId: boundThreadId, runtimeMode: "full-access" });
+        const fullAccessClient: McpInvocationScope = {
+          ...supervisedClient,
+          client: { sessionId: "scheduled", label: "Claude Code", access: "full-access" },
+        };
         const mcp = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
-          Effect.provide(service([task({})], null, upserted)),
-        );
-        const error = yield* mcp
-          .updateScheduledTask(supervisedClient, {
-            scheduledTaskId: task({}).id,
-            workflow: "feature",
-          })
-          .pipe(Effect.flip);
-        assert.equal(error.code, "runtime_mode_escalation_denied");
-        assert.equal(yield* Ref.get(upserted), 0);
-      }),
-    );
-
-    it.effect(
-      "unbinds a task that becomes a workflow and starts it on the development branch",
-      () =>
-        Effect.gen(function* () {
-          const saved = yield* Ref.make<ReadonlyArray<ScheduledTaskUpsertInput>>([]);
-          const bound = task({ threadId: boundThreadId, runtimeMode: "full-access" });
-          const fullAccessClient: McpInvocationScope = {
-            ...supervisedClient,
-            client: { sessionId: "scheduled", label: "Claude Code", access: "full-access" },
-          };
-          const mcp = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
-            Effect.provide(
-              layerOrchestratorService.pipe(
-                Layer.provide(
-                  Layer.mergeAll(
-                    NodeServices.layer,
-                    NodeCrypto.layer,
-                    ServerSettings.layerTest(),
-                    Layer.mock(ThreadManagementService.ThreadManagementService)({
-                      getThreadShell: (threadId) =>
-                        Effect.succeed(liveThreadShell(threadId, { runtimeMode: "full-access" })),
-                    }),
-                    Layer.mock(ProviderRegistry.ProviderRegistry)({
-                      getProviders: Effect.succeed([]),
-                    }),
-                    Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
-                      list: () => Effect.succeed([]),
-                    }),
-                    Layer.mock(ProjectService.ProjectService)({}),
-                    Layer.mock(SecretRequests.SecretRequests)({}),
-                    Layer.mock(RemoteDelegation.RemoteDelegation)({}),
-                    Layer.mock(ScheduledTaskService.ScheduledTaskService)({
-                      list: () => Effect.succeed({ tasks: [bound] }),
-                      upsert: (input) =>
-                        Ref.update(saved, (inputs) => [...inputs, input]).pipe(
-                          Effect.as({ task: { ...bound, threadId: null, workflow: "feature" } }),
-                        ),
-                    }),
-                  ),
+          Effect.provide(
+            layerOrchestratorService.pipe(
+              Layer.provide(
+                Layer.mergeAll(
+                  NodeServices.layer,
+                  NodeCrypto.layer,
+                  ServerSettings.layerTest(),
+                  Layer.mock(ThreadManagementService.ThreadManagementService)({
+                    getThreadShell: (threadId) =>
+                      Effect.succeed(liveThreadShell(threadId, { runtimeMode: "full-access" })),
+                  }),
+                  Layer.mock(ProviderRegistry.ProviderRegistry)({
+                    getProviders: Effect.succeed([]),
+                  }),
+                  Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+                    list: () => Effect.succeed([]),
+                  }),
+                  Layer.mock(ProjectService.ProjectService)({}),
+                  Layer.mock(SecretRequests.SecretRequests)({}),
+                  Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+                  Layer.mock(ScheduledTaskService.ScheduledTaskService)({
+                    list: () => Effect.succeed({ tasks: [bound] }),
+                    upsert: (input) =>
+                      Ref.update(saved, (inputs) => [...inputs, input]).pipe(
+                        Effect.as({ task: { ...bound, threadId: null } }),
+                      ),
+                  }),
                 ),
               ),
             ),
-          );
-          const updated = yield* mcp.updateScheduledTask(
-            fullAccessClient,
-            { scheduledTaskId: bound.id, workflow: "feature" },
-            {
-              developmentWorktree: () =>
-                Effect.succeed({ type: "worktree", baseRef: "dev", startFromOrigin: true }),
-              defaultModelSelection: () => null,
-              workflowModelSelection: () => null,
-            },
-          );
-          const [input] = yield* Ref.get(saved);
-          assert.equal(input?.workflow, "feature");
-          assert.equal(input?.useWorkflowDefaultModel, true);
-          assert.equal(input?.threadId, null);
-          assert.deepEqual(input?.workspaceStrategy, {
-            type: "worktree",
-            baseRef: "dev",
-            startFromOrigin: true,
-          });
-          assert.equal(updated.workflow, "feature");
-          assert.equal(updated.boundThreadId, null);
-        }),
+          ),
+        );
+        const updated = yield* mcp.updateScheduledTask(
+          fullAccessClient,
+          { scheduledTaskId: bound.id, bindToCurrentThread: false },
+          {
+            developmentWorktree: () =>
+              Effect.succeed({ type: "worktree", baseRef: "dev", startFromOrigin: true }),
+            defaultModelSelection: () => null,
+          },
+        );
+        const [input] = yield* Ref.get(saved);
+        assert.equal(input?.threadId, null);
+        assert.deepEqual(input?.workspaceStrategy, {
+          type: "worktree",
+          baseRef: "dev",
+          startFromOrigin: true,
+        });
+        assert.equal(updated.boundThreadId, null);
+      }),
     );
 
-    it.effect("starts a workflow task an agent schedules on the workflow's default model", () =>
+    it.effect("schedules an agent's task on the default model the settings resolve", () =>
       Effect.gen(function* () {
         const saved = yield* Ref.make<ReadonlyArray<ScheduledTaskUpsertInput>>([]);
-        const featureModel = {
-          instanceId: ProviderInstanceId.make("claudeAgent"),
-          model: "claude-opus",
-        };
         const mcp = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
           Effect.provide(
             layerOrchestratorService.pipe(
@@ -3665,9 +3638,7 @@ describe("OrchestratorMcpService provider resolution", () => {
                   Layer.mock(ScheduledTaskService.ScheduledTaskService)({
                     upsert: (input) =>
                       Ref.update(saved, (inputs) => [...inputs, input]).pipe(
-                        Effect.as({
-                          task: task({ workflow: "feature", useWorkflowDefaultModel: true }),
-                        }),
+                        Effect.as({ task: task({}) }),
                       ),
                   }),
                 ),
@@ -3683,30 +3654,15 @@ describe("OrchestratorMcpService provider resolution", () => {
           developmentWorktree: () =>
             Effect.succeed({ type: "worktree" as const, baseRef: "dev", startFromOrigin: true }),
           defaultModelSelection: () => task({}).modelSelection,
-          workflowModelSelection: () => featureModel,
         };
-        const scheduled = yield* mcp.scheduleTask(
-          fullAccessClient,
-          {
-            projectId,
-            prompt: "Fix {{body.title}}",
-            schedule: { type: "webhook" },
-            workflow: "feature",
-          },
-          defaults,
-        );
         yield* mcp.scheduleTask(
           fullAccessClient,
           { projectId, prompt: "Report", schedule: { type: "webhook" } },
           defaults,
         );
-        const [workflowInput, plainInput] = yield* Ref.get(saved);
-        assert.deepEqual(workflowInput?.modelSelection, featureModel);
-        assert.equal(workflowInput?.useWorkflowDefaultModel, true);
-        assert.equal(scheduled.useWorkflowDefaultModel, true);
-        // A plain task gets the resolved default, not the project record's missing one.
-        assert.deepEqual(plainInput?.modelSelection, task({}).modelSelection);
-        assert.equal(plainInput?.useWorkflowDefaultModel, false);
+        const [input] = yield* Ref.get(saved);
+        // The resolved default, not the project record's missing one.
+        assert.deepEqual(input?.modelSelection, task({}).modelSelection);
       }),
     );
 

@@ -2745,67 +2745,6 @@ describe("storage cleanup reports and local file policies", () => {
       }),
     ),
   );
-  it.effect.each([
-    { status: "needs-human-attention", path: "orchestrator", outcome: "kept" },
-    { status: "needs-human-attention", path: "ticket", outcome: "kept" },
-    { status: "completed", path: "orchestrator", outcome: "removed" },
-  ] as const)(
-    "a $status run's $path checkout is $outcome after going idle",
-    ({ status, path, outcome }) =>
-      runCleanupTest(
-        Effect.gen(function* () {
-          yield* TestClock.setTime(NOW_MS);
-          const sql = yield* SqlClient.SqlClient;
-          const fixture = yield* cleanupFixture(undefined, sql);
-          fixture.setThreads([
-            shell({ branch: "feature", worktreePath: fixture.worktree, archivedAt: at(-DAY_MS) }),
-          ]);
-          const runWorktree = (owned: boolean) => (owned ? fixture.worktree : "/elsewhere");
-          const timestamp = DateTime.formatIso(at(-10 * DAY_MS));
-          const run = {
-            orchestratorWorktreePath: runWorktree(path === "orchestrator"),
-            launchSummary: {
-              plannedWorkers: [
-                { ticketId: "ticket-1", worktreePath: runWorktree(path === "ticket") },
-              ],
-            },
-            ticketStates: [{ ticketId: "ticket-1", worktreePath: null }],
-            repositories: [],
-          };
-          yield* sql`INSERT INTO projection_implementation_runs ${sql.insert({
-            run_id: "run-1",
-            spec_id: "spec-1",
-            orchestrator_thread_id: "thread-orchestrator",
-            source_thread_id: "thread-root",
-            status,
-            base_branch: "main",
-            pinned_commit: "abc",
-            orchestrator_branch: "feature",
-            orchestrator_worktree_path: run.orchestratorWorktreePath,
-            launch_summary_json: JSON.stringify(run.launchSummary),
-            ticket_states_json: JSON.stringify(run.ticketStates),
-            worker_results_json: "[]",
-            terminal_lineage_ticket_ids_json: "[]",
-            app_review_ids_json: "[]",
-            qa_attempt_count: 0,
-            handoff_target: "pull-request",
-            base_branch_merge_policy: "merge",
-            run_json: JSON.stringify(run),
-            created_at: timestamp,
-            updated_at: timestamp,
-          })}`;
-          const report = yield* fixture.service.runNow;
-          expect(report.entries).toEqual([
-            expect.objectContaining({
-              path: fixture.worktree,
-              outcome,
-              ...(outcome === "kept" ? { reason: "An unfinished implementation run uses it" } : {}),
-            }),
-          ]);
-          expect(yield* fixture.fs.exists(fixture.worktree)).toBe(outcome === "kept");
-        }).pipe(Effect.provide(Sqlite.layerMemory)),
-      ),
-  );
   it.live("skips a stored worktree path whose parent is a regular file", () =>
     runCleanupTest(
       Effect.gen(function* () {

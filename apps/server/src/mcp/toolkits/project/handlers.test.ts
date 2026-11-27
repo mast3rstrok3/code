@@ -9,7 +9,6 @@ import {
   type ServerProvider,
   type Project as ProjectRecord,
   ThreadId,
-  WORKFLOW_START_MODEL_PINS,
   type ModelSelection,
   type RuntimeMode,
   type OrchestrationV2ThreadShell,
@@ -352,7 +351,7 @@ const clientLaunchHarness = (input: {
   readonly launched: Array<ThreadLaunch.ThreadLaunchInput>;
   readonly workspaceRoot?: string;
   readonly checkWorktreeBase?: ThreadLaunch.ThreadLaunchService["Service"]["checkWorktreeBase"];
-  /** Extra environment settings, such as workflow model pins. */
+  /** Extra environment settings, such as a default model. */
   readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
   /** The project record's own default; the settings may resolve another. */
   readonly projectDefault?: null;
@@ -867,132 +866,6 @@ it.effect("a launch binds only an existing checkout that is one of the project's
       code: "invalid_request",
     });
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-);
-
-it.effect(
-  "starts a Feature in a new worktree from the development branch, within the caller's modes",
-  () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-launch-feature-" });
-      const repo = path.join(root, "repo");
-      yield* fileSystem.makeDirectory(repo);
-
-      const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
-      const featureModel = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.5" };
-      const { projectId, modelSelection, dependencies } = clientLaunchHarness({
-        runtimeModeCeiling: "full-access",
-        launched,
-        workspaceRoot: repo,
-        settings: {
-          workflowStepModels: [
-            { workflowPromptId: WORKFLOW_START_MODEL_PINS.feature, modelSelection: featureModel },
-          ],
-        },
-      });
-      const git = yield* GitVcsDriver.GitVcsDriver.pipe(Effect.provide(dependencies));
-      for (const args of [
-        ["init", "-b", "main"],
-        ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init"],
-        ["branch", "dev"],
-      ]) {
-        yield* git.execute({ operation: "test.setupRepo", cwd: repo, args });
-      }
-      const toolkit = yield* ProjectToolkit.pipe(
-        Effect.provide(
-          McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(
-            Layer.provide(dependencies),
-          ),
-        ),
-      );
-      const handle = (params: Parameters<typeof toolkit.handle<"t3_thread_launch">>[1]) =>
-        toolkit
-          .handle("t3_thread_launch", params)
-          .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
-
-      const missingTask = yield* handle({
-        title: "Checkout",
-        projectId,
-        workflowPreset: "feature",
-      });
-      expect(missingTask.at(-1)?.result).toMatchObject({ code: "invalid_request" });
-
-      const result = yield* handle({
-        title: "Checkout",
-        projectId,
-        workflowPreset: "feature",
-        interactionMode: "default",
-        message: "Add a fast checkout",
-      });
-      expect(result.at(-1)?.result).toMatchObject({ projectId });
-      expect(launched).toHaveLength(1);
-      expect(launched[0]).toMatchObject({
-        workflowPreset: "fast-plan",
-        interactionMode: "default",
-        runtimeMode: "full-access",
-        workspaceStrategy: { type: "worktree", baseRef: "dev", startFromOrigin: true },
-        // No model named: the Feature workflow's default.
-        modelSelection: featureModel,
-      });
-      expect(launched[0]?.initialMessage?.text).toMatch(/^Add a fast checkout/);
-      expect(launched[0]?.initialMessage?.text).toContain("planning.fast-feature.codex");
-
-      // An explicit workspace wins over the development branch.
-      yield* handle({
-        title: "Engineering",
-        projectId,
-        workflowPreset: "engineering",
-        grillAnswerer: "judge",
-        message: "Plan the billing rewrite",
-        workspaceStrategy: { type: "worktree", baseRef: "main" },
-      });
-      expect(launched[1]).toMatchObject({
-        workflowPreset: "planning",
-        interactionMode: "planning-workflow",
-        workspaceStrategy: { type: "worktree", baseRef: "main" },
-        // The run keeps Engineering's stage choices and an LLM judge for its Grill.
-        workflowImplementationSettings: { ticketAppReviewEnabled: false, grillAnswerer: "judge" },
-        // Engineering has no default of its own and follows the project's model.
-        modelSelection,
-      });
-
-      // Only an Engineering Grill has questions for a judge.
-      const featureJudge = yield* handle({
-        title: "Checkout",
-        projectId,
-        workflowPreset: "feature",
-        grillAnswerer: "judge",
-        message: "Add a fast checkout",
-      });
-      expect(featureJudge.at(-1)?.result).toMatchObject({ code: "invalid_request" });
-      expect(launched).toHaveLength(2);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-);
-
-it.effect("refuses a workflow launch to a caller that may not run unattended in full access", () =>
-  Effect.gen(function* () {
-    const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
-    const { projectId, dependencies } = clientLaunchHarness({
-      runtimeModeCeiling: "auto",
-      launched,
-    });
-    const toolkit = yield* ProjectToolkit.pipe(
-      Effect.provide(
-        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(dependencies)),
-      ),
-    );
-    const result = yield* toolkit
-      .handle("t3_thread_launch", {
-        title: "Checkout",
-        projectId,
-        workflowPreset: "feature",
-        message: "Add a fast checkout",
-      })
-      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
-    expect(result.at(-1)?.result).toMatchObject({ code: "runtime_mode_escalation_denied" });
-    expect(launched).toHaveLength(0);
-  }),
 );
 
 it.effect("a launch into a new worktree creates nothing when its base ref has no commit", () =>

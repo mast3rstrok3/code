@@ -665,14 +665,6 @@ export default defineConfig({
       // Legacy manual Effect runners tracked as debt: no net-new occurrences.
       // Lower a ceiling when you migrate a file, and delete its entry at zero.
       ...Object.entries({
-        "apps/server/src/orchestration/Layers/CheckpointReactor.test.ts": 42,
-        "apps/server/src/orchestration/Layers/OrchestrationEngine.test.ts": 5,
-        "apps/server/src/orchestration/Layers/OrchestrationReactor.test.ts": 4,
-        "apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts": 77,
-        "apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts": 29,
-        "apps/server/src/orchestration/Layers/ThreadDeletionReactor.test.ts": 2,
-        "apps/server/src/orchestration/commandInvariants.test.ts": 5,
-        "apps/server/src/orchestration/projector.test.ts": 20,
         "apps/server/src/provider/Layers/CodexAdapter.test.ts": 1,
         "apps/server/src/provider/Layers/CodexSessionRuntime.test.ts": 5,
         "apps/server/src/provider/Layers/CursorAdapter.test.ts": 1,

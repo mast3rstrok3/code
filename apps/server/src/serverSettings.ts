@@ -9,7 +9,6 @@ import {
   type ProviderInstanceMutation,
   defaultInstanceIdForDriver,
   isProviderDriverKind,
-  isUnconfiguredDefaultInstanceEnabled,
   ProviderDriverKind,
   ProviderInstanceId,
   resolveProviderInstanceEnabled,
@@ -593,49 +592,6 @@ function fallbackTextGenerationProvider(
     { defaultModelSelection: settings.defaultModelSelection },
   );
   return fallback === null ? settings : { ...settings, textGenerationModelSelection: fallback };
-}
-
-/**
- * The unconfigured default instance counts when it is enabled by default. Prefers an enabled
- * `preferredInstanceId`, then the driver's default instance, then the first enabled one.
- */
-export function findEnabledProviderInstanceIdForDriver(
-  settings: ServerSettings,
-  driver: ProviderDriverKind,
-  preferredInstanceId?: ProviderInstanceId,
-): ProviderInstanceId | undefined {
-  const enabledInstanceIds = Object.entries(settings.providerInstances)
-    .filter(([, entry]) => entry.driver === driver && resolveProviderInstanceEnabled(entry))
-    .map(([instanceId]) => ProviderInstanceId.make(instanceId));
-
-  const defaultInstanceId = defaultInstanceIdForDriver(driver);
-  if (
-    !(defaultInstanceId in settings.providerInstances) &&
-    isUnconfiguredDefaultInstanceEnabled(defaultInstanceId)
-  ) {
-    enabledInstanceIds.push(defaultInstanceId);
-  }
-
-  const findEnabled = (instanceId: ProviderInstanceId | undefined) =>
-    instanceId !== undefined && enabledInstanceIds.includes(instanceId) ? instanceId : undefined;
-
-  return (
-    findEnabled(preferredInstanceId) ?? findEnabled(defaultInstanceId) ?? enabledInstanceIds[0]
-  );
-}
-
-/**
- * True when `instanceId` names a provider instance that is currently enabled, using the same
- * rule as `findEnabledProviderInstanceIdForDriver`. An id absent from `providerInstances` is
- * treated as the default instance for the driver of the same name.
- */
-export function isProviderInstanceEnabled(
-  settings: ServerSettings,
-  instanceId: ProviderInstanceId,
-): boolean {
-  const driver =
-    settings.providerInstances[instanceId]?.driver ?? ProviderDriverKind.make(instanceId);
-  return findEnabledProviderInstanceIdForDriver(settings, driver, instanceId) === instanceId;
 }
 
 const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([

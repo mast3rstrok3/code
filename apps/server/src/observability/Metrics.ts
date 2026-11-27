@@ -35,32 +35,6 @@ export const orchestrationEffectQueueWait = Metric.timer("t3_orchestration_effec
     "Time from an orchestration effect's temporal availability until claim, including same-thread blocking.",
 });
 
-export const workflowQueuedStagesWithoutOwners = Metric.gauge(
-  "t3_workflow_queued_stages_without_owners",
-  { description: "Queued workflow stages without an execution owner." },
-);
-
-export const workflowStageLaunchLatency = Metric.timer("t3_workflow_stage_launch_latency", {
-  description: "Time from durable stage queueing to ownership claim.",
-});
-
-export const workflowStaleLeasesTotal = Metric.counter("t3_workflow_stale_leases_total", {
-  description: "Workflow stage leases found expired by reconciliation.",
-});
-
-export const workflowParkedRateLimits = Metric.gauge("t3_workflow_parked_rate_limits", {
-  description: "Workflow stages parked for a provider usage limit.",
-});
-
-export const workflowMissingChildExecutionsTotal = Metric.counter(
-  "t3_workflow_missing_child_executions_total",
-  { description: "Workflow stage claims whose durable child execution is missing." },
-);
-
-export const workflowWatchdogFindingsTotal = Metric.counter("t3_workflow_watchdog_findings_total", {
-  description: "Deduplicated workflow watchdog findings.",
-});
-
 export const providerSessionsTotal = Metric.counter("t3_provider_sessions_total", {
   description: "Total provider session lifecycle operations.",
 });
@@ -228,14 +202,6 @@ export const withMetrics: {
   ): <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   <A, E, R>(effect: Effect.Effect<A, E, R>, options: WithMetricsOptions): Effect.Effect<A, E, R>;
 } = dual(2, withMetricsImpl);
-
-export const orchestrationCommandAckDuration = Metric.timer(
-  "t3_orchestration_command_ack_duration",
-  {
-    description:
-      "Time from orchestration command dispatch to the first committed domain event emitted for that command.",
-  },
-);
 
 // Shaped as an `Effect.fn` combinator: the command is the instrumented function's argument.
 export const withCommandMetrics = <A, E, R>(

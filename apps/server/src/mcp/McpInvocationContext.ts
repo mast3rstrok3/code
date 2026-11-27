@@ -22,8 +22,6 @@ const ALL_MCP_CAPABILITIES = [
   "device",
   "pull-requests",
   "app-review",
-  "workflow-artifacts",
-  "user-input",
 ] as const;
 export type McpCapability = (typeof ALL_MCP_CAPABILITIES)[number];
 
@@ -81,15 +79,7 @@ const runtimeModeRank: Record<RuntimeMode, number> = {
   auto: 2,
   "full-access": 3,
 };
-// Workflow modes belong to workflow automation, so they rank above `default` and a client's
-// limit can never narrow into one.
-const interactionModeRank: Record<ProviderInteractionMode, number> = {
-  plan: 0,
-  default: 1,
-  "planning-workflow": 2,
-  "implementation-workflow": 2,
-  "product-workflow": 2,
-};
+const interactionModeRank: Record<ProviderInteractionMode, number> = { plan: 0, default: 1 };
 
 /**
  * The modes a client caller's writes are capped at: what it was approved
@@ -243,9 +233,7 @@ export const requireMcpCapability = <const C extends McpCapability>(
     Effect.withSpan("mcp.requireCapability"),
   );
 
-export const requireThreadMcpCapability = <
-  const C extends "preview" | "device" | "app-review" | "workflow-artifacts" | "user-input",
->(
+export const requireThreadMcpCapability = <const C extends "preview" | "device" | "app-review">(
   capability: C,
 ): Effect.Effect<McpThreadInvocationScope, McpCapabilityError<C>, McpInvocationContext> =>
   McpInvocationContext.pipe(

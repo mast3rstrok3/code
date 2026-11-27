@@ -8,7 +8,6 @@ import {
   ScheduledTaskId,
   ThreadId,
   ScheduledTaskWebhookDeliveryId,
-  WORKFLOW_AUTOMATION_RUNTIME_MODE,
   type ScheduledTaskDeleteInput,
   type ScheduledTaskDeleteResult,
   type ScheduledTaskGetWebhookDeliveryInput,
@@ -29,7 +28,6 @@ import {
   scheduledTaskThreadMode,
   managedRuntimeModeDenial,
 } from "@t3tools/contracts";
-import { resolveWorkflowModelSelection } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
@@ -53,12 +51,6 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
-import {
-  LAUNCHABLE_WORKFLOWS,
-  workflowLaunchImplementationSettings,
-  workflowLaunchText,
-} from "../orchestration-v2/WorkflowLaunch.ts";
-import * as ServerSettings from "../serverSettings.ts";
 import * as Metrics from "../observability/Metrics.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { OrchestratorDispatchError } from "../orchestration-v2/Orchestrator.ts";
@@ -231,8 +223,6 @@ interface ScheduledTaskRow {
   readonly model_selection_json: string;
   readonly runtime_mode: string;
   readonly interaction_mode: string;
-  readonly workflow: string | null;
-  readonly use_workflow_default_model: number;
   readonly created_by: string;
   readonly creation_source: string;
   readonly created_at: string;
@@ -436,8 +426,6 @@ const decodeRow = Effect.fnUntraced(
       modelSelection,
       runtimeMode: row.runtime_mode,
       interactionMode: row.interaction_mode,
-      workflow: row.workflow,
-      useWorkflowDefaultModel: row.use_workflow_default_model === 1,
       createdBy: row.created_by,
       creationSource: row.creation_source,
       createdAt: row.created_at,
@@ -509,13 +497,6 @@ export const layer = Layer.effect(
     const secretRequests = yield* SecretRequests.SecretRequests;
     const scheduler = yield* Scheduler.Scheduler;
     const readWebhookOrigin = yield* ScheduledTaskWebhookOrigin;
-    // Only workflow runs read settings, for the workflow's step instructions
-    // and default model.
-    const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
-    const readServerSettings = Option.match(serverSettings, {
-      onNone: () => Effect.succeed(null),
-      onSome: (service) => service.getSettings.pipe(Effect.orElseSucceed(() => null)),
-    });
     const managedPolicy = yield* ManagedPolicy.ManagedPolicy;
     const webhookPolicyOrganization = ManagedPolicy.deniedBy(managedPolicy, "webhookTasks");
     // Existing webhook tasks stay stored but report why they do not run.
@@ -569,8 +550,6 @@ export const layer = Layer.effect(
         model_selection_json,
         runtime_mode,
         interaction_mode,
-        workflow,
-        use_workflow_default_model,
         created_by,
         creation_source,
         created_at,
@@ -613,8 +592,6 @@ export const layer = Layer.effect(
         model_selection_json,
         runtime_mode,
         interaction_mode,
-        workflow,
-        use_workflow_default_model,
         created_by,
         creation_source,
         created_at,
@@ -693,8 +670,6 @@ export const layer = Layer.effect(
           model_selection_json,
           runtime_mode,
           interaction_mode,
-          workflow,
-          use_workflow_default_model,
           created_by,
           creation_source,
           created_at,
@@ -720,8 +695,6 @@ export const layer = Layer.effect(
           ${JSON.stringify(task.modelSelection)},
           ${task.runtimeMode},
           ${task.interactionMode},
-          ${task.workflow ?? null},
-          ${task.useWorkflowDefaultModel === true ? 1 : 0},
           ${task.createdBy},
           ${task.creationSource},
           ${task.createdAt},
@@ -754,8 +727,6 @@ export const layer = Layer.effect(
           model_selection_json = excluded.model_selection_json,
           runtime_mode = excluded.runtime_mode,
           interaction_mode = excluded.interaction_mode,
-          workflow = excluded.workflow,
-          use_workflow_default_model = excluded.use_workflow_default_model,
           creation_source = excluded.creation_source,
           updated_at = excluded.updated_at,
           -- Keep a next_run_at that a finishing run moved during this save, unless
@@ -1074,22 +1045,6 @@ export const layer = Layer.effect(
         const commandId = CommandId.make(`scheduled-task:${fireKey}`);
         const messageId = MessageId.make(`scheduled-task-message:${fireKey}`);
         const prompt = webhook?.prompt ?? active.prompt;
-        const workflow =
-          active.workflow == null || active.threadId !== null
-            ? null
-            : LAUNCHABLE_WORKFLOWS[active.workflow];
-        const settings = workflow === null ? null : yield* readServerSettings;
-        const launchText =
-          workflow === null ? prompt : workflowLaunchText(prompt, workflow.preset, settings);
-        const workflowImplementationSettings =
-          workflow === null
-            ? undefined
-            : workflowLaunchImplementationSettings(workflow.preset, settings, { unattended: true });
-        // Resolved per run, so a settings change reaches the task without an edit.
-        const launchModelSelection =
-          (active.workflow != null && active.useWorkflowDefaultModel === true && settings !== null
-            ? resolveWorkflowModelSelection(settings, active.projectId, active.workflow)
-            : null) ?? active.modelSelection;
         const threadMode = scheduledTaskThreadMode(active);
 
         // A bound thread can move to another project (No project to a project) while
@@ -1138,20 +1093,14 @@ export const layer = Layer.effect(
                     commandId,
                     projectId: active.projectId,
                     title: webhook?.title ?? active.title,
-                    modelSelection: launchModelSelection,
-                    // A workflow runs unattended and switches its own modes as it goes.
-                    runtimeMode:
-                      workflow === null ? active.runtimeMode : WORKFLOW_AUTOMATION_RUNTIME_MODE,
-                    interactionMode: workflow?.interactionMode ?? active.interactionMode,
+                    modelSelection: active.modelSelection,
+                    runtimeMode: active.runtimeMode,
+                    interactionMode: active.interactionMode,
                     workspaceStrategy: active.workspaceStrategy,
-                    ...(workflow === null ? {} : { workflowPreset: workflow.preset }),
-                    ...(workflowImplementationSettings === undefined
-                      ? {}
-                      : { workflowImplementationSettings }),
                     initialMessage: {
                       messageId,
                       scheduledTaskId: active.id,
-                      text: launchText,
+                      text: prompt,
                       attachments: [],
                     },
                     createdBy: active.createdBy,
@@ -1498,10 +1447,7 @@ export const layer = Layer.effect(
       // keep their run history, and so real load failures propagate instead
       // of silently resetting an existing row.
       const existingTask = yield* findTask(id);
-      const workflow =
-        input.workflow === undefined ? (existingTask?.workflow ?? null) : input.workflow;
-      // A workflow task starts a fresh thread on every run.
-      const threadMode = workflow === null ? resolveThreadMode(input, existingTask) : "new_thread";
+      const threadMode = resolveThreadMode(input, existingTask);
       const keptThreadId = input.threadId ?? existingTask?.threadId ?? null;
       // A bound thread belongs to its project, so moving the task leaves it for a new one.
       const movedOffThread =
@@ -1599,12 +1545,6 @@ export const layer = Layer.effect(
           (yield* threadLaunch.isNonGitProject(input.projectId)))
           ? { type: "root" }
           : input.workspaceStrategy;
-      if (workflow !== null && input.threadId != null) {
-        return yield* taskError(
-          "A workflow task starts a fresh thread on every run, so it cannot be bound to a thread.",
-          { taskId: id },
-        );
-      }
       const scheduleUnchanged =
         existingTask !== null &&
         existingTask.enabled === input.enabled &&
@@ -1622,13 +1562,8 @@ export const layer = Layer.effect(
         threadMode,
         workspaceStrategy,
         modelSelection: input.modelSelection,
-        // Its runs start unattended in full access, which the stored modes say.
-        runtimeMode: workflow === null ? input.runtimeMode : WORKFLOW_AUTOMATION_RUNTIME_MODE,
-        interactionMode: workflow === null ? input.interactionMode : "default",
-        workflow,
-        useWorkflowDefaultModel:
-          workflow !== null &&
-          (input.useWorkflowDefaultModel ?? existingTask?.useWorkflowDefaultModel ?? false),
+        runtimeMode: input.runtimeMode,
+        interactionMode: input.interactionMode,
         createdBy: existingTask?.createdBy ?? input.createdBy ?? "user",
         creationSource: input.creationSource ?? "web",
         createdAt: existingTask?.createdAt ?? iso(now),

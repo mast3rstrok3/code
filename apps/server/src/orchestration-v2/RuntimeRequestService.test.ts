@@ -8,14 +8,12 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
-import * as WorkflowUserInputBroker from "../mcp/WorkflowUserInputBroker.ts";
 
 it.effect.each(["expired", "resolved"] as const)(
   "responds only to resolved requests and preserves feedback (%s)",
@@ -61,7 +59,6 @@ it.effect.each(["expired", "resolved"] as const)(
           Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
             get: getSession,
           }),
-          WorkflowUserInputBroker.layer,
         ),
       ),
     );
@@ -102,19 +99,20 @@ it.effect.each(["expired", "resolved"] as const)(
   },
 );
 
-it.effect("hands a workflow question's answer to its parked tool call, not the provider", () => {
+it.effect("fails an answer to a card left by the removed workflow question tool", () => {
   const threadId = ThreadId.make("thread-workflow-question");
   const providerSessionId = ProviderSessionId.make("provider-session-workflow-question");
   const requestId = RuntimeRequestId.make("workflow-user-input-session-1");
-  const getSession = vi.fn(() => Effect.succeedNone);
+  const respondToRuntimeRequest = vi.fn(() => Effect.void);
+  const getSession = vi.fn(() => Effect.succeedSome({ respondToRuntimeRequest } as never));
   const layerTest = RuntimeRequestService.layer.pipe(
-    Layer.provideMerge(
+    Layer.provide(
       Layer.mergeAll(
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getRuntimeRequest: () =>
             Effect.succeed({
               id: requestId,
-              nodeId: NodeId.make("node-workflow-question"),
+              nodeId: NodeId.make(`node:workflow-user-input:${requestId}`),
               providerTurnId: null,
               nativeRequestRef: null,
               kind: "user_input",
@@ -125,29 +123,17 @@ it.effect("hands a workflow question's answer to its parked tool call, not the p
             }),
         }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({ get: getSession }),
-        WorkflowUserInputBroker.layer,
       ),
     ),
   );
 
   return Effect.gen(function* () {
-    const broker = yield* WorkflowUserInputBroker.WorkflowUserInputBroker;
     const service = yield* RuntimeRequestService.RuntimeRequestServiceV2;
-    const parked = yield* broker
-      .awaitAnswers({ threadId, requestId, questions: [], waitFor: 60_000 })
-      .pipe(Effect.forkChild({ startImmediately: true }));
+    const error = yield* service
+      .respond({ threadId, providerSessionId, requestId, answers: { voice: ["Fold"] } })
+      .pipe(Effect.flip);
 
-    yield* service.respond({
-      threadId,
-      providerSessionId,
-      requestId,
-      answers: { voice: ["Fold into Phone"] },
-    });
-
-    assert.deepEqual(yield* Fiber.join(parked), {
-      _tag: "answered",
-      answers: { voice: ["Fold into Phone"] },
-    });
-    assert.equal(getSession.mock.calls.length, 0);
+    assert.equal(error.reason, "request-not-resumable");
+    assert.equal(respondToRuntimeRequest.mock.calls.length, 0);
   }).pipe(Effect.provide(layerTest));
 });

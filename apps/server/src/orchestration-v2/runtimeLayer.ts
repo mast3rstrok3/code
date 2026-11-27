@@ -59,7 +59,6 @@ import * as ThreadForkService from "./ThreadForkService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
-import * as WorkflowUserInputBroker from "../mcp/WorkflowUserInputBroker.ts";
 
 export const layerEventInfrastructure = Layer.mergeAll(
   OrchestrationEventStore.layer,
@@ -189,13 +188,7 @@ const layerProviderTurnControlServiceProvided = ProviderTurnControlService.layer
   ),
 );
 const layerRuntimeRequestServiceProvided = RuntimeRequestService.layer.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      ProjectionStore.layer,
-      layerProviderSessionManagerProvided,
-      WorkflowUserInputBroker.layer,
-    ),
-  ),
+  Layer.provide(Layer.merge(ProjectionStore.layer, layerProviderSessionManagerProvided)),
 );
 const layerCheckpointRollbackServiceProvided = CheckpointRollbackService.layer.pipe(
   Layer.provide(

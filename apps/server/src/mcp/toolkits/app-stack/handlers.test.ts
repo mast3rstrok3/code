@@ -1,15 +1,13 @@
 import { describe } from "vite-plus/test";
-import { DEFAULT_WORKSPACE_USER_ID } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import {
   AppStack,
   AppStackError,
   EnvironmentId,
-  OrchestrationProjectShell,
-  OrchestrationThreadShell,
+  OrchestrationV2ThreadShellJson,
+  ProjectId,
   ProviderInstanceId,
   ThreadId,
-  WorkflowId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -21,44 +19,63 @@ import * as TestClock from "effect/testing/TestClock";
 import { McpServer, McpSchema } from "effect/ai";
 
 import { AppStackManager } from "../../../appStack/AppStackManager.ts";
-import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProjectionStore from "../../../orchestration-v2/ProjectionStore.ts";
+import * as ProjectStore from "../../../orchestration-v2/ProjectStore.ts";
 import { McpInvocationContext, type McpCapability } from "../../McpInvocationContext.ts";
 import { layerInProcessMcpServer, toolkitRegistration } from "../../McpHttpServer.ts";
 import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
 import * as AppStackHandlers from "./handlers.ts";
 import { AppStackToolkit } from "./tools.ts";
 
-const thread = Schema.decodeSync(OrchestrationThreadShell)({
-  ownerUserId: DEFAULT_WORKSPACE_USER_ID,
-  parentThreadId: null,
-  workflowRole: null,
-  pullRequests: [],
-
+const createdAt = "2026-01-01T00:00:00.000Z";
+const thread = Schema.decodeSync(OrchestrationV2ThreadShellJson)({
   id: "thread-1",
   projectId: "project-1",
   title: "Check dev",
+  providerInstanceId: "codex",
   modelSelection: { instanceId: "codex", model: "gpt-5.4" },
   runtimeMode: "full-access",
+  interactionMode: "default",
   branch: "dev",
   worktreePath: null,
-  latestTurn: null,
-  session: null,
+  activeProviderThreadId: null,
+  lineage: { rootThreadId: "thread-1", parentThreadId: null, relationshipToParent: null },
+  forkedFrom: null,
+  createdBy: "user",
+  creationSource: "web",
+  latestRunId: null,
+  activeRunId: null,
+  status: "idle",
+  pendingRuntimeRequest: null,
+  latestVisibleMessage: null,
   latestUserMessageAt: null,
-  hasPendingApprovals: false,
-  hasPendingUserInput: false,
   hasActionableProposedPlan: false,
-  createdAt: "2026-01-01T00:00:00.000Z",
-  updatedAt: "2026-01-01T00:00:00.000Z",
+  itemCount: 0,
+  visibleItemCount: 0,
+  createdAt,
+  updatedAt: createdAt,
+  archivedAt: null,
+  settledOverride: null,
+  settledAt: null,
+  deletedAt: null,
 });
-const project = Schema.decodeSync(OrchestrationProjectShell)({
-  id: "project-1",
+const project: ProjectStore.ProjectRow = {
+  projectId: ProjectId.make("project-1"),
   title: "Rudi",
+  hasCustomTitle: false,
   workspaceRoot: "/repo/rudi",
   defaultModelSelection: null,
+  defaultThreadEnvMode: null,
+  autoPull: false,
+  faviconPath: null,
+  projectIcon: null,
   scripts: [],
-  createdAt: thread.createdAt,
-  updatedAt: thread.updatedAt,
-});
+  pinnedAt: null,
+  archivedAt: null,
+  createdAt,
+  updatedAt: createdAt,
+  deletedAt: null,
+};
 const stack = Schema.decodeSync(AppStack)({
   id: "stack-1",
   uuid: "stack-1",
@@ -67,14 +84,13 @@ const stack = Schema.decodeSync(AppStack)({
   composePath: "infra/compose/compose.app-dev.yml",
   displayName: "Rudi dev",
   description: null,
-  workflowId: "workflow-1",
   status: "running",
   services: [],
   serviceCount: 0,
   lastError: null,
   errorCount: 0,
-  createdAt: thread.createdAt,
-  updatedAt: thread.updatedAt,
+  createdAt,
+  updatedAt: createdAt,
 });
 const emptyStack = { stack: null, frontendUrl: null, frontendServiceName: null };
 const leaseId = "935970a8-0032-4c65-b87f-5c36fd46bb91";
@@ -85,7 +101,7 @@ const deviceLease = {
   expiresAt: null,
   queueReason: "capacity",
   queuePosition: 2,
-  queuedAt: thread.createdAt,
+  queuedAt: createdAt,
   queueExpiresAt: "2026-01-01T01:00:00.000Z",
   retryAfterSeconds: 10,
   error: null,
@@ -102,13 +118,12 @@ const invocation = Layer.succeed(McpInvocationContext, {
     providerInstanceId: ProviderInstanceId.make("codex"),
   },
   client: undefined,
-  requestNamespace: "workflow-test",
+  requestNamespace: "app-stack-test",
 });
 
 function harness(
   input: {
     worktreePath?: string;
-    workflowId?: string;
     missing?: boolean;
     missingProject?: boolean;
     enabled?: boolean;
@@ -133,41 +148,32 @@ function harness(
   };
   const layer = Layer.mergeAll(
     invocation,
-    Layer.mock(ProjectionSnapshotQuery)({
-      getThreadShellById: (id) => {
+    Layer.mock(ProjectionStore.ProjectionStoreV2)({
+      getThreadShell: (id) => {
         if (id !== thread.id) {
           const other = input.threads?.find((candidate) => candidate.id === id);
           return Effect.succeed(
             other === undefined
-              ? Option.none()
-              : Option.some({
+              ? null
+              : {
                   ...thread,
                   id: ThreadId.make(other.id),
-                  parentThreadId: ThreadId.make(other.parentThreadId),
+                  lineage: {
+                    ...thread.lineage,
+                    parentThreadId: ThreadId.make(other.parentThreadId),
+                  },
                   worktreePath: other.worktreePath,
-                }),
+                },
           );
         }
         return Effect.succeed(
-          input.missing
-            ? Option.none()
-            : Option.some({
-                ...thread,
-                worktreePath: input.worktreePath ?? null,
-                ...(input.workflowId === undefined
-                  ? {}
-                  : {
-                      workflowContext: {
-                        workflowId: WorkflowId.make(input.workflowId),
-                        rootThreadId: thread.id,
-                        ticketScope: [],
-                      },
-                    }),
-              }),
+          input.missing ? null : { ...thread, worktreePath: input.worktreePath ?? null },
         );
       },
-      getProjectShellById: (id) => {
-        expect(id).toBe(project.id);
+    }),
+    Layer.mock(ProjectStore.ProjectStoreV2)({
+      get: (id) => {
+        expect(id).toBe(project.projectId);
         return Effect.succeed(input.missingProject ? Option.none() : Option.some(project));
       },
     }),
@@ -271,7 +277,7 @@ function harness(
           containerName: request.containerName ?? null,
           tailLines: request.tailLines ?? 200,
           logs: "Server ready",
-          fetchedAt: thread.createdAt,
+          fetchedAt: createdAt,
         });
       },
     }),
@@ -526,51 +532,12 @@ it.effect("starts the authenticated worktree with its branch and explicit varian
   }).pipe(Effect.provide(test.layer));
 });
 
-describe.each([...(["dev", "prod"] as const)].map((scenarioCase) => [scenarioCase] as const))(
-  "scenario %s",
-  (variant) => {
-    it.effect(`keeps the calling workflow as owner when creating its ${variant} stack`, () => {
-      const test = harness({
-        worktreePath: "/worktrees/ticket-1",
-        workflowId: "implementation-run-1",
-      });
-      return Effect.gen(function* () {
-        yield* AppStackHandlers.handlers.app_stack_start({ variant });
-        expect(test.operations).toMatchObject([
-          {
-            operation: "autoCreate",
-            input: {
-              worktreePath: "/worktrees/ticket-1",
-              workflowId: "implementation-run-1",
-              variant,
-            },
-          },
-        ]);
-      }).pipe(Effect.provide(test.layer));
-    });
-  },
-);
-
-it.effect("reuses an existing stack without provisioning or changing its owner", () => {
+it.effect("reuses an existing stack without provisioning it again", () => {
   const test = harness({ stack });
   return Effect.gen(function* () {
     const result = yield* AppStackHandlers.handlers.app_stack_start({ displayName: "New name" });
-    expect(result).toMatchObject({
-      created: false,
-      alreadyRunning: true,
-      stack: { workflowId: "workflow-1" },
-    });
+    expect(result).toMatchObject({ created: false, alreadyRunning: true, stack: { id: stack.id } });
     expect(test.operations).toEqual([]);
-  }).pipe(Effect.provide(test.layer));
-});
-
-it.effect("keeps an existing stack's owner when changing its shape", () => {
-  const test = harness({ stack, workflowId: "another-calling-workflow" });
-  return Effect.gen(function* () {
-    yield* AppStackHandlers.handlers.app_stack_start({ bundle: ["cortex"] });
-    expect(test.operations).toMatchObject([
-      { operation: "autoCreate", input: { workflowId: stack.workflowId, bundle: ["cortex"] } },
-    ]);
   }).pipe(Effect.provide(test.layer));
 });
 
@@ -632,7 +599,7 @@ describe.each([...(["stopped", "error"] as const)].map((scenarioCase) => [scenar
           const result = yield* AppStackHandlers.handlers.app_stack_start({});
           expect(result).toMatchObject({
             created: false,
-            stack: { status: "running", workflowId: "workflow-1" },
+            stack: { status: "running", id: stack.id },
           });
           expect(test.operations).toEqual([{ operation: "restart", input: { stackId: stack.id } }]);
         }).pipe(Effect.provide(test.layer));
