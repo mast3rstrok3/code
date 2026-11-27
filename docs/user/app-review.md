@@ -4,7 +4,7 @@ App Review is the evidence that a change works in the running app. The agent on 
 
 ## Start a review
 
-Ask the agent for one, for example "run an App Review of this change". Agents that load T3 Code's skills, such as Claude, follow the bundled `app-review` skill; the empty App Review panel offers a button that puts `$app-review` in the composer. Every agent can use the App Review tools, so any provider can run one.
+Ask the agent for one, for example "run an App Review of this change". Agents that load T3 Code's skills, such as Claude, follow the bundled `app-review` skill; the empty App Review panel offers a button that puts `$t3:app-review` in the composer. Every agent can use the App Review tools, so any provider can run one.
 
 A thread keeps every review its agent ran, newest first. Open the panel from the thread's right panel or the command palette (**Open App Review**). On mobile, open the thread's Git sheet and choose **App Review**.
 

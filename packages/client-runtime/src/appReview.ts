@@ -8,7 +8,7 @@ export function isDomReplayRecording(mimeType: string | null | undefined): boole
 }
 
 /** What the composer offers when a thread has no App Review: ask its agent to run one. */
-export const APP_REVIEW_SKILL_PROMPT = "$app-review ";
+export const APP_REVIEW_SKILL_PROMPT = "$t3:app-review ";
 
 export const APP_REVIEW_STATUS_LABELS: Record<AppReviewStatus, string> = {
   pending: "Pending",
