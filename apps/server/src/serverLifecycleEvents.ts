@@ -10,7 +10,6 @@ import * as Stream from "effect/Stream";
 type LifecycleEventInput =
   | Omit<Extract<ServerLifecycleStreamEvent, { type: "welcome" }>, "sequence">
   | Omit<Extract<ServerLifecycleStreamEvent, { type: "ready" }>, "sequence">
-  | Omit<Extract<ServerLifecycleStreamEvent, { type: "draining" }>, "sequence">
   | Omit<Extract<ServerLifecycleStreamEvent, { type: "legacyThreadMigration" }>, "sequence">;
 
 interface SnapshotState {

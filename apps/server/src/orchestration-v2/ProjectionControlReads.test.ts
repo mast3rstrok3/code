@@ -30,7 +30,6 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
-import * as WorkflowUserInputBroker from "../mcp/WorkflowUserInputBroker.ts";
 
 const threadId = ThreadId.make("thread:control-reads");
 const providerThreadId = ProviderThreadId.make("provider-thread:control-reads");
@@ -394,7 +393,7 @@ it.effect.each(storageCases)(
       }).pipe(
         Effect.provide(
           Layer.merge(ProviderTurnControlService.layer, RuntimeRequestService.layer).pipe(
-            Layer.provide(Layer.mergeAll(layerSessions, layerEvents, WorkflowUserInputBroker.layer)),
+            Layer.provide(Layer.merge(layerSessions, layerEvents)),
           ),
         ),
       );

@@ -1,5 +1,3 @@
-import { ProjectionSnapshotQuery as WorkflowSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import * as Option from "effect/Option";
 import {
   backgroundWorkHoldsCompletion,
   isPullRequestWatchTask,
@@ -310,59 +308,9 @@ export function autoSettlementSettingsKey(
   ]);
 }
 
-export function workflowHoldsSettlement(
-  threadId: ThreadId,
-  snapshot: {
-    readonly threads: ReadonlyArray<
-      Pick<
-        import("@t3tools/contracts").OrchestrationThreadShell,
-        "id" | "workflowContext" | "workflowPausedAt"
-      >
-    >;
-    readonly implementationRuns?: ReadonlyArray<
-      Pick<
-        import("@t3tools/contracts").OrchestrationImplementationRun,
-        "orchestratorThreadId" | "status"
-      >
-    >;
-    readonly appReviewWorkflowRuns?: ReadonlyArray<
-      Pick<
-        import("@t3tools/contracts").AppReviewWorkflowRun,
-        "targetThreadId" | "controllerThreadId" | "status"
-      >
-    >;
-  },
-): boolean {
-  const thread = snapshot.threads.find((candidate) => candidate.id === threadId);
-  if (!thread) return false;
-  const root = thread.workflowContext?.rootThreadId ?? thread.id;
-  const ownsRoot = (id: ThreadId) => {
-    const candidate = snapshot.threads.find((entry) => entry.id === id);
-    return id === thread.id || (candidate?.workflowContext?.rootThreadId ?? id) === root;
-  };
-  return (
-    snapshot.threads.some(
-      (candidate) =>
-        (candidate.workflowContext?.rootThreadId ?? candidate.id) === root &&
-        candidate.workflowPausedAt != null,
-    ) ||
-    (snapshot.implementationRuns ?? []).some(
-      (run) =>
-        ownsRoot(run.orchestratorThreadId) &&
-        !["completed", "failed", "canceled", "cancelled"].includes(run.status),
-    ) ||
-    (snapshot.appReviewWorkflowRuns ?? []).some(
-      (run) =>
-        (ownsRoot(run.targetThreadId) || ownsRoot(run.controllerThreadId)) &&
-        !["completed", "failed", "canceled", "cancelled"].includes(run.status),
-    )
-  );
-}
-
 export const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
-  const workflows = yield* Effect.serviceOption(WorkflowSnapshotQuery);
   const projectStore = yield* ProjectStore.ProjectStoreV2;
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const git = yield* GitManager.GitManager;
@@ -403,14 +351,7 @@ export const make = Effect.gen(function* () {
     if (mergedPullRequest !== null) yield* pauseQuietReads();
     const settings = yield* settingsService.getSettings;
     const automaticSettlementEnabled = autoSettlementConfigured(settings);
-    const allThreads = yield* projections.getSettlementCandidates(threadId);
-    const workflowSnapshot = Option.isSome(workflows)
-      ? yield* workflows.value.getShellSnapshot().pipe(Effect.orDie)
-      : null;
-    const threads =
-      workflowSnapshot === null
-        ? allThreads
-        : allThreads.filter((thread) => !workflowHoldsSettlement(thread.id, workflowSnapshot));
+    const threads = yield* projections.getSettlementCandidates(threadId);
     if (threads.length === 0) return;
     const projectShells = yield* projectStore.listShells();
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
@@ -445,14 +386,6 @@ export const make = Effect.gen(function* () {
           yield* settingsService.getSettings,
           thread.projectId,
         ).settings;
-        if (
-          Option.isSome(workflows) &&
-          workflowHoldsSettlement(
-            thread.id,
-            yield* workflows.value.getShellSnapshot().pipe(Effect.orDie),
-          )
-        )
-          return thread;
         const decisionNow = yield* DateTime.now;
         const settledAt = resolveAutoSettlementAt({
           thread,

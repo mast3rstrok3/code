@@ -1,16 +1,3 @@
-import { ThreadId } from "./baseSchemas.ts";
-import {
-  NativeVerificationRequest,
-  NativeVerificationResponse,
-  NativeVerificationError,
-} from "./nativeVerification.ts";
-import { OrchestrationThread } from "./orchestration.ts";
-import {
-  ClientOrchestrationCommand,
-  DispatchResult,
-  OrchestrationShellSnapshot,
-  OrchestrationGetSnapshotError,
-} from "./orchestration.ts";
 import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
@@ -473,19 +460,9 @@ import {
   SourceControlSignInResult,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
-import {
-  WorkflowArtifactAccessError,
-  WorkflowArtifactsGetInput,
-  WorkflowArtifactsSnapshot,
-} from "./workflowArtifacts.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 
 export const WS_METHODS = {
-  workflowDispatchCommand: "workflow.dispatchCommand",
-  workflowSubscribe: "workflow.subscribe",
-  workflowNativeVerification: "workflow.nativeVerification",
-  workflowGetThread: "workflow.getThread",
-  workflowGetSnapshot: "workflow.getSnapshot",
   projectsList: "projects.list",
   projectsAdd: "projects.add",
   projectsRemove: "projects.remove",
@@ -548,7 +525,6 @@ export const WS_METHODS = {
 
   reviewGetBranchCommits: "review.getBranchCommits",
   reviewGetDiffPreview: "review.getDiffPreview",
-  workflowArtifactsGet: "workflow.artifacts.get",
   reviewGetDiffFileContents: "review.getDiffFileContents",
 
   terminalOpen: "terminal.open",
@@ -1754,44 +1730,6 @@ const WsReviewGetDiffPreviewRpc = Rpc.make(WS_METHODS.reviewGetDiffPreview, {
   error: Schema.Union([ReviewDiffPreviewError, EnvironmentAuthorizationError]),
 });
 
-export const WsWorkflowDispatchCommandRpc = Rpc.make(WS_METHODS.workflowDispatchCommand, {
-  payload: Schema.Struct({ command: ClientOrchestrationCommand }),
-  success: DispatchResult,
-  error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
-});
-export const WsWorkflowGetThreadRpc = Rpc.make(WS_METHODS.workflowGetThread, {
-  payload: Schema.Struct({ threadId: ThreadId }),
-  success: Schema.NullOr(OrchestrationThread),
-  error: Schema.Union([OrchestrationGetSnapshotError, EnvironmentAuthorizationError]),
-  stream: true,
-});
-export const WsWorkflowNativeVerificationRpc = Rpc.make(WS_METHODS.workflowNativeVerification, {
-  payload: NativeVerificationRequest,
-  success: NativeVerificationResponse,
-  error: Schema.Union([NativeVerificationError, EnvironmentAuthorizationError]),
-});
-export const WsWorkflowGetSnapshotRpc = Rpc.make(WS_METHODS.workflowGetSnapshot, {
-  payload: Schema.Struct({}),
-  success: OrchestrationShellSnapshot,
-  error: Schema.Union([OrchestrationGetSnapshotError, EnvironmentAuthorizationError]),
-});
-export const WsWorkflowSubscribeRpc = Rpc.make(WS_METHODS.workflowSubscribe, {
-  payload: Schema.Struct({}),
-  success: OrchestrationShellSnapshot,
-  error: Schema.Union([OrchestrationGetSnapshotError, EnvironmentAuthorizationError]),
-  stream: true,
-});
-
-export const WsWorkflowArtifactsGetRpc = Rpc.make(WS_METHODS.workflowArtifactsGet, {
-  payload: WorkflowArtifactsGetInput,
-  success: WorkflowArtifactsSnapshot,
-  error: Schema.Union([
-    WorkflowArtifactAccessError,
-    OrchestrationGetSnapshotError,
-    EnvironmentAuthorizationError,
-  ]),
-});
-
 export const WsReviewGetDiffFileContentsRpc = Rpc.make(WS_METHODS.reviewGetDiffFileContents, {
   payload: ReviewDiffFileContentsInput,
   success: ReviewDiffFileContentsResult,
@@ -2591,12 +2529,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsInitRpc,
   WsReviewGetBranchCommitsRpc,
   WsReviewGetDiffPreviewRpc,
-  WsWorkflowArtifactsGetRpc,
-  WsWorkflowDispatchCommandRpc,
-  WsWorkflowGetSnapshotRpc,
-  WsWorkflowGetThreadRpc,
-  WsWorkflowNativeVerificationRpc,
-  WsWorkflowSubscribeRpc,
   WsReviewGetDiffFileContentsRpc,
   WsTerminalOpenRpc,
   WsTerminalAttachRpc,

@@ -76,12 +76,6 @@ Retained events must remain decodable on replay. Changing a schema affects old e
 startup as well as live RPC traffic. Compatibility work must account for stored history, not just
 what the newest client sends.
 
-Fork workflows retain their durable metadata in `workflow_events`, separate from the native
-orchestration event log. The [workflow bridge](../../apps/server/src/orchestration/WorkflowRuntimeBridge.ts)
-translates their launch and control commands into native commands and returns finalized results to
-the workflow reactors. Native orchestration owns provider processes, checkpoints, and thread
-recovery. A workflow reactor must use the bridge rather than start a second provider runtime.
-
 ## Turn completion and checkpoints
 
 A provider turn ending and its follow-up work settling are separate milestones. Orchestration

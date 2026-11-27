@@ -3020,58 +3020,6 @@ it.effect.each([0, 1])("releases an async setup before its completion with exit 
   }),
 );
 
-it.effect("launches Feature and Engineering roots with their workflow identity", () =>
-  Effect.gen(function* () {
-    const harness = makeHarness();
-    yield* Effect.gen(function* () {
-      const launches = yield* ThreadLaunch.ThreadLaunchService;
-      const result = yield* launches.launch({
-        ...launchInput({
-          command: "command:launch:feature",
-          thread: "thread:launch:feature",
-          message: "Add a fast checkout",
-        }),
-        interactionMode: "plan",
-        workflowPreset: "fast-plan",
-      });
-      assert.equal(result.projection.thread.workflowPreset, "fast-plan");
-      assert.deepEqual({ ...result.projection.thread.workflowContext }, {
-        workflowId: "workflow-thread:launch:feature",
-        parentWorkflowId: null,
-        rootThreadId: "thread:launch:feature",
-        ticketScope: [],
-      } as Record<string, unknown>);
-
-      const settings = {
-        grillAnswerer: "judge" as const,
-        ticketAppReviewEnabled: false,
-        appReviewEnabled: true,
-        finalCodeReviewEnabled: true,
-        pullRequestCreationEnabled: true,
-        pullRequestBabysittingEnabled: true,
-      };
-      const engineering = yield* launches.launch({
-        ...launchInput({
-          command: "command:launch:engineering",
-          thread: "thread:launch:engineering",
-          message: "Plan the billing rewrite",
-        }),
-        interactionMode: "planning-workflow",
-        workflowPreset: "planning",
-        workflowImplementationSettings: settings,
-      });
-      assert.deepEqual(
-        { ...engineering.projection.thread.workflowImplementationSettings },
-        settings as Record<string, unknown>,
-      );
-      assert.equal(
-        engineering.projection.thread.workflowContext?.workflowId,
-        "workflow-thread:launch:engineering",
-      );
-    }).pipe(Effect.provide(harness.layer));
-  }),
-);
-
 it.effect.each(["origin/master", ":/initial"])(
   "refuses a worktree in a non-Git project before checking base %s",
   (baseRef) =>

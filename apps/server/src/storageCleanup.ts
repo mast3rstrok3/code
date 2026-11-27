@@ -1167,29 +1167,6 @@ const make = Effect.gen(function* () {
       ),
       ...deletedThreads.filter((_thread, index) => !groups.has(deletedKeys[index]!)),
     ];
-    // A halted run can sit idle for days and still needs every checkout it planned when it resumes.
-    const runWorktreeRows = yield* sql<{ runWorktreePath: string | null }>`
-      WITH open_runs AS (
-        SELECT run_json FROM projection_implementation_runs
-        WHERE status NOT IN ('completed', 'canceled')
-      )
-      SELECT json_extract(run_json, '$.orchestratorWorktreePath') AS "runWorktreePath" FROM open_runs
-      UNION
-      SELECT json_extract(entry.value, '$.worktreePath') FROM open_runs,
-        json_each(run_json, '$.launchSummary.plannedWorkers') AS entry
-      UNION
-      SELECT json_extract(entry.value, '$.worktreePath') FROM open_runs,
-        json_each(run_json, '$.ticketStates') AS entry
-      UNION
-      SELECT json_extract(entry.value, '$.worktreePath') FROM open_runs,
-        json_each(run_json, '$.repositories') AS entry
-    `.pipe(NodeSqliteClient.readOnly);
-    const runWorktreeKeys = new Set(
-      yield* Effect.forEach(
-        runWorktreeRows.flatMap((row) => row.runWorktreePath ?? []),
-        (worktreePath) => canonical(worktreePath),
-      ),
-    );
     for (const thread of candidates) {
       const settings = resolveWorktreeCleanup(serverSettings, thread.projectId);
       if (!worktreeCleanupEnabled(settings)) continue;
@@ -1244,8 +1221,6 @@ const make = Effect.gen(function* () {
           ),
         );
         if (!exists) return;
-        if (runWorktreeKeys.has(worktreeKey))
-          return keep("an unfinished implementation run uses it");
         if (deleted && !settings.worktreeOnDelete) return keep("no rules apply");
         if (members.length > 1 && worktreeOwner(members) === undefined)
           return keep(`shared by ${members.length} threads`);

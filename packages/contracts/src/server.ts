@@ -1076,21 +1076,6 @@ export const ServerLifecycleStreamReadyEvent = Schema.Struct({
 });
 export type ServerLifecycleStreamReadyEvent = typeof ServerLifecycleStreamReadyEvent.Type;
 
-export const ServerLifecycleDrainingPayload = Schema.Struct({
-  operationId: TrimmedNonEmptyString,
-  requestedAt: IsoDateTime,
-  deadlineAt: IsoDateTime,
-  forced: Schema.Boolean,
-});
-export type ServerLifecycleDrainingPayload = typeof ServerLifecycleDrainingPayload.Type;
-
-export const ServerLifecycleStreamDrainingEvent = Schema.Struct({
-  version: Schema.Literal(1),
-  sequence: NonNegativeInt,
-  type: Schema.Literal("draining"),
-  payload: ServerLifecycleDrainingPayload,
-});
-export type ServerLifecycleStreamDrainingEvent = typeof ServerLifecycleStreamDrainingEvent.Type;
 export const ServerLifecycleStreamLegacyThreadMigrationEvent = Schema.Struct({
   version: Schema.Literal(1),
   sequence: NonNegativeInt,
@@ -1103,7 +1088,6 @@ export type ServerLifecycleStreamLegacyThreadMigrationEvent =
 export const ServerLifecycleStreamEvent = Schema.Union([
   ServerLifecycleStreamWelcomeEvent,
   ServerLifecycleStreamReadyEvent,
-  ServerLifecycleStreamDrainingEvent,
   ServerLifecycleStreamLegacyThreadMigrationEvent,
 ]);
 export type ServerLifecycleStreamEvent = typeof ServerLifecycleStreamEvent.Type;

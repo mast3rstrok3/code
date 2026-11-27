@@ -583,16 +583,6 @@ export function applyServerSettingsPatch(
     ...(patch.workflowStepInstructions !== undefined
       ? { workflowStepInstructions: patch.workflowStepInstructions }
       : {}),
-    ...(patch.workflowStepReviewParts !== undefined
-      ? { workflowStepReviewParts: patch.workflowStepReviewParts }
-      : {}),
-    // Replace, never merge: dropping a default step pin has to be expressible.
-    ...(patch.workflowStepModels !== undefined
-      ? { workflowStepModels: patch.workflowStepModels }
-      : {}),
-    ...(patch.workflowStepCycles !== undefined
-      ? { workflowStepCycles: patch.workflowStepCycles }
-      : {}),
     ...(patch.workspaceUsers !== undefined
       ? {
           workspaceUsers: normalizeWorkspaceUsersPatch(

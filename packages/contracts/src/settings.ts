@@ -35,13 +35,6 @@ import {
   ProviderOptionSelections,
 } from "./model.ts";
 import {
-  ImplementationWorkflowSettings,
-  MaxParallelTickets,
-  WorkflowStepCycleOverride,
-  WorkflowStepModelOverride,
-  WorkflowStepReviewPartsOverride,
-} from "./orchestration.ts";
-import {
   DEFAULT_WORKSPACE_USER,
   DEFAULT_WORKSPACE_USER_ID,
   DEFAULT_WORKSPACE_USER_VIEW,
@@ -1583,31 +1576,6 @@ export const ServerSettings = Schema.Struct({
     TrimmedNonEmptyString,
     TrimmedString.check(Schema.isMaxLength(20_000)),
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-  /**
-   * Default model per workflow step and sub-step, used by every workflow that
-   * does not pin the step itself. A pin set from the Workflows panel governs
-   * that one run; this is the standing choice new runs start from.
-   */
-  workflowStepModels: Schema.Array(WorkflowStepModelOverride).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
-  /**
-   * Default cycle budget per looping workflow step, used by every workflow
-   * that does not set the step's budget itself. Same standing-default role as
-   * `workflowStepModels`.
-   */
-  workflowStepCycles: Schema.Array(WorkflowStepCycleOverride).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
-  /**
-   * Which parts each App Review step runs, keyed like `workflowStepCycles`.
-   * The step-level entry is the standing default for every review; the ticket
-   * sub-step entry overrides it for per-ticket reviews. No entry enables E2E
-   * testing and disables browser review.
-   */
-  workflowStepReviewParts: Schema.Array(WorkflowStepReviewPartsOverride).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
   reviewGuidesEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   reviewGuideModelSelection: Schema.NullOr(ModelSelection).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
@@ -1623,9 +1591,6 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-  implementation: ImplementationWorkflowSettings.pipe(
-    Schema.withDecodingDefault(Effect.succeed({})),
-  ),
   workspaceUsers: Schema.Array(WorkspaceUser).pipe(
     Schema.withDecodingDefault(Effect.succeed([DEFAULT_WORKSPACE_USER])),
   ),
@@ -2028,23 +1993,8 @@ export const ServerSettingsPatch = Schema.Struct({
     }),
   ),
   sourceControlWriterModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
-  // Whole-array replacement, like `providerInstances`: the list is small and
-  // the client always sends the complete set of default step pins.
   workflowStepInstructions: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, TrimmedString.check(Schema.isMaxLength(20_000))),
-  ),
-  workflowStepModels: Schema.optionalKey(Schema.Array(WorkflowStepModelOverride)),
-  workflowStepCycles: Schema.optionalKey(Schema.Array(WorkflowStepCycleOverride)),
-  workflowStepReviewParts: Schema.optionalKey(Schema.Array(WorkflowStepReviewPartsOverride)),
-  implementation: Schema.optionalKey(
-    Schema.Struct({
-      maxParallelTickets: Schema.optionalKey(MaxParallelTickets),
-      maxParallelAppReviews: Schema.optionalKey(MaxParallelTickets),
-      appReviewEnabled: Schema.optionalKey(Schema.Boolean),
-      finalCodeReviewEnabled: Schema.optionalKey(Schema.Boolean),
-      pullRequestCreationEnabled: Schema.optionalKey(Schema.Boolean),
-      pullRequestBabysittingEnabled: Schema.optionalKey(Schema.Boolean),
-    }),
   ),
   reviewGuidesEnabled: Schema.optionalKey(Schema.Boolean),
   reviewGuideModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),

@@ -50,9 +50,7 @@ const HANDOFF_DELAY_MS = 2_000;
  * take minutes. A missed window rolls back the database, so the next attempt pays the same cost.
  */
 const PREPARED_TIMEOUT_MS = 30 * 60_000;
-// The child drains workflow turns for up to 90 seconds before its Effect scope
-// closes. Keep a small launcher margin before the force signal.
-const TERMINATE_GRACE_MS = 95_000;
+const TERMINATE_GRACE_MS = 5_000;
 // Keep SQLite startup and journaling from turning a full filesystem into a restart loop.
 const MIN_SERVICE_START_FREE_BYTES = 64 * 1024 ** 2;
 const DISK_SPACE_RETRY_MS = 30_000;

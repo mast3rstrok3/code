@@ -4,7 +4,6 @@ import {
   ThreadId,
   OrchestratorMcpFailure,
   ProjectId,
-  WORKFLOW_AUTOMATION_RUNTIME_MODE,
 } from "@t3tools/contracts";
 import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
@@ -23,19 +22,10 @@ import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.t
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
-import {
-  LAUNCHABLE_WORKFLOWS,
-  developmentWorktreeStrategy,
-  workflowLaunchImplementationSettings,
-  workflowLaunchText,
-} from "../../../orchestration-v2/WorkflowLaunch.ts";
 import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
 import * as DateTime from "effect/DateTime";
 import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
-import {
-  resolveProjectSettings,
-  resolveWorkflowModelSelection,
-} from "@t3tools/shared/projectSettings";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { resolveRuntimeMode } from "../../delegatedTaskModes.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -118,12 +108,7 @@ const access = Effect.gen(function* () {
 });
 export const layer = McpToolAccess.toLayer(ProjectToolkit, {
   t3_thread_launch: McpToolAccess.startsThreads(
-    // A workflow runs unattended: it switches itself to the default interaction mode and
-    // full access later, so the caller has to allow both now.
-    (input) =>
-      input.workflowPreset === undefined
-        ? input
-        : { runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE, interactionMode: "default" as const },
+    (input) => input,
     (input, { runtimeMode, interactionMode, linkOrigin }) =>
       Effect.gen(function* () {
         const scope = yield* McpInvocationContext.McpInvocationContext;
@@ -238,28 +223,13 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
                 }),
             ),
           );
-        const workflow =
-          input.workflowPreset === undefined
-            ? undefined
-            : LAUNCHABLE_WORKFLOWS[input.workflowPreset];
-        const settings =
-          workflow === undefined
-            ? null
-            : yield* ServerSettings.ServerSettingsService.pipe(
-                Effect.flatMap((service) => service.getSettings),
-                Effect.orElseSucceed(() => null),
-              );
         // A caller outside a thread has nothing to inherit, so it starts with the
         // project's effective defaults, as the composer does. Its mode stays
         // within the ceiling it was approved with.
         const projectDefaults = caller === undefined ? projectSettings : undefined;
-        // A workflow starts on its own default model unless the caller names one.
         const modelSelection =
           input.modelSelection ??
           launchedModel ??
-          (input.workflowPreset === undefined || settings === null
-            ? null
-            : resolveWorkflowModelSelection(settings, projectId, input.workflowPreset)) ??
           caller?.modelSelection ??
           (projectDefaults
             ? resolveNewThreadModelSelection({
@@ -280,59 +250,8 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             message:
               "Pass modelSelection: the project has no default model. orchestrator_capabilities lists providers and models.",
           });
-        if (workflow !== undefined && (input.message === undefined || input.scratch === true))
-          return yield* new OrchestratorMcpFailure({
-            code: "invalid_request",
-            message:
-              "A workflow launch needs a project and a task: pass message, and omit scratch.",
-          });
-        if (input.grillAnswerer !== undefined && input.workflowPreset !== "engineering")
-          return yield* new OrchestratorMcpFailure({
-            code: "invalid_request",
-            message: 'grillAnswerer only applies to workflowPreset "engineering".',
-          });
-        const workspaceStrategy =
-          strategy ??
-          (workflow === undefined
-            ? ({ type: "root" } as const)
-            : yield* Effect.gen(function* () {
-                const launchProject =
-                  project ??
-                  (yield* Project.ProjectService.pipe(
-                    Effect.flatMap((projects) => projects.getById(projectId)),
-                    Effect.mapError(unavailable),
-                    Effect.map(Option.getOrUndefined),
-                  ));
-                const developmentStrategy =
-                  launchProject === undefined
-                    ? null
-                    : yield* developmentWorktreeStrategy({
-                        git: yield* GitVcsDriver.GitVcsDriver,
-                        settings,
-                        workspaceRoot: launchProject.workspaceRoot,
-                        projectId,
-                      });
-                if (developmentStrategy === null)
-                  return yield* new OrchestratorMcpFailure({
-                    code: "invalid_request",
-                    message:
-                      "The project names no development or default branch. Pass workspaceStrategy with the baseRef to start from.",
-                  });
-                return developmentStrategy;
-              }));
-        const workflowImplementationSettings =
-          workflow === undefined
-            ? undefined
-            : workflowLaunchImplementationSettings(workflow.preset, settings, {
-                grillAnswerer: input.grillAnswerer,
-              });
-        const text =
-          workflow === undefined
-            ? (input.message ?? "")
-            : workflowLaunchText(input.message ?? "", workflow.preset, settings);
-        // A workflow already asked for full access; the project default must not narrow it.
         let startedRuntimeMode =
-          workflow === undefined && projectDefaults !== undefined && input.runtimeMode === undefined
+          projectDefaults !== undefined && input.runtimeMode === undefined
             ? yield* resolveRuntimeMode(runtimeMode, projectDefaults.defaultRuntimeMode).pipe(
                 Effect.orElseSucceed(() => runtimeMode),
               )
@@ -353,19 +272,15 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           title: input.title,
           modelSelection,
           runtimeMode: startedRuntimeMode,
-          interactionMode: workflow?.interactionMode ?? interactionMode,
-          workspaceStrategy,
-          ...(workflow === undefined ? {} : { workflowPreset: workflow.preset }),
-          ...(workflowImplementationSettings === undefined
-            ? {}
-            : { workflowImplementationSettings }),
+          interactionMode,
+          workspaceStrategy: strategy ?? { type: "root" },
           ...(input.message === undefined && attachments.length === 0
             ? {}
             : {
                 initialMessage: {
                   messageId,
                   ...(caller === undefined ? {} : { senderThreadId: caller.id }),
-                  text,
+                  text: input.message ?? "",
                   attachments,
                 },
               }),

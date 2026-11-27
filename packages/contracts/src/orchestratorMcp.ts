@@ -22,11 +22,15 @@ import {
 } from "./baseSchemas.ts";
 import {
   ScheduledTaskRunStatus,
-  ScheduledTaskWorkflow,
   ScheduledTaskSchedule,
   ScheduledTaskUpsertSchedule,
 } from "./scheduledTask.ts";
-import { ProviderInteractionMode, ProviderRequestKind, RuntimeMode } from "./providerPolicy.ts";
+import {
+  ProviderInteractionMode,
+  ProviderRequestKind,
+  RuntimeMode,
+  SelectableProviderInteractionMode,
+} from "./providerPolicy.ts";
 import { PullRequestState } from "./pullRequest.ts";
 import {
   ThreadLinkedPullRequest,
@@ -134,7 +138,7 @@ export type OrchestratorMcpRuntimeMode = typeof OrchestratorMcpRuntimeMode.Type;
 
 export const OrchestratorMcpInteractionMode = Schema.Union([
   Schema.Literal("inherit"),
-  ProviderInteractionMode,
+  SelectableProviderInteractionMode,
 ]);
 export type OrchestratorMcpInteractionMode = typeof OrchestratorMcpInteractionMode.Type;
 
@@ -724,12 +728,6 @@ export const OrchestratorMcpScheduleTaskInput = Schema.Struct({
         "Runs share one thread but each starts a fresh session. Unbound: the first run makes the thread.",
     }),
   ),
-  workflow: Schema.optional(
-    ScheduledTaskWorkflow.annotate({
-      description:
-        "Start each run as a fresh thread running this workflow, in a new worktree from the project's development branch: feature (Plan, Implement, Code Review, pull request) or engineering. Implies bindToCurrentThread=false, and the caller must allow full access.",
-    }),
-  ),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
 });
 export type OrchestratorMcpScheduleTaskInput = typeof OrchestratorMcpScheduleTaskInput.Type;
@@ -751,11 +749,6 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   enabled: Schema.Boolean,
   projectId: ProjectId,
   boundThreadId: Schema.NullOr(ThreadId),
-  workflow: Schema.NullOr(ScheduledTaskWorkflow),
-  useWorkflowDefaultModel: Schema.optional(Schema.Boolean).annotate({
-    description:
-      "True when each run starts on the workflow's default model from settings, resolved when the run starts.",
-  }),
   freshSession: Schema.Boolean,
   schedule: ScheduledTaskSchedule,
   nextRunAt: Schema.NullOr(IsoDateTime),
@@ -800,12 +793,6 @@ export const OrchestratorMcpUpdateScheduledTaskInput = Schema.Struct({
   schedule: Schema.optional(OrchestratorMcpSchedule),
   enabled: Schema.optional(Schema.Boolean),
   bindToCurrentThread: Schema.optional(Schema.Boolean),
-  workflow: Schema.optional(
-    Schema.NullOr(ScheduledTaskWorkflow).annotate({
-      description:
-        "Start each run as a fresh thread running this workflow (feature or engineering), or null for a plain thread. Setting one unbinds the task from its thread.",
-    }),
-  ),
   freshSession: Schema.optional(Schema.Boolean),
 });
 export type OrchestratorMcpUpdateScheduledTaskInput =
