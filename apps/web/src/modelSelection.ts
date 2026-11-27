@@ -459,27 +459,3 @@ export function resolveAppModelSelectionState(
 
   return NO_PROVIDER_MODEL_SELECTION;
 }
-
-export function resolveDefaultAgentModelSelectionState(
-  settings: UnifiedSettings,
-  providers: ReadonlyArray<ServerProvider>,
-): ModelSelection {
-  const entry = deriveProviderInstanceEntries(providers).find(
-    (candidate) => candidate.enabled && candidate.isAvailable,
-  );
-  if (!entry)
-    return createModelSelection(
-      defaultInstanceIdForDriver(ProviderDriverKind.make("codex")),
-      getDefaultServerModel(providers, ProviderDriverKind.make("codex")),
-    );
-  const model =
-    resolveAppModelSelectionForInstance(entry.instanceId, settings, providers, null) ??
-    getDefaultServerModel(providers, entry.driverKind);
-  const { modelOptionsForDispatch } = getComposerProviderState({
-    provider: entry.driverKind,
-    model,
-    models: entry.models,
-    modelOptions: undefined,
-  });
-  return createModelSelection(entry.instanceId, model, modelOptionsForDispatch);
-}
