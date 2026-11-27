@@ -133,6 +133,7 @@ import * as ServerOwnership from "./serverOwnership.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import * as SkillsPlugin from "./skills/SkillsPlugin.ts";
 import * as ManagedLimits from "./policy/managedLimits.ts";
 import * as ManagedPolicy from "./policy/ManagedPolicy.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
@@ -835,6 +836,8 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
       McpProviderSessions.layer,
     ),
   ),
+  // Below provider hydration, which reads it optionally to give Claude sessions the plugin.
+  Layer.provideMerge(SkillsPlugin.layer.pipe(Layer.provide(layerServerSettings))),
   Layer.provideMerge(
     OpenCodeRuntime.layer.pipe(
       Layer.provide(

@@ -114,7 +114,8 @@ export default mergeConfig(
       outDir: packBootstrap ? "dist-exe" : packExecutable ? cliAssetDir : "dist",
       sourcemap: !packExecutable,
       clean: true,
-      copy: [{ from: "src/provider/workflow-skills", to: "dist" }],
+      // The executable cannot carry a directory; scripts/build-cli-archive.ts stages it beside t3.
+      copy: packExecutable ? [] : [{ from: "src/skills/plugin", to: "dist/skills" }],
       // SEA can only resolve built-ins; keep dynamic imports inside each emitted module.
       ...(packExecutable ? { outputOptions: { codeSplitting: false } } : {}),
       ...(packMode === "1"

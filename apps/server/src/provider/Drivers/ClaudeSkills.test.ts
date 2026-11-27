@@ -7,6 +7,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import { discoverClaudeSkills as discoverSkills } from "./ClaudeSkills.ts";
 import { planClaudeSkillDispatch } from "./ClaudeSkillDispatch.ts";
+import * as SkillsPlugin from "../../skills/SkillsPlugin.ts";
 
 // Windows makes the managed directory fixture-controlled without reading host policy or skills.
 const discoverClaudeSkills = (
@@ -673,6 +674,22 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
           CLAUDE_CODE_PLUGIN_DIRS: inherited,
         })).map((skill) => skill.name),
         ["inherited:stale"],
+      );
+
+      // T3 Code's bundled plugin reaches every session as an inline plugin.
+      assert.deepEqual(
+        (yield* discoverClaudeSkills({ homePath: path.join(workspace, "empty") }, workspace, {
+          CLAUDE_CODE_PLUGIN_DIRS: inherited,
+        }).pipe(
+          Effect.provideService(
+            SkillsPlugin.SkillsPlugin,
+            SkillsPlugin.SkillsPlugin.of({
+              catalog: { pluginName: "acme", skills: [], docs: [] },
+              directory: Effect.succeed(named),
+            }),
+          ),
+        )).map((skill) => skill.name),
+        ["acme:qa", "inherited:stale"],
       );
     }),
   );

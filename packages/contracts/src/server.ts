@@ -31,120 +31,37 @@ import { ServerProviderUsageLimits, UsageLimitSourceSnapshots } from "./provider
 import { ServerSettings } from "./settings.ts";
 import { DesktopUpdateChannelSchema } from "./ipc.ts";
 
-export const WorkflowPromptAssociatedDocContract = Schema.Struct({
+/** A supporting file in a bundled skill's folder, such as a format reference or a script template. */
+export const SkillDoc = Schema.Struct({
+  /** `<skill>/<path>`, unique across the catalog. */
   id: TrimmedNonEmptyString,
-  title: TrimmedNonEmptyString,
+  skill: TrimmedNonEmptyString,
+  /** Relative to the skill's folder. */
   path: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  description: TrimmedNonEmptyString,
   content: TrimmedNonEmptyString,
 });
-export type WorkflowPromptAssociatedDocContract = typeof WorkflowPromptAssociatedDocContract.Type;
+export type SkillDoc = typeof SkillDoc.Type;
 
-const WorkflowPromptWorkflow = Schema.Literals([
-  "shared",
-  "planning",
-  "implementation",
-  "app-review",
-  "product",
-]);
-
-export const WorkflowPromptContract = Schema.Struct({
-  id: TrimmedNonEmptyString,
-  order: PositiveInt,
-  workflow: WorkflowPromptWorkflow,
-  role: Schema.Literals([
-    "workflow-communications",
-    "planning-thread",
-    "planning-reviewer",
-    "planning-grill-judge",
-    "implementation-orchestrator",
-    "implementation-worker",
-    "implementation-validator",
-    "implementation-qa-reviewer",
-    "implementation-fixer",
-    "implementation-code-reviewer",
-    "implementation-change-request-babysitter",
-    "app-review-orchestrator",
-    "app-review-reviewer",
-    "app-review-fixer",
-  ]),
-  stage: TrimmedNonEmptyString,
-  title: TrimmedNonEmptyString,
+export const BundledSkill = Schema.Struct({
+  name: TrimmedNonEmptyString,
   description: TrimmedNonEmptyString,
-  promptText: TrimmedNonEmptyString,
-  associatedDocs: Schema.optional(Schema.Array(WorkflowPromptAssociatedDocContract)),
-});
-export type WorkflowPromptContract = typeof WorkflowPromptContract.Type;
-
-export const WorkflowPromptContracts = Schema.Array(WorkflowPromptContract);
-export type WorkflowPromptContracts = typeof WorkflowPromptContracts.Type;
-
-export const WorkflowCatalogStep = Schema.Struct({
-  label: TrimmedNonEmptyString,
-  skillId: Schema.optional(TrimmedNonEmptyString),
-  workflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
-  threadBoundary: Schema.optional(
-    Schema.Literals(["same thread", "new thread", "new child thread", "new review thread"]),
-  ),
-  note: Schema.optional(TrimmedNonEmptyString),
-});
-export type WorkflowCatalogStep = typeof WorkflowCatalogStep.Type;
-
-export const WorkflowCatalogWorkflow = Schema.Struct({
-  id: TrimmedNonEmptyString,
-  order: PositiveInt,
-  title: TrimmedNonEmptyString,
-  description: TrimmedNonEmptyString,
-  interactionMode: TrimmedNonEmptyString,
-  steps: Schema.Array(WorkflowCatalogStep),
-});
-export type WorkflowCatalogWorkflow = typeof WorkflowCatalogWorkflow.Type;
-
-export const WorkflowSkillContract = Schema.Struct({
-  id: TrimmedNonEmptyString,
-  order: PositiveInt,
-  workflow: WorkflowPromptWorkflow,
-  role: WorkflowPromptContract.fields.role,
-  stage: TrimmedNonEmptyString,
-  title: TrimmedNonEmptyString,
-  description: TrimmedNonEmptyString,
-  promptText: TrimmedNonEmptyString,
-  workflowAnnotations: Schema.Array(
-    Schema.Struct({
-      workflowPromptId: TrimmedNonEmptyString,
-      title: TrimmedNonEmptyString,
-      text: TrimmedNonEmptyString,
-    }),
-  ).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
-  promptIds: Schema.Array(TrimmedNonEmptyString).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
+  /** `disable-model-invocation`: only a user typing the skill's name can run it. */
+  userInvocationOnly: Schema.Boolean,
+  /** The complete SKILL.md, frontmatter included. */
+  content: TrimmedNonEmptyString,
   docIds: Schema.Array(TrimmedNonEmptyString),
-  buildModes: Schema.Array(Schema.Literal("build")).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
-  workflowIds: Schema.Array(TrimmedNonEmptyString),
-  sourceUrl: Schema.optional(TrimmedNonEmptyString),
 });
-export type WorkflowSkillContract = typeof WorkflowSkillContract.Type;
+export type BundledSkill = typeof BundledSkill.Type;
 
-export const WorkflowDocContract = Schema.Struct({
-  id: TrimmedNonEmptyString,
-  title: TrimmedNonEmptyString,
-  path: TrimmedNonEmptyString,
-  description: TrimmedNonEmptyString.pipe(
-    Schema.withDecodingDefault(Effect.succeed("Supporting reference for a workflow skill.")),
-  ),
-  content: TrimmedNonEmptyString,
-  skillIds: Schema.Array(TrimmedNonEmptyString),
+/** The Claude Code plugin T3 Code ships; its skills are invoked as `<pluginName>:<name>`. */
+export const SkillCatalog = Schema.Struct({
+  pluginName: TrimmedNonEmptyString,
+  skills: Schema.Array(BundledSkill),
+  docs: Schema.Array(SkillDoc),
 });
-export type WorkflowDocContract = typeof WorkflowDocContract.Type;
-
-export const WorkflowCatalog = Schema.Struct({
-  workflows: Schema.Array(WorkflowCatalogWorkflow),
-  skills: Schema.Array(WorkflowSkillContract),
-  docs: Schema.Array(WorkflowDocContract),
-});
-export type WorkflowCatalog = typeof WorkflowCatalog.Type;
+export type SkillCatalog = typeof SkillCatalog.Type;
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),

@@ -200,6 +200,10 @@ export default defineConfig({
       "apps/mobile/modules/t3-highlights/cpp/generated/**",
       "apps/mobile/modules/t3-highlights/nitrogen/generated/**",
       "*.icon/**",
+      // Byte-identical copies of mattpocock/skills, so upstream syncs stay plain file copies.
+      "apps/server/src/skills/plugin/skills/*/",
+      "!apps/server/src/skills/plugin/skills/workflow/",
+      "!apps/server/src/skills/plugin/skills/app-review/",
     ],
     sortPackageJson: {},
     overrides: [

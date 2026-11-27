@@ -28,7 +28,6 @@ export type SettingsPath =
   | "/settings/keybindings"
   | "/settings/snap-shot"
   | "/settings/providers"
-  | "/settings/workflows"
   | "/settings/skills"
   | "/settings/docs"
   | "/settings/threads"
@@ -107,7 +106,6 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/keybindings": msg("Keybindings"),
   "/settings/snap-shot": msg("SnapShots"),
   "/settings/providers": msg("Providers"),
-  "/settings/workflows": msg("Workflows"),
   "/settings/skills": msg("Skills"),
   "/settings/docs": msg("Docs"),
   "/settings/threads": msg("Threads"),
@@ -150,7 +148,6 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
     heading: msg("Agents"),
     paths: [
       "/settings/providers",
-      "/settings/workflows",
       "/settings/skills",
       "/settings/docs",
       "/settings/threads",
@@ -1398,7 +1395,6 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/docs": null,
   "/settings/skills": null,
   "/settings/users": null,
-  "/settings/workflows": null,
   "/settings/diagnostics": "environment",
   "/settings/projects": "project",
   "/settings/general": null,
