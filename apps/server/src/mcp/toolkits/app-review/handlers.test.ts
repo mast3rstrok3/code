@@ -19,7 +19,7 @@ import * as AppReviewStore from "../../../appReview/AppReviewStore.ts";
 import * as AppReviewTests from "../../../appReview/AppReviewTests.ts";
 import { createPendingAttachmentId } from "../../../attachmentStore.ts";
 import * as ServerConfig from "../../../config.ts";
-import { SqlitePersistenceMemory } from "../../../persistence/Layers/Sqlite.ts";
+import { layerMemory as SqlitePersistenceMemory } from "../../../persistence/Sqlite.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import * as PreviewRecordingPolicy from "../../../preview/PreviewRecordingPolicy.ts";

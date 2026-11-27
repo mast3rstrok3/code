@@ -62,7 +62,6 @@ const SNAPSHOT: OrchestrationV2ShellSnapshot = {
       id: THREAD_ID,
       projectId: ProjectId.make("project"),
       ownerUserId: DEFAULT_WORKSPACE_USER_ID,
-      workflowRole: null,
       title: "Remote thread",
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
       runtimeMode: "full-access",

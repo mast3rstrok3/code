@@ -340,16 +340,6 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                 );
               })}
             </div>
-            {activeQuestion.recommendation ? (
-              <div className="mt-3 rounded-lg border border-primary/20 bg-primary/6 px-3 py-2">
-                <p className="text-2xs font-semibold tracking-wide text-primary uppercase">
-                  Recommended: {activeQuestion.recommendation.optionLabel}
-                </p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {activeQuestion.recommendation.rationale}
-                </p>
-              </div>
-            ) : null}
           </ComposerBanner.Body>
         </ComposerBanner.Scroll>
       </CollapsiblePanel>
