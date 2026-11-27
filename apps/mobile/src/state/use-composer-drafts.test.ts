@@ -1922,7 +1922,7 @@ describe("mobile composer drafts", () => {
     });
 
     expect(decoded.drafts).toEqual({
-      "environment-1:thread-1": { text: "Build it", attachments: [] },
+      "environment-1:thread-1": { text: "Build it", attachments: [], interactionMode: "default" },
     });
     expect(decoded.cloudDrafts.signedOut).toEqual({ account: { drafts: {}, queuedMessages: [] } });
   });

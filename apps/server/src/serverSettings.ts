@@ -1098,42 +1098,45 @@ const make = Effect.gen(function* () {
       const keptSecretNames = new Set<string>();
       const writtenSecretNames = new Set<string>();
       const inlineWrites = new Map<string, SecretChange>();
-      const settings = mapServerSettingsSecrets(withEchoedSecretReferences(current, next), (secret) => {
-        const metadata = {
-          secretName: secret.secretName,
-          ...(secret.providerInstanceId !== undefined
-            ? { providerInstanceId: secret.providerInstanceId }
-            : {}),
-          ...(secret.environmentVariable !== undefined
-            ? { environmentVariable: secret.environmentVariable }
-            : {}),
-        };
-        if (!secret.sensitive) {
-          changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
-          return { value: secret.value, redacted: false };
-        }
-        if (secret.redacted) {
-          keptSecretNames.add(secret.secretName);
-          nextSecretNames.add(secret.secretName);
-          const inlineValue = inlineValues.get(secret.secretName);
-          if (inlineValue !== undefined) {
-            inlineWrites.set(secret.secretName, {
-              ...metadata,
-              kind: "write",
-              value: textEncoder.encode(inlineValue),
-            });
+      const settings = mapServerSettingsSecrets(
+        withEchoedSecretReferences(current, next),
+        (secret) => {
+          const metadata = {
+            secretName: secret.secretName,
+            ...(secret.providerInstanceId !== undefined
+              ? { providerInstanceId: secret.providerInstanceId }
+              : {}),
+            ...(secret.environmentVariable !== undefined
+              ? { environmentVariable: secret.environmentVariable }
+              : {}),
+          };
+          if (!secret.sensitive) {
+            changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
+            return { value: secret.value, redacted: false };
           }
+          if (secret.redacted) {
+            keptSecretNames.add(secret.secretName);
+            nextSecretNames.add(secret.secretName);
+            const inlineValue = inlineValues.get(secret.secretName);
+            if (inlineValue !== undefined) {
+              inlineWrites.set(secret.secretName, {
+                ...metadata,
+                kind: "write",
+                value: textEncoder.encode(inlineValue),
+              });
+            }
+            return { value: "", redacted: true };
+          }
+          if (secret.value.length === 0) {
+            changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
+            return { value: "", redacted: false };
+          }
+          nextSecretNames.add(secret.secretName);
+          writtenSecretNames.add(secret.secretName);
+          changes.push({ ...metadata, kind: "write", value: textEncoder.encode(secret.value) });
           return { value: "", redacted: true };
-        }
-        if (secret.value.length === 0) {
-          changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
-          return { value: "", redacted: false };
-        }
-        nextSecretNames.add(secret.secretName);
-        writtenSecretNames.add(secret.secretName);
-        changes.push({ ...metadata, kind: "write", value: textEncoder.encode(secret.value) });
-        return { value: "", redacted: true };
-      });
+        },
+      );
       // A legacy inline value only moves to the store when no row in this save replaces it.
       for (const [secretName, change] of inlineWrites) {
         if (!writtenSecretNames.has(secretName)) changes.push(change);
