@@ -13,35 +13,14 @@ import * as Option from "effect/Option";
 import { makeThreadProjectionFixture } from "./test-fixtures";
 
 import {
-  buildWorkflowRouteUrl,
+  isThreadRoutePathname,
   isThreadRouteSnapshotAuthoritative,
   resolveActiveThreadRouteRef,
   resolveThreadRouteRenderState,
-  resolveThreadRouteSearch,
-  isThreadRoutePathname,
   resolveThreadRouteTarget,
 } from "./threadRoutes";
 
 describe("threadRoutes", () => {
-  it("parses workflow deep-link identity and ignores invalid values", () => {
-    expect(resolveThreadRouteSearch({ workflow: " workflow-123 " })).toEqual({
-      workflow: "workflow-123",
-    });
-    expect(resolveThreadRouteSearch({ workflow: 123 })).toEqual({});
-    expect(resolveThreadRouteSearch({ workflow: "   " })).toEqual({});
-  });
-
-  it("builds a canonical link to a workflow run", () => {
-    expect(
-      buildWorkflowRouteUrl({
-        currentHref: "https://code.example/old/thread?panel=diff#message",
-        environmentId: "env one" as never,
-        rootThreadId: ThreadId.make("root/thread"),
-        workflowId: "workflow-123" as never,
-      }),
-    ).toBe("https://code.example/env%20one/root%2Fthread?workflow=workflow-123");
-  });
-
   it("does not treat cached thread lists as authoritative for deep links", () => {
     expect(isThreadRouteSnapshotAuthoritative("empty")).toBe(false);
     expect(isThreadRouteSnapshotAuthoritative("cached")).toBe(false);

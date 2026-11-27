@@ -56,7 +56,7 @@ import {
   type ComposerSubmissionIntent,
   collapseExpandedComposerCursor,
 } from "../../composer-logic";
-import { type ChatMessage } from "../../types";
+import { type ChatMessage, DEFAULT_INTERACTION_MODE } from "../../types";
 import { recordPromptSent } from "../GitHubStarPrompt";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
@@ -588,22 +588,7 @@ export function useComposerSend(input: ComposerSendInput) {
       selectedProviderModels: ctxSelectedProviderModels,
       selectedPromptEffort: ctxSelectedPromptEffort,
       selectedModelSelection: ctxSelectedModelSelection,
-      interactionMode: sendInteractionMode,
-      clearWorkflowMode: clearWorkflowModeForSend,
-      workflowPreset: sendWorkflowPreset,
-      workflowImplementationSettings: sendWorkflowImplementationSettings,
-      workflowPromptId: sendWorkflowPromptId,
     } = sendCtx;
-    if (
-      multipleModelSelections !== null &&
-      (sendWorkflowPreset !== null || sendWorkflowPromptId !== null)
-    ) {
-      setThreadError(
-        activeThread.id,
-        "Select a single model before starting a workflow or skill. Workflow steps can use their own model overrides.",
-      );
-      return;
-    }
     const { images: composerImages, previewAnnotations: composerPreviewAnnotations } =
       mergeDirectPreviewAnnotation({
         images: sendContextImages,
@@ -1251,7 +1236,7 @@ export function useComposerSend(input: ComposerSendInput) {
           ? { branch: localCheckoutBranchMismatch.currentBranch }
           : {}),
         runtimeMode,
-        interactionMode: sendInteractionMode,
+        interactionMode: DEFAULT_INTERACTION_MODE,
       });
       if (settingsResult._tag === "Failure") {
         failure = settingsResult;
@@ -1284,7 +1269,7 @@ export function useComposerSend(input: ComposerSendInput) {
           },
           modelSelection: ctxSelectedModelSelection,
           runtimeMode,
-          interactionMode: sendInteractionMode,
+          interactionMode: DEFAULT_INTERACTION_MODE,
         },
       });
       if (compactResult._tag === "Failure") {
@@ -1305,7 +1290,7 @@ export function useComposerSend(input: ComposerSendInput) {
                       title,
                       modelSelection: threadCreateModelSelection,
                       runtimeMode,
-                      interactionMode: sendInteractionMode,
+                      interactionMode: DEFAULT_INTERACTION_MODE,
                       branch: activeThreadBranch,
                       worktreePath: activeThread.worktreePath,
                       createdAt: activeThread.createdAt,
@@ -1354,12 +1339,8 @@ export function useComposerSend(input: ComposerSendInput) {
           modelSelection: ctxSelectedModelSelection,
           titleSeed: title,
           runtimeMode,
-          interactionMode: sendInteractionMode,
+          interactionMode: DEFAULT_INTERACTION_MODE,
           dispatchMode: turnDispatchMode,
-          clearWorkflowMode: clearWorkflowModeForSend,
-          workflowPreset: sendWorkflowPreset,
-          workflowImplementationSettings: sendWorkflowImplementationSettings,
-          workflowPromptId: sendWorkflowPromptId,
           ...(freshArm === undefined ? {} : { freshContext: true }),
           ...(bootstrap ? { bootstrap } : {}),
           createdAt: messageCreatedAt,

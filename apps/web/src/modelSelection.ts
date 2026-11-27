@@ -460,17 +460,6 @@ export function resolveAppModelSelectionState(
   return NO_PROVIDER_MODEL_SELECTION;
 }
 
-export function getProviderModelPickerChoices(
-  settings: UnifiedSettings,
-  providers: ReadonlyArray<ServerProvider>,
-) {
-  const instanceEntries = deriveProviderInstanceEntries(providers);
-  const modelOptionsByInstance = new Map<ProviderInstanceId, ReadonlyArray<AppModelOption>>();
-  for (const entry of instanceEntries)
-    modelOptionsByInstance.set(entry.instanceId, getAppModelOptionsForInstance(settings, entry));
-  return { instanceEntries, modelOptionsByInstance };
-}
-
 export function resolveDefaultAgentModelSelectionState(
   settings: UnifiedSettings,
   providers: ReadonlyArray<ServerProvider>,

@@ -4,7 +4,6 @@ import { resolveComposerControlsOwnership } from "./composerControlsOwnership";
 
 const base = {
   matchesDefault: true,
-  modePickerShown: false,
   collapsed: false,
   measuredHiddenBlockCount: 0,
 };
@@ -47,17 +46,5 @@ describe("resolveComposerControlsOwnership", () => {
       collapsed: true,
     });
     expect(result.accessDisplay).toBe("icon");
-  });
-
-  it("keeps the mode picker block at the default and leaves Permissions with the picker", () => {
-    const result = resolveComposerControlsOwnership({
-      ...base,
-      modePickerShown: true,
-      measuredHiddenBlockCount: 1,
-    });
-    expect(result.showModeBlock).toBe(true);
-    expect(result.hiddenBlockIds).toEqual(["mode"]);
-    expect(result.overflowShowsPermissions).toBe(false);
-    expect(result.pickerOwnsModeShortcut).toBe(true);
   });
 });

@@ -8,7 +8,6 @@ import {
   type ScheduledTaskSchedule,
   type ScheduledTaskThreadMode,
   type ScheduledTaskUpsertSchedule,
-  type ScheduledTaskWorkflow,
   scheduledTaskThreadMode,
   type ModelSelection,
   type RuntimeMode,
@@ -28,7 +27,6 @@ import { scheduleTimeZoneLabel } from "@t3tools/client-runtime/scheduled-task-ti
 
 import {
   resolveProjectSettings,
-  workflowStartModel,
   type LegacyProjectSettingsFields,
 } from "@t3tools/shared/projectSettings";
 import type { ProviderInstanceEntry } from "../../providerInstances";
@@ -94,13 +92,6 @@ export function validateScheduledTasksSearch(raw: Record<string, unknown>) {
 export type ScheduleMode = "fixed" | "once" | "interval" | "webhook";
 export type WorkspaceMode = "root" | "worktree" | "existing_worktree";
 
-/** What each run starts as: a plain thread, or a fresh thread running a workflow. */
-export const WORKFLOW_LABELS: Record<"thread" | ScheduledTaskWorkflow, string> = {
-  thread: "A new thread",
-  feature: "Feature workflow",
-  engineering: "Engineering workflow",
-};
-
 export interface DraftState {
   readonly editingId: string | null;
   readonly title: string;
@@ -116,9 +107,6 @@ export interface DraftState {
   readonly weekdays: ReadonlySet<number>;
   readonly projectId: string;
   readonly threadId: string;
-  readonly workflow: ScheduledTaskWorkflow | null;
-  /** With a workflow, each run starts on the workflow's default model as it is then. */
-  readonly useWorkflowDefaultModel: boolean;
   readonly threadMode: ScheduledTaskThreadMode;
   readonly workspaceMode: WorkspaceMode;
   /** Empty until the project's development branch is known. */
@@ -308,8 +296,6 @@ export function taskToDraft(task: ScheduledTask): DraftState {
     weekdays,
     projectId: task.projectId,
     threadId: task.threadId ?? "",
-    workflow: task.workflow ?? null,
-    useWorkflowDefaultModel: task.useWorkflowDefaultModel === true,
     threadMode: scheduledTaskThreadMode(task),
     workspaceMode: task.workspaceStrategy.type,
     baseRef: task.workspaceStrategy.type === "worktree" ? task.workspaceStrategy.baseRef : "",
@@ -321,16 +307,10 @@ export function taskToDraft(task: ScheduledTask): DraftState {
       task.workspaceStrategy.type === "existing_worktree"
         ? task.workspaceStrategy.worktreePath
         : "",
-    // A task on the workflow default stores only a fallback; picking a model
-    // starts from the default as it is now.
-    ...(task.useWorkflowDefaultModel === true
-      ? { modelKey: "", baseModelSelection: null }
-      : {
-          modelKey: `${task.modelSelection.instanceId}:${task.modelSelection.model}`,
-          baseModelSelection: task.modelSelection,
-        }),
+    modelKey: `${task.modelSelection.instanceId}:${task.modelSelection.model}`,
     runtimeMode: task.runtimeMode,
     interactionMode: task.interactionMode,
+    baseModelSelection: task.modelSelection,
     ...(schedule.type === "webhook" && schedule.signature !== null
       ? {
           signatureEnabled: true,
@@ -408,12 +388,10 @@ export function scheduledTaskDestinationThreads(
     .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
-/** A workflow's own default comes first, the way the server resolves it per run. */
 export function scheduledTaskDefaultModel(
   settings: ServerSettings,
   project: (LegacyProjectSettingsFields & { readonly id: ProjectId }) | null,
   entries: readonly ProviderInstanceEntry[],
-  workflow: ScheduledTaskWorkflow | null = null,
 ): ModelSelection | null {
   const available = entries.filter(
     (entry) =>
@@ -424,8 +402,7 @@ export function scheduledTaskDefaultModel(
   );
   const configured = resolveProjectSettings(settings, project?.id ?? null, project).settings
     .defaultModelSelection;
-  const workflowDefault = workflow === null ? null : workflowStartModel(settings, workflow);
-  for (const selection of [workflowDefault, configured, settings.defaultModelSelection]) {
+  for (const selection of [configured, settings.defaultModelSelection]) {
     if (
       selection &&
       available.some(

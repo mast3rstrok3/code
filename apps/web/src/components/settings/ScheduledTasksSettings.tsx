@@ -24,7 +24,6 @@ import type {
   ScheduledTaskThreadMode,
   ScheduledTaskUpsertInput,
   ScheduledTaskWebhookDeliverySummary,
-  ScheduledTaskWorkflow,
   ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -52,7 +51,7 @@ import {
 import { formatRelativeTime } from "../../timestampFormat";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
-import { type ProviderInstanceEntry, providerInstanceEntriesFor } from "../../providerInstances";
+import { providerInstanceEntriesFor } from "../../providerInstances";
 import { usePrimaryCloudLinkState } from "../../cloud/cloudLinkState";
 import { requestConfirmDialog } from "../../confirmDialog";
 import { webhookAddress } from "@t3tools/client-runtime/webhook-address";
@@ -109,7 +108,6 @@ import {
   scheduledTaskDestinationThreads,
   toDateTimeLocalValue,
   webhookDeliveryLabel,
-  WORKFLOW_LABELS,
   defaultScheduledTaskProjectId,
   matchesScheduledTaskScope,
   scheduleFromDraft,
@@ -127,7 +125,6 @@ import { Menu, MenuTrigger, MenuPopup, MenuItem, MenuSeparator } from "../ui/men
 import { ToggleGroup, Toggle } from "../ui/toggle-group";
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia } from "../ui/empty";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
-import { getTriggerDisplayModelName } from "../chat/providerIconUtils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
@@ -188,9 +185,6 @@ const EMPTY_DRAFT: DraftState = {
   weekdays: new Set([1, 2, 3, 4, 5]),
   projectId: "",
   threadId: "",
-  workflow: null,
-  // Only read once Start as names a workflow, where it is the default choice.
-  useWorkflowDefaultModel: true,
   threadMode: "new_thread",
   workspaceMode: "worktree",
   baseRef: "",
@@ -326,20 +320,6 @@ function Field({
       {children}
     </div>
   );
-}
-
-/** "Workflow default (Codex · GPT-5.5)", naming the model each run would start on now. */
-function describeWorkflowDefault(
-  selection: ModelSelection | null,
-  instanceEntries: readonly ProviderInstanceEntry[],
-): string {
-  if (selection === null) return "Workflow default";
-  const entry = instanceEntries.find((candidate) => candidate.instanceId === selection.instanceId);
-  const option = entry?.models.find((candidate) => candidate.slug === selection.model);
-  const modelName = option
-    ? getTriggerDisplayModelName(option, entry?.driverKind)
-    : selection.model;
-  return `Workflow default (${entry === undefined ? modelName : `${entry.displayName} · ${modelName}`})`;
 }
 
 function splitModelKey(value: string): ModelSelection | null {
@@ -1494,20 +1474,12 @@ function ScheduledTaskEditorForm({
   const baseRef = draft.baseRef.trim() || developmentBranch || "";
 
   const firstInstance = instanceEntries[0];
-  const defaultSelection = scheduledTaskDefaultModel(
-    settings,
-    selectedProject ?? null,
-    instanceEntries,
-    draft.workflow,
-  );
-  const workflowDefaultLabel = describeWorkflowDefault(defaultSelection, instanceEntries);
-  const followsWorkflowDefault = draft.workflow !== null && draft.useWorkflowDefaultModel;
   const draftSelection = draft.modelKey ? splitModelKey(draft.modelKey) : null;
   const activeSelection =
     draftSelection &&
     instanceEntries.some((entry) => entry.instanceId === draftSelection.instanceId && entry.enabled)
       ? draftSelection
-      : defaultSelection;
+      : scheduledTaskDefaultModel(settings, selectedProject ?? null, instanceEntries);
   const activeInstanceId =
     activeSelection?.instanceId ?? firstInstance?.instanceId ?? ("" as ProviderInstanceId);
   const activeModel = activeSelection?.model ?? "";
@@ -1548,9 +1520,7 @@ function ScheduledTaskEditorForm({
       tasksQuery.data === null
     )
       return;
-    // On the workflow default the stored model is only the fallback, so it
-    // is the default as it is now.
-    const selection = followsWorkflowDefault ? defaultSelection : activeSelection;
+    const selection = activeSelection;
     if (
       !draft.title.trim() ||
       !draft.prompt.trim() ||
@@ -1621,9 +1591,8 @@ function ScheduledTaskEditorForm({
       enabled: draft.enabled,
       schedule,
       projectId: selectedProjectId as ProjectId,
-      // A workflow starts a fresh thread on every run.
-      threadId: draft.threadId && draft.workflow === null ? (draft.threadId as ThreadId) : null,
-      ...(offersThreadModes && draft.workflow === null ? { threadMode: draft.threadMode } : {}),
+      threadId: draft.threadId ? (draft.threadId as ThreadId) : null,
+      ...(offersThreadModes ? { threadMode: draft.threadMode } : {}),
       workspaceStrategy,
       modelSelection,
       // Tasks have no mode picker; a mode above the administrator's ceiling would fail every run.
@@ -1631,8 +1600,6 @@ function ScheduledTaskEditorForm({
         clampManagedRuntimeMode(environment?.serverConfig?.managedPolicy, draft.runtimeMode) ??
         draft.runtimeMode,
       interactionMode: draft.interactionMode,
-      workflow: draft.workflow,
-      useWorkflowDefaultModel: followsWorkflowDefault,
       creationSource: "web",
     };
     // Lock before React renders, and keep successful creates locked until the form closes.
@@ -1859,38 +1826,6 @@ function ScheduledTaskEditorForm({
             </Field>
           ) : null}
 
-          <Field
-            label="Start as"
-            htmlFor="scheduled-task-workflow"
-            {...(draft.workflow === null
-              ? {}
-              : {
-                  hint:
-                    draft.workflow === "feature"
-                      ? "Opens a pull request on its own, in full access"
-                      : "Runs unattended, in full access",
-                })}
-          >
-            <Select
-              value={draft.workflow ?? "thread"}
-              onValueChange={(value) =>
-                setDraft((current) => ({
-                  ...current,
-                  workflow: value === "thread" ? null : (value as ScheduledTaskWorkflow),
-                }))
-              }
-            >
-              <SelectTrigger size="sm" id="scheduled-task-workflow">
-                <SelectValue>{WORKFLOW_LABELS[draft.workflow ?? "thread"]}</SelectValue>
-              </SelectTrigger>
-              <SelectPopup>
-                <SelectItem value="thread">{WORKFLOW_LABELS.thread}</SelectItem>
-                <SelectItem value="feature">{WORKFLOW_LABELS.feature}</SelectItem>
-                <SelectItem value="engineering">{WORKFLOW_LABELS.engineering}</SelectItem>
-              </SelectPopup>
-            </Select>
-          </Field>
-
           <Field label="Prompt" htmlFor="scheduled-task-prompt">
             <Textarea
               id="scheduled-task-prompt"
@@ -1903,33 +1838,8 @@ function ScheduledTaskEditorForm({
             />
           </Field>
 
-          <Field
-            label="Model"
-            {...(draft.workflow === null ? {} : { htmlFor: "scheduled-task-model-source" })}
-            {...(followsWorkflowDefault ? { hint: "Resolved at each run" } : {})}
-          >
-            {draft.workflow === null ? null : (
-              <Select
-                value={followsWorkflowDefault ? "workflow-default" : "task"}
-                onValueChange={(value) =>
-                  setDraft((current) => ({
-                    ...current,
-                    useWorkflowDefaultModel: value === "workflow-default",
-                  }))
-                }
-              >
-                <SelectTrigger size="sm" id="scheduled-task-model-source">
-                  <SelectValue>
-                    {followsWorkflowDefault ? workflowDefaultLabel : "A specific model"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup>
-                  <SelectItem value="workflow-default">{workflowDefaultLabel}</SelectItem>
-                  <SelectItem value="task">A specific model</SelectItem>
-                </SelectPopup>
-              </Select>
-            )}
-            {followsWorkflowDefault ? null : (
+          <Field label="Model">
+            <div>
               <ProviderModelPicker
                 environmentId={environmentId}
                 // The saved selection only seeds new threads; bound runs ignore it.
@@ -1942,14 +1852,10 @@ function ScheduledTaskEditorForm({
                 isComposerOwned={false}
                 triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
                 onInstanceModelChange={(instanceId, model) =>
-                  setDraft((current) => ({
-                    ...current,
-                    modelKey: `${instanceId}:${model}`,
-                    useWorkflowDefaultModel: false,
-                  }))
+                  setDraft((current) => ({ ...current, modelKey: `${instanceId}:${model}` }))
                 }
               />
-            )}
+            </div>
           </Field>
 
           <div className="space-y-3">

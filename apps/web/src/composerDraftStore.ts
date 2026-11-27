@@ -30,8 +30,6 @@ import {
   type ScopedThreadRef,
   ThreadId,
   WorkspaceUserId,
-  WorkflowPreset,
-  ImplementationWorkflowSettings,
   SnapShotSource,
 } from "@t3tools/contracts";
 import {
@@ -108,6 +106,7 @@ import {
 } from "@t3tools/shared/composerContextReferences";
 import { UnifiedSettings } from "@t3tools/contracts/settings";
 
+const isElementContextDetails = Schema.is(ElementContextDetails);
 import { ReviewCommentContextSchema, type ReviewCommentContext } from "./reviewCommentContext";
 const isRuntimeMode = Schema.is(RuntimeMode);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
@@ -253,24 +252,7 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
   });
 }
 
-const isElementContextDetails = Schema.is(ElementContextDetails);
 const isWorkspaceUserId = Schema.is(WorkspaceUserId);
-const isProviderInteractionMode = Schema.is(ProviderInteractionMode);
-const isNullableWorkflowPreset = Schema.is(Schema.NullOr(WorkflowPreset));
-// Quick Feature merged into Feature and Quick Engineering into Engineering.
-const RETIRED_WORKFLOW_PRESETS: Readonly<Record<string, WorkflowPreset>> = {
-  "quick-plan": "fast-plan",
-  "fast-engineering": "planning",
-};
-
-/** A stored preset the composer still offers, or undefined when the draft has none. */
-function normalizePersistedWorkflowPreset(value: unknown): WorkflowPreset | null | undefined {
-  const preset = typeof value === "string" ? (RETIRED_WORKFLOW_PRESETS[value] ?? value) : value;
-  return isNullableWorkflowPreset(preset) ? preset : undefined;
-}
-const isNullableImplementationWorkflowSettings = Schema.is(
-  Schema.NullOr(ImplementationWorkflowSettings),
-);
 
 export const PersistedComposerImageAttachment = Schema.Struct({
   id: Schema.String,
@@ -372,9 +354,6 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   modelSelectionExplicit: Schema.optionalKey(Schema.Boolean),
   runtimeMode: Schema.optionalKey(RuntimeMode),
   interactionMode: Schema.optionalKey(ProviderInteractionMode),
-  workflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
-  lastWorkflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
-  workflowImplementationSettings: Schema.optionalKey(Schema.NullOr(ImplementationWorkflowSettings)),
 });
 type PersistedComposerThreadDraftState = typeof PersistedComposerThreadDraftState.Type;
 
@@ -505,9 +484,6 @@ export interface ComposerThreadDraftState {
   modelSelectionExplicit?: boolean;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
-  workflowPreset?: WorkflowPreset | null;
-  lastWorkflowPreset?: WorkflowPreset | null;
-  workflowImplementationSettings?: ImplementationWorkflowSettings | null;
 }
 
 export function composerDraftHasUserContent(
@@ -694,12 +670,6 @@ interface ComposerDraftStoreState {
   setRuntimeMode: (
     threadRef: ComposerThreadTarget,
     runtimeMode: RuntimeMode | null | undefined,
-  ) => void;
-  setComposerMode: (
-    threadRef: ComposerThreadTarget,
-    interactionMode: ProviderInteractionMode,
-    workflowPreset: WorkflowPreset | null,
-    settings?: ImplementationWorkflowSettings,
   ) => void;
   setInteractionMode: (
     threadRef: ComposerThreadTarget,
@@ -2001,9 +1971,11 @@ function normalizePersistedDraftThreads(
         runtimeMode: isRuntimeMode(candidateDraftThread.runtimeMode)
           ? candidateDraftThread.runtimeMode
           : DEFAULT_RUNTIME_MODE,
-        interactionMode: isProviderInteractionMode(candidateDraftThread.interactionMode)
-          ? candidateDraftThread.interactionMode
-          : DEFAULT_INTERACTION_MODE,
+        interactionMode:
+          candidateDraftThread.interactionMode === "plan" ||
+          candidateDraftThread.interactionMode === "default"
+            ? candidateDraftThread.interactionMode
+            : DEFAULT_INTERACTION_MODE,
         branch: typeof branch === "string" ? branch : null,
         worktreePath: normalizedWorktreePath,
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
@@ -2188,9 +2160,10 @@ function normalizePersistedDraftsByThreadId(
     const runtimeMode = isRuntimeMode(draftCandidate.runtimeMode)
       ? draftCandidate.runtimeMode
       : null;
-    const interactionMode = isProviderInteractionMode(draftCandidate.interactionMode)
-      ? draftCandidate.interactionMode
-      : null;
+    const interactionMode =
+      draftCandidate.interactionMode === "plan" || draftCandidate.interactionMode === "default"
+        ? draftCandidate.interactionMode
+        : null;
     const contextIds = new Map<string, string>();
     for (const [kind, entries] of [
       ["image", attachments],
@@ -2298,8 +2271,6 @@ function normalizePersistedDraftsByThreadId(
                 ? normalizeLegacyComposerStorageKey(threadKeyOrId, { environmentId })
                 : threadKeyOrId;
             })();
-    const workflowPreset = normalizePersistedWorkflowPreset(draftCandidate.workflowPreset);
-    const lastWorkflowPreset = normalizePersistedWorkflowPreset(draftCandidate.lastWorkflowPreset);
     nextDraftsByThreadKey[normalizedThreadKey] = {
       prompt,
       attachments,
@@ -2319,11 +2290,6 @@ function normalizePersistedDraftsByThreadId(
         : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
       ...(interactionMode ? { interactionMode } : {}),
-      ...(workflowPreset === undefined ? {} : { workflowPreset }),
-      ...(lastWorkflowPreset === undefined ? {} : { lastWorkflowPreset }),
-      ...(isNullableImplementationWorkflowSettings(draftCandidate.workflowImplementationSettings)
-        ? { workflowImplementationSettings: draftCandidate.workflowImplementationSettings }
-        : {}),
     };
   }
 
@@ -2493,13 +2459,6 @@ export function partializeComposerDraftStoreState(
         : {}),
       ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
       ...(draft.interactionMode ? { interactionMode: draft.interactionMode } : {}),
-      ...(draft.workflowPreset === undefined ? {} : { workflowPreset: draft.workflowPreset }),
-      ...(draft.lastWorkflowPreset === undefined
-        ? {}
-        : { lastWorkflowPreset: draft.lastWorkflowPreset }),
-      ...(draft.workflowImplementationSettings === undefined
-        ? {}
-        : { workflowImplementationSettings: draft.workflowImplementationSettings }),
     };
     persistedDraftsByThreadKey[threadKey] = persistedDraft;
   }
@@ -2775,15 +2734,6 @@ function toHydratedThreadDraft(
     ...(persistedDraft.modelSelectionExplicit ? { modelSelectionExplicit: true } : {}),
     runtimeMode: persistedDraft.runtimeMode ?? null,
     interactionMode: persistedDraft.interactionMode ?? null,
-    ...(persistedDraft.workflowPreset === undefined
-      ? {}
-      : { workflowPreset: persistedDraft.workflowPreset }),
-    ...(persistedDraft.lastWorkflowPreset === undefined
-      ? {}
-      : { lastWorkflowPreset: persistedDraft.lastWorkflowPreset }),
-    ...(persistedDraft.workflowImplementationSettings === undefined
-      ? {}
-      : { workflowImplementationSettings: persistedDraft.workflowImplementationSettings }),
   };
 }
 
@@ -3565,32 +3515,13 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },
-        setComposerMode: (threadRef, interactionMode, workflowPreset, settings) => {
-          const key = resolveComposerDraftKey(get(), threadRef);
-          if (!key) return;
-          set((state) => {
-            const draft = state.draftsByThreadKey[key] ?? createEmptyThreadDraft();
-            return {
-              draftsByThreadKey: {
-                ...state.draftsByThreadKey,
-                [key]: {
-                  ...draft,
-                  interactionMode,
-                  workflowPreset,
-                  lastWorkflowPreset: workflowPreset ?? draft.lastWorkflowPreset ?? null,
-                  workflowImplementationSettings: settings ?? null,
-                },
-              },
-            };
-          });
-        },
         setInteractionMode: (threadRef, interactionMode) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
           if (threadKey.length === 0) {
             return;
           }
           const nextInteractionMode =
-            interactionMode && isProviderInteractionMode(interactionMode) ? interactionMode : null;
+            interactionMode === "plan" || interactionMode === "default" ? interactionMode : null;
           set((state) => {
             const existing = state.draftsByThreadKey[threadKey];
             if (!existing && nextInteractionMode === null) {

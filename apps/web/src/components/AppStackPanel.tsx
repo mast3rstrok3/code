@@ -96,10 +96,6 @@ import {
   type PreviewCandidate,
 } from "@t3tools/client-runtime/app-stack-panel";
 import {
-  AppStackWorkflowConflictWarning,
-  AppStackWorkflowOwnershipBadge,
-} from "./AppStackWorkflowOwnership";
-import {
   displayStackName,
   isSameOrChildStackPath,
   normalizeStackWorktreePath as normalizeWorktreePath,
@@ -875,7 +871,6 @@ export function AppStackPanel(props: AppStackPanelProps) {
             displayName: sourceStack?.displayName ?? appStackDisplayName(normalizedPath, branch),
             gitBranch: branch,
             namespace,
-            workflowId: sourceStack?.workflowId ?? undefined,
             variant,
             ...(bundle && bundle.length > 0 ? { bundle: [...bundle] } : {}),
             ...(omitServices === undefined ? {} : { omitServices }),
@@ -1275,7 +1270,6 @@ export function AppStackPanel(props: AppStackPanelProps) {
                     Current
                   </span>
                 ) : null}
-                <AppStackWorkflowOwnershipBadge stack={stack} />
                 {isProtectedAppStack(stack) ? (
                   <span className="inline-flex h-5 items-center gap-1 rounded-full border border-border bg-muted px-2 text-2xs font-medium text-muted-foreground">
                     <ShieldCheckIcon className="size-3" />
@@ -1405,7 +1399,7 @@ export function AppStackPanel(props: AppStackPanelProps) {
                 data-pressed={isProtectedAppStack(stack) ? "" : undefined}
                 aria-pressed={isProtectedAppStack(stack)}
                 aria-label={appStackProtectionAction(stack).ariaLabel}
-                title="Protected stacks survive workflow teardown and are shed last under memory pressure"
+                title="Protected stacks are shed last under memory pressure"
               >
                 {pendingAction === "protect" ? (
                   <LoaderIcon className="size-3.5 animate-spin" />
@@ -1514,8 +1508,6 @@ export function AppStackPanel(props: AppStackPanelProps) {
               <div>{statusQuery.error}</div>
             </div>
           ) : null}
-
-          <AppStackWorkflowConflictWarning conflicts={listQuery.data?.workflowConflicts ?? []} />
 
           {isCreateOpen ? (
             <section className="space-y-3 rounded-lg border border-border bg-card/35 p-3">

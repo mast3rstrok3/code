@@ -44,7 +44,6 @@ import {
   Files,
   Layers,
   ClipboardCheck,
-  Workflow,
   ScrollText,
   Globe2,
   MessagesSquare,
@@ -149,7 +148,6 @@ export interface RightPanelTabsProps {
   onAddDevice: () => void;
   onAddAppStack?: (() => void) | undefined;
   onAddReview?: (() => void) | undefined;
-  onAddWorkflows?: (() => void) | undefined;
   onAddLogs?: (() => void) | undefined;
   /** Absent where side chats are not offered. */
   onAddSideChat?: (() => void) | undefined;
@@ -162,7 +160,6 @@ export interface RightPanelTabsProps {
   deviceAvailable: boolean;
   appStackAvailable?: boolean | undefined;
   reviewAvailable?: boolean | undefined;
-  workflowsAvailable?: boolean | undefined;
   logsAvailable?: boolean | undefined;
   sideChatAvailable?: boolean;
   /** Overrides the default reason while side chats are available but cannot start. */
@@ -338,7 +335,6 @@ function RightPanelEmptyState(props: {
   onAddDevice: () => void;
   onAddAppStack?: (() => void) | undefined;
   onAddReview?: (() => void) | undefined;
-  onAddWorkflows?: (() => void) | undefined;
   onAddLogs?: (() => void) | undefined;
   /** Absent where side chats are not offered. */
   onAddSideChat?: (() => void) | undefined;
@@ -351,7 +347,6 @@ function RightPanelEmptyState(props: {
   deviceAvailable: boolean;
   appStackAvailable?: boolean | undefined;
   reviewAvailable?: boolean | undefined;
-  workflowsAvailable?: boolean | undefined;
   logsAvailable?: boolean | undefined;
   sideChatAvailable: boolean;
   sideChatDisabledReason: string | null;
@@ -430,14 +425,6 @@ function RightPanelEmptyState(props: {
       available: props.logsAvailable === true,
       disabledReason: "Connect the environment to inspect stack logs.",
       onClick: () => props.onAddLogs?.(),
-    },
-    {
-      label: "Workflows",
-      icon: Workflow,
-      shortcut: "W",
-      available: props.workflowsAvailable === true,
-      disabledReason: "Workflows require a started thread.",
-      onClick: () => props.onAddWorkflows?.(),
     },
     {
       label: "Device",
@@ -627,8 +614,6 @@ function surfaceTitle(
   terminalLabelsById: ReadonlyMap<string, string>,
 ): string {
   switch (surface.kind) {
-    case "workflows":
-      return "Workflows";
     case "app-review":
       return "App Review";
     case "app-stack":
@@ -719,8 +704,6 @@ function SurfaceIcon({
   switch (surface.kind) {
     case "preview":
       return <PreviewFavicon capturedUrl={previewCapturedUrl} url={previewUrl} />;
-    case "workflows":
-      return <Workflow className="size-3 shrink-0" />;
     case "app-review":
       return <ClipboardCheck className="size-3 shrink-0" />;
     case "app-stack":
@@ -1234,14 +1217,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: () => props.onAddLogs?.(),
     },
     {
-      label: "Workflows",
-      icon: Workflow,
-      shortcut: "W",
-      available: props.workflowsAvailable === true,
-      disabledReason: "Workflows require a started thread.",
-      onClick: () => props.onAddWorkflows?.(),
-    },
-    {
       label: "Device",
       icon: Smartphone,
       shortcut: "M",
@@ -1648,12 +1623,10 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddDevice={props.onAddDevice}
             onAddAppStack={props.onAddAppStack}
             onAddReview={props.onAddReview}
-            onAddWorkflows={props.onAddWorkflows}
             onAddLogs={props.onAddLogs}
             logsAvailable={props.logsAvailable}
             appStackAvailable={props.appStackAvailable}
             reviewAvailable={props.reviewAvailable}
-            workflowsAvailable={props.workflowsAvailable}
             onAddSideChat={props.onAddSideChat}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
