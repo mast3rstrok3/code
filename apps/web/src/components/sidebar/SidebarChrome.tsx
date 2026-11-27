@@ -7,7 +7,6 @@ import {
   ClipboardCheckIcon,
   LayersIcon,
   SettingsIcon,
-  WorkflowIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo } from "react";
@@ -276,14 +275,6 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             onClick={() => {
               closeMobileSidebar();
               useRightPanelStore.getState().open(routeThreadRef, "app-stack");
-            }}
-          />
-          <SidebarUtilityItem
-            icon={<WorkflowIcon />}
-            label="Workflows"
-            onClick={() => {
-              closeMobileSidebar();
-              useRightPanelStore.getState().open(routeThreadRef, "workflows");
             }}
           />
           <SidebarUtilityItem

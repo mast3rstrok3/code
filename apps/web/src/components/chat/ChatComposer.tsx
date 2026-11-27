@@ -1,4 +1,3 @@
-import { useComposerWorkflowControls } from "./useComposerWorkflowControls";
 import { VoiceInputSetup } from "./VoiceInputSetup";
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
 import { insertAttachmentReferencesForDraft } from "./composerAttachmentReferences";
@@ -32,7 +31,6 @@ import type {
   ThreadContextRecord,
   EnvironmentContextRecord,
   ResolvedKeybindingsConfig,
-  ProviderInteractionMode,
   RuntimeMode,
   RuntimeRequestId,
   ScopedThreadRef,
@@ -250,12 +248,7 @@ import { useManagedPolicy } from "../../state/managedPolicy";
 import { hasProviderSetup } from "./ProviderStatusBanner";
 import { type AppModelOption, getAppModelOptionsForInstance } from "../../modelSelection";
 import type { UnifiedSettings } from "@t3tools/contracts/settings";
-import {
-  DEFAULT_INTERACTION_MODE,
-  isVideoAttachment,
-  type SessionPhase,
-  type Thread,
-} from "../../types";
+import { isVideoAttachment, type SessionPhase, type Thread } from "../../types";
 import { type ComposerPromptHistoryPosition } from "./composerPromptHistory";
 import { usePendingUserInputDraft } from "./usePendingThreadRequests";
 import type { PendingApproval, PendingUserInput, TimelineEntry } from "../../session-logic";
@@ -350,11 +343,6 @@ export interface ChatComposerHandle {
     selectedProvider: ProviderDriverKind;
     selectedModel: string;
     selectedProviderModels: ReadonlyArray<ServerProvider["models"][number]>;
-    interactionMode: ProviderInteractionMode;
-    clearWorkflowMode: boolean;
-    workflowPreset: import("@t3tools/contracts").WorkflowPreset | null;
-    workflowImplementationSettings: import("@t3tools/contracts").ImplementationWorkflowSettings;
-    workflowPromptId: string | null;
     shownPendingApprovalIds: ReadonlyArray<RuntimeRequestId>;
   };
   validateProviderInput: (providerInput: string) => boolean;
@@ -968,21 +956,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedModel,
     selectedModelOptionsForDispatch,
   );
-  // Plan mode is gone; a draft or thread keeps only a workflow interaction mode.
-  const requestedInteractionMode =
-    composerDraft.interactionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
-  const interactionMode = requestedInteractionMode.endsWith("-workflow")
-    ? requestedInteractionMode
-    : DEFAULT_INTERACTION_MODE;
-  const workflowControls = useComposerWorkflowControls({
-    environmentId,
-    target: composerDraftTarget,
-    provider: selectedProvider,
-    modelSelection: selectedModelSelection,
-    interactionMode,
-    showPrimaryModes: false,
-    threadPreset: activeThread?.workflowPreset ?? null,
-  });
   const selectedModelForPicker = selectedModel;
   const modelOptionsByInstance = new Map<ProviderInstanceId, ReadonlyArray<AppModelOption>>();
   for (const entry of providerInstanceEntries) {
@@ -2472,7 +2445,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       reportedModelSelection={reportedModelSelection}
       promptUltrathink={promptUltrathink}
       onPromptEdit={editPromptFromTraitsStable}
-      modeControls={workflowControls.controls}
       compatibleRuntimeMode={compatibleRuntimeMode}
       defaultRuntimeMode={props.defaultRuntimeMode}
       compatibleRuntimeModeOptions={compatibleRuntimeModeOptions}
@@ -3232,11 +3204,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         selectedProvider,
         selectedModel,
         selectedProviderModels,
-        interactionMode,
-        clearWorkflowMode: workflowControls.clearWorkflowMode,
-        workflowPreset: workflowControls.workflowPreset,
-        workflowImplementationSettings: workflowControls.workflowImplementationSettings,
-        workflowPromptId: workflowControls.workflowPromptId,
       }),
       setMultipleModelSelections,
       validateProviderInput: (providerInput: string) => {
@@ -3299,8 +3266,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       selectedPromptEffort,
       selectedProvider,
       selectedProviderModels,
-      interactionMode,
-      workflowControls,
       compactThreadContextStable,
     ],
   );
@@ -3872,7 +3837,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           </div>
         </ComposerSurface.Main>
       </div>
-      {workflowControls.catalogDialog}
     </form>
   );
 });

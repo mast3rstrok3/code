@@ -44,7 +44,7 @@ beforeEach(() => {
 });
 
 describe("reopenClosedView", () => {
-  it.each(["workflows", "app-review", "app-stack", "logs"] as const)(
+  it.each(["app-review", "app-stack", "logs"] as const)(
     "restores a closed %s panel without creating a browser session",
     async (kind) => {
       const openPreview = vi.fn();

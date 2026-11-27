@@ -1,6 +1,6 @@
 "use client";
 
-import { LayersIcon, ClipboardCheckIcon, WorkflowIcon, ScrollTextIcon } from "lucide-react";
+import { LayersIcon, ClipboardCheckIcon, ScrollTextIcon } from "lucide-react";
 
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
@@ -1322,14 +1322,13 @@ function OpenCommandPaletteDialog(props: {
     for (const [kind, title, Icon] of [
       ["app-stack", "Open App Stack", LayersIcon],
       ["app-review", "Open App Review", ClipboardCheckIcon],
-      ["workflows", "Open workflows", WorkflowIcon],
       ["logs", "Open stack logs", ScrollTextIcon],
     ] as const) {
       actionItems.push({
         kind: "action",
         value: `action:open-${kind}`,
         title,
-        searchTerms: [kind, "workflow", "panel"],
+        searchTerms: [kind, "panel"],
         icon: <Icon className={ITEM_ICON_CLASS} />,
         run: async () => {
           useRightPanelStore.getState().open(threadRef, kind);

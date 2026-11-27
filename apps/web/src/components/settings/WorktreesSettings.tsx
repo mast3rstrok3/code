@@ -29,7 +29,7 @@ function DevelopmentBranchRow() {
       serverScoped
       settingKeys={["worktreeBaseBranch"]}
       {...searchableSetting("worktree-base-branch")}
-      description="New worktrees and Feature workflows start from this branch unless you pick another. Leave empty to use dev when the repository has it, else its default branch."
+      description="New worktrees start from this branch unless you pick another. Leave empty to use dev when the repository has it, else its default branch."
       resetAction={
         mixed || settings.worktreeBaseBranch !== null ? (
           <SettingResetButton

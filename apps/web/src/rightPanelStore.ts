@@ -13,7 +13,6 @@ import type { ThreadPanelPresentation } from "./rightPanelLayout";
 import type { ChatFileAttachment } from "./types";
 
 const RIGHT_PANEL_KINDS = [
-  "workflows",
   "app-review",
   "app-stack",
   "logs",
@@ -39,7 +38,6 @@ export interface DeviceTabTarget {
 }
 
 export type RightPanelSurface =
-  | { id: "workflows"; kind: "workflows" }
   | { id: "app-review"; kind: "app-review" }
   | { id: "app-stack"; kind: "app-stack" }
   | { id: "logs"; kind: "logs" }
@@ -89,7 +87,7 @@ export type RightPanelSurface =
   | { id: `side-chat:${string}`; kind: "side-chat"; threadId: ThreadId };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
-const RIGHT_PANEL_STORAGE_VERSION = 14;
+const RIGHT_PANEL_STORAGE_VERSION = 15;
 
 export const PULL_REQUESTS_PANEL_REF = scopeThreadRef(
   EnvironmentId.make("pull-requests-panel"),
@@ -225,8 +223,6 @@ const singletonSurface = (
   kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request" | "side-chat">,
 ): RightPanelSurface => {
   switch (kind) {
-    case "workflows":
-      return { id: "workflows", kind };
     case "app-review":
       return { id: "app-review", kind };
     case "app-stack":
@@ -518,7 +514,7 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
               const surfaces = Array.isArray(validThreadState?.surfaces)
                 ? validThreadState.surfaces.flatMap<RightPanelSurface>((surface) => {
                     const kind = (surface as { kind?: string }).kind;
-                    if (kind === "plan" || kind === "agents") return [];
+                    if (kind === "plan" || kind === "agents" || kind === "workflows") return [];
                     if (
                       (surface.kind === "file" || surface.kind === "files") &&
                       "folderTrail" in surface &&

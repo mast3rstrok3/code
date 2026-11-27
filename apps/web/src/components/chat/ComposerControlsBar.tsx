@@ -4,7 +4,6 @@ import type { ProviderInstanceEntry } from "../../providerInstances";
 import { type AppModelOption } from "../../modelSelection";
 import { CircleAlertIcon } from "lucide-react";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
-import type { ComposerModeControls } from "./ComposerModePicker";
 import { ComposerControl } from "./ComposerControl";
 import {
   ComposerFooterModeControls,
@@ -54,7 +53,6 @@ export function ComposerControlsBar(props: {
   reportedModelSelection: ChatComposerProps["reportedModelSelection"];
   promptUltrathink: PromptUltrathink;
   onPromptEdit: (edit: (prompt: string) => string) => void;
-  modeControls?: ComposerModeControls | undefined;
   effortDisplay: EffortDisplay;
   /** The strip under a new thread names the permissions, so the row does not repeat them. */
   permissionsShownInStrip: boolean;
@@ -102,7 +100,6 @@ export function ComposerControlsBar(props: {
     reportedModelSelection,
     promptUltrathink,
     onPromptEdit,
-    modeControls,
     compatibleRuntimeMode,
     defaultRuntimeMode,
     compatibleRuntimeModeOptions,
@@ -144,7 +141,6 @@ export function ComposerControlsBar(props: {
     pickerOwnsModeShortcut,
   } = resolveComposerControlsOwnership({
     matchesDefault: accessMatchesDefault || props.permissionsShownInStrip,
-    modePickerShown: modeControls !== undefined,
     collapsed: composerControlsCollapsed,
     measuredHiddenBlockCount,
   });
@@ -172,7 +168,6 @@ export function ComposerControlsBar(props: {
           id: "mode",
           content: (
             <ComposerFooterModeControls
-              modeControls={modeControls}
               runtimeMode={compatibleRuntimeMode}
               runtimeModeOptions={compatibleRuntimeModeOptions}
               size={controlSize}
@@ -302,7 +297,6 @@ export function ComposerControlsBar(props: {
           )}
         >
           <CompactComposerControlsMenu
-            modeControls={hiddenRestingBlockIds.length > 0 ? modeControls : undefined}
             runtimeMode={compatibleRuntimeMode}
             runtimeModeOptions={compatibleRuntimeModeOptions}
             size={controlSize}

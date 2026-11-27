@@ -1,9 +1,6 @@
-import { workflowPresetStartsInDedicatedWorkspace } from "@t3tools/shared/orchestrationImplementation";
 import { ThreadAppStackIndicator } from "./ThreadAppStackIndicator";
-import { WorkflowRuntimePanel } from "./WorkflowRuntimePanel";
 import { AppReviewControllerStatus } from "./AppReviewThreadStatus";
 import { AppStackLogsPanel } from "./AppStackLogsPanel";
-import { resolveThreadRouteSearch } from "../threadRoutes";
 import { AppStackPanel } from "./AppStackPanel";
 import { ChildThreadApprovals } from "./chat/ChildThreadApprovals";
 import { workspaceAreaProps } from "../lib/workspaceFocus";
@@ -212,7 +209,6 @@ import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { shortcutLabelForCommand } from "../keybindings";
 import { cn } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
-import { Button } from "./ui/button";
 import { toastManager } from "./ui/toast";
 import { projectScriptIdFromCommand } from "~/projectScripts";
 import { newMessageId } from "~/lib/utils";
@@ -599,9 +595,6 @@ export default function ChatView(props: ChatViewProps) {
   const settings = useEnvironmentSettings(environmentId);
   const clientSettingsHydrated = useClientSettingsHydrated();
   const timestampFormat = settings.timestampFormat;
-  const focusedWorkflowId = useLocation({
-    select: (location) => resolveThreadRouteSearch(location.search).workflow ?? null,
-  });
   const navigate = useNavigate();
   // Selects primitives: an object here is new on every router store update, which
   // re-renders ChatView on unrelated navigation state changes.
@@ -1036,12 +1029,6 @@ export default function ChatView(props: ChatViewProps) {
   })();
   const activeThreadRef = useActiveThreadRef(activeThread);
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a ?workflow= deep link opens the external right panel store's Workflows surface
-  useEffect(() => {
-    if (focusedWorkflowId && activeThreadRef && isServerThread) {
-      useRightPanelStore.getState().open(activeThreadRef, "workflows");
-    }
-  }, [focusedWorkflowId, activeThreadRef, isServerThread]);
   const activeEnvironmentServerBrowser = useEnvironmentSupportsServerBrowser(
     activeThreadRef?.environmentId ?? null,
   );
@@ -2285,15 +2272,8 @@ export default function ChatView(props: ChatViewProps) {
       ? (pendingServerThreadStartFromOriginByThreadId[activeThread?.id ?? ""] ??
         activeProjectSettings.settings.newWorktreesStartFromOrigin)
       : false;
-  const draftWorkflowPreset = useComposerDraftStore(
-    (store) => store.getComposerDraft(composerDraftTarget)?.workflowPreset,
-  );
-  const activeWorkflowPreset =
-    draftWorkflowPreset === undefined ? activeThread?.workflowPreset : draftWorkflowPreset;
   const sendEnvMode = resolveSendEnvMode({
-    requestedEnvMode: workflowPresetStartsInDedicatedWorkspace(activeWorkflowPreset)
-      ? "worktree"
-      : envMode,
+    requestedEnvMode: envMode,
     isGitRepo,
   });
   const localCheckoutBranchMismatch = isServerThread
@@ -3259,33 +3239,8 @@ export default function ChatView(props: ChatViewProps) {
 
   const rightPanelContent = activeThreadRef ? (
     // Fork-only surfaces render here; RightPanelSurfaceContent owns the shared ones.
-    renderedRightPanelSurface?.kind === "workflows" ||
     renderedRightPanelSurface?.kind === "app-review" ? (
-      <WorkflowRuntimePanel
-        key={`${activeThreadKey}:${renderedRightPanelSurface.kind}`}
-        threadRef={activeThreadRef}
-        initialReviewOpen={renderedRightPanelSurface.kind === "app-review"}
-        focusedWorkflowId={focusedWorkflowId}
-        sourceSettled={latestRunSettled}
-        sourceContext={
-          latestRunSettled
-            ? {
-                turnId: null,
-                messages: timelineMessages.slice(
-                  Math.max(
-                    0,
-                    timelineMessages.findLastIndex((message) => message.role === "user"),
-                  ),
-                ),
-              }
-            : null
-        }
-        previewTargets={
-          activePreviewState.snapshot && activePreviewState.snapshot.navStatus._tag !== "Idle"
-            ? [activePreviewState.snapshot.navStatus.url]
-            : []
-        }
-      />
+      <div />
     ) : renderedRightPanelSurface?.kind === "logs" ? (
       <AppStackLogsPanel
         environmentId={activeThreadRef.environmentId}
@@ -3446,20 +3401,6 @@ export default function ChatView(props: ChatViewProps) {
             ) : null}
             {!rightPanelControlsAtRoot && !rightPanelControlsInPanel ? panelLayoutControls : null}
             {inlineRightPanelOwnsTitleBar ? threadPanelHeaderControl : null}
-            {isServerThread && activeThreadRef ? (
-              <div className="mr-2 [-webkit-app-region:no-drag]">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    if (activeThreadRef)
-                      useRightPanelStore.getState().open(activeThreadRef, "workflows");
-                  }}
-                >
-                  Workflows
-                </Button>
-              </div>
-            ) : null}
             {isServerThread && activeThreadRef && activeProject ? (
               <ThreadAppStackIndicator
                 environmentId={activeThreadRef.environmentId}
@@ -4143,12 +4084,8 @@ export default function ChatView(props: ChatViewProps) {
           onAddReview={() =>
             activeThreadRef && useRightPanelStore.getState().open(activeThreadRef, "app-review")
           }
-          onAddWorkflows={() =>
-            activeThreadRef && useRightPanelStore.getState().open(activeThreadRef, "workflows")
-          }
           appStackAvailable={activeThreadRef !== null && activeProject !== null}
           reviewAvailable={isServerThread && activeThreadRef !== null}
-          workflowsAvailable={isServerThread && activeThreadRef !== null}
           onAddLogs={() =>
             activeThreadRef && useRightPanelStore.getState().open(activeThreadRef, "logs")
           }
