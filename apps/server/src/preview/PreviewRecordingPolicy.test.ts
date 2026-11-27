@@ -7,33 +7,18 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
 import * as ServerConfig from "../config.ts";
-import { PersistenceSqlError } from "../persistence/Errors.ts";
-import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
-import { ProjectionThreadRepository } from "../persistence/Services/ProjectionThreads.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import { PreviewRecordingPolicy, layer } from "./PreviewRecordingPolicy.ts";
 
 const threadId = ThreadId.make("reviewer-thread");
 const projectId = ProjectId.make("project-1");
 
-const project = (previewRecordingMode: PreviewRecordingMode | null) => ({
-  projectId,
-  title: "Project",
-  workspaceRoot: "/tmp/project",
-  defaultModelSelection: null,
-  defaultThreadEnvMode: null,
-  previewRecordingMode,
-  scripts: [],
-  createdAt: "2026-08-19T00:00:00.000Z",
-  updatedAt: "2026-08-19T00:00:00.000Z",
-  deletedAt: null,
-});
-
 const harness = (input: {
   readonly serverMode: PreviewRecordingMode;
-  readonly thread?: "missing" | "fails" | "found";
-  readonly project?: "missing" | ReturnType<typeof project>;
+  readonly thread?: "missing" | "found";
+  readonly projectMode?: PreviewRecordingMode | "missing";
 }) => {
-  const threadOutcome = input.thread ?? "found";
   const configLayer = Layer.effect(
     ServerConfig.ServerConfig,
     Effect.gen(function* () {
@@ -50,24 +35,20 @@ const harness = (input: {
 
   return layer.pipe(
     Layer.provide(
-      Layer.mock(ProjectionThreadRepository)({
-        getById: () =>
-          threadOutcome === "fails"
-            ? Effect.fail(new PersistenceSqlError({ operation: "getById" }))
-            : Effect.succeed(
-                threadOutcome === "missing"
-                  ? Option.none()
-                  : Option.some({ threadId, projectId } as never),
-              ),
+      Layer.mock(ProjectionStore.ProjectionStoreV2)({
+        getThread: () =>
+          input.thread === "missing"
+            ? Effect.fail(new ProjectionStore.ProjectionStoreThreadNotFoundError({ threadId }))
+            : Effect.succeed({ id: threadId, projectId } as never),
       }),
     ),
     Layer.provide(
-      Layer.mock(ProjectionProjectRepository)({
-        getById: () =>
+      Layer.mock(ProjectStore.ProjectStoreV2)({
+        get: () =>
           Effect.succeed(
-            input.project === undefined || input.project === "missing"
+            input.projectMode === undefined || input.projectMode === "missing"
               ? Option.none()
-              : Option.some(input.project as never),
+              : Option.some({ projectId, previewRecordingMode: input.projectMode } as never),
           ),
       }),
     ),
@@ -84,18 +65,14 @@ const modeFor = (layers: Layer.Layer<PreviewRecordingPolicy, PlatformError>) =>
 describe("PreviewRecordingPolicy", () => {
   it.effect("lets a project pin the encoder the server would not have chosen", () =>
     Effect.gen(function* () {
-      expect(yield* modeFor(harness({ serverMode: "auto", project: project("video") }))).toBe(
-        "video",
-      );
+      expect(yield* modeFor(harness({ serverMode: "auto", projectMode: "video" }))).toBe("video");
     }),
   );
 
-  it.effect("falls back to the server setting when the project states no preference", () =>
+  it.effect("defers to the server setting when the project keeps the default", () =>
     Effect.gen(function* () {
-      expect(yield* modeFor(harness({ serverMode: "auto", project: project(null) }))).toBe("auto");
-      expect(yield* modeFor(harness({ serverMode: "video", project: project(null) }))).toBe(
-        "video",
-      );
+      expect(yield* modeFor(harness({ serverMode: "auto", projectMode: "auto" }))).toBe("auto");
+      expect(yield* modeFor(harness({ serverMode: "video", projectMode: "auto" }))).toBe("video");
     }),
   );
 
@@ -103,8 +80,7 @@ describe("PreviewRecordingPolicy", () => {
     Effect.gen(function* () {
       // A stale or unreadable projection must not cost the reviewer its recording.
       expect(yield* modeFor(harness({ serverMode: "dom", thread: "missing" }))).toBe("dom");
-      expect(yield* modeFor(harness({ serverMode: "dom", project: "missing" }))).toBe("dom");
-      expect(yield* modeFor(harness({ serverMode: "dom", thread: "fails" }))).toBe("dom");
+      expect(yield* modeFor(harness({ serverMode: "dom", projectMode: "missing" }))).toBe("dom");
     }),
   );
 });

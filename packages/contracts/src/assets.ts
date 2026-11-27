@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { NonNegativeInt, ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
-import { AppReviewId, AppReviewWorkflowRunId } from "./review.ts";
+import { AppReviewId } from "./review.ts";
 import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
@@ -66,8 +66,8 @@ export const AssetResource = Schema.Union([
     evidenceId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
   }),
   Schema.TaggedStruct("app-review-test-recording", {
-    runId: AppReviewWorkflowRunId,
-    /** Recording id from one of the run's E2E test results. */
+    reviewId: AppReviewId,
+    /** Recording id from one of the review's E2E test results. */
     recordingId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
   }),
   Schema.TaggedStruct("native-app-icon", {

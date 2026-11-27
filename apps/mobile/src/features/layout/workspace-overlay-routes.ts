@@ -30,7 +30,6 @@ const LISTED_OVERLAY_ROUTES: ReadonlySet<string> = new Set([
   "ThreadAgents",
   "ThreadAppReview",
   "ThreadAppReviewDocument",
-  "ThreadAppReviewLaunch",
   "ThreadAppStack",
   "ThreadAppStackLogs",
   "ThreadAppStacks",

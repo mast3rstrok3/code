@@ -206,8 +206,6 @@ import {
 import type { ComposerModeControlProps } from "./ComposerModeControl";
 import { ComposerPopoverHost } from "./ComposerPopoverHost";
 import { ThreadFeed, type ThreadFeedHistoryControls } from "./ThreadFeed";
-import { appReviewSegmentLabel, isAppReviewThreadRole } from "../app-review/appReviewSheetModel";
-import { useAppReviewControllerStatus } from "../app-review/useAppReview";
 import { WorkspaceMutationIdProvider } from "./WorkspaceMutationIdProvider";
 import { useThreadTurnSubagents } from "./ThreadAgentsSheet";
 import { ComposerQueuedEditBanner } from "./ComposerQueuedEdit";
@@ -535,30 +533,10 @@ function ThreadDetailBody(
   const queuedCount = useThreadQueuedCount(props.selectedThreadDetailRef);
   // The shell already says whether this thread belongs to a workflow, so the
   // chip costs no subscription; the sheet subscribes only while it is open.
-  const appReviewThread = isAppReviewThreadRole(props.selectedThread.workflowRole);
-  // A standalone App Review's threads carry a role but belong to no workflow,
-  // so they open the App Review rather than an empty Workflow sheet.
   const isWorkflowThread =
-    (props.selectedThread.workflowRole != null && !appReviewThread) ||
+    props.selectedThread.workflowRole != null ||
     props.selectedThread.workflowContext != null ||
     props.selectedThread.workflowPreset != null;
-  const appReviewStatus = useAppReviewControllerStatus(
-    props.environmentId,
-    props.selectedThread.id,
-    props.selectedThread.workflowRole === "app-review-orchestrator",
-  );
-  const appReviewSegment = appReviewThread
-    ? {
-        label: appReviewSegmentLabel(appReviewStatus),
-        onPress: () => {
-          Keyboard.dismiss();
-          navigation.navigate("ThreadAppReview", {
-            environmentId: props.environmentId,
-            threadId: props.selectedThread.id,
-          });
-        },
-      }
-    : null;
   const turnSubagents = useThreadTurnSubagents(props.selectedThreadDetailRef);
   const agentsSegment = resolveSubagentPillSegment(turnSubagents);
   const defaultComposerEditorRef = useRef<ComposerEditorHandle>(null);
@@ -939,7 +917,6 @@ function ThreadDetailBody(
     queuedCount > 0 ||
     agentsSegment !== null ||
     isWorkflowThread ||
-    appReviewSegment !== null ||
     devicePreviews.length > 0 ||
     browserTabs.tabs.length > 0 ||
     appStackChip !== null ||
@@ -1693,7 +1670,6 @@ function ThreadDetailBody(
                           }
                         : null
                     }
-                    appReview={appReviewSegment}
                     queuedCount={queuedCount}
                     onOpenQueue={() => {
                       Keyboard.dismiss();

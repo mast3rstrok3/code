@@ -256,6 +256,13 @@ function makeContext(onClose?: (context: BrowserContext) => void, initialUrl = "
     removed: false,
     pagehideBinding: null as (() => void) | null,
     pagehideWatched: Promise.withResolvers<void>(),
+    domBinding: null as null | ((source: unknown, payload: unknown) => Promise<unknown>),
+    exposeBinding: vi.fn(
+      async (_name: string, callback: (source: unknown, payload: unknown) => Promise<unknown>) => {
+        page.domBinding = callback;
+      },
+    ),
+    addInitScript: vi.fn(async () => {}),
     exposeFunction: vi.fn(async (_name: string, callback: () => void) => {
       page.pagehideBinding = callback;
       page.pagehideWatched.resolve();
@@ -1423,6 +1430,47 @@ it.effect.each([
         expect(yield* fs.readFileString(artifact.path)).toBe(expected);
       }),
     ).pipe(Effect.provide(layer)),
+);
+
+it.effect("records a DOM replay into a pending attachment and starts fresh in the same tab", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const fs = yield* FileSystem.FileSystem;
+      const page = contexts[0]!.page;
+      const record = Effect.fn(function* (events: ReadonlyArray<unknown>) {
+        yield* broker.invoke({
+          scope,
+          tabId,
+          operation: "recordingStart",
+          input: { format: "dom" },
+        });
+        expect(yield* Effect.promise(() => page.domBinding!(null, events))).toEqual({
+          stop: false,
+        });
+        return yield* broker.invoke<{ path: string; mimeType: string; sizeBytes: number }>({
+          scope,
+          tabId,
+          operation: "recordingStop",
+          input: {},
+        });
+      });
+
+      const first = yield* record([{ type: 4 }, { type: 2 }]);
+      expect(first.mimeType).toBe("application/x-rrweb+jsonl");
+      expect(yield* fs.readFileString(first.path)).toBe('{"type":4}\n{"type":2}\n');
+      expect(first.sizeBytes).toBe(22);
+      // A recorder left in the page after the stop is told to retire.
+      expect(yield* Effect.promise(() => page.domBinding!(null, [{ type: 3 }]))).toEqual({
+        stop: true,
+      });
+
+      const second = yield* record([{ type: 4 }]);
+      expect(yield* fs.readFileString(second.path)).toBe('{"type":4}\n');
+      expect(page.exposeBinding).toHaveBeenCalledTimes(1);
+      expect(page.addInitScript).toHaveBeenCalledTimes(1);
+    }),
+  ).pipe(Effect.provide(layer)),
 );
 
 it.effect("enforces provider ownership and explicit targets when a session has multiple tabs", () =>

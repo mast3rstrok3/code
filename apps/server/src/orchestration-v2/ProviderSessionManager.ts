@@ -582,17 +582,13 @@ export const layerWithOptions = (
                   "orchestration",
                   "worktree",
                   "pull-requests",
+                  "app-review",
                   "workflow-artifacts",
                   "user-input",
                 ]);
                 const workflowThread = Option.getOrUndefined(
                   yield* projectionStore.getThread(threadId).pipe(Effect.option),
                 );
-                if (
-                  workflowThread?.workflowRole === "implementation-qa-reviewer" ||
-                  workflowThread?.workflowRole === "app-review-reviewer"
-                )
-                  capabilities.add("app-review");
                 if (browserToolsAvailable) capabilities.add("preview");
                 if (deviceToolsAvailable) capabilities.add("device");
                 const subagent = workflowThread?.lineage.relationshipToParent === "subagent";

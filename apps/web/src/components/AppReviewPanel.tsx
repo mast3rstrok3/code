@@ -1,222 +1,101 @@
-import { useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, ExternalLink, PlayCircle, Square } from "lucide-react";
-import type {
-  AppReviewWorkflowRun,
-  ScopedThreadRef,
-  ThreadId,
-  WorkflowArtifactsSnapshot,
-} from "@t3tools/contracts";
-
+import { useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
+import type { AppReviewRecord, ScopedThreadRef } from "@t3tools/contracts";
 import {
-  useAppReviewWorkflowRuns,
-  useThreadAppReviews,
-  useThreadPlanningWorkflow,
-} from "~/state/entities";
-import {
-  APP_REVIEW_CYCLE_STEP_STATUS_LABELS,
-  appReviewCycleReplayCount,
-  appReviewCycleSteps,
-  appReviewRunReplayCount,
-  appReviewRunStatusLabel,
-  appReviewRunTicketLabel,
-  selectAppReviewRunsForPanel,
-  selectHeadlineAppReviewRun,
-  type AppReviewCycleStepStatus,
-  type AppReviewWorkflowLaunchRequest,
+  APP_REVIEW_SKILL_PROMPT,
+  APP_REVIEW_STATUS_LABELS,
 } from "@t3tools/client-runtime/app-review";
-import type { BrowserAppReviewSourceContext } from "./ChatView.logic";
+
+import { useComposerDraftStore } from "~/composerDraftStore";
+import { useThreadAppReviews } from "~/state/appReview";
+import { AppReviewDocument } from "./AppReviewDocument";
+import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
-import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
-import { AppReviewDocument, AppReviewCycleDocument } from "./AppReviewDocument";
-import { AppReviewLaunchDialog } from "./AppReviewLaunchDialog";
-import { cn } from "~/lib/utils";
 
-export function AppReviewPanel(props: {
-  mode: DiffPanelMode;
-  threadRef: ScopedThreadRef;
-  launchInFlight: boolean;
-  launchDisabled: boolean;
-  sourceSettled: boolean;
-  sourceContext: BrowserAppReviewSourceContext | null;
-  previewTargets: ReadonlyArray<string>;
-  onLaunch: (request: AppReviewWorkflowLaunchRequest) => void;
-  onStop: (run: AppReviewWorkflowRun) => void;
-  onOpenThread: (threadId: ThreadId) => void;
-  onOpenPlanArtifact?: (ticketId: string | null) => void;
-  workflowArtifacts?: WorkflowArtifactsSnapshot | null;
-}) {
-  const [launchDialogOpen, setLaunchDialogOpen] = useState(false);
-  const localRecords = useThreadAppReviews(props.threadRef);
-  const localRuns = useAppReviewWorkflowRuns(props.threadRef.environmentId);
-  const localPlanningWorkflow = useThreadPlanningWorkflow(props.threadRef);
-  const records = props.workflowArtifacts?.appReviews ?? localRecords;
-  const runs = props.workflowArtifacts?.appReviewWorkflowRuns ?? localRuns;
-  const planningWorkflow =
-    props.workflowArtifacts == null
-      ? localPlanningWorkflow
-      : { spec: props.workflowArtifacts.spec, tickets: props.workflowArtifacts.tickets };
-  const relevantRuns = useMemo(
-    () =>
-      selectAppReviewRunsForPanel({
-        runs,
-        openedThreadId: props.threadRef.threadId,
-        workflowScoped: props.workflowArtifacts != null,
-        tickets: planningWorkflow?.tickets ?? [],
-      }),
-    [planningWorkflow?.tickets, props.threadRef.threadId, props.workflowArtifacts, runs],
-  );
-  const currentRun = selectHeadlineAppReviewRun(relevantRuns);
-  const activeRun = relevantRuns.find((run) => run.status === "running") ?? null;
-  const [expandedRunIds, setExpandedRunIds] = useState<Record<string, boolean>>({});
-  const legacyRecords = records.filter(
-    (record) =>
-      !runs.some((run) =>
-        run.cycles.some((cycle) => cycle.reviewId === record.id || cycle.e2eReviewId === record.id),
-      ),
-  );
+/** Reviews an agent ran on this thread, newest first and open. */
+export function AppReviewPanel(props: { mode: DiffPanelMode; threadRef: ScopedThreadRef }) {
+  const reviews = useThreadAppReviews(props.threadRef);
+  const newestFirst = (reviews.data ?? []).toReversed();
+  const newest = newestFirst[0];
+  const [openIds, setOpenIds] = useState<Record<string, boolean>>({});
+
+  const askAgent = () => {
+    const store = useComposerDraftStore.getState();
+    const draft = store.getComposerDraft(props.threadRef)?.prompt ?? "";
+    if (draft.startsWith(APP_REVIEW_SKILL_PROMPT)) return;
+    store.setPrompt(props.threadRef, `${APP_REVIEW_SKILL_PROMPT}${draft}`);
+  };
 
   return (
     <DiffPanelShell
       mode={props.mode}
       header={
-        <>
-          <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold">
-              {relevantRuns.length > 1 ? `App Reviews · ${relevantRuns.length}` : "App Review"}
-            </h2>
-            <p className="truncate text-xs text-muted-foreground">
-              {currentRun ? appReviewRunStatusLabel(currentRun) : "No workflow launched"}
-            </p>
-          </div>
-          {activeRun ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={props.launchInFlight}
-              onClick={() => props.onStop(activeRun)}
-            >
-              <Square className="size-3.5" />
-              Stop
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={props.launchInFlight || props.launchDisabled}
-              onClick={() => setLaunchDialogOpen(true)}
-            >
-              <PlayCircle className="size-4" />
-              Launch App Review
-            </Button>
-          )}
-        </>
+        <div className="min-w-0">
+          <h2 className="truncate text-sm font-semibold">
+            {newestFirst.length > 1 ? `App Reviews · ${newestFirst.length}` : "App Review"}
+          </h2>
+          <p className="truncate text-xs text-muted-foreground">
+            {newest ? APP_REVIEW_STATUS_LABELS[newest.status] : "No review yet"}
+          </p>
+        </div>
       }
     >
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {currentRun ? (
+        {reviews.error && newest === undefined ? (
+          <p className="p-6 text-center text-sm text-destructive">{reviews.error}</p>
+        ) : newest === undefined ? (
+          <div className="flex min-h-52 items-center justify-center p-6 text-center">
+            <div className="max-w-sm">
+              <h3 className="text-sm font-medium">No App Review</h3>
+              <p className="mt-2 text-sm text-muted-foreground">
+                The agent runs the end-to-end tests, tries the app in the browser, and records what
+                it sees here.
+              </p>
+              <div className="mt-4">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={reviews.isPending}
+                  onClick={askAgent}
+                >
+                  Ask the agent for an App Review
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : (
           <div className="divide-y divide-border">
-            {relevantRuns.map((run, index) => (
-              <RunDetails
-                key={run.id}
-                run={run}
-                records={records}
+            {newestFirst.map((record, index) => (
+              <ReviewSection
+                key={record.id}
+                record={record}
                 environmentId={props.threadRef.environmentId}
-                onOpenThread={props.onOpenThread}
-                label={
-                  appReviewRunTicketLabel(run, planningWorkflow?.tickets ?? []) ??
-                  (relevantRuns.length > 1 ? `App Review ${String(index + 1)}` : "App Review")
-                }
-                open={expandedRunIds[run.id] ?? run.id === currentRun.id}
+                label={record.document.brief || `App Review ${newestFirst.length - index}`}
+                open={openIds[record.id] ?? index === 0}
                 onToggle={() =>
-                  setExpandedRunIds((current) => ({
+                  setOpenIds((current) => ({
                     ...current,
-                    [run.id]: !(current[run.id] ?? run.id === currentRun.id),
+                    [record.id]: !(current[record.id] ?? index === 0),
                   }))
                 }
               />
             ))}
           </div>
-        ) : (
-          <div className="flex min-h-52 items-center justify-center p-6 text-center">
-            <div className="max-w-sm">
-              <h3 className="text-sm font-medium">No App Review workflow</h3>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Run automated acceptance tests and repair the failures they find.
-              </p>
-            </div>
-          </div>
         )}
-
-        {planningWorkflow?.spec ? (
-          <div className="border-t border-border px-4 py-3">
-            <Button
-              type="button"
-              size="xs"
-              variant="ghost"
-              onClick={() => props.onOpenPlanArtifact?.(null)}
-            >
-              Spec · {planningWorkflow.spec.title}
-            </Button>
-          </div>
-        ) : null}
-
-        {legacyRecords.length > 0 ? (
-          <section className="border-t border-border">
-            <div className="px-4 py-3">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Browser App Reviews
-              </h3>
-            </div>
-            {legacyRecords.map((record) => (
-              <AppReviewDocument
-                key={record.id}
-                record={record}
-                environmentId={props.threadRef.environmentId}
-              />
-            ))}
-          </section>
-        ) : null}
       </div>
-
-      <AppReviewLaunchDialog
-        open={launchDialogOpen}
-        onOpenChange={setLaunchDialogOpen}
-        launchInFlight={props.launchInFlight}
-        launchDisabled={props.launchDisabled}
-        sourceSettled={props.sourceSettled}
-        sourceContext={props.sourceContext}
-        previewTargets={props.previewTargets}
-        onLaunch={(request) => {
-          props.onLaunch(request);
-          setLaunchDialogOpen(false);
-        }}
-      />
     </DiffPanelShell>
   );
 }
 
-/**
- * One App Review run, folded down to its ticket and status. A workflow can
- * carry a review per ticket plus its own, so the panel opens as a list the
- * user can scan: only the headline run starts open, and inside a run only the
- * newest cycle does, which puts the latest test replays one click away.
- */
-function RunDetails(props: {
-  readonly run: AppReviewWorkflowRun;
-  readonly records: WorkflowArtifactsSnapshot["appReviews"];
+function ReviewSection(props: {
+  readonly record: AppReviewRecord;
   readonly environmentId: ScopedThreadRef["environmentId"];
-  readonly onOpenThread: (threadId: ThreadId) => void;
   readonly label: string;
   readonly open: boolean;
   readonly onToggle: () => void;
 }) {
-  const [expandedCycles, setExpandedCycles] = useState<Record<number, boolean>>({});
-  const recordById = new Map(props.records.map((record) => [record.id, record] as const));
-  const newestCycleNumber = props.run.cycles.at(-1)?.cycleNumber;
-  const runReplayCount = appReviewRunReplayCount(props.run);
   return (
     <section>
       <button
@@ -231,156 +110,13 @@ function RunDetails(props: {
           <ChevronRight className="size-3.5 shrink-0" />
         )}
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{props.label}</span>
-        {runReplayCount > 0 ? <ReplayCountBadge count={runReplayCount} /> : null}
         <Badge variant="outline" size="sm">
-          {appReviewRunStatusLabel(props.run)}
+          {APP_REVIEW_STATUS_LABELS[props.record.status]}
         </Badge>
       </button>
-
       {props.open ? (
-        <>
-          <div className="space-y-3 border-b border-t border-border px-4 py-3">
-            <p className="text-xs text-muted-foreground">
-              {props.run.cyclesUsed} of {props.run.cycleBudget} cycles used
-            </p>
-            <div>
-              <p className="text-xs font-medium text-foreground">Original brief</p>
-              <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">
-                {props.run.briefMarkdown}
-              </p>
-            </div>
-            {props.run.failure ? (
-              <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3">
-                <p className="text-xs font-medium text-destructive">
-                  {props.run.status === "exhausted" ? "Last cycle" : "Blocked"} ·{" "}
-                  {props.run.failure.reason}
-                </p>
-                <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">
-                  {props.run.failure.detailMarkdown}
-                </p>
-              </div>
-            ) : null}
-          </div>
-
-          <div className="space-y-3 p-4">
-            {props.run.cycles.map((cycle) => {
-              const record = recordById.get(cycle.reviewId);
-              const e2eRecord =
-                cycle.e2eReviewId == null ? undefined : recordById.get(cycle.e2eReviewId);
-              const cycleOpen =
-                expandedCycles[cycle.cycleNumber] ?? cycle.cycleNumber === newestCycleNumber;
-              const cycleReplayCount = appReviewCycleReplayCount(cycle);
-              return (
-                <article key={cycle.cycleNumber} className="overflow-hidden rounded-lg border">
-                  <button
-                    type="button"
-                    aria-expanded={cycleOpen}
-                    onClick={() =>
-                      setExpandedCycles((current) => ({
-                        ...current,
-                        [cycle.cycleNumber]: !cycleOpen,
-                      }))
-                    }
-                    className="flex w-full cursor-pointer items-center justify-between gap-3 px-3 py-2 text-left"
-                  >
-                    <span className="flex min-w-0 items-center gap-2">
-                      {cycleOpen ? (
-                        <ChevronDown className="size-3.5 shrink-0" />
-                      ) : (
-                        <ChevronRight className="size-3.5 shrink-0" />
-                      )}
-                      <span className="truncate text-sm font-medium">
-                        Cycle {cycle.cycleNumber} of {props.run.cycleBudget}
-                      </span>
-                    </span>
-                    <span className="flex shrink-0 items-center gap-1.5">
-                      {cycleReplayCount > 0 ? <ReplayCountBadge count={cycleReplayCount} /> : null}
-                      <Badge variant="outline" size="sm">
-                        {cycle.status}
-                      </Badge>
-                    </span>
-                  </button>
-                  {cycleOpen ? (
-                    <>
-                      <ol className="space-y-2 border-b border-t px-3 py-3">
-                        {appReviewCycleSteps(cycle).map((step) => (
-                          <CycleStep
-                            key={step.number}
-                            number={step.number}
-                            title={step.title}
-                            description={step.description}
-                            status={step.status}
-                            actionLabel={step.actionLabel}
-                            {...(step.threadId
-                              ? { onOpen: () => props.onOpenThread(step.threadId!) }
-                              : {})}
-                          />
-                        ))}
-                      </ol>
-                      {cycle.failure ? (
-                        <p className="whitespace-pre-wrap border-b px-3 py-2 text-xs text-destructive">
-                          Cycle spent · {cycle.failure.reason}: {cycle.failure.detailMarkdown}
-                        </p>
-                      ) : null}
-                      <AppReviewCycleDocument
-                        runId={props.run.id}
-                        cycle={cycle}
-                        e2eRecord={e2eRecord}
-                        browserRecord={record}
-                        environmentId={props.environmentId}
-                      />
-                    </>
-                  ) : null}
-                </article>
-              );
-            })}
-          </div>
-        </>
+        <AppReviewDocument record={props.record} environmentId={props.environmentId} />
       ) : null}
     </section>
-  );
-}
-
-function ReplayCountBadge(props: { readonly count: number }) {
-  return (
-    <Badge variant="outline" size="sm">
-      {props.count} {props.count === 1 ? "replay" : "replays"}
-    </Badge>
-  );
-}
-
-function CycleStep(props: {
-  readonly number: number;
-  readonly title: string;
-  readonly description: string;
-  readonly status: AppReviewCycleStepStatus;
-  readonly actionLabel: string;
-  readonly onOpen?: () => void;
-}) {
-  const statusLabel = APP_REVIEW_CYCLE_STEP_STATUS_LABELS[props.status];
-  return (
-    <li className="flex items-start justify-between gap-3">
-      <div className="min-w-0">
-        <p className="text-xs font-medium text-foreground">
-          {props.number}. {props.title}
-        </p>
-        <p className="mt-0.5 text-xs text-muted-foreground">{props.description}</p>
-      </div>
-      <div className="flex shrink-0 items-center gap-1.5">
-        <span
-          className={cn(
-            "text-2xs",
-            props.status === "failed" ? "text-destructive" : "text-muted-foreground",
-          )}
-        >
-          {statusLabel}
-        </span>
-        {props.onOpen ? (
-          <Button type="button" size="xs" variant="ghost" onClick={props.onOpen}>
-            {props.actionLabel} <ExternalLink className="size-3" />
-          </Button>
-        ) : null}
-      </div>
-    </li>
   );
 }

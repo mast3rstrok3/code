@@ -1,7 +1,7 @@
 import { workflowPresetStartsInDedicatedWorkspace } from "@t3tools/shared/orchestrationImplementation";
 import { ThreadAppStackIndicator } from "./ThreadAppStackIndicator";
 import { WorkflowRuntimePanel } from "./WorkflowRuntimePanel";
-import { AppReviewControllerStatus } from "./AppReviewThreadStatus";
+import { AppReviewPanel } from "./AppReviewPanel";
 import { AppStackLogsPanel } from "./AppStackLogsPanel";
 import { resolveThreadRouteSearch } from "../threadRoutes";
 import { AppStackPanel } from "./AppStackPanel";
@@ -3259,12 +3259,13 @@ export default function ChatView(props: ChatViewProps) {
 
   const rightPanelContent = activeThreadRef ? (
     // Fork-only surfaces render here; RightPanelSurfaceContent owns the shared ones.
-    renderedRightPanelSurface?.kind === "workflows" ||
     renderedRightPanelSurface?.kind === "app-review" ? (
+      <AppReviewPanel key={activeThreadKey} mode="sidebar" threadRef={activeThreadRef} />
+    ) : renderedRightPanelSurface?.kind === "workflows" ? (
       <WorkflowRuntimePanel
         key={`${activeThreadKey}:${renderedRightPanelSurface.kind}`}
         threadRef={activeThreadRef}
-        initialReviewOpen={renderedRightPanelSurface.kind === "app-review"}
+        initialReviewOpen={false}
         focusedWorkflowId={focusedWorkflowId}
         sourceSettled={latestRunSettled}
         sourceContext={
@@ -3623,11 +3624,6 @@ export default function ChatView(props: ChatViewProps) {
                   onViewportAttach={attachTimelineViewport}
                   onFooterGrow={onTimelineFooterGrowStable}
                   hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
-                  emptyPlaceholder={
-                    activeThread?.workflowRole === "app-review-orchestrator" && activeThreadRef ? (
-                      <AppReviewControllerStatus threadRef={activeThreadRef} />
-                    ) : undefined
-                  }
                   emptyPlaceholderInset={composerReservedHeight}
                   topFadeEnabled={!hasTimelineTopBanner}
                   {...(threadHistoryControls === undefined

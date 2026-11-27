@@ -3,10 +3,9 @@ import {
   AssetAppReviewEvidenceNotFoundError,
   AssetAppReviewEvidenceResolutionError,
   APP_REVIEW_RECORDING_EVIDENCE_ID,
-  APP_REVIEW_TEST_RECORDING_SUFFIX,
+  type AppReviewRecord,
 } from "@t3tools/contracts";
-import { appReviewTestRecordingsDir } from "../orchestration/appReviewTestRunner.ts";
-import { ProjectionThreadAppReviewRepository } from "../persistence/Services/ProjectionThreadAppReviews.ts";
+import * as AppReviewStore from "../appReview/AppReviewStore.ts";
 import type { AssetResource } from "@t3tools/contracts";
 import {
   AssetAttachmentNotFoundError,
@@ -181,7 +180,7 @@ const AssetClaimsSchema = Schema.Union([
   Schema.Struct({
     version: Schema.Literal(1),
     kind: Schema.Literal("app-review-test-recording"),
-    runId: Schema.String,
+    reviewId: Schema.String,
     recordingId: Schema.String,
     expiresAt: Schema.Number,
   }),
@@ -566,76 +565,65 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
 );
 
 /**
- * Resolve an App Review evidence file server-side from the review projection.
- * The stored evidence path is authoritative and
- * must sit under `stateDir/preview-artifacts`.
+ * Resolve an App Review evidence file from the stored review. The stored path is
+ * authoritative and must sit under `stateDir/preview-artifacts`.
  */
-const resolveAppReviewEvidenceFile = Effect.fn("AssetAccess.resolveAppReviewEvidenceFile")(
-  function* (input: { readonly reviewId: string; readonly evidenceId: string }) {
-    const repositoryOption = yield* Effect.serviceOption(ProjectionThreadAppReviewRepository);
-    if (Option.isNone(repositoryOption)) return null;
-    const repository = repositoryOption.value;
-    const config = yield* ServerConfig.ServerConfig;
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-
-    const review = yield* repository.getById({ reviewId: input.reviewId as AppReviewId });
-    if (Option.isNone(review)) return null;
-
-    const evidence = review.value.evidence;
-    const evidencePath =
-      input.evidenceId === APP_REVIEW_RECORDING_EVIDENCE_ID
-        ? evidence.recording.status === "saved"
-          ? evidence.recording.path
-          : null
-        : (evidence.screenshots.find((shot) => shot.id === input.evidenceId)?.path ?? null);
-    if (!evidencePath) return null;
-
-    const [artifactsRoot, canonicalFile] = yield* Effect.all([
-      ProjectFaviconResolver.optionOnNotFound(
-        fileSystem.realPath(path.join(config.stateDir, "preview-artifacts")),
-      ),
-      ProjectFaviconResolver.optionOnNotFound(fileSystem.realPath(evidencePath)),
-    ]);
-    if (Option.isNone(artifactsRoot) || Option.isNone(canonicalFile)) return null;
-
-    const relative = path.relative(artifactsRoot.value, canonicalFile.value);
-    if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return null;
-
-    const info = yield* ProjectFaviconResolver.optionOnNotFound(
-      fileSystem.stat(canonicalFile.value),
-    );
-    return Option.isSome(info) && info.value.type === "File" ? canonicalFile.value : null;
-  },
-);
-
-/**
- * Resolve an E2E test recording. The test runner stores every recording as
- * `<runId>/<recordingId>.rrweb.jsonl`, so the ids locate the file and the
- * containment check rejects an id that tries to leave the run's directory.
- */
-const resolveAppReviewTestRecordingFile = Effect.fn(
-  "AssetAccess.resolveAppReviewTestRecordingFile",
-)(function* (input: { readonly runId: string; readonly recordingId: string }) {
+const resolveAppReviewFile = Effect.fn("AssetAccess.resolveAppReviewFile")(function* (input: {
+  readonly reviewId: string;
+  readonly evidencePath: (record: AppReviewRecord) => string | null | undefined;
+}) {
+  const storeOption = yield* Effect.serviceOption(AppReviewStore.AppReviewStore);
+  if (Option.isNone(storeOption)) return null;
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
 
-  const runDir = appReviewTestRecordingsDir(path, config.stateDir, input.runId);
-  const [canonicalRunDir, canonicalFile] = yield* Effect.all([
-    ProjectFaviconResolver.optionOnNotFound(fileSystem.realPath(runDir)),
+  const review = yield* storeOption.value.get(input.reviewId as AppReviewId);
+  if (Option.isNone(review)) return null;
+  const evidencePath = input.evidencePath(review.value);
+  if (!evidencePath) return null;
+
+  const [artifactsRoot, canonicalFile] = yield* Effect.all([
     ProjectFaviconResolver.optionOnNotFound(
-      fileSystem.realPath(
-        path.join(runDir, `${input.recordingId}${APP_REVIEW_TEST_RECORDING_SUFFIX}`),
-      ),
+      fileSystem.realPath(path.join(config.stateDir, "preview-artifacts")),
     ),
+    ProjectFaviconResolver.optionOnNotFound(fileSystem.realPath(evidencePath)),
   ]);
-  if (Option.isNone(canonicalRunDir) || Option.isNone(canonicalFile)) return null;
-  if (path.dirname(canonicalFile.value) !== canonicalRunDir.value) return null;
+  if (Option.isNone(artifactsRoot) || Option.isNone(canonicalFile)) return null;
+
+  const relative = path.relative(artifactsRoot.value, canonicalFile.value);
+  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return null;
 
   const info = yield* ProjectFaviconResolver.optionOnNotFound(fileSystem.stat(canonicalFile.value));
   return Option.isSome(info) && info.value.type === "File" ? canonicalFile.value : null;
 });
+
+const resolveAppReviewEvidenceFile = (input: {
+  readonly reviewId: string;
+  readonly evidenceId: string;
+}) =>
+  resolveAppReviewFile({
+    reviewId: input.reviewId,
+    evidencePath: ({ evidence }) =>
+      input.evidenceId === APP_REVIEW_RECORDING_EVIDENCE_ID
+        ? evidence.recording.status === "saved"
+          ? evidence.recording.path
+          : null
+        : evidence.screenshots.find((shot) => shot.id === input.evidenceId)?.path,
+  });
+
+/** An E2E test recording, by the id its test result lists. */
+const resolveAppReviewTestRecordingFile = (input: {
+  readonly reviewId: string;
+  readonly recordingId: string;
+}) =>
+  resolveAppReviewFile({
+    reviewId: input.reviewId,
+    evidencePath: ({ evidence }) =>
+      (evidence.tests ?? [])
+        .flatMap((result) => result.recordings ?? [])
+        .find((recording) => recording.id === input.recordingId)?.path,
+  });
 
 export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (input: {
   readonly resource: AssetResource;
@@ -967,7 +955,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       claims = {
         version: 1,
         kind: "app-review-test-recording",
-        runId: resource.runId,
+        reviewId: resource.reviewId,
         recordingId: resource.recordingId,
         expiresAt,
       };
@@ -1111,7 +1099,7 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
     const recordingFile = yield* resolveAppReviewTestRecordingFile(claims).pipe(
       Effect.tapError((cause) =>
         Effect.logError("Failed to resolve App Review test recording asset.", {
-          runId: claims.runId,
+          reviewId: claims.reviewId,
           recordingId: claims.recordingId,
           cause,
         }),

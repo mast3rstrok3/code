@@ -579,6 +579,10 @@
       "types": "./src/state/appStacks.ts",
       "default": "./src/state/appStacks.ts"
     },
+    "./state/app-review": {
+      "types": "./src/state/appReview.ts",
+      "default": "./src/state/appReview.ts"
+    },
     "./state/workflows": {
       "types": "./src/state/workflows.ts",
       "default": "./src/state/workflows.ts"

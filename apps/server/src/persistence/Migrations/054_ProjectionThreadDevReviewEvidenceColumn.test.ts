@@ -131,7 +131,6 @@ describe("054 App Review evidence compatibility", () => {
         sourceThreadId: ThreadId.make("thread-source-fresh"),
         reviewThreadId: ThreadId.make("thread-review-fresh"),
         appReviewScope: null,
-        sourceProposedPlan: null,
         sourceTurnId: null,
         status: "running",
         document: {

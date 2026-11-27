@@ -1,12 +1,9 @@
-import {
-  groupAppReviewTestResults,
-  isDomReplayRecording,
-} from "@t3tools/client-runtime/app-review";
+import { APP_REVIEW_STATUS_LABELS, isDomReplayRecording } from "@t3tools/client-runtime/app-review";
 import {
   APP_REVIEW_RECORDING_EVIDENCE_ID,
   type AppReviewRecord,
   type AppReviewScreenshotEvidence,
-  type AppReviewWorkflowCycle,
+  type AppReviewTestResult,
   type AssetResource,
   type EnvironmentId,
 } from "@t3tools/contracts";
@@ -62,85 +59,24 @@ function Muted(props: { readonly children: ReactNode }) {
 }
 
 /**
- * One cycle: its result, the E2E commands it ran with their recordings, and the
- * reviews agents wrote for it.
- */
-export function AppReviewCycleDocument(props: {
-  readonly cycle: AppReviewWorkflowCycle;
-  readonly e2eRecord: AppReviewRecord | undefined;
-  readonly browserRecord: AppReviewRecord | undefined;
-  readonly environmentId: EnvironmentId;
-}) {
-  const testResults = props.cycle.e2eExecution?.results ?? [];
-  const summaries = [props.e2eRecord, props.browserRecord].flatMap((record) =>
-    record?.document.summary ? [record] : [],
-  );
-  return (
-    <>
-      <Section title="Overall result">
-        <Text className="font-t3-medium text-sm text-foreground">{props.cycle.status}</Text>
-        {summaries.map((record) => (
-          <Text key={record.id} selectable className="text-sm text-foreground">
-            {record.document.summary}
-          </Text>
-        ))}
-        {summaries.length === 0 && testResults.length === 0 ? <Muted>No summary yet.</Muted> : null}
-        {props.cycle.actionableFindingsMarkdown ? (
-          <Text selectable className="text-sm text-foreground-muted">
-            {props.cycle.actionableFindingsMarkdown}
-          </Text>
-        ) : null}
-        {props.cycle.failure ? (
-          <Text selectable className="text-sm text-danger-foreground">
-            Cycle spent · {props.cycle.failure.reason}: {props.cycle.failure.detailMarkdown}
-          </Text>
-        ) : null}
-      </Section>
-      {props.cycle.e2eExecution ? (
-        <TestResultsSection execution={props.cycle.e2eExecution} />
-      ) : null}
-      {props.e2eRecord !== undefined ? (
-        <ReviewSection
-          title="Agent review · end-to-end tests"
-          record={props.e2eRecord}
-          environmentId={props.environmentId}
-        />
-      ) : null}
-      {props.cycle.appReviewScope !== "e2e" || props.browserRecord !== undefined ? (
-        <ReviewSection
-          title="Agent review · browser"
-          record={props.browserRecord}
-          environmentId={props.environmentId}
-        />
-      ) : null}
-    </>
-  );
-}
-
-/**
- * The commands a cycle ran. Their per-test recordings are rrweb DOM captures,
+ * The commands a review ran. Their per-test recordings are rrweb DOM captures,
  * which only the web replayer plays, so mobile lists them without a player.
  */
-function TestResultsSection(props: {
-  readonly execution: NonNullable<AppReviewWorkflowCycle["e2eExecution"]>;
-}) {
+function TestResultsSection(props: { readonly results: ReadonlyArray<AppReviewTestResult> }) {
   const [open, setOpen] = useState<string | null>(null);
-  const groups = groupAppReviewTestResults(props.execution);
-  const featureCount = groups.feature.length;
   return (
     <Section title="End-to-end tests">
-      {props.execution.results.length === 0 ? <Muted>No test command has finished.</Muted> : null}
-      {[...groups.feature, ...groups.other].map((result, index) => {
+      {props.results.map((result, index) => {
         const recordings = result.recordings ?? [];
-        const expanded = open === result.command;
+        const key = `${result.command}:${result.completedAt}`;
+        const expanded = open === key;
         return (
           <View
-            key={result.command}
+            key={key}
             className={cn("gap-1.5", index > 0 && "border-t border-border-subtle pt-2")}
           >
             <View className="flex-row items-start gap-3">
               <Text selectable className="min-w-0 flex-1 font-mono text-xs text-foreground">
-                {index < featureCount ? "Feature test · " : ""}
                 {result.executedCommand}
               </Text>
               <Text
@@ -158,7 +94,7 @@ function TestResultsSection(props: {
               <Pressable
                 accessibilityRole="button"
                 accessibilityState={{ expanded }}
-                onPress={() => setOpen(expanded ? null : result.command)}
+                onPress={() => setOpen(expanded ? null : key)}
                 className="flex-row items-center gap-1.5 py-1 active:opacity-70"
               >
                 <SymbolView
@@ -192,44 +128,6 @@ function TestResultsSection(props: {
   );
 }
 
-/** An agent's review, folded until asked for so its media is signed only when looked at. */
-function ReviewSection(props: {
-  readonly title: string;
-  readonly record: AppReviewRecord | undefined;
-  readonly environmentId: EnvironmentId;
-}) {
-  const [open, setOpen] = useState(false);
-  const style = props.record ? appReviewRecordStyle(props.record.status) : null;
-  return (
-    <View className="gap-3">
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ expanded: open }}
-        onPress={() => setOpen(!open)}
-        className="min-h-12 flex-row items-center gap-2 rounded-2xl bg-grouped-card px-4 py-3 active:opacity-70"
-      >
-        <SymbolView
-          name={open ? "chevron.down" : "chevron.right"}
-          size={12}
-          tintColorClassName="accent-icon-muted"
-          type="monochrome"
-        />
-        <Text className="min-w-0 flex-1 font-t3-medium text-sm text-foreground">{props.title}</Text>
-        <Text className={cn("text-xs", style?.textClassName ?? "text-foreground-muted")}>
-          {props.record?.status ?? "No results"}
-        </Text>
-      </Pressable>
-      {open ? (
-        props.record ? (
-          <AppReviewRecordDocument record={props.record} environmentId={props.environmentId} />
-        ) : (
-          <Muted>No results or recordings for this section.</Muted>
-        )
-      ) : null}
-    </View>
-  );
-}
-
 /** One review's verdict, evidence, checks, findings, and follow-ups. */
 export function AppReviewRecordDocument(props: {
   readonly record: AppReviewRecord;
@@ -247,9 +145,14 @@ export function AppReviewRecordDocument(props: {
       <Section title="Verdict">
         <View className="flex-row items-center gap-2">
           <View className={cn("size-2 rounded-full", style.dotClassName)} />
-          <Text className="font-t3-medium text-sm capitalize text-foreground">{record.status}</Text>
+          <Text className="font-t3-medium text-sm text-foreground">
+            {APP_REVIEW_STATUS_LABELS[record.status]}
+          </Text>
           <Text className="text-sm text-foreground-muted">Verdict: {document.verdict}</Text>
         </View>
+        {document.brief ? (
+          <Text className="text-xs text-foreground-muted">{document.brief}</Text>
+        ) : null}
         {document.summary ? (
           <Text selectable className="text-sm text-foreground">
             {document.summary}
@@ -258,6 +161,10 @@ export function AppReviewRecordDocument(props: {
           <Muted>Review document is pending.</Muted>
         )}
       </Section>
+
+      {(record.evidence.tests ?? []).length > 0 ? (
+        <TestResultsSection results={record.evidence.tests ?? []} />
+      ) : null}
 
       {showsBrowserEvidence ? (
         <>
@@ -289,9 +196,7 @@ export function AppReviewRecordDocument(props: {
                     : "text-foreground-muted",
                 )}
               >
-                {check.carriedFromCycle === undefined
-                  ? check.status
-                  : `${check.status} · carried from cycle ${String(check.carriedFromCycle)}`}
+                {check.status}
               </Text>
             </View>
             {check.notes ? (

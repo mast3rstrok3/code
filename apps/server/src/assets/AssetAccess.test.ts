@@ -4,8 +4,11 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
 import * as NodeFSP from "node:fs/promises";
 import {
+  AppReviewId,
   AssetAccessError,
   AssetCreateUrlInput,
+  EMPTY_APP_REVIEW_EVIDENCE,
+  type AppReviewRecord,
   AssetPreviewTypeValidationError,
   SOURCE_CONTROL_MEDIA_ASSET,
   ThreadId,
@@ -18,6 +21,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
@@ -25,6 +29,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { HttpClientRequest, HttpClientResponse, HttpServerResponse } from "effect/http";
 import { vi } from "vite-plus/test";
 
+import * as AppReviewStore from "../appReview/AppReviewStore.ts";
 import * as AssetSigner from "./AssetSigner.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
@@ -213,6 +218,67 @@ describe("AssetAccess", () => {
       }).pipe(Effect.flip);
       expect(oversized._tag).toBe("AssetWorkspaceAssetNotFoundError");
     }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("serves an E2E test recording by its review and only from preview artifacts", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const reviewDir = path.join(config.stateDir, "preview-artifacts", "app-review-e2e", "r1");
+      yield* fileSystem.makeDirectory(reviewDir, { recursive: true });
+      const inside = path.join(reviewDir, "run-1.rrweb.jsonl");
+      const outside = path.join(config.stateDir, "run-2.rrweb.jsonl");
+      yield* fileSystem.writeFileString(inside, '{"type":4}\n');
+      yield* fileSystem.writeFileString(outside, '{"type":4}\n');
+      const recording = (id: string, recordingPath: string) => ({
+        id,
+        label: id,
+        path: recordingPath,
+        sizeBytes: 11,
+      });
+      const review = {
+        id: AppReviewId.make("r1"),
+        evidence: {
+          ...EMPTY_APP_REVIEW_EVIDENCE,
+          tests: [
+            {
+              command: "pnpm e2e",
+              executedCommand: "pnpm e2e",
+              status: "passed" as const,
+              outputMarkdown: "",
+              recordings: [recording("run-1", inside), recording("run-2", outside)],
+              completedAt: "2026-11-27T00:00:00.000Z",
+            },
+          ],
+        },
+      } as unknown as AppReviewRecord;
+      const store = Layer.mock(AppReviewStore.AppReviewStore)({
+        get: (reviewId) =>
+          Effect.succeed(reviewId === review.id ? Option.some(review) : Option.none()),
+      });
+      const issue = (recordingId: string, reviewId = review.id) =>
+        issueAssetUrl({
+          resource: { _tag: "app-review-test-recording", reviewId, recordingId },
+        }).pipe(Effect.provide(store));
+
+      const result = yield* issue("run-1");
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const separator = suffix.indexOf("/");
+      const canonicalInside = yield* fileSystem.realPath(inside);
+      expect(
+        yield* resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1)).pipe(
+          Effect.provide(store),
+        ),
+      ).toEqual({ kind: "file", path: canonicalInside });
+      for (const missing of [
+        issue("run-2"),
+        issue("run-1", AppReviewId.make("other")),
+        issue("unknown"),
+      ]) {
+        expect((yield* Effect.flip(missing))._tag).toBe("AssetAppReviewEvidenceNotFoundError");
+      }
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
   it.effect("issues exact URLs for media and browser documents outside the workspace", () =>

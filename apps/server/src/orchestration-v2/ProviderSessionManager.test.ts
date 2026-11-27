@@ -5593,6 +5593,8 @@ it.effect(
         enableDeviceSupport: true,
       });
       assert.isTrue(enabled?.capabilities?.has("device"));
+      // Any thread can run an App Review, whatever its browser access.
+      assert.isTrue(enabled?.capabilities?.has("app-review"));
       assert.isFalse(enabled?.browserToolsAvailable);
       const denied = yield* runBrowserAccessScenario({
         enableAgentBrowserAccess: false,

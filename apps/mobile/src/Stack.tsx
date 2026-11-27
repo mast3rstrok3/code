@@ -66,7 +66,6 @@ import { WorkflowRunSettingsSheet } from "./features/workflows/WorkflowRunSettin
 import { WorkflowSheet } from "./features/workflows/WorkflowSheet";
 import { ThreadBackgroundWorkSheet } from "./features/threads/ThreadBackgroundWorkSheet";
 import { AppReviewDocumentScreen } from "./features/app-review/AppReviewDocumentScreen";
-import { AppReviewLaunchSheet } from "./features/app-review/AppReviewLaunchSheet";
 import { AppReviewSheet } from "./features/app-review/AppReviewSheet";
 import { AppStackListSheet } from "./features/app-stacks/AppStackListSheet";
 import { AppStackLogsScreen } from "./features/app-stacks/AppStackLogsScreen";
@@ -742,14 +741,6 @@ const RootStackConfig = createWorkspaceStackNavigator({
     ThreadAppReviewDocument: createNativeStackScreen({
       screen: AppReviewDocumentScreen,
       options: { ...sheetRoute({ header: "none", detent: 0.95 }), sheetAllowedDetents: [0.95] },
-    }),
-    ThreadAppReviewLaunch: createNativeStackScreen({
-      screen: AppReviewLaunchSheet,
-      options:
-        // The brief needs the keyboard, which an Android formSheet cannot host.
-        Platform.OS === "android"
-          ? sheetRoute({ header: "none", detent: 0.92, android: "card" })
-          : { ...sheetRoute({ header: "none", detent: 0.92 }), sheetAllowedDetents: [0.92] },
     }),
     ThreadAppStack: createNativeStackScreen({
       screen: AppStackSheet,

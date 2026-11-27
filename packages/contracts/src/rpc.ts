@@ -166,6 +166,8 @@ import {
   VcsStatusStreamEvent,
 } from "./git.ts";
 import {
+  AppReviewError,
+  AppReviewRecord,
   ReviewBranchCommitsInput,
   ReviewBranchCommitsResult,
   ReviewDiffFileContentsInput,
@@ -550,6 +552,7 @@ export const WS_METHODS = {
   reviewGetDiffPreview: "review.getDiffPreview",
   workflowArtifactsGet: "workflow.artifacts.get",
   reviewGetDiffFileContents: "review.getDiffFileContents",
+  appReviewSubscribeThread: "appReview.subscribeThread",
 
   terminalOpen: "terminal.open",
   terminalAttach: "terminal.attach",
@@ -1792,6 +1795,14 @@ export const WsWorkflowArtifactsGetRpc = Rpc.make(WS_METHODS.workflowArtifactsGe
   ]),
 });
 
+/** The thread's App Reviews, oldest first, re-sent whole whenever one changes. */
+const WsAppReviewSubscribeThreadRpc = Rpc.make(WS_METHODS.appReviewSubscribeThread, {
+  payload: Schema.Struct({ threadId: ThreadId }),
+  success: Schema.Array(AppReviewRecord),
+  error: Schema.Union([AppReviewError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
 export const WsReviewGetDiffFileContentsRpc = Rpc.make(WS_METHODS.reviewGetDiffFileContents, {
   payload: ReviewDiffFileContentsInput,
   success: ReviewDiffFileContentsResult,
@@ -2598,6 +2609,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsWorkflowNativeVerificationRpc,
   WsWorkflowSubscribeRpc,
   WsReviewGetDiffFileContentsRpc,
+  WsAppReviewSubscribeThreadRpc,
   WsTerminalOpenRpc,
   WsTerminalAttachRpc,
   WsTerminalObserveRpc,
