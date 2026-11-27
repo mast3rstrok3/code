@@ -571,37 +571,9 @@
       "types": "./src/appStackLogs.ts",
       "default": "./src/appStackLogs.ts"
     },
-    "./state/native-verification": {
-      "types": "./src/state/nativeVerification.ts",
-      "default": "./src/state/nativeVerification.ts"
-    },
     "./state/app-stacks": {
       "types": "./src/state/appStacks.ts",
       "default": "./src/state/appStacks.ts"
-    },
-    "./state/workflows": {
-      "types": "./src/state/workflows.ts",
-      "default": "./src/state/workflows.ts"
-    },
-    "./workflow-model": {
-      "types": "./src/workflowModel.ts",
-      "default": "./src/workflowModel.ts"
-    },
-    "./workflow-panel": {
-      "types": "./src/workflowPanel.ts",
-      "default": "./src/workflowPanel.ts"
-    },
-    "./workflow-composer-mode": {
-      "types": "./src/workflowComposerMode.ts",
-      "default": "./src/workflowComposerMode.ts"
-    },
-    "./workflow-step-models": {
-      "types": "./src/workflowStepModels.ts",
-      "default": "./src/workflowStepModels.ts"
-    },
-    "./workflow-model-quick-actions": {
-      "types": "./src/workflowModelQuickActions.ts",
-      "default": "./src/workflowModelQuickActions.ts"
     },
     "./app-review": {
       "types": "./src/appReview.ts",

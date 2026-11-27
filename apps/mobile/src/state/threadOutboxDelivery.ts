@@ -85,7 +85,6 @@ import {
   updateComposerDraftSettings,
   waitForComposerDraftsLoaded,
 } from "./use-composer-drafts";
-import { draftWorkflowFromQueued } from "./composer-workflow";
 import {
   dispatchingQueuedMessageIdAtom,
   editingQueuedMessageIdsAtom,
@@ -380,7 +379,6 @@ export async function recoverEditedCreationAfterDelivery(
       ...(kept.modelSelection !== undefined ? { modelSelection: kept.modelSelection } : {}),
       ...(kept.runtimeMode !== undefined ? { runtimeMode: kept.runtimeMode } : {}),
       ...(kept.interactionMode !== undefined ? { interactionMode: kept.interactionMode } : {}),
-      ...(kept.workflow !== undefined ? { workflow: draftWorkflowFromQueued(kept.workflow) } : {}),
     });
     // Flush before removal: append only schedules persistence, leaving the queue as the sole durable copy.
     await flushComposerDrafts();
@@ -466,9 +464,6 @@ export async function restoreRejectedQueuedMessage(
       ...(queuedMessage.modelSelection ? { modelSelection: queuedMessage.modelSelection } : {}),
       ...(queuedMessage.runtimeMode ? { runtimeMode: queuedMessage.runtimeMode } : {}),
       ...(queuedMessage.interactionMode ? { interactionMode: queuedMessage.interactionMode } : {}),
-      ...(queuedMessage.workflow
-        ? { workflow: draftWorkflowFromQueued(queuedMessage.workflow) }
-        : {}),
       ...(queuedMessage.freshContext ? { freshContext: true } : {}),
       ...(queuedMessage.creation
         ? {
@@ -961,7 +956,6 @@ export function createThreadOutboxDelivery(): {
         }),
         runtimeMode: sendSettings.runtimeMode,
         interactionMode: sendSettings.interactionMode,
-        ...queuedMessage.workflow,
         createdAt: queuedMessage.createdAt,
         dispatchMode: queuedMessage.dispatchMode ?? "start",
         ...(queuedMessage.freshContext ? { freshContext: true } : {}),
@@ -1135,7 +1129,6 @@ export function createThreadOutboxDelivery(): {
         modelSelection: sendSettings.modelSelection,
         runtimeMode: sendSettings.runtimeMode,
         interactionMode: sendSettings.interactionMode,
-        workflow: queuedMessage.workflow,
         workspaceMode: workspace.workspaceMode,
         branch: workspace.branch,
         worktreePath: workspace.worktreePath,

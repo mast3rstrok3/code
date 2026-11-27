@@ -1,4 +1,3 @@
-import type { OrchestrationThreadShell } from "@t3tools/contracts";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestsOf } from "../threadPullRequests.ts";
 import type {
@@ -143,9 +142,6 @@ function threadRunStatusIsActive(status: ThreadRuntimeSummary["status"]): boolea
 
 export interface EnvironmentThreadShell {
   readonly ownerUserId?: OrchestrationV2ThreadShell["ownerUserId"];
-  readonly workflowRole?: OrchestrationV2ThreadShell["workflowRole"];
-  readonly workflowContext?: OrchestrationV2ThreadShell["workflowContext"];
-  readonly workflowPreset?: OrchestrationV2ThreadShell["workflowPreset"];
   readonly environmentId: EnvironmentId;
   readonly id: ThreadId;
   readonly projectId: ProjectId;
@@ -293,9 +289,6 @@ export function presentThreadShell(
     environmentId,
     id: thread.id,
     ...(thread.ownerUserId === undefined ? {} : { ownerUserId: thread.ownerUserId }),
-    ...(thread.workflowRole === undefined ? {} : { workflowRole: thread.workflowRole }),
-    ...(thread.workflowContext === undefined ? {} : { workflowContext: thread.workflowContext }),
-    ...(thread.workflowPreset === undefined ? {} : { workflowPreset: thread.workflowPreset }),
     projectId: thread.projectId,
     title:
       thread.lineage.relationshipToParent === "subagent"
@@ -405,10 +398,6 @@ export function resolveThreadWorkingStartedAt(input: {
     return valid(run.startedAt) ?? valid(run.requestedAt);
   }
   return null;
-}
-
-export interface EnvironmentWorkflowThreadShell extends OrchestrationThreadShell {
-  readonly environmentId: EnvironmentId;
 }
 
 export function formatWorkingDurationLabel(elapsedMs: number): string {

@@ -203,7 +203,6 @@ import {
   ThreadComposer,
   type ThreadComposerProps,
 } from "./ThreadComposer";
-import type { ComposerModeControlProps } from "./ComposerModeControl";
 import { ComposerPopoverHost } from "./ComposerPopoverHost";
 import { ThreadFeed, type ThreadFeedHistoryControls } from "./ThreadFeed";
 import { appReviewSegmentLabel, isAppReviewThreadRole } from "../app-review/appReviewSheetModel";
@@ -314,7 +313,6 @@ export interface ThreadDetailScreenProps {
   ) => Promise<MessageId | null>;
   readonly onReconnectEnvironment: () => void;
   readonly canSwitchThreadProvider: boolean;
-  readonly composerMode: ComposerModeControlProps | null;
   readonly onRespondToApproval: ApprovalResponder;
   readonly onSelectUserInputOption: (
     requestId: RuntimeRequestId,
@@ -533,15 +531,7 @@ function ThreadDetailBody(
     ? (preferences.value.toolCallVisibility ?? "showAll")
     : "showAll";
   const queuedCount = useThreadQueuedCount(props.selectedThreadDetailRef);
-  // The shell already says whether this thread belongs to a workflow, so the
-  // chip costs no subscription; the sheet subscribes only while it is open.
   const appReviewThread = isAppReviewThreadRole(props.selectedThread.workflowRole);
-  // A standalone App Review's threads carry a role but belong to no workflow,
-  // so they open the App Review rather than an empty Workflow sheet.
-  const isWorkflowThread =
-    (props.selectedThread.workflowRole != null && !appReviewThread) ||
-    props.selectedThread.workflowContext != null ||
-    props.selectedThread.workflowPreset != null;
   const appReviewStatus = useAppReviewControllerStatus(
     props.environmentId,
     props.selectedThread.id,
@@ -938,7 +928,6 @@ function ThreadDetailBody(
     showWorkingControl ||
     queuedCount > 0 ||
     agentsSegment !== null ||
-    isWorkflowThread ||
     appReviewSegment !== null ||
     devicePreviews.length > 0 ||
     browserTabs.tabs.length > 0 ||
@@ -1682,17 +1671,6 @@ function ThreadDetailBody(
                         threadId: props.selectedThread.id,
                       });
                     }}
-                    onOpenWorkflow={
-                      isWorkflowThread
-                        ? () => {
-                            Keyboard.dismiss();
-                            navigation.navigate("ThreadWorkflow", {
-                              environmentId: props.environmentId,
-                              threadId: props.selectedThread.id,
-                            });
-                          }
-                        : null
-                    }
                     appReview={appReviewSegment}
                     queuedCount={queuedCount}
                     onOpenQueue={() => {
@@ -1989,7 +1967,6 @@ function ThreadDetailBody(
                         onSendMessage={handleSendMessage}
                         onShowUsageLimits={showUsageLimits}
                         canSwitchProvider={props.canSwitchThreadProvider}
-                        composerMode={props.composerMode}
                         onHeightChange={handleComposerHeightChange}
                         onEditorFocusChange={handleOwnedInputFocusChange}
                       />

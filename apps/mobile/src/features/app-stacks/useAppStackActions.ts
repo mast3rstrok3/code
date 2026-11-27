@@ -148,7 +148,6 @@ export function useAppStackActions(input: {
           displayName: stack.displayName ?? appStackDisplayName(stack.worktreePath, input.branch),
           gitBranch: stack.branchName ?? input.branch,
           namespace: stack.namespace ?? null,
-          workflowId: stack.workflowId ?? undefined,
           variant: stack.variant ?? appStackVariantForComposePath(stack.composePath),
         },
       }),

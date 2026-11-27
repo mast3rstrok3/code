@@ -82,8 +82,6 @@ export function FloatingWorkingControl(props: {
   readonly onOpenAgents: () => void;
   readonly queuedCount: number;
   readonly onOpenQueue: () => void;
-  /** Present on a workflow's root or member threads; opens the Workflow sheet. */
-  readonly onOpenWorkflow?: (() => void) | null;
   /** Present on threads an App Review started; opens the App Review sheet. */
   readonly appReview?: { readonly label: string; readonly onPress: () => void } | null;
   readonly lift?: SharedValue<number>;
@@ -104,9 +102,6 @@ export function FloatingWorkingControl(props: {
       ? props.status.action
       : null;
   const [agentsWidth, setAgentsWidth] = useState(0);
-  const [workflowWidth, setWorkflowWidth] = useState(0);
-  const onOpenWorkflow = props.onOpenWorkflow ?? null;
-  const hasWorkflow = onOpenWorkflow !== null;
   const [appReviewWidth, setAppReviewWidth] = useState(0);
   const appReview = props.appReview ?? null;
   const hasAppReview = appReview !== null;
@@ -128,7 +123,6 @@ export function FloatingWorkingControl(props: {
       (action !== null ? actionWidth : 0) -
       (hasQueue ? queueWidth : 0) -
       (hasAgents ? agentsWidth : 0) -
-      (hasWorkflow ? workflowWidth : 0) -
       (hasAppReview ? appReviewWidth : 0) -
       (hasPreview ? previewWidth : 0),
   );
@@ -167,8 +161,7 @@ export function FloatingWorkingControl(props: {
     capsuleWidth.set(first ? width : withTiming(width, CONTROL_TIMING));
   };
   const hasStatus = props.status !== null;
-  const hasCapsule =
-    hasStatus || hasQueue || hasAgents || hasWorkflow || hasAppReview || hasPreview;
+  const hasCapsule = hasStatus || hasQueue || hasAgents || hasAppReview || hasPreview;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears the Reanimated capsule width value and measured width when the status goes away
   useEffect(() => {
     if (!hasStatus) {
@@ -187,8 +180,7 @@ export function FloatingWorkingControl(props: {
     return null;
   }
 
-  const previewCompact =
-    hasStatus || hasAgents || hasWorkflow || hasAppReview || hasQueue || previewCount > 1;
+  const previewCompact = hasStatus || hasAgents || hasAppReview || hasQueue || previewCount > 1;
   const statusInteractive =
     props.status?.kind === "connection" ||
     props.status?.kind === "extension" ||
@@ -200,7 +192,6 @@ export function FloatingWorkingControl(props: {
     action !== null ||
     hasQueue ||
     hasAgents ||
-    hasWorkflow ||
     hasAppReview ||
     hasPreview;
   const statusContent =
@@ -302,30 +293,6 @@ export function FloatingWorkingControl(props: {
           </Text>
         </Pressable>
       ) : null}
-      {onOpenWorkflow !== null ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Open workflow"
-          accessibilityHint="Opens the workflow's steps, tickets, and controls"
-          onPress={onOpenWorkflow}
-          onLayout={(event) => setWorkflowWidth(settleWidth(event.nativeEvent.layout.width))}
-          className="h-11 flex-row items-center gap-1.5 px-3 active:opacity-70"
-        >
-          {hasStatus || hasPreview || hasAgents ? (
-            <View className="absolute left-0 h-4 w-px bg-border" />
-          ) : null}
-          <SymbolView
-            name="point.3.connected.trianglepath.dotted"
-            size={13}
-            tintColorClassName="accent-foreground-muted"
-          />
-          {hasStatus ? null : (
-            <Text className="font-t3-medium text-xs" numberOfLines={1}>
-              Workflow
-            </Text>
-          )}
-        </Pressable>
-      ) : null}
       {appReview !== null ? (
         <Pressable
           accessibilityRole="button"
@@ -335,7 +302,7 @@ export function FloatingWorkingControl(props: {
           onLayout={(event) => setAppReviewWidth(settleWidth(event.nativeEvent.layout.width))}
           className="h-11 flex-row items-center gap-1.5 px-3 active:opacity-70"
         >
-          {hasStatus || hasPreview || hasAgents || hasWorkflow ? (
+          {hasStatus || hasPreview || hasAgents ? (
             <View className="absolute left-0 h-4 w-px bg-border" />
           ) : null}
           <SymbolView
@@ -360,7 +327,7 @@ export function FloatingWorkingControl(props: {
           style={{ maxWidth: Math.min(overlayWidth, windowWidth) * 0.45 }}
           className="h-11 flex-row items-center gap-2 px-3 active:opacity-70"
         >
-          {hasStatus || hasPreview || hasAgents || hasWorkflow || hasAppReview ? (
+          {hasStatus || hasPreview || hasAgents || hasAppReview ? (
             <View className="absolute left-0 h-4 w-px bg-border" />
           ) : null}
           <SymbolView name="list.number" size={13} tintColorClassName="accent-foreground" />

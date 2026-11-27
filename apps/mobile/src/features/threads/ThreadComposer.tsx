@@ -89,11 +89,6 @@ import {
 import { formatTokens } from "@t3tools/shared/usageFormat";
 import { ComposerModelControl } from "../../components/ComposerModelControl";
 import {
-  ComposerModeControl,
-  composerModeControlVisible,
-  type ComposerModeControlProps,
-} from "./ComposerModeControl";
-import {
   composerStripAttachments,
   type DraftComposerFileAttachment,
 } from "../../lib/composerImages";
@@ -275,7 +270,6 @@ export interface ThreadComposerProps {
   ) => Promise<MessageId | null>;
   readonly onShowUsageLimits: (report: UsageLimitsReport | null) => void;
   readonly canSwitchProvider: boolean;
-  readonly composerMode: ComposerModeControlProps | null;
   readonly onHeightChange?: (height: number) => void;
   readonly onEditorFocusChange?: (focused: boolean) => void;
 }
@@ -843,22 +837,6 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     </View>
   );
 
-  // The expanded composer always offers the mode; the collapsed row only shows a mode that is
-  // not Build.
-  const composerMode = props.composerMode;
-  const modeControl =
-    composerMode !== null &&
-    composerModeControlVisible(composerMode) &&
-    (compactEditor.isExpanded ||
-      composerMode.workflowPreset !== null ||
-      composerMode.interactionMode !== "default") ? (
-      <ComposerModeControl
-        {...composerMode}
-        disabled={isSubmissionLocked}
-        iconOnly={!compactEditor.isExpanded}
-      />
-    ) : null;
-
   const compactBeforeSend =
     props.compactBeforeSend && !showResumeAction && queuedEdit === null
       ? props.compactBeforeSend
@@ -1165,7 +1143,6 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                   compactEditor.isExpanded ? { flex: 1, justifyContent: "flex-end" } : undefined
                 }
               >
-                {modeControl}
                 {compactControl}
                 {modelControl}
                 <ComposerDictationStartAction

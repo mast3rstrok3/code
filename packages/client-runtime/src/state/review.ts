@@ -79,11 +79,6 @@ export function createReviewEnvironmentAtoms<R, E>(
       tag: WS_METHODS.reviewGetBranchCommits,
       staleTimeMs: 5_000,
     }),
-    workflowArtifacts: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:workflow:artifacts",
-      tag: WS_METHODS.workflowArtifactsGet,
-      staleTimeMs: 0,
-    }),
     diffPreview,
     diffFilePatch: createEnvironmentQueryAtomFamily(runtime, {
       label: "environment-data:review:diff-file-patch",

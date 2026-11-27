@@ -286,7 +286,6 @@ function StackDetail(props: {
     isPlatform ? "Platform" : (stack.namespace ?? "Namespace pending"),
     bundleApps ? `Bundle ${bundleApps.join(" + ")}` : null,
     variant === "prod" ? "Production build" : null,
-    stack.workflowId ? "Workflow-owned" : null,
   ]
     .filter(Boolean)
     .join("\n");
@@ -378,7 +377,7 @@ function StackDetail(props: {
         <ListToggleRow
           icon="exclamationmark.shield"
           label="Protected"
-          description="Survives workflow teardown and is shed last under memory pressure"
+          description="Shed last under memory pressure"
           value={isProtectedAppStack(stack)}
           disabled={busy}
           onValueChange={(next) => {

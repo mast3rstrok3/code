@@ -62,8 +62,6 @@ import { GitConfirmSheet } from "./features/threads/git/GitConfirmSheet";
 import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
 import { ThreadPullRequestsSheet } from "./features/threads/ThreadPullRequestsSheet";
 import { ThreadAgentsSheet } from "./features/threads/ThreadAgentsSheet";
-import { WorkflowRunSettingsSheet } from "./features/workflows/WorkflowRunSettingsSheet";
-import { WorkflowSheet } from "./features/workflows/WorkflowSheet";
 import { ThreadBackgroundWorkSheet } from "./features/threads/ThreadBackgroundWorkSheet";
 import { AppReviewDocumentScreen } from "./features/app-review/AppReviewDocumentScreen";
 import { AppReviewLaunchSheet } from "./features/app-review/AppReviewLaunchSheet";
@@ -141,7 +139,6 @@ import {
   SettingsUserRouteScreen,
   SettingsUsersRouteScreen,
 } from "./features/settings/SettingsUsersRouteScreen";
-import { SettingsWorkflowsRouteScreen } from "./features/settings/SettingsWorkflowsRouteScreen";
 import { SettingsLabsRouteScreen } from "./features/settings/ThreadSettingsSections";
 import { SettingsEnvironmentFilterProvider } from "./features/settings/settings-environment-filter";
 import { openSettings, settingsOpenIn } from "./features/settings/settings-navigation";
@@ -251,11 +248,6 @@ const SETTINGS_SCREENS = {
     screen: SettingsThreadsRouteScreen,
     linking: "settings/thread-preferences",
     options: settingsPage("Threads"),
-  }),
-  SettingsWorkflows: createNativeStackScreen({
-    screen: SettingsWorkflowsRouteScreen,
-    linking: "settings/workflows",
-    options: settingsPage("Workflows"),
   }),
   SettingsAbout: createNativeStackScreen({
     screen: SettingsAboutRouteScreen,
@@ -716,14 +708,6 @@ const RootStackConfig = createWorkspaceStackNavigator({
     ThreadAgents: createNativeStackScreen({
       screen: ThreadAgentsSheet,
       options: sheetRoute({ detent: 0.5, androidMaxDetent: 0.9 }),
-    }),
-    ThreadWorkflow: createNativeStackScreen({
-      screen: WorkflowSheet,
-      options: sheetRoute({ header: "none", detent: 0.6, androidMaxDetent: 0.95 }),
-    }),
-    ThreadWorkflowSettings: createNativeStackScreen({
-      screen: WorkflowRunSettingsSheet,
-      options: sheetRoute({ header: "none", detent: 0.7, androidMaxDetent: 0.95 }),
     }),
     GitOverview: createNativeStackScreen({
       screen: GitOverviewSheet,
