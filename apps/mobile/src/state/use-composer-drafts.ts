@@ -1,4 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
+import { msg } from "gt-react-native";
+import { m } from "../i18n/messages";
 import {
   EnvironmentId as EnvironmentIdSchema,
   ModelSelection as ModelSelectionSchema,
@@ -12,8 +14,6 @@ import {
   ProviderInteractionMode as ProviderInteractionModeSchema,
   ProviderOptionSelection as ProviderOptionSelectionSchema,
   RuntimeMode as RuntimeModeSchema,
-  ImplementationWorkflowSettings as ImplementationWorkflowSettingsSchema,
-  WorkflowPreset as WorkflowPresetSchema,
   type EnvironmentId,
   type ModelSelection,
   type ProjectId,
@@ -69,11 +69,9 @@ import {
 import {
   decodeQueuedThreadMessage,
   encodeQueuedThreadMessage,
-  QueuedThreadMessageSchema,
   type QueuedThreadMessage,
 } from "./thread-outbox-model";
 import { flushThreadOutbox, threadOutboxManager } from "./thread-outbox";
-import type { ComposerDraftWorkflow } from "./composer-workflow";
 import { composerDraftEnvironmentId } from "../lib/composerAttachmentUploadQueue";
 
 const COMPOSER_DRAFTS_SCHEMA_VERSION = 1;
@@ -406,6 +404,7 @@ function draftWithInsertedContext(
   draft: ComposerDraft,
   content: { text: string; context: OrchestrationMessageContext },
   target?: ComposerDraftInsertion,
+  maxContextRecords = COMPOSER_CONTEXT_MAX_RECORDS,
 ): ComposerDraft | null {
   const { start, end } = contextInsertionRange(draftKey, draft, target);
   const before = draft.text.slice(0, start);
@@ -415,7 +414,7 @@ function draftWithInsertedContext(
   const records = new Map(draft.context?.records.map((record) => [record.contextId, record]));
   for (const record of content.context.records) records.set(record.contextId, record);
   const context = referencedComposerContext(text, { version: 1, records: [...records.values()] });
-  if ((context?.records.length ?? 0) > COMPOSER_CONTEXT_MAX_RECORDS) return null;
+  if ((context?.records.length ?? 0) > maxContextRecords) return null;
   rememberComposerDraftSelection(
     draftKey,
     text,
@@ -448,7 +447,6 @@ export interface ComposerDraft {
   readonly modelSelection?: ModelSelection;
   readonly runtimeMode?: RuntimeMode;
   readonly interactionMode?: ProviderInteractionMode;
-  readonly workflow?: ComposerDraftWorkflow;
   /** `/clear` armed this draft: its next message starts a fresh provider session. */
   readonly freshContext?: boolean;
   readonly workspaceSelection?: ComposerDraftWorkspaceSelection;
@@ -480,6 +478,11 @@ export interface ComposerDraftWorkspaceSelection {
    * included) until the user picks a branch, rather than pinning the first name refs reported.
    */
   readonly followsCurrentCheckout?: boolean;
+  /**
+   * Tracked repositories a new worktree takes, by path. Absent until the user chooses, so the
+   * server's default applies.
+   */
+  readonly repositories?: ReadonlyArray<string>;
 }
 
 export type ComposerDraftSettingsUpdate = Pick<
@@ -487,17 +490,10 @@ export type ComposerDraftSettingsUpdate = Pick<
   | "modelSelection"
   | "runtimeMode"
   | "interactionMode"
-  | "workflow"
   | "freshContext"
   | "workspaceSelection"
   | "project"
 >;
-
-const ComposerDraftWorkflowSchema = Schema.Struct({
-  preset: Schema.NullOr(WorkflowPresetSchema),
-  lastPreset: Schema.NullOr(WorkflowPresetSchema),
-  implementationSettings: Schema.NullOr(ImplementationWorkflowSettingsSchema),
-});
 
 const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
   mode: Schema.Literals(["local", "worktree"]),
@@ -506,6 +502,7 @@ const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
   startFromOrigin: Schema.optional(Schema.Boolean),
   pullRequestReference: Schema.optional(Schema.String),
   followsCurrentCheckout: Schema.optional(Schema.Boolean),
+  repositories: Schema.optional(Schema.Array(Schema.String)),
 });
 
 const ComposerDraftProjectSchema = Schema.Struct({
@@ -528,7 +525,6 @@ const ComposerDraftSchema = Schema.Struct({
   modelSelection: Schema.optional(ModelSelectionSchema),
   runtimeMode: Schema.optional(RuntimeModeSchema),
   interactionMode: Schema.optional(ProviderInteractionModeSchema),
-  workflow: Schema.optional(ComposerDraftWorkflowSchema),
   freshContext: Schema.optional(Schema.Boolean),
   workspaceSelection: Schema.optional(ComposerDraftWorkspaceSelectionSchema),
   project: Schema.optional(ComposerDraftProjectSchema),
@@ -550,7 +546,7 @@ const PersistedComposerDraftsSchema = Schema.Struct({
       Schema.String,
       Schema.Struct({
         drafts: Schema.Record(Schema.String, ComposerDraftSchema),
-        queuedMessages: Schema.Array(QueuedThreadMessageSchema),
+        queuedMessages: Schema.Array(Schema.Unknown),
       }),
     ),
   ),
@@ -709,7 +705,6 @@ function isEmptyDraft(draft: ComposerDraft): boolean {
     draft.modelSelection === undefined &&
     draft.runtimeMode === undefined &&
     draft.interactionMode === undefined &&
-    draft.workflow === undefined &&
     draft.freshContext !== true &&
     draft.workspaceSelection === undefined
   );
@@ -734,12 +729,19 @@ function newDraftId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+// Engineering workflow modes were removed; drafts saved in one load in the default mode.
+function withoutWorkflowInteractionMode(draft: ComposerDraft): ComposerDraft {
+  if (!draft.interactionMode?.endsWith("-workflow")) return draft;
+  const { interactionMode: _, ...rest } = draft;
+  return rest;
+}
+
 export function migrateLegacyNewTaskDraft(
   key: string,
   draft: ComposerDraft,
   now: string,
 ): readonly [key: string, draft: ComposerDraft] {
-  const restored = restoreMissingComposerFileReferences(draft);
+  const restored = restoreMissingComposerFileReferences(withoutWorkflowInteractionMode(draft));
   const legacy = draft.project === undefined ? parseLegacyNewTaskDraftKey(key) : null;
   if (legacy === null) {
     return [key, restored];
@@ -777,7 +779,6 @@ export function decodePersistedComposerState(value: unknown): {
               draft.attachments.length === 0 &&
               draft.runtimeMode === undefined &&
               draft.interactionMode === undefined &&
-              draft.workflow === undefined &&
               draft.workspaceSelection === undefined
               ? { ...draft, modelSelection: undefined }
               : draft,
@@ -802,7 +803,9 @@ export function decodePersistedComposerState(value: unknown): {
                 migrateLegacyNewTaskDraft(key, draft, now),
               ),
             ),
-            queuedMessages: saved.queuedMessages.map(decodeQueuedThreadMessage),
+            queuedMessages: saved.queuedMessages.flatMap(
+              (message) => decodeQueuedThreadMessage(message) ?? [],
+            ),
           },
         ]),
       ),
@@ -1193,7 +1196,8 @@ export async function archiveCloudComposerDrafts(
   knownEnvironmentIds: Iterable<EnvironmentId>,
 ): Promise<void> {
   await waitForComposerDraftsLoaded();
-  if (!(await threadOutboxManager.load())) throw new Error("Could not preserve queued messages.");
+  if (!(await threadOutboxManager.load()))
+    throw new Error(m(msg("Could not preserve queued messages.")));
   await flushThreadOutbox();
   const cloud = appAtomRegistry.get(composerCloudDraftsAtom);
   const owner = accountId ?? cloud.accountId;
@@ -1267,14 +1271,12 @@ export async function removeDeliveredCloudQueuedMessage(
         archived.modelSelection,
         archived.runtimeMode,
         archived.interactionMode,
-        archived.workflow,
         archived.creation,
       ]) !==
       JSON.stringify([
         message.modelSelection,
         message.runtimeMode,
         message.interactionMode,
-        message.workflow,
         message.creation,
       ])
     )
@@ -1297,7 +1299,9 @@ export async function removeDeliveredCloudQueuedMessage(
             editor.workspaceSelection.pullRequestReference !==
               message.creation?.pullRequestReference ||
             (editor.workspaceSelection.startFromOrigin ?? false) !==
-              (message.creation?.startFromOrigin ?? false))))
+              (message.creation?.startFromOrigin ?? false) ||
+            JSON.stringify(editor.workspaceSelection.repositories) !==
+              JSON.stringify(message.creation?.repositories))))
     )
       continue;
     const drafts = { ...saved.drafts };
@@ -1325,7 +1329,8 @@ export async function restoreCloudComposerDrafts(accountId: string): Promise<voi
   const cloud = appAtomRegistry.get(composerCloudDraftsAtom);
   const saved = cloud.signedOut[accountId];
   if (saved) {
-    if (!(await threadOutboxManager.load())) throw new Error("Could not restore queued messages.");
+    if (!(await threadOutboxManager.load()))
+      throw new Error(m(msg("Could not restore queued messages.")));
     for (const message of saved.queuedMessages) {
       const alreadyQueued = Object.values(
         appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom),
@@ -1428,14 +1433,14 @@ export function appendComposerDraftText(draftKey: string, value: string): void {
   });
 }
 
-// Pasted images all share one name, so an image's inline bytes decide whether it is a repeat.
+// Pasted images all share one name, so an image's bytes decide whether it is a repeat.
 function isSameAttachment(a: DraftComposerAttachment, b: DraftComposerAttachment): boolean {
-  return (
-    a.mimeType === b.mimeType &&
-    a.sizeBytes === b.sizeBytes &&
-    a.name === b.name &&
-    (a.type !== "image" || b.type !== "image" || a.dataUrl === b.dataUrl)
-  );
+  if (a.mimeType !== b.mimeType || a.sizeBytes !== b.sizeBytes || a.name !== b.name) return false;
+  if (a.type !== "image" || b.type !== "image") return true;
+  if (a.contentDigest !== undefined && b.contentDigest !== undefined) {
+    return a.contentDigest === b.contentDigest;
+  }
+  return a.dataUrl === b.dataUrl && a.fileUri === b.fileUri;
 }
 
 /**
@@ -1481,9 +1486,10 @@ export function appendComposerDraftAttachments(
             options?.maxAttachments ?? PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
           ) - retained.attachments.length,
         );
-    const contextCapacity = options?.appendReference
-      ? Math.max(0, COMPOSER_CONTEXT_MAX_RECORDS - (retained.context?.records.length ?? 0))
-      : attachments.length;
+    const contextCapacity =
+      options?.appendReference && !options.restore
+        ? Math.max(0, COMPOSER_CONTEXT_MAX_RECORDS - (retained.context?.records.length ?? 0))
+        : attachments.length;
     const accepted = attachments.slice(0, Math.min(remaining, contextCapacity));
     rejected = attachments.slice(accepted.length);
     if (accepted.length === 0) {
@@ -1499,7 +1505,8 @@ export function appendComposerDraftAttachments(
           text: records.map(formatComposerContextReference).join(" "),
           context: { version: 1, records },
         },
-        options?.insertion,
+        options.insertion,
+        options.restore ? Infinity : COMPOSER_CONTEXT_MAX_RECORDS,
       );
       if (!inserted) {
         rejected = attachments;
@@ -1891,7 +1898,6 @@ export function sameComposerDraftState(a: ComposerDraft, b: ComposerDraft): bool
     a.modelSelection === b.modelSelection &&
     a.runtimeMode === b.runtimeMode &&
     a.interactionMode === b.interactionMode &&
-    a.workflow === b.workflow &&
     a.freshContext === b.freshContext &&
     a.workspaceSelection === b.workspaceSelection
   );
@@ -1922,7 +1928,6 @@ export function undoComposerDraftMergeState(
       | "modelSelection"
       | "runtimeMode"
       | "interactionMode"
-      | "workflow"
       | "freshContext"
       | "workspaceSelection",
   >(
@@ -1944,7 +1949,6 @@ export function undoComposerDraftMergeState(
     modelSelection: undoSetting("modelSelection"),
     runtimeMode: undoSetting("runtimeMode"),
     interactionMode: undoSetting("interactionMode"),
-    workflow: undoSetting("workflow"),
     freshContext: undoSetting("freshContext"),
     workspaceSelection: undoSetting("workspaceSelection"),
   };
@@ -2087,13 +2091,15 @@ export function retargetNewTaskDraft(
   });
 }
 
-/** Retargets a saved draft once drafts load; an absent one is not created. */
+/** Retargets a saved draft after loading. Returns false if absent or cancelled before the write. */
 export async function retargetSavedNewTaskDraft(
   draftKey: string,
   project: { readonly environmentId: EnvironmentId; readonly projectId: ProjectId },
+  signal?: AbortSignal,
 ): Promise<boolean> {
   await waitForComposerDraftsLoaded();
-  if (appAtomRegistry.get(composerDraftsAtom)[draftKey] === undefined) return false;
+  if (signal?.aborted || appAtomRegistry.get(composerDraftsAtom)[draftKey] === undefined)
+    return false;
   retargetNewTaskDraft(draftKey, project);
   return true;
 }
@@ -2196,7 +2202,7 @@ export const composerDraftUploadSourcesAtom = Atom.make((get): ComposerDraftUplo
 
 type ComposerDraftSettings = Pick<
   ComposerDraft,
-  "modelSelection" | "runtimeMode" | "interactionMode" | "workflow" | "freshContext"
+  "modelSelection" | "runtimeMode" | "interactionMode" | "freshContext"
 >;
 const EMPTY_DRAFT_SETTINGS: ComposerDraftSettings = {};
 const composerDraftSettingsAtom = Atom.family((draftKey: string) =>
@@ -2206,7 +2212,6 @@ const composerDraftSettingsAtom = Atom.family((draftKey: string) =>
       modelSelection: draft.modelSelection,
       runtimeMode: draft.runtimeMode,
       interactionMode: draft.interactionMode,
-      workflow: draft.workflow,
       freshContext: draft.freshContext,
     };
   }).pipe(
@@ -2215,7 +2220,6 @@ const composerDraftSettingsAtom = Atom.family((draftKey: string) =>
         a.modelSelection === b.modelSelection &&
         a.runtimeMode === b.runtimeMode &&
         a.interactionMode === b.interactionMode &&
-        a.workflow === b.workflow &&
         a.freshContext === b.freshContext,
     ),
   ),

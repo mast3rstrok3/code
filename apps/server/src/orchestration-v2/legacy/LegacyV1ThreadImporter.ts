@@ -1,11 +1,4 @@
-import {
-  DEFAULT_WORKSPACE_USER_ID,
-  WorkspaceUserId,
-  OrchestrationThreadWorkflowRole,
-  ThreadWorkflowContext,
-  WorkflowPreset,
-  ProviderInteractionMode,
-} from "@t3tools/contracts";
+import { DEFAULT_WORKSPACE_USER_ID, WorkspaceUserId } from "@t3tools/contracts";
 import {
   threadPullRequestKeysEqual,
   threadPullRequestsOf,
@@ -51,9 +44,7 @@ interface LegacyThreadRow {
   readonly project_id: string;
   readonly owner_user_id: string | null;
   readonly parent_thread_id: string | null;
-  readonly workflow_role: string | null;
-  readonly workflow_context_json: string | null;
-  readonly workflow_preset: string | null;
+  readonly root_thread_id: string | null;
   readonly title: string;
   readonly model_selection_json: string | null;
   readonly runtime_mode: string;
@@ -142,10 +133,6 @@ const decodeStoredThread = Schema.decodeUnknownOption(
   Schema.fromJsonString(OrchestrationV2AppThreadJson),
 );
 const decodeMessageContext = Schema.decodeUnknownOption(OrchestrationMessageContext);
-const decodeInteractionMode = Schema.decodeUnknownOption(ProviderInteractionMode);
-const decodeWorkflowRole = Schema.decodeUnknownOption(OrchestrationThreadWorkflowRole);
-const decodeWorkflowContext = Schema.decodeUnknownOption(ThreadWorkflowContext);
-const decodeWorkflowPreset = Schema.decodeUnknownOption(WorkflowPreset);
 
 function parseJson(json: string): unknown {
   try {
@@ -196,10 +183,7 @@ function runtimeModeFor(value: string): OrchestrationV2AppThread["runtimeMode"] 
 }
 
 function interactionModeFor(value: string): OrchestrationV2AppThread["interactionMode"] {
-  return Option.getOrElse(
-    decodeInteractionMode(value),
-    () => "default",
-  );
+  return value === "plan" ? "plan" : "default";
 }
 
 function settledOverrideFor(value: string | null): OrchestrationV2AppThread["settledOverride"] {
@@ -240,13 +224,6 @@ function importedThread(row: LegacyThreadRow, importedAt: DateTime.Utc): Orchest
     id: threadId,
     projectId: ProjectId.make(row.project_id),
     ownerUserId: WorkspaceUserId.make(row.owner_user_id || DEFAULT_WORKSPACE_USER_ID),
-    workflowRole: Option.getOrNull(decodeWorkflowRole(row.workflow_role)),
-    workflowContext: Option.getOrNull(
-      decodeWorkflowContext(
-        parseJson(row.workflow_context_json ?? "null"),
-      ),
-    ),
-    workflowPreset: Option.getOrNull(decodeWorkflowPreset(row.workflow_preset)),
     title: row.title.trim() === "" ? "Untitled thread" : row.title,
     providerInstanceId: modelSelection.instanceId,
     modelSelection,
@@ -263,12 +240,7 @@ function importedThread(row: LegacyThreadRow, importedAt: DateTime.Utc): Orchest
     lineage: {
       parentThreadId: row.parent_thread_id === null ? null : ThreadId.make(row.parent_thread_id),
       relationshipToParent: row.parent_thread_id === null ? null : "subagent",
-      rootThreadId:
-        Option.getOrNull(
-          decodeWorkflowContext(
-            parseJson(row.workflow_context_json ?? "null"),
-          ),
-        )?.rootThreadId ?? threadId,
+      rootThreadId: row.root_thread_id === null ? threadId : ThreadId.make(row.root_thread_id),
     },
     forkedFrom: null,
     createdAt,
@@ -478,9 +450,10 @@ const make = Effect.gen(function* () {
       SELECT
         thread.thread_id,
         thread.project_id,
-        thread.owner_user_id, thread.parent_thread_id, thread.workflow_role, thread.workflow_preset,
-        CASE WHEN thread.workflow_id IS NULL OR thread.workflow_root_thread_id IS NULL THEN NULL ELSE
-          json_object('workflowId', thread.workflow_id, 'parentWorkflowId', thread.workflow_parent_id, 'rootThreadId', thread.workflow_root_thread_id, 'ticketScope', json(thread.workflow_ticket_scope_json)) END AS workflow_context_json,
+        thread.owner_user_id,
+        thread.parent_thread_id,
+        CASE WHEN thread.workflow_id IS NULL THEN NULL ELSE thread.workflow_root_thread_id END
+          AS root_thread_id,
         thread.title,
         thread.model_selection_json,
         thread.runtime_mode,
@@ -585,9 +558,10 @@ const make = Effect.gen(function* () {
       SELECT
         thread.thread_id,
         thread.project_id,
-        thread.owner_user_id, thread.parent_thread_id, thread.workflow_role, thread.workflow_preset,
-        CASE WHEN thread.workflow_id IS NULL OR thread.workflow_root_thread_id IS NULL THEN NULL ELSE
-          json_object('workflowId', thread.workflow_id, 'parentWorkflowId', thread.workflow_parent_id, 'rootThreadId', thread.workflow_root_thread_id, 'ticketScope', json(thread.workflow_ticket_scope_json)) END AS workflow_context_json,
+        thread.owner_user_id,
+        thread.parent_thread_id,
+        CASE WHEN thread.workflow_id IS NULL THEN NULL ELSE thread.workflow_root_thread_id END
+          AS root_thread_id,
         thread.title,
         thread.model_selection_json,
         thread.runtime_mode,

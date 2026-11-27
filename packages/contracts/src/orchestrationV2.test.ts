@@ -2,10 +2,21 @@ import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 
-import { NodeId, RunAttemptId, TrimmedNonEmptyString } from "./index.ts";
+import {
+  EnvironmentId,
+  NodeId,
+  RunAttemptId,
+  RunId,
+  ScheduledTaskId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./index.ts";
 import {
   latestProviderTurnForAttempt,
   OrchestrationV2CheckpointFileSummary,
+  OrchestrationV2DomainEventJson,
+  OrchestrationV2FileSearchResult,
+  repositoryRewindCheckpoint,
   OrchestrationV2ProviderCapabilities,
   OrchestrationV2ProviderThread,
   OrchestrationV2ProviderThreadJson,
@@ -16,11 +27,14 @@ import {
   OrchestrationV2ThreadHistoryPage,
   OrchestrationV2TurnItem,
   OrchestrationV2TurnItemJson,
+  withMessageSenderNote,
 } from "./orchestrationV2.ts";
 
 const now = DateTime.makeUnsafe("2026-04-20T00:00:00.000Z");
 
 const decodeOrchestrationV2TurnItemJson = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
+const decodeDomainEventJson = Schema.decodeUnknownSync(OrchestrationV2DomainEventJson);
+const decodeThreadShellJson = Schema.decodeUnknownSync(OrchestrationV2ThreadShellJson);
 const encodeOrchestrationV2TurnItemJson = Schema.encodeSync(OrchestrationV2TurnItemJson);
 const decodeOrchestrationV2Subagent = Schema.decodeUnknownSync(OrchestrationV2Subagent);
 const decodeCheckpointFileSummary = Schema.decodeSync(OrchestrationV2CheckpointFileSummary);
@@ -37,6 +51,14 @@ const decodeOrchestrationV2ProviderCapabilities = Schema.decodeUnknownSync(
 );
 
 describe("orchestration V2 contracts", () => {
+  it("preserves trailing spaces in file search result paths on the wire", () => {
+    const codec = Schema.toCodecJson(OrchestrationV2FileSearchResult);
+    const result = { fileName: "docs/Release notes.md ", line: 3 };
+    const encoded = Schema.encodeSync(codec)(result);
+    expect(encoded).toEqual(result);
+    expect(Schema.decodeSync(codec)(result)).toEqual(result);
+  });
+
   it("decodes thread event types from a newer server as skippable items", () => {
     const decodeWireItems = Schema.decodeUnknownSync(
       Schema.toCodecJson(Schema.Array(OrchestrationV2RpcSchemas.subscribeThread.output)),
@@ -458,39 +480,41 @@ describe("orchestration V2 contracts", () => {
   });
 });
 
+const storedThreadShell = {
+  id: "thread-test",
+  projectId: "project-test",
+  title: "Thread",
+  providerInstanceId: "codex",
+  modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  branch: null,
+  worktreePath: null,
+  activeProviderThreadId: null,
+  lineage: { rootThreadId: "thread-test", parentThreadId: null, relationshipToParent: null },
+  forkedFrom: null,
+  createdBy: "user",
+  creationSource: "mobile",
+  latestRunId: null,
+  activeRunId: null,
+  status: "idle",
+  pendingRuntimeRequest: null,
+  latestVisibleMessage: null,
+  latestUserMessageAt: null,
+  hasActionableProposedPlan: false,
+  itemCount: 0,
+  visibleItemCount: 0,
+  createdAt: "2026-10-01T00:00:00.000Z",
+  updatedAt: "2026-10-01T00:00:00.000Z",
+  archivedAt: null,
+  settledOverride: null,
+  settledAt: null,
+  deletedAt: null,
+};
+
 describe("thread open stats", () => {
   it("reads a thread whose open stats this build cannot read, without them", () => {
-    const shell = {
-      id: "thread-test",
-      projectId: "project-test",
-      title: "Thread",
-      providerInstanceId: "codex",
-      modelSelection: { instanceId: "codex", model: "gpt-5.4" },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      branch: null,
-      worktreePath: null,
-      activeProviderThreadId: null,
-      lineage: { rootThreadId: "thread-test", parentThreadId: null, relationshipToParent: null },
-      forkedFrom: null,
-      createdBy: "user",
-      creationSource: "mobile",
-      latestRunId: null,
-      activeRunId: null,
-      status: "idle",
-      pendingRuntimeRequest: null,
-      latestVisibleMessage: null,
-      latestUserMessageAt: null,
-      hasActionableProposedPlan: false,
-      itemCount: 0,
-      visibleItemCount: 0,
-      createdAt: "2026-10-01T00:00:00.000Z",
-      updatedAt: "2026-10-01T00:00:00.000Z",
-      archivedAt: null,
-      settledOverride: null,
-      settledAt: null,
-      deletedAt: null,
-    };
+    const shell = storedThreadShell;
     const decode = Schema.decodeUnknownSync(OrchestrationV2ThreadShellJson);
     const opens = { openedAt: 1, score: 1, picks: [{ query: "upl", at: 1 }] };
     expect(decode({ ...shell, opens }).opens).toEqual(opens);
@@ -648,5 +672,150 @@ describe("latestProviderTurnForAttempt", () => {
     ];
     expect(latestProviderTurnForAttempt(turns, RunAttemptId.make("goal-attempt"))?.id).toBe("last");
     expect(latestProviderTurnForAttempt(turns, null)).toBeUndefined();
+  });
+});
+
+describe("removed workflow interaction modes", () => {
+  it.each(["planning-workflow", "implementation-workflow", "product-workflow"])(
+    "decodes a stored %s thread as the default mode",
+    (interactionMode) => {
+      const thread = decodeThreadShellJson({
+        ...storedThreadShell,
+        interactionMode,
+        workflowRole: "implementation-root",
+        workflowContext: { workflowId: "workflow-1" },
+      });
+      expect(thread.interactionMode).toBe("default");
+      expect(thread).not.toHaveProperty("workflowRole");
+      expect(
+        decodeThreadShellJson({ ...storedThreadShell, interactionMode: "plan" }).interactionMode,
+      ).toBe("plan");
+      expect(() =>
+        decodeThreadShellJson({ ...storedThreadShell, interactionMode: "bogus" }),
+      ).toThrow();
+    },
+  );
+
+  it("decodes a stored thread.created event from a workflow launch", () => {
+    const event = decodeDomainEventJson({
+      id: "event-workflow-root",
+      type: "thread.created",
+      threadId: "thread-test",
+      providerInstanceId: "codex",
+      occurredAt: "2026-10-01T00:00:00.000Z",
+      payload: {
+        id: "thread-test",
+        projectId: "project-test",
+        title: "Engineering workflow",
+        providerInstanceId: "codex",
+        modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+        runtimeMode: "full-access",
+        interactionMode: "implementation-workflow",
+        workflowPreset: "engineering",
+        workflowRole: "implementation-root",
+        workflowImplementationSettings: { maxParallelTickets: 2 },
+        branch: null,
+        worktreePath: null,
+        activeProviderThreadId: null,
+        lineage: { rootThreadId: "thread-test", parentThreadId: null, relationshipToParent: null },
+        forkedFrom: null,
+        createdBy: "user",
+        creationSource: "web",
+        createdAt: "2026-10-01T00:00:00.000Z",
+        updatedAt: "2026-10-01T00:00:00.000Z",
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
+      },
+    });
+    expect(event.type === "thread.created" && event.payload.interactionMode).toBe("default");
+    expect(event.payload).not.toHaveProperty("workflowPreset");
+  });
+});
+
+describe("repositoryRewindCheckpoint", () => {
+  const run = RunId.make("run");
+  // Runs 2 and 6 changed the repository; a rewind to run 3 already discarded what run 5 recorded.
+  // Run 11's snapshot failed, run 12 left the repository alone, run 13 changed it.
+  const checkpoints = [
+    { ordinalWithinScope: 1, runId: null, status: "ready" },
+    { ordinalWithinScope: 2, runId: run, status: "ready" },
+    { ordinalWithinScope: 4, runId: null, status: "stale" },
+    { ordinalWithinScope: 5, runId: run, status: "stale" },
+    { ordinalWithinScope: 5, runId: null, status: "ready" },
+    { ordinalWithinScope: 6, runId: run, status: "ready" },
+    { ordinalWithinScope: 8, runId: null, status: "missing" },
+    { ordinalWithinScope: 9, runId: run, status: "ready" },
+    { ordinalWithinScope: 10, runId: null, status: "missing" },
+    { ordinalWithinScope: 11, runId: run, status: "error" },
+    { ordinalWithinScope: 12, runId: null, status: "ready" },
+    { ordinalWithinScope: 13, runId: run, status: "ready" },
+  ] as const;
+
+  it.each([
+    { target: 0, restores: 1, why: "the baseline before the first change" },
+    { target: 2, restores: 2, why: "the target run's own checkpoint" },
+    { target: 3, restores: 5, why: "the baseline before the next change, past stale records" },
+    { target: 6, restores: 6, why: "the target run's own checkpoint" },
+    { target: 7, restores: null, why: "nothing: the state before run 9 was never snapshotted" },
+    { target: 10, restores: null, why: "nothing: run 11's failed snapshot hides what it changed" },
+    {
+      target: 11,
+      restores: 12,
+      why: "the baseline before the next change, its own snapshot failed",
+    },
+    { target: 14, restores: null, why: "nothing: no later run changed the repository" },
+  ])("a rewind to run $target restores $why", ({ target, restores }) => {
+    expect(repositoryRewindCheckpoint(checkpoints, target)?.ordinalWithinScope ?? null).toBe(
+      restores,
+    );
+  });
+});
+
+describe("withMessageSenderNote", () => {
+  const thread = {
+    createdBy: "agent",
+    creationSource: "mcp",
+    senderThreadId: ThreadId.make("t"),
+  } as const;
+  it.each([
+    [thread, "Hi", '[T3 Code: the agent in T3 thread "t" sent this message, not the user.]\n\nHi'],
+    [thread, "", '[T3 Code: the agent in T3 thread "t" sent this message, not the user.]'],
+    [thread, " /git/review staged", " /git/review staged"],
+    [thread, "$deploy ship it", "$deploy ship it"],
+    [
+      thread,
+      "$25 left",
+      '[T3 Code: the agent in T3 thread "t" sent this message, not the user.]\n\n$25 left',
+    ],
+    [
+      {
+        createdBy: "agent",
+        creationSource: "mcp",
+        linkedSender: {
+          environmentId: EnvironmentId.make("e"),
+          threadId: ThreadId.make("r"),
+          title: "x",
+        },
+      },
+      "Hi",
+      '[T3 Code: the agent in T3 thread "r" on linked environment "e" sent this message, not the user.]\n\nHi',
+    ],
+    [
+      { createdBy: "user", creationSource: "web", scheduledTaskId: ScheduledTaskId.make("s") },
+      "Hi",
+      '[T3 Code: scheduled task "s" sent this prompt, not the user typing in this chat.]\n\nHi',
+    ],
+    [
+      { createdBy: "agent", creationSource: "mcp" },
+      "Hi",
+      "[T3 Code: this message came through T3 Code's tools, not from the user typing in this chat.]\n\nHi",
+    ],
+    [{ createdBy: "user", creationSource: "web" }, "Hi", "Hi"],
+    [{ createdBy: "agent", creationSource: "server" }, "Hi", "Hi"],
+  ] as const)("labels %j's message %j for the provider", (message, text, expected) => {
+    expect(withMessageSenderNote(message, text)).toBe(expected);
   });
 });

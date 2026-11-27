@@ -57,3 +57,35 @@ export const resolveProjectDevelopmentBranch = Effect.fn("resolveProjectDevelopm
     } satisfies ProjectDevelopmentBranch;
   },
 );
+
+/**
+ * A new worktree from the project's development branch, where a launched or
+ * scheduled thread starts when nobody picks a base. Null when the checkout
+ * names no development or default branch.
+ */
+export const developmentWorktreeStrategy = Effect.fn("developmentWorktreeStrategy")(
+  function* (input: {
+    readonly git: GitVcsDriver["Service"];
+    readonly settings: ServerSettings | null;
+    readonly workspaceRoot: string;
+    readonly projectId: ProjectId;
+  }) {
+    const development = yield* resolveProjectDevelopmentBranch({
+      git: input.git,
+      settings: input.settings,
+      cwd: input.workspaceRoot,
+      projectId: input.projectId,
+    });
+    if (development === null) return null;
+    const startFromOrigin =
+      input.settings === null
+        ? true
+        : resolveProjectSettings(input.settings, input.projectId).settings
+            .newWorktreesStartFromOrigin;
+    return {
+      type: "worktree" as const,
+      baseRef: development.branch,
+      startFromOrigin: startFromOrigin || !development.existsLocally,
+    };
+  },
+);

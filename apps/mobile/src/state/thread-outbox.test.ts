@@ -205,6 +205,41 @@ describe("thread outbox", () => {
     },
   );
 
+  it("deletes queued Engineering workflow sends instead of replaying them as plain turns", async () => {
+    onTestFinished(() => outboxFiles.clear());
+    const plain = queuedMessage({ messageId: "message-1", createdAt: "2026-06-08T10:00:01.000Z" });
+    const stored = (messageId: string, extra: Record<string, unknown>) =>
+      JSON.stringify({
+        ...(encodeQueuedThreadMessage(
+          queuedMessage({ messageId, createdAt: "2026-06-08T10:00:02.000Z" }),
+        ) as object),
+        ...extra,
+      });
+    outboxFiles.set("message-1.json", JSON.stringify(encodeQueuedThreadMessage(plain)));
+    outboxFiles.set(
+      "message-2.json",
+      stored("message-2", {
+        interactionMode: "product-workflow",
+        workflow: {
+          workflowPreset: "fast-feature",
+          workflowPromptId: "implementation.fast-feature.codex",
+          workflowImplementationSettings: {},
+          clearWorkflowMode: false,
+        },
+      }),
+    );
+    outboxFiles.set(
+      "message-3.json",
+      stored("message-3", { interactionMode: "planning-workflow" }),
+    );
+
+    await expect(expoThreadOutboxStorage.load()).resolves.toEqual({
+      messages: [plain],
+      errors: [],
+    });
+    expect([...outboxFiles.keys()]).toEqual(["message-1.json"]);
+  });
+
   it("preserves queued messages when environment cleanup cannot read the outbox", async () => {
     const registry = AtomRegistry.make();
     onTestFinished(() => registry.dispose());
@@ -715,6 +750,42 @@ describe("thread outbox", () => {
     await expect(manager.update({ ...message, text: "stale flush" })).resolves.toBe(false);
     expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({});
     expect(stored.size).toBe(0);
+    registry.dispose();
+  });
+
+  it("composes concurrent modifications of one message instead of rejecting the later one", async () => {
+    const registry = AtomRegistry.make();
+    const stored = new Map<MessageId, QueuedThreadMessage>();
+    const manager = createThreadOutboxManager({
+      registry,
+      storage: {
+        load: async () => ({ messages: [], errors: [] }),
+        write: async (message) => {
+          stored.set(message.messageId, message);
+        },
+        remove: async () => undefined,
+      },
+    });
+    const message = queuedMessage({
+      messageId: "message-two-uploads",
+      createdAt: "2026-06-08T10:00:01.000Z",
+    });
+    await manager.enqueue(message);
+
+    // Two attachments finishing together each record their upload on the same message.
+    const results = await Promise.all([
+      manager.modify(message.messageId, (current) => ({ ...current, text: `${current.text} a` })),
+      manager.modify(message.messageId, (current) => ({ ...current, text: `${current.text} b` })),
+    ]);
+
+    expect(results).toEqual([true, true]);
+    const composed = { ...message, text: `${message.text} a b` };
+    expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({
+      "environment-1:thread-1": [composed],
+    });
+    expect(stored.get(message.messageId)).toEqual(composed);
+    await manager.remove(composed);
+    await expect(manager.modify(message.messageId, (current) => current)).resolves.toBe(false);
     registry.dispose();
   });
 
@@ -1262,6 +1333,19 @@ describe("thread outbox", () => {
         creation: { ...creationMessage.creation, branch: "" },
       }),
     ).toBe(false);
+    const plainFolderCreation = {
+      ...creationMessage,
+      creation: {
+        ...creationMessage.creation,
+        branch: null,
+        repositories: ["/workspace/api"],
+        startsFromRepositoryDefaults: true,
+      },
+    } satisfies QueuedThreadMessage;
+    expect(decodeQueuedThreadMessage(encodeQueuedThreadMessage(plainFolderCreation))).toEqual(
+      plainFolderCreation,
+    );
+    expect(isQueuedThreadCreationSendable(plainFolderCreation)).toBe(true);
     expect(isQueuedThreadCreationSendable({ ...creationMessage, modelSelection: undefined })).toBe(
       false,
     );

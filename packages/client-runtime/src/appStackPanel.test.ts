@@ -13,14 +13,12 @@ import {
   appStackBundleApps,
   appStackBundleMemberDescription,
   appStackMatchesStatusFilter,
-  appStackOwnershipLabel,
   appStackPlatformMembers,
   appStackProtectionAction,
   appStackRangeIds,
   appStackSelectionState,
   appStackStartShape,
   appStackStatusFilterCounts,
-  appStackWorkflowConflictSummary,
   autoCreateNotice,
   defaultAppStackBundleSelection,
   isProtectedAppStack,
@@ -137,19 +135,6 @@ describe("AppStackPanel URL helpers", () => {
 });
 
 describe("AppStackPanel list management", () => {
-  it("labels workflow ownership and summarizes non-destructive conflicts", () => {
-    expect(appStackOwnershipLabel(makeStack({ workflowId: "workflow-1" }))).toBe("Workflow-owned");
-    expect(appStackOwnershipLabel(makeStack({}))).toBeNull();
-    expect(
-      appStackWorkflowConflictSummary({
-        workflowId: "workflow-1",
-        stackIds: ["one", "two"],
-        runIds: ["run-one", "run-two"],
-        worktreePaths: ["/one", "/two"],
-      }),
-    ).toBe("2 stacks · workflow-1");
-  });
-
   it("shows the current stack once and orders remaining stacks by update time", () => {
     const current = makeStack({ id: "current", worktreePath: "/repo/current" });
     const older = makeStack({

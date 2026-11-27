@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { DocSettings } from "../components/settings/WorkflowSettings";
+import { DocSettings } from "../components/settings/SkillSettings";
 
 export const Route = createFileRoute("/_chat/settings/docs")({
   validateSearch: (search: Record<string, unknown>) => ({

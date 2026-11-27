@@ -1,17 +1,16 @@
 import type {
   AssetResource,
+  AppReviewId,
   AppReviewRecord,
   AppReviewRecordingEvidence,
   AppReviewTestRecording,
   AppReviewTestResult,
-  AppReviewWorkflowCycle,
-  AppReviewWorkflowRunId,
   EnvironmentId,
 } from "@t3tools/contracts";
 import { APP_REVIEW_RECORDING_EVIDENCE_ID } from "@t3tools/contracts";
-import { groupAppReviewTestResults } from "@t3tools/client-runtime/app-review";
+import { APP_REVIEW_STATUS_LABELS } from "@t3tools/client-runtime/app-review";
 import { CheckCircle2, Circle, CircleDot, Info, XCircle } from "lucide-react";
-import { Suspense, lazy, useMemo, useState } from "react";
+import { Suspense, lazy, useState } from "react";
 
 import { useAssetUrls } from "~/assets/assetUrls";
 import { cn } from "~/lib/utils";
@@ -121,33 +120,22 @@ export function AppReviewDocument(props: {
   const findings = record.document.findings;
   const questions = record.document.questions;
   const nextSteps = record.document.nextSteps;
-  const statusLabel = record.status[0]?.toUpperCase() + record.status.slice(1);
+  const tests = record.evidence.tests ?? [];
   const recording = record.evidence.recording;
   const screenshots = record.evidence.screenshots;
   const showsBrowserEvidence =
     record.appReviewScope !== "e2e" || recording.status !== "not-started" || screenshots.length > 0;
   const recordingSaved = showsBrowserEvidence && recording.status === "saved";
 
-  const evidenceResources = useMemo<AssetResource[]>(() => {
-    const resources: AssetResource[] = [];
-    if (recordingSaved) {
-      resources.push({
-        _tag: "app-review-evidence",
-        reviewId: record.id,
-        evidenceId: APP_REVIEW_RECORDING_EVIDENCE_ID,
-      });
-    }
-    if (showsBrowserEvidence) {
-      for (const screenshot of screenshots) {
-        resources.push({
-          _tag: "app-review-evidence",
-          reviewId: record.id,
-          evidenceId: screenshot.id,
-        });
-      }
-    }
-    return resources;
-  }, [record.id, recordingSaved, screenshots, showsBrowserEvidence]);
+  const evidenceIds = [
+    ...(recordingSaved ? [APP_REVIEW_RECORDING_EVIDENCE_ID] : []),
+    ...(showsBrowserEvidence ? screenshots.map((screenshot) => screenshot.id) : []),
+  ];
+  const evidenceResources: AssetResource[] = evidenceIds.map((evidenceId) => ({
+    _tag: "app-review-evidence",
+    reviewId: record.id,
+    evidenceId,
+  }));
   const evidenceUrls = useAssetUrls(props.environmentId, evidenceResources);
   const recordingUrl = recordingSaved ? (evidenceUrls[0] ?? null) : null;
   const screenshotUrls = recordingSaved ? evidenceUrls.slice(1) : evidenceUrls;
@@ -171,15 +159,33 @@ export function AppReviewDocument(props: {
       <div className="border-b border-border px-4 py-3">
         <div className="flex items-center gap-2 text-sm font-medium">
           {statusIcon(record.status)}
-          <span className={statusClassName[record.status]}>{statusLabel}</span>
+          <span className={statusClassName[record.status]}>
+            {APP_REVIEW_STATUS_LABELS[record.status]}
+          </span>
           <span className="text-muted-foreground">Verdict: {record.document.verdict}</span>
         </div>
+        {record.document.brief ? (
+          <p className="mt-2 text-xs text-muted-foreground">{record.document.brief}</p>
+        ) : null}
         {record.document.summary ? (
           <p className="mt-2 text-sm leading-relaxed text-foreground">{record.document.summary}</p>
         ) : (
           <p className="mt-2 text-sm text-muted-foreground">Review document is pending.</p>
         )}
       </div>
+
+      {tests.length > 0 ? (
+        <section className="border-b border-border">
+          <h3 className="px-4 pt-3 text-xs font-semibold uppercase tracking-normal text-muted-foreground">
+            End-to-end tests
+          </h3>
+          <TestResultList
+            reviewId={record.id}
+            results={tests}
+            environmentId={props.environmentId}
+          />
+        </section>
+      ) : null}
 
       {showsBrowserEvidence ? (
         <>
@@ -240,11 +246,7 @@ export function AppReviewDocument(props: {
               <div key={check.id} className="py-2">
                 <div className="flex items-center justify-between gap-3 text-sm">
                   <span className="font-medium">{check.label}</span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {check.carriedFromCycle === undefined
-                      ? check.status
-                      : `${check.status} · carried from cycle ${check.carriedFromCycle}`}
-                  </span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{check.status}</span>
                 </div>
                 {check.notes ? (
                   <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
@@ -354,135 +356,9 @@ export function AppReviewDocument(props: {
   );
 }
 
-/**
- * One cycle: its result, the E2E tests it ran with their recordings, and any
- * review an agent wrote for it.
- */
-export function AppReviewCycleDocument(props: {
-  runId: AppReviewWorkflowRunId;
-  cycle: AppReviewWorkflowCycle;
-  e2eRecord?: AppReviewRecord | undefined;
-  browserRecord?: AppReviewRecord | undefined;
-  environmentId: EnvironmentId;
-}) {
-  const testResults = props.cycle.e2eExecution?.results ?? [];
-  const summaryRecords = [props.e2eRecord, props.browserRecord].filter(
-    (record): record is AppReviewRecord => Boolean(record?.document.summary),
-  );
-  return (
-    <div>
-      <section className="border-b border-border px-4 py-3">
-        <h3 className="text-sm font-semibold">Overall result</h3>
-        <p className="mt-1 text-xs text-muted-foreground">{props.cycle.status}</p>
-        {summaryRecords.length > 0 ? (
-          summaryRecords.map((record) => (
-            <p key={record.id} className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">
-              {record.document.summary}
-            </p>
-          ))
-        ) : testResults.length === 0 ? (
-          <p className="mt-2 text-sm text-muted-foreground">No summary yet.</p>
-        ) : null}
-        {props.cycle.actionableFindingsMarkdown ? (
-          <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">
-            {props.cycle.actionableFindingsMarkdown}
-          </p>
-        ) : null}
-      </section>
-      {props.cycle.e2eExecution ? (
-        <section className="border-b border-border">
-          <h3 className="px-4 pt-3 text-sm font-semibold">End-to-end tests</h3>
-          <TestRecordingsList
-            runId={props.runId}
-            execution={props.cycle.e2eExecution}
-            environmentId={props.environmentId}
-          />
-        </section>
-      ) : null}
-      {props.e2eRecord !== undefined ? (
-        <ReviewEvidenceSection
-          title="Agent review · end-to-end tests"
-          record={props.e2eRecord}
-          environmentId={props.environmentId}
-        />
-      ) : null}
-      {props.cycle.appReviewScope !== "e2e" || props.browserRecord !== undefined ? (
-        <ReviewEvidenceSection
-          title="Agent review · browser"
-          record={props.browserRecord}
-          environmentId={props.environmentId}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * Every test the cycle's commands recorded, replayable in place. The tickets'
- * feature tests come first; the other suites fold away behind them.
- */
-function TestRecordingsList(props: {
-  runId: AppReviewWorkflowRunId;
-  execution: NonNullable<AppReviewWorkflowCycle["e2eExecution"]>;
-  environmentId: EnvironmentId;
-}) {
-  const [otherOpen, setOtherOpen] = useState(false);
-  if (props.execution.results.length === 0) {
-    return <p className="px-4 py-3 text-sm text-muted-foreground">No test command has finished.</p>;
-  }
-  const groups = groupAppReviewTestResults(props.execution);
-  const hasFeatureTests = props.execution.commands.some((entry) => entry.purpose === "feature");
-  if (!hasFeatureTests) {
-    return (
-      <TestResultList
-        runId={props.runId}
-        results={props.execution.results}
-        environmentId={props.environmentId}
-      />
-    );
-  }
-  return (
-    <div>
-      <h4 className="px-4 pt-3 text-xs font-semibold">Feature tests</h4>
-      {groups.feature.length > 0 ? (
-        <TestResultList
-          runId={props.runId}
-          results={groups.feature}
-          environmentId={props.environmentId}
-        />
-      ) : (
-        <p className="px-4 py-3 text-sm text-muted-foreground">No feature test has finished.</p>
-      )}
-      {groups.other.length > 0 ? (
-        <>
-          <button
-            type="button"
-            aria-expanded={otherOpen}
-            onClick={() => setOtherOpen(!otherOpen)}
-            className="flex w-full cursor-pointer items-center justify-between px-4 py-2 text-left text-xs font-semibold"
-          >
-            <span>{groups.otherLabel}</span>
-            <span className="font-normal text-muted-foreground">
-              {groups.other.filter((result) => result.status === "failed").length} failed ·{" "}
-              {otherOpen ? "Collapse" : "Expand"}
-            </span>
-          </button>
-          {otherOpen ? (
-            <TestResultList
-              runId={props.runId}
-              results={groups.other}
-              environmentId={props.environmentId}
-            />
-          ) : null}
-        </>
-      ) : null}
-    </div>
-  );
-}
-
 /** A fleet run yields hundreds, so a row mints its URL and mounts the player only while open. */
 function TestResultList(props: {
-  runId: AppReviewWorkflowRunId;
+  reviewId: AppReviewId;
   results: ReadonlyArray<AppReviewTestResult>;
   environmentId: EnvironmentId;
 }) {
@@ -490,7 +366,10 @@ function TestResultList(props: {
   return (
     <ul className="space-y-3 px-4 py-3">
       {props.results.map((result) => (
-        <li key={result.command} className="rounded-md border border-border">
+        <li
+          key={`${result.command}:${result.completedAt}`}
+          className="rounded-md border border-border"
+        >
           <div className="flex items-start justify-between gap-3 px-3 py-2">
             <code className="min-w-0 break-words text-xs">{result.executedCommand}</code>
             <span className={cn("shrink-0 text-xs", statusClassName[result.status])}>
@@ -502,7 +381,7 @@ function TestResultList(props: {
               {result.recordings.map((recording) => (
                 <TestRecordingRow
                   key={recording.id}
-                  runId={props.runId}
+                  reviewId={props.reviewId}
                   recording={recording}
                   open={openRecordingId === recording.id}
                   onToggle={() =>
@@ -524,7 +403,7 @@ function TestResultList(props: {
 }
 
 function TestRecordingRow(props: {
-  runId: AppReviewWorkflowRunId;
+  reviewId: AppReviewId;
   recording: AppReviewTestRecording;
   open: boolean;
   onToggle: () => void;
@@ -545,7 +424,7 @@ function TestRecordingRow(props: {
       </button>
       {props.open ? (
         <TestRecordingReplay
-          runId={props.runId}
+          reviewId={props.reviewId}
           recordingId={props.recording.id}
           environmentId={props.environmentId}
         />
@@ -555,16 +434,13 @@ function TestRecordingRow(props: {
 }
 
 function TestRecordingReplay(props: {
-  runId: AppReviewWorkflowRunId;
+  reviewId: AppReviewId;
   recordingId: string;
   environmentId: EnvironmentId;
 }) {
-  const resources = useMemo<AssetResource[]>(
-    () => [
-      { _tag: "app-review-test-recording", runId: props.runId, recordingId: props.recordingId },
-    ],
-    [props.runId, props.recordingId],
-  );
+  const resources: AssetResource[] = [
+    { _tag: "app-review-test-recording", reviewId: props.reviewId, recordingId: props.recordingId },
+  ];
   const [url] = useAssetUrls(props.environmentId, resources);
   const loading = <div className="px-3 py-4 text-sm text-muted-foreground">Loading replay...</div>;
   return url ? (
@@ -575,37 +451,5 @@ function TestRecordingReplay(props: {
     </Suspense>
   ) : (
     loading
-  );
-}
-
-function ReviewEvidenceSection(props: {
-  title: string;
-  record?: AppReviewRecord | undefined;
-  environmentId: EnvironmentId;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <section className="border-b border-border">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        className="flex w-full cursor-pointer items-center justify-between px-4 py-3 text-left text-sm font-medium"
-      >
-        <span>{props.title}</span>
-        <span className="text-xs text-muted-foreground">
-          {props.record?.status ?? "No results"} · {open ? "Collapse" : "Expand"}
-        </span>
-      </button>
-      {open ? (
-        props.record ? (
-          <AppReviewDocument record={props.record} environmentId={props.environmentId} />
-        ) : (
-          <p className="px-4 pb-3 text-sm text-muted-foreground">
-            No results or recordings for this section.
-          </p>
-        )
-      ) : null}
-    </section>
   );
 }

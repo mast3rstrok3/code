@@ -89,8 +89,3 @@ export class AgentSessionScanError extends Schema.TaggedError<AgentSessionScanEr
     return `Failed to scan agent sessions during ${this.operation}.`;
   }
 }
-
-/** Imported message IDs remain readable in workflow history. */
-export function isImportedAgentSessionMessageId(messageId: string): boolean {
-  return messageId.startsWith("import:");
-}

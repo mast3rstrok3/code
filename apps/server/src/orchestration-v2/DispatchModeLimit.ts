@@ -28,13 +28,7 @@ export const DispatchModeLimit = Context.Reference<DispatchModeLimitValue | unde
   { defaultValue: () => undefined },
 );
 
-const interactionModeRank: Record<ProviderInteractionMode, number> = {
-  plan: 0,
-  default: 1,
-  "planning-workflow": 1,
-  "implementation-workflow": 1,
-  "product-workflow": 1,
-};
+const interactionModeRank: Record<ProviderInteractionMode, number> = { plan: 0, default: 1 };
 
 export const exceededDispatchModeLimit = (
   limit: DispatchModes,

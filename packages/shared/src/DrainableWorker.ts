@@ -1,4 +1,5 @@
 import * as Cause from "effect/Cause";
+import * as Context from "effect/Context";
 import * as Scope from "effect/Scope";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -7,6 +8,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TxQueue from "effect/TxQueue";
 import * as TxRef from "effect/TxRef";
+import * as Tracer from "effect/Tracer";
 
 export interface DrainableWorker<A> {
   readonly enqueue: (item: A) => Effect.Effect<void>;
@@ -65,6 +67,11 @@ export const makeDrainableWorker = Effect.fn("DrainableWorker.makeDrainableWorke
         : // `suspend` turns a `process` that throws while building its effect
           // into this item's defect instead of the loop's.
           Effect.suspend(() => process(entry.value)).pipe(
+            // The worker outlives the span it was made under; each item starts its own trace.
+            Effect.updateContext(
+              (context: Context.Context<R>) =>
+                Context.omit(Tracer.ParentSpan)(context) as Context.Context<R>,
+            ),
             // Only the item's own failure, defect, or interruption lands here and
             // the loop continues; interrupting the worker fiber still stops it.
             Effect.catchCause((cause) =>

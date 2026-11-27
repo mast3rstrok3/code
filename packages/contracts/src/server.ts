@@ -31,120 +31,37 @@ import { ServerProviderUsageLimits, UsageLimitSourceSnapshots } from "./provider
 import { ServerSettings } from "./settings.ts";
 import { DesktopUpdateChannelSchema } from "./ipc.ts";
 
-export const WorkflowPromptAssociatedDocContract = Schema.Struct({
+/** A supporting file in a bundled skill's folder, such as a format reference or a script template. */
+export const SkillDoc = Schema.Struct({
+  /** `<skill>/<path>`, unique across the catalog. */
   id: TrimmedNonEmptyString,
-  title: TrimmedNonEmptyString,
+  skill: TrimmedNonEmptyString,
+  /** Relative to the skill's folder. */
   path: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  description: TrimmedNonEmptyString,
   content: TrimmedNonEmptyString,
 });
-export type WorkflowPromptAssociatedDocContract = typeof WorkflowPromptAssociatedDocContract.Type;
+export type SkillDoc = typeof SkillDoc.Type;
 
-const WorkflowPromptWorkflow = Schema.Literals([
-  "shared",
-  "planning",
-  "implementation",
-  "app-review",
-  "product",
-]);
-
-export const WorkflowPromptContract = Schema.Struct({
-  id: TrimmedNonEmptyString,
-  order: PositiveInt,
-  workflow: WorkflowPromptWorkflow,
-  role: Schema.Literals([
-    "workflow-communications",
-    "planning-thread",
-    "planning-reviewer",
-    "planning-grill-judge",
-    "implementation-orchestrator",
-    "implementation-worker",
-    "implementation-validator",
-    "implementation-qa-reviewer",
-    "implementation-fixer",
-    "implementation-code-reviewer",
-    "implementation-change-request-babysitter",
-    "app-review-orchestrator",
-    "app-review-reviewer",
-    "app-review-fixer",
-  ]),
-  stage: TrimmedNonEmptyString,
-  title: TrimmedNonEmptyString,
+export const BundledSkill = Schema.Struct({
+  name: TrimmedNonEmptyString,
   description: TrimmedNonEmptyString,
-  promptText: TrimmedNonEmptyString,
-  associatedDocs: Schema.optional(Schema.Array(WorkflowPromptAssociatedDocContract)),
-});
-export type WorkflowPromptContract = typeof WorkflowPromptContract.Type;
-
-export const WorkflowPromptContracts = Schema.Array(WorkflowPromptContract);
-export type WorkflowPromptContracts = typeof WorkflowPromptContracts.Type;
-
-export const WorkflowCatalogStep = Schema.Struct({
-  label: TrimmedNonEmptyString,
-  skillId: Schema.optional(TrimmedNonEmptyString),
-  workflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
-  threadBoundary: Schema.optional(
-    Schema.Literals(["same thread", "new thread", "new child thread", "new review thread"]),
-  ),
-  note: Schema.optional(TrimmedNonEmptyString),
-});
-export type WorkflowCatalogStep = typeof WorkflowCatalogStep.Type;
-
-export const WorkflowCatalogWorkflow = Schema.Struct({
-  id: TrimmedNonEmptyString,
-  order: PositiveInt,
-  title: TrimmedNonEmptyString,
-  description: TrimmedNonEmptyString,
-  interactionMode: TrimmedNonEmptyString,
-  steps: Schema.Array(WorkflowCatalogStep),
-});
-export type WorkflowCatalogWorkflow = typeof WorkflowCatalogWorkflow.Type;
-
-export const WorkflowSkillContract = Schema.Struct({
-  id: TrimmedNonEmptyString,
-  order: PositiveInt,
-  workflow: WorkflowPromptWorkflow,
-  role: WorkflowPromptContract.fields.role,
-  stage: TrimmedNonEmptyString,
-  title: TrimmedNonEmptyString,
-  description: TrimmedNonEmptyString,
-  promptText: TrimmedNonEmptyString,
-  workflowAnnotations: Schema.Array(
-    Schema.Struct({
-      workflowPromptId: TrimmedNonEmptyString,
-      title: TrimmedNonEmptyString,
-      text: TrimmedNonEmptyString,
-    }),
-  ).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
-  promptIds: Schema.Array(TrimmedNonEmptyString).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
+  /** `disable-model-invocation`: only a user typing the skill's name can run it. */
+  userInvocationOnly: Schema.Boolean,
+  /** The complete SKILL.md, frontmatter included. */
+  content: TrimmedNonEmptyString,
   docIds: Schema.Array(TrimmedNonEmptyString),
-  buildModes: Schema.Array(Schema.Literal("build")).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
-  workflowIds: Schema.Array(TrimmedNonEmptyString),
-  sourceUrl: Schema.optional(TrimmedNonEmptyString),
 });
-export type WorkflowSkillContract = typeof WorkflowSkillContract.Type;
+export type BundledSkill = typeof BundledSkill.Type;
 
-export const WorkflowDocContract = Schema.Struct({
-  id: TrimmedNonEmptyString,
-  title: TrimmedNonEmptyString,
-  path: TrimmedNonEmptyString,
-  description: TrimmedNonEmptyString.pipe(
-    Schema.withDecodingDefault(Effect.succeed("Supporting reference for a workflow skill.")),
-  ),
-  content: TrimmedNonEmptyString,
-  skillIds: Schema.Array(TrimmedNonEmptyString),
+/** The Claude Code plugin T3 Code ships; its skills are invoked as `<pluginName>:<name>`. */
+export const SkillCatalog = Schema.Struct({
+  pluginName: TrimmedNonEmptyString,
+  skills: Schema.Array(BundledSkill),
+  docs: Schema.Array(SkillDoc),
 });
-export type WorkflowDocContract = typeof WorkflowDocContract.Type;
-
-export const WorkflowCatalog = Schema.Struct({
-  workflows: Schema.Array(WorkflowCatalogWorkflow),
-  skills: Schema.Array(WorkflowSkillContract),
-  docs: Schema.Array(WorkflowDocContract),
-});
-export type WorkflowCatalog = typeof WorkflowCatalog.Type;
+export type SkillCatalog = typeof SkillCatalog.Type;
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
@@ -206,6 +123,14 @@ export const ServerProviderModel = Schema.Struct({
   capabilities: Schema.NullOr(ModelCapabilities),
 });
 export type ServerProviderModel = typeof ServerProviderModel.Type;
+
+/** A backend a provider's models run on, such as one of fx's. */
+export const ServerProviderSubProvider = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  /** Why none of its models can run now, such as a signed-out backend. */
+  unavailableReason: Schema.optional(TrimmedNonEmptyString),
+});
+export type ServerProviderSubProvider = typeof ServerProviderSubProvider.Type;
 
 export const ServerProviderUpdateRequiredModel = Schema.Struct({
   slug: TrimmedNonEmptyString,
@@ -270,6 +195,34 @@ export function isProviderWorkspaceSnapshotPending(
 ): boolean {
   return snapshot.slashCommandsPending === true || snapshot.modelsPending === true;
 }
+
+/** Whose settings keep a provider from running a mode; "settings" when the source is not known. */
+export const ProviderRuntimeModeLimitReason = Schema.Literals([
+  "managed-settings",
+  "user-settings",
+  "project-settings",
+  "settings",
+]);
+export type ProviderRuntimeModeLimitReason = typeof ProviderRuntimeModeLimitReason.Type;
+
+/**
+ * A mode a provider offers that cannot run in one folder. The mode stays selectable by every
+ * caller; clients show it as unavailable with the reason.
+ */
+export const ProviderRuntimeModeLimit = Schema.Struct({
+  mode: RuntimeMode,
+  reason: ProviderRuntimeModeLimitReason,
+});
+export type ProviderRuntimeModeLimit = typeof ProviderRuntimeModeLimit.Type;
+
+export const ProviderRuntimeModeLimitsInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  cwd: TrimmedNonEmptyString,
+});
+export const ProviderRuntimeModeLimitsResult = Schema.Struct({
+  limits: ForwardCompatibleArray(ProviderRuntimeModeLimit),
+});
+export type ProviderRuntimeModeLimitsResult = typeof ProviderRuntimeModeLimitsResult.Type;
 
 /** Unavailable snapshots must set installed and enabled false. */
 export const ServerProviderAvailability = Schema.Literals(["available", "unavailable"]);
@@ -384,6 +337,12 @@ export const ServerProvider = Schema.Struct({
   availability: Schema.optional(ServerProviderAvailability),
   unavailableReason: Schema.optional(TrimmedNonEmptyString),
   models: Schema.Array(ServerProviderModel),
+  // Pickers group `models` under these, in order, by `subProvider`.
+  subProviders: Schema.optional(Schema.Array(ServerProviderSubProvider)),
+  // Set for the one failed check that follows a ready one: pickers keep offering `models`.
+  modelsRetained: Schema.optionalKey(Schema.Boolean),
+  // Set by a ready check whose `models` may lack some the provider still offers, so they are kept.
+  modelsIncomplete: Schema.optionalKey(Schema.Boolean),
   // Kept apart from `models` so clients that predate it never offer them.
   updateRequiredModels: Schema.optionalKey(Schema.Array(ServerProviderUpdateRequiredModel)),
   slashCommands: Schema.Array(ServerProviderSlashCommand).pipe(
@@ -391,6 +350,11 @@ export const ServerProvider = Schema.Struct({
   ),
   skills: Schema.Array(ServerProviderSkill).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   workspaceSnapshots: Schema.optionalKey(Schema.Array(ServerProviderWorkspaceSnapshot)),
+  /**
+   * Set when the server rescanned a workspace after a session start and its skills or commands
+   * changed. Clients holding fetched workspace snapshots for this provider fetch them again.
+   */
+  workspaceRescannedAt: Schema.optionalKey(IsoDateTime),
   usageLimits: Schema.optional(ServerProviderUsageLimits),
   versionAdvisory: Schema.optionalKey(ServerProviderVersionAdvisory),
   compatibilityAdvisory: Schema.optionalKey(ServerProviderCompatibilityAdvisory),
@@ -481,6 +445,8 @@ export const ServerObservability = Schema.Struct({
   otlpLogsSource: Schema.optional(OtlpEndpointSource),
   otlpLogsVariable: Schema.optional(TrimmedNonEmptyString),
   otlpLogsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** Relay tracing policy for browsers opened from this server. */
+  relayTracingAllowed: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerObservability = typeof ServerObservability.Type;
 
@@ -753,7 +719,7 @@ const EnvironmentThemeColors = Schema.Record(
   TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
 );
 
-export const THEME_CSS_MAX_LENGTH = 50_000;
+export const THEME_CSS_MAX_LENGTH = 100_000;
 
 const environmentThemeFields = {
   version: Schema.optional(Schema.Literal(1)),
@@ -779,6 +745,8 @@ export type EnvironmentThemeFile = typeof EnvironmentThemeFile.Type;
 export const EnvironmentTheme = Schema.Struct({
   id: EnvironmentThemeId,
   ...environmentThemeFields,
+  /** Revision of the image file published beside the theme; absent without one. */
+  background: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
 });
 export type EnvironmentTheme = typeof EnvironmentTheme.Type;
 
@@ -811,6 +779,13 @@ export const ServerEventLoopStall = Schema.Struct({
   cpuCount: PositiveInt,
 });
 export type ServerEventLoopStall = typeof ServerEventLoopStall.Type;
+
+/** The boolean `T3CODE_FEATURE_FLAGS` a server started with. Unset flags are off. */
+export const ServerFeatureFlags = Schema.Struct({
+  secretProviders: Schema.optionalKey(Schema.Boolean),
+  tanstackSource: Schema.optionalKey(Schema.Boolean),
+});
+export type ServerFeatureFlags = typeof ServerFeatureFlags.Type;
 
 export const ServerConfig = Schema.Struct({
   environment: ExecutionEnvironmentDescriptor,
@@ -850,6 +825,7 @@ export const ServerConfig = Schema.Struct({
   threadSnapshotPagination: Schema.optionalKey(Schema.Boolean),
   threadFind: Schema.optionalKey(Schema.Boolean),
   threadFindProgressive: Schema.optionalKey(Schema.Boolean),
+  featureFlags: Schema.optionalKey(ServerFeatureFlags),
   /** Settings patches may carry `secretProviders`; older servers drop the key without an error. */
   secretProviderSettings: Schema.optionalKey(Schema.Boolean),
   /** Secret settings may point at a secret provider; older servers drop the reference. */
@@ -1076,21 +1052,6 @@ export const ServerLifecycleStreamReadyEvent = Schema.Struct({
 });
 export type ServerLifecycleStreamReadyEvent = typeof ServerLifecycleStreamReadyEvent.Type;
 
-export const ServerLifecycleDrainingPayload = Schema.Struct({
-  operationId: TrimmedNonEmptyString,
-  requestedAt: IsoDateTime,
-  deadlineAt: IsoDateTime,
-  forced: Schema.Boolean,
-});
-export type ServerLifecycleDrainingPayload = typeof ServerLifecycleDrainingPayload.Type;
-
-export const ServerLifecycleStreamDrainingEvent = Schema.Struct({
-  version: Schema.Literal(1),
-  sequence: NonNegativeInt,
-  type: Schema.Literal("draining"),
-  payload: ServerLifecycleDrainingPayload,
-});
-export type ServerLifecycleStreamDrainingEvent = typeof ServerLifecycleStreamDrainingEvent.Type;
 export const ServerLifecycleStreamLegacyThreadMigrationEvent = Schema.Struct({
   version: Schema.Literal(1),
   sequence: NonNegativeInt,
@@ -1103,7 +1064,6 @@ export type ServerLifecycleStreamLegacyThreadMigrationEvent =
 export const ServerLifecycleStreamEvent = Schema.Union([
   ServerLifecycleStreamWelcomeEvent,
   ServerLifecycleStreamReadyEvent,
-  ServerLifecycleStreamDrainingEvent,
   ServerLifecycleStreamLegacyThreadMigrationEvent,
 ]);
 export type ServerLifecycleStreamEvent = typeof ServerLifecycleStreamEvent.Type;
@@ -1132,6 +1092,18 @@ export class ServerProviderUpdateError extends Schema.TaggedError<ServerProvider
     return `Provider update failed for ${this.provider}: ${this.reason}`;
   }
 }
+
+export const DatabaseMigrationProgress = Schema.Struct({
+  current: Schema.Int.check(Schema.isGreaterThan(0)),
+  total: Schema.Int.check(Schema.isGreaterThan(0)),
+});
+export type DatabaseMigrationProgress = typeof DatabaseMigrationProgress.Type;
+
+export const ServerStartupStatus = Schema.Struct({
+  status: Schema.Literal("starting"),
+  migration: Schema.NullOr(DatabaseMigrationProgress),
+});
+export type ServerStartupStatus = typeof ServerStartupStatus.Type;
 
 export const ServerNpmReleaseInput = Schema.Struct({
   spec: Schema.String.check(
@@ -1199,6 +1171,13 @@ export class ServerSelfUpdateError extends Schema.TaggedError<ServerSelfUpdateEr
   "ServerSelfUpdateError",
   {
     reason: TrimmedNonEmptyString,
+    /** Set when the host's desktop app refused only because its build and saved tracks differ. */
+    trackMismatch: Schema.optionalKey(
+      Schema.Struct({
+        buildChannel: DesktopUpdateChannelSchema,
+        savedChannel: DesktopUpdateChannelSchema,
+      }),
+    ),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {

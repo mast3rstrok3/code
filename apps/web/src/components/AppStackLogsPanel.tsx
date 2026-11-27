@@ -1,4 +1,5 @@
 import type { AppStackPodLogEntry, EnvironmentId, TimestampFormat } from "@t3tools/contracts";
+import { msg } from "gt-react";
 import {
   ChevronDownIcon,
   ChevronRightIcon,
@@ -155,7 +156,13 @@ export function AppStackLogsPanel(props: AppStackLogsPanelProps) {
   const [collapsedServiceKeys, setCollapsedServiceKeys] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "app stack pod logs" });
+  const { copyToClipboard, isCopied } = useCopyToClipboard({
+    target: {
+      target: "app stack pod logs",
+      unavailableMessage: msg("Clipboard API is unavailable while copying app stack pod logs."),
+      failureMessage: msg("Failed to copy app stack pod logs to the clipboard."),
+    },
+  });
 
   const readLimit = useMemo(() => stackLogTailSelectionToReadLimit(tailSelection), [tailSelection]);
   const associatedWorktreePath = useMemo(

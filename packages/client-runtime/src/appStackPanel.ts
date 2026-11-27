@@ -1,6 +1,5 @@
 import type {
   AppStack,
-  AppStackListResult,
   AppStackAutoCreateResult,
   AppStackBundlePlan,
   AppStackBundlePlanMember,
@@ -11,20 +10,14 @@ import type {
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
 import { appStackVariantForComposePath } from "@t3tools/shared/appStack";
 
-type WorkflowConflict = NonNullable<AppStackListResult["workflowConflicts"]>[number];
-
-export function appStackOwnershipLabel(stack: AppStack): string | null {
-  return stack.workflowId ? "Workflow-owned" : null;
-}
-
 export function isProtectedAppStack(stack: AppStack): boolean {
   return stack.protected === true;
 }
 
 /**
- * Labels the protection toggle. A protected stack survives workflow teardown
- * and is the last one the environment sheds under memory pressure, so the
- * button says what pressing it gives up.
+ * Labels the protection toggle. A protected stack is the last one the
+ * environment sheds under memory pressure, so the button says what pressing
+ * it gives up.
  */
 export function appStackProtectionAction(stack: AppStack): {
   readonly label: string;
@@ -43,10 +36,6 @@ export function appStackProtectionAction(stack: AppStack): {
         ariaLabel: `Protect ${stackName} from automatic teardown`,
         nextProtected: true,
       };
-}
-
-export function appStackWorkflowConflictSummary(conflict: WorkflowConflict): string {
-  return `${conflict.stackIds.length} stacks · ${conflict.workflowId}`;
 }
 
 export interface PreviewCandidate {

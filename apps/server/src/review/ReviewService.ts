@@ -1,4 +1,3 @@
-import * as Option from "effect/Option";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -19,8 +18,6 @@ import {
 } from "@t3tools/contracts";
 
 import * as ServerConfig from "../config.ts";
-import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
-import { ProjectionThreadRepository } from "../persistence/Services/ProjectionThreads.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as KnownWorkspaces from "../workspace/KnownWorkspaces.ts";
@@ -54,8 +51,6 @@ export const make = Effect.gen(function* () {
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const knownWorkspaces = yield* KnownWorkspaces.KnownWorkspaces;
-  const projectRepository = yield* Effect.serviceOption(ProjectionProjectRepository);
-  const threadRepository = yield* Effect.serviceOption(ProjectionThreadRepository);
 
   const canonicalizePath = (value: string) => {
     const resolvedPath = path.resolve(value);
@@ -91,73 +86,10 @@ export const make = Effect.gen(function* () {
       return;
     }
 
-    // Workflow metadata still registers projects and thread worktrees in the
-    // V1 projections, so they count as known workspaces too.
-    const projects = yield* (
-      Option.isSome(projectRepository) ? projectRepository.value.listAll() : Effect.succeed([])
-    ).pipe(
-      Effect.mapError(
-        (cause) =>
-          new VcsRepositoryDetectionError({
-            operation,
-            cwd,
-            detail: "Failed to load registered workspace roots while validating the review path.",
-            cause,
-          }),
-      ),
-    );
-    const activeProjects = projects.filter((project) => project.deletedAt === null);
-    const registeredRoots = yield* Effect.forEach(
-      activeProjects,
-      (project) => canonicalizePath(project.workspaceRoot),
-      { concurrency: "unbounded" },
-    );
-    if (registeredRoots.some((root) => KnownWorkspaces.isWithinRoot(path, candidate, root))) {
-      return;
-    }
-
-    const threadsByProject = yield* Effect.forEach(
-      activeProjects,
-      (project) =>
-        Option.isSome(threadRepository)
-          ? threadRepository.value.listByProjectId({ projectId: project.projectId })
-          : Effect.succeed([]),
-      { concurrency: "unbounded" },
-    ).pipe(
-      Effect.mapError(
-        (cause) =>
-          new VcsRepositoryDetectionError({
-            operation,
-            cwd,
-            detail: "Failed to load registered thread worktrees while validating the review path.",
-            cause,
-          }),
-      ),
-    );
-    const registeredWorktreePaths = Array.from(
-      new Set(
-        threadsByProject
-          .flat()
-          .flatMap((thread) =>
-            thread.deletedAt === null && thread.worktreePath !== null ? [thread.worktreePath] : [],
-          ),
-      ),
-    );
-    const registeredWorktreeRoots = yield* Effect.forEach(
-      registeredWorktreePaths,
-      canonicalizePath,
-      { concurrency: "unbounded" },
-    );
-    if (
-      registeredWorktreeRoots.some((root) => KnownWorkspaces.isWithinRoot(path, candidate, root))
-    ) {
-      return;
-    }
-
     return yield* new VcsRepositoryDetectionError({
       operation,
       cwd,
-      detail: `Review ${WORKSPACE_BOUND_SUBJECTS[operation]} cwd must stay within the configured workspace root or a registered workspace.`,
+      detail: `Review ${WORKSPACE_BOUND_SUBJECTS[operation]} cwd must stay within the configured workspace root.`,
     });
   });
 

@@ -16,8 +16,11 @@ import {
   OrchestrationV2CreationSource,
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
 } from "./orchestrationV2.ts";
-import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
-import { LaunchableWorkflow } from "./workflowSettings.ts";
+import {
+  ProviderInteractionMode,
+  RuntimeMode,
+  SelectableProviderInteractionMode,
+} from "./providerPolicy.ts";
 
 const TimeOfDay = TrimmedNonEmptyString.check(
   Schema.isPattern(/^([01]?\d|2[0-3]):([0-5]\d)$/),
@@ -226,14 +229,6 @@ export const ScheduledTaskWebhookEndpoint = Schema.Struct({
 export type ScheduledTaskWebhookEndpoint = typeof ScheduledTaskWebhookEndpoint.Type;
 
 /**
- * The workflow each run's fresh thread starts as, by the names
- * `t3_thread_launch` accepts: `feature` plans, implements, reviews and opens a
- * pull request on its own; `engineering` runs the Engineering workflow.
- */
-export const ScheduledTaskWorkflow = LaunchableWorkflow;
-export type ScheduledTaskWorkflow = LaunchableWorkflow;
-
-/**
  * Where runs go. One-thread modes launch their thread on the first run and keep it; `fresh_session`
  * starts each later run in a new provider session there.
  */
@@ -260,13 +255,6 @@ export const ScheduledTask = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
-  /** Null (or absent from an older server) starts each run as a plain thread. */
-  workflow: Schema.optional(Schema.NullOr(ScheduledTaskWorkflow)),
-  /**
-   * A workflow task's runs start on the workflow's default model as it is when
-   * each run starts, falling back to `modelSelection`. Absent means false.
-   */
-  useWorkflowDefaultModel: Schema.optional(Schema.Boolean),
   createdBy: OrchestrationV2Actor,
   creationSource: OrchestrationV2CreationSource,
   createdAt: IsoDateTime,
@@ -295,7 +283,8 @@ export type ScheduledTaskListResult = typeof ScheduledTaskListResult.Type;
 export const ScheduledTaskUpsertInput = Schema.Struct({
   id: Schema.optional(ScheduledTaskId),
   requireExisting: Schema.optional(Schema.Boolean).annotate({
-    description: "Reject the save if the task no longer exists, for edits from a client form.",
+    description:
+      "Reject the save if the task no longer exists, for edits based on an earlier read.",
   }),
   commandId: Schema.optional(CommandId),
   title: TrimmedNonEmptyString,
@@ -303,21 +292,16 @@ export const ScheduledTaskUpsertInput = Schema.Struct({
   enabled: Schema.Boolean,
   schedule: ScheduledTaskUpsertSchedule,
   projectId: ProjectId,
+  /** Omitted or null: keep the stored thread, which a first run may have bound since the form opened. */
   threadId: Schema.optional(Schema.NullOr(ThreadId)),
+  /** True with no `threadId`: the user cleared the thread, so the next run starts one. */
+  unbindThread: Schema.optional(Schema.Boolean),
   /** Omitted: keep the stored mode, or derive it from `threadId` for a new or rebound task. */
   threadMode: Schema.optional(ScheduledTaskThreadMode),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
-  interactionMode: ProviderInteractionMode,
-  workflow: Schema.optional(Schema.NullOr(ScheduledTaskWorkflow)).annotate({
-    description:
-      "Start each run's fresh thread as this workflow; null starts a plain thread. Omit to keep the task's current choice. A workflow task cannot be bound to a thread.",
-  }),
-  useWorkflowDefaultModel: Schema.optional(Schema.Boolean).annotate({
-    description:
-      "For a workflow task, start each run on the workflow's default model from settings, resolved at run time; modelSelection is the fallback. Omit to keep the task's current choice. Ignored without a workflow.",
-  }),
+  interactionMode: SelectableProviderInteractionMode,
   createdBy: Schema.optional(OrchestrationV2Actor),
   creationSource: Schema.optional(OrchestrationV2CreationSource),
 });

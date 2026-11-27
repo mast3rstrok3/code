@@ -30,13 +30,15 @@ import * as Schema from "effect/Schema";
 import { McpSchema, Tool, Toolkit } from "effect/ai";
 
 import { AppStackManager } from "../../../appStack/AppStackManager.ts";
-import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProjectionStore from "../../../orchestration-v2/ProjectionStore.ts";
+import * as ProjectStore from "../../../orchestration-v2/ProjectStore.ts";
 import { McpInvocationContext, hiddenFromOutsideClients } from "../../McpInvocationContext.ts";
 
 const dependencies = [
   ThreadManagementService,
   McpInvocationContext,
-  ProjectionSnapshotQuery,
+  ProjectionStore.ProjectionStoreV2,
+  ProjectStore.ProjectStoreV2,
   AppStackManager,
 ];
 const WorkspaceInput = Schema.Struct({
@@ -44,7 +46,7 @@ const WorkspaceInput = Schema.Struct({
   threadId: Schema.optionalKey(
     ThreadId.annotate({
       description:
-        "A thread below this one, such as a workflow worker or fixer, whose workspace stack to use. Default: this thread. Other threads are rejected.",
+        "A thread below this one, such as a delegated task, whose workspace stack to use. Default: this thread. Other threads are rejected.",
     }),
   ),
 });
@@ -178,7 +180,7 @@ const AppStackGetTool = Tool.make("app_stack_get", {
 
 const AppStackStartTool = Tool.make("app_stack_start", {
   description:
-    'Start or reuse this thread\'s workspace App Stack. Defaults to dev; prod must be explicit and needs a prod compose contract. Uses the workspace and branch from the authenticated thread. Preserves existing workflow ownership; new stacks are manually owned. Pass bundle, a list of other platform apps such as ["cortex", "medical-repository"] or "all", to run those apps from their worktrees on the same branch next to this one; missing worktrees are created from origin where app_stack_bundle_plan shows, and every app left out keeps using its standing dev copy. From a platform workspace (healthcare-infra) the stack always runs apps from this branch: every app by default, or the bundle list; its stack record runs no pods and stop, restart and delete act on all of its apps. Pass omitServices, such as {"rudi": ["codex-runner"]}, to leave compose services of this app or a bundled one out; services that depend on them start without them. With either set, a running stack of this workspace that bundles or omits differently is replaced. app_stack_bundle_plan lists the app and service names. Returns current status and URLs, which may not be ready yet; use app_stack_get to check readiness. stack.testPassword is the password of the stack\'s seeded test users (Rudi: testuser@ivelion.com and the other realm users), unique to this stack; give it to the person who will sign in, and never commit it or paste it into files, PRs or logs.',
+    'Start or reuse this thread\'s workspace App Stack. Defaults to dev; prod must be explicit and needs a prod compose contract. Uses the workspace and branch from the authenticated thread. Pass bundle, a list of other platform apps such as ["cortex", "medical-repository"] or "all", to run those apps from their worktrees on the same branch next to this one; missing worktrees are created from origin where app_stack_bundle_plan shows, and every app left out keeps using its standing dev copy. From a platform workspace (healthcare-infra) the stack always runs apps from this branch: every app by default, or the bundle list; its stack record runs no pods and stop, restart and delete act on all of its apps. Pass omitServices, such as {"rudi": ["codex-runner"]}, to leave compose services of this app or a bundled one out; services that depend on them start without them. With either set, a running stack of this workspace that bundles or omits differently is replaced. app_stack_bundle_plan lists the app and service names. Returns current status and URLs, which may not be ready yet; use app_stack_get to check readiness. stack.testPassword is the password of the stack\'s seeded test users (Rudi: testuser@ivelion.com and the other realm users), unique to this stack; give it to the person who will sign in, and never commit it or paste it into files, PRs or logs.',
   parameters: StartInput,
   success: AppStackAutoCreateResult,
   failure: Schema.Union([AppStackError, OrchestratorMcpFailure]),
@@ -223,7 +225,7 @@ const AppStackCreateWorktreesTool = Tool.make("app_stack_create_worktrees", {
 
 const AppStackStopTool = Tool.make("app_stack_stop", {
   description:
-    "Stop this thread's workspace App Stack, keeping its namespace for restart. Defaults to dev. Explicit stops also stop protected stacks. A bundled stack stops with every stack of its bundle. Resolves the stack from the authenticated thread, or from threadId for a thread below it, such as a workflow child.",
+    "Stop this thread's workspace App Stack, keeping its namespace for restart. Defaults to dev. Explicit stops also stop protected stacks. A bundled stack stops with every stack of its bundle. Resolves the stack from the authenticated thread, or from threadId for a thread below it, such as a delegated task.",
   parameters: WorkspaceInput,
   success: AppStack,
   failure: Schema.Union([AppStackError, OrchestratorMcpFailure]),
@@ -238,7 +240,7 @@ const AppStackStopTool = Tool.make("app_stack_stop", {
 
 const AppStackRestartTool = Tool.make("app_stack_restart", {
   description:
-    "Restart this thread's workspace App Stack using its existing configuration and workflow ownership. Defaults to dev. Interrupts running services, including protected stacks. A bundle restarts whole, with the same apps and left-out services; a platform bundle always restarts from its platform record. Use app_stack_get afterwards to check readiness.",
+    "Restart this thread's workspace App Stack using its existing configuration. Defaults to dev. Interrupts running services, including protected stacks. A bundle restarts whole, with the same apps and left-out services; a platform bundle always restarts from its platform record. Use app_stack_get afterwards to check readiness.",
   parameters: WorkspaceInput,
   success: AppStack,
   failure: Schema.Union([AppStackError, OrchestratorMcpFailure]),

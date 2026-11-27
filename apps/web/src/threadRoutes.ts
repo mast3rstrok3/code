@@ -1,12 +1,7 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentShellStatus } from "@t3tools/client-runtime/state/shell";
-import {
-  type EnvironmentId,
-  type ScopedThreadRef,
-  type ThreadId,
-  WorkflowId,
-} from "@t3tools/contracts";
 import type { EnvironmentThreadState } from "@t3tools/client-runtime/state/threads";
+import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import type { DraftId } from "./composerDraftStore";
 
@@ -26,30 +21,7 @@ type DraftThreadRouteState = {
   promotedTo?: ScopedThreadRef | null;
 };
 
-export type ThreadRouteRenderState = "loading" | "ready" | "missing";
-
-export type ThreadRouteSearch = {
-  readonly workflow?: WorkflowId;
-};
-
-export function resolveThreadRouteSearch(search: Record<string, unknown>): ThreadRouteSearch {
-  const workflow = typeof search.workflow === "string" ? search.workflow.trim() : "";
-  return workflow.length > 0 ? { workflow: WorkflowId.make(workflow) } : {};
-}
-
-export function buildWorkflowRouteUrl(input: {
-  readonly currentHref: string;
-  readonly environmentId: EnvironmentId;
-  readonly rootThreadId: ThreadId;
-  readonly workflowId: WorkflowId;
-}): string {
-  const url = new URL(input.currentHref);
-  url.pathname = `/${encodeURIComponent(input.environmentId)}/${encodeURIComponent(input.rootThreadId)}`;
-  url.search = "";
-  url.searchParams.set("workflow", input.workflowId);
-  url.hash = "";
-  return url.toString();
-}
+export type ThreadRouteRenderState = "loading" | "ready" | "missing" | "unreachable";
 
 export function isThreadRouteSnapshotAuthoritative(
   status: EnvironmentShellStatus | null | undefined,
@@ -63,9 +35,14 @@ export function resolveThreadRouteRenderState(input: {
   serverThreadDeleted: boolean;
   unlistedThreadDetail: EnvironmentThreadState;
   draftThreadExists: boolean;
+  /** The app has no enabled connection to the thread's environment, so its shell never goes live. */
+  environmentUnreachable?: boolean;
 }): ThreadRouteRenderState {
   if (input.draftThreadExists || (input.serverThreadExists && !input.serverThreadDeleted)) {
     return "ready";
+  }
+  if (input.environmentUnreachable) {
+    return "unreachable";
   }
   if (!input.bootstrapComplete) {
     return "loading";

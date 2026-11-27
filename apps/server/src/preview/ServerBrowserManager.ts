@@ -87,7 +87,6 @@ export interface ServerBrowserManagerAdapter {
 type BrowserDataKind = "cookies" | "cache" | "all";
 type ServerBrowserTabDisposalReason =
   | "explicit-close"
-  | "workflow-cleanup"
   | "page-crash"
   | "page-close"
   | "context-closed"

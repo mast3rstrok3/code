@@ -1,18 +1,10 @@
-import {
-  OrchestratorMcpFailure,
-  WORKFLOW_AUTOMATION_RUNTIME_MODE,
-  type ProjectId,
-  type ScheduledTaskWorkflow,
-} from "@t3tools/contracts";
+import { OrchestratorMcpFailure, type ProjectId } from "@t3tools/contracts";
 import { OrchestratorToolkit } from "./tools.ts";
-import {
-  resolveProjectSettings,
-  resolveWorkflowModelSelection,
-} from "@t3tools/shared/projectSettings";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
-import { developmentWorktreeStrategy } from "../../../orchestration-v2/WorkflowLaunch.ts";
+import { developmentWorktreeStrategy } from "../../../vcs/developmentBranch.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
@@ -49,8 +41,6 @@ const scheduledTaskDefaults = Effect.gen(function* () {
       settings === null
         ? null
         : resolveProjectSettings(settings, projectId).settings.defaultModelSelection,
-    workflowModelSelection: (projectId: ProjectId, workflow: ScheduledTaskWorkflow) =>
-      settings === null ? null : resolveWorkflowModelSelection(settings, projectId, workflow),
     developmentWorktree: (projectId: ProjectId) =>
       Option.isNone(git) || Option.isNone(projects)
         ? Effect.succeed(null)
@@ -120,7 +110,8 @@ const handlers = {
         );
       }),
   ),
-  t3_background_wait: McpToolAccess.actsAsCaller((input) =>
+  // Claude can start a turn by itself before T3 starts its run, so a live-run check would refuse the mark.
+  t3_background_wait: McpToolAccess.readsAsCaller((input) =>
     Effect.gen(function* () {
       const { scope, threads } = yield* readCaller();
       const caller = yield* McpInvocationContext.requireThreadScope(scope, "t3_background_wait");
@@ -147,12 +138,7 @@ const handlers = {
   schedule_task: McpToolAccess.either(
     (input) => input.scheduledTaskId === undefined,
     McpToolAccess.startsThreads(
-      // A scheduled task runs with the caller's own modes; a workflow task's
-      // runs start unattended, so the caller has to allow full access.
-      (input) =>
-        input.workflow === undefined
-          ? {}
-          : { runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE, interactionMode: "default" as const },
+      () => ({}),
       ({ prompt, schedule, ...input }) =>
         Effect.gen(function* () {
           if (prompt === undefined || schedule === undefined) {
@@ -173,16 +159,7 @@ const handlers = {
       { refused: "schedule tasks in this environment" },
     ),
     McpToolAccess.writes(
-      ({
-        scheduledTaskId,
-        prompt,
-        title,
-        schedule,
-        enabled,
-        freshSession,
-        bindToCurrentThread,
-        workflow,
-      }) =>
+      ({ scheduledTaskId, prompt, title, schedule, enabled, freshSession, bindToCurrentThread }) =>
         Effect.gen(function* () {
           if (scheduledTaskId === undefined) return yield* Effect.die("unreachable");
           const scope = yield* McpInvocationContext.McpInvocationContext;
@@ -197,7 +174,6 @@ const handlers = {
               enabled,
               freshSession,
               bindToCurrentThread,
-              workflow,
             },
             yield* scheduledTaskDefaults,
           );
@@ -299,7 +275,7 @@ const handlers = {
   t3_environment_unlink: McpToolAccess.writesEnvironment(({ environmentId }) =>
     Effect.gen(function* () {
       const links = yield* PeerLinks.PeerLinks;
-      const removed = yield* links
+      const result = yield* links
         .unlink(environmentId)
         .pipe(
           Effect.mapError(
@@ -307,7 +283,7 @@ const handlers = {
               new OrchestratorMcpFailure({ code: "orchestration_error", message: error.message }),
           ),
         );
-      return { environmentId, removed };
+      return { environmentId, ...result };
     }),
   ),
   t3_thread_interrupt: McpToolAccess.writesThreads(

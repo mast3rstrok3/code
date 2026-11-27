@@ -89,6 +89,11 @@ export default mergeConfig(
           dependsOn: ["@t3tools/web#build"],
           cache: false,
         },
+        // A local tsbuildinfo is leftover build state, not a typecheck input.
+        typecheck: {
+          command: "effect-tsgo tsrs --noEmit",
+          cache: { input: [{ auto: true }, "!*.tsbuildinfo"] },
+        },
       },
     },
     pack: {
@@ -105,16 +110,17 @@ export default mergeConfig(
           },
         },
       ],
-      // SEA embeds one entry; expose the history worker as a hidden subcommand.
+      // SEA embeds one entry; expose the workers as hidden subcommands.
       entry: packBootstrap
         ? ["src/bin.ts"]
         : packExecutable
           ? ["src/binMain.ts"]
-          : ["src/bin.ts", "src/claude-history-worker.ts"],
+          : ["src/bin.ts", "src/claude-history-worker.ts", "src/process-launcher.ts"],
       outDir: packBootstrap ? "dist-exe" : packExecutable ? cliAssetDir : "dist",
       sourcemap: !packExecutable,
       clean: true,
-      copy: [{ from: "src/provider/workflow-skills", to: "dist" }],
+      // The executable cannot carry a directory; scripts/build-cli-archive.ts stages it beside t3.
+      copy: packExecutable ? [] : [{ from: "src/skills/plugin", to: "dist/skills" }],
       // SEA can only resolve built-ins; keep dynamic imports inside each emitted module.
       ...(packExecutable ? { outputOptions: { codeSplitting: false } } : {}),
       ...(packMode === "1"

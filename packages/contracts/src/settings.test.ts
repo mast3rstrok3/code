@@ -25,7 +25,6 @@ import {
   withIdleCompaction,
 } from "./settings.ts";
 import { DEFAULT_WORKSPACE_USER, DEFAULT_WORKSPACE_USER_VIEW } from "./workspaceUsers.ts";
-import { ImplementationWorkflowSettings } from "./orchestration.ts";
 
 const decodeClientSettings = Schema.decodeUnknownSync(ClientSettingsSchema);
 const decodeClientSettingsPatch = Schema.decodeUnknownSync(ClientSettingsPatch);
@@ -44,54 +43,6 @@ const decodeClientServerSettingsPatch = Schema.decodeUnknownSync(ClientServerSet
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodeServerSettingsPatch = Schema.encodeSync(ServerSettingsPatch);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
-const decodeWorkflowSettings = Schema.decodeSync(ImplementationWorkflowSettings);
-const decodeUnknownWorkflowSettings = Schema.decodeUnknownSync(ImplementationWorkflowSettings);
-
-describe("parallel ticket limits", () => {
-  it("preserves workflow limits and partial server defaults", () => {
-    expect(decodeWorkflowSettings({ maxParallelTickets: 3 })).toMatchObject({
-      maxParallelTickets: 3,
-    });
-    expect(decodeServerSettingsPatch({ implementation: { maxParallelTickets: 4 } })).toEqual({
-      implementation: { maxParallelTickets: 4 },
-    });
-    expect(
-      encodeServerSettings(decodeServerSettings({ implementation: { maxParallelTickets: 4 } })),
-    ).toMatchObject({ implementation: { maxParallelTickets: 4 } });
-    expect(decodeWorkflowSettings({}).maxParallelTickets).toBeUndefined();
-  });
-
-  it.each([0, -1, 1.5, 33, Infinity, "2"])(
-    "rejects invalid parallel ticket limit %s",
-    (maxParallelTickets) => {
-      expect(() => decodeUnknownWorkflowSettings({ maxParallelTickets })).toThrow();
-      expect(() => decodeServerSettingsPatch({ implementation: { maxParallelTickets } })).toThrow();
-    },
-  );
-});
-
-describe("parallel App Review limits", () => {
-  it("persists independent limits in workflow settings and server defaults", () => {
-    const limits = { maxParallelTickets: 6, maxParallelAppReviews: 2 };
-    expect(decodeWorkflowSettings(limits)).toMatchObject(limits);
-    expect(encodeServerSettings(decodeServerSettings({ implementation: limits }))).toMatchObject({
-      implementation: limits,
-    });
-    expect(decodeServerSettingsPatch({ implementation: { maxParallelAppReviews: 1 } })).toEqual({
-      implementation: { maxParallelAppReviews: 1 },
-    });
-    expect(decodeWorkflowSettings({}).maxParallelAppReviews).toBeUndefined();
-  });
-  it.each([0, -1, 1.5, 33, Infinity, "2"])(
-    "rejects invalid App Review limit %s",
-    (maxParallelAppReviews) => {
-      expect(() => decodeUnknownWorkflowSettings({ maxParallelAppReviews })).toThrow();
-      expect(() =>
-        decodeServerSettingsPatch({ implementation: { maxParallelAppReviews } }),
-      ).toThrow();
-    },
-  );
-});
 
 describe("ServerSettings response streaming", () => {
   it("defaults to paragraph buffering", () => {
@@ -204,6 +155,12 @@ describe("storage cleanup settings", () => {
     expect(() =>
       decodeServerSettingsPatch({ storageCleanup: { worktreeKeepWhen: "unknown" } }),
     ).toThrow();
+  });
+});
+
+describe("ClientSettings terminal close confirmation", () => {
+  it("keeps confirmation enabled for settings without a saved preference", () => {
+    expect(decodeClientSettings({}).confirmTerminalClose).toBe(true);
   });
 });
 
@@ -362,25 +319,6 @@ describe("ClaudeSettings auto-compaction", () => {
       expect(() => decodeClaudeSettings({ autoCompactWindow: value })).toThrow();
     },
   );
-});
-
-describe("Engineering Workflow settings", () => {
-  it("runs every optional step except Ticket App Review by default", () => {
-    expect(decodeServerSettings({}).implementation).toEqual({
-      ticketAppReviewEnabled: false,
-      appReviewEnabled: true,
-      finalCodeReviewEnabled: true,
-      pullRequestCreationEnabled: true,
-      pullRequestBabysittingEnabled: true,
-    });
-  });
-
-  it("accepts partial patches for optional workflow steps", () => {
-    expect(
-      decodeServerSettingsPatch({ implementation: { pullRequestBabysittingEnabled: false } })
-        .implementation,
-    ).toEqual({ pullRequestBabysittingEnabled: false });
-  });
 });
 
 describe("resolveIdleCompaction", () => {
@@ -1156,6 +1094,11 @@ describe("voice settings", () => {
       speechPostProcessingEnabled: true,
     };
     expect(decodeClientSettings({}).speechSilenceFiltering).toBe(true);
+    expect(decodeClientSettings({}).speechStreaming).toBe(true);
+    expect(decodeClientSettings({ speechStreaming: false }).speechStreaming).toBe(false);
+    expect(decodeClientSettingsPatch({ speechStreaming: false })).toEqual({
+      speechStreaming: false,
+    });
     expect(decodeClientSettingsPatch({ speechSilenceFiltering: false })).toEqual({
       speechSilenceFiltering: false,
     });
@@ -1185,12 +1128,21 @@ describe("server model preferences", () => {
   });
 });
 
-describe("retired workflow model pins", () => {
-  it("still decodes a stored Recovery backup pin", () => {
-    const pin = {
-      workflowPromptId: "workflow.recovery-fallback",
-      modelSelection: { instanceId: "codex", model: "gpt-5.5" },
-    };
-    expect(decodeServerSettings({ workflowStepModels: [pin] }).workflowStepModels).toEqual([pin]);
+describe("removed workflow settings", () => {
+  it("still decodes a settings file that holds them", () => {
+    const settings = decodeServerSettings({
+      workflowStepModels: [
+        {
+          workflowPromptId: "workflow.recovery-fallback",
+          modelSelection: { instanceId: "codex", model: "gpt-5.5" },
+        },
+      ],
+      workflowStepCycles: [{ workflowPromptId: "implementation.code-review", cycles: 2 }],
+      implementation: { maxParallelTickets: 4 },
+      branchNamePrefix: "kept",
+    });
+    expect(settings.branchNamePrefix).toBe("kept");
+    expect(settings).not.toHaveProperty("workflowStepModels");
+    expect(settings).not.toHaveProperty("implementation");
   });
 });

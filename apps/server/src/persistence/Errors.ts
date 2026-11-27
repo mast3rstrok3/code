@@ -115,11 +115,7 @@ export type ProviderSessionRuntimeRepositoryError = PersistenceSqlError | Persis
 export type AuthPairingLinkRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 export type AuthSessionRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 export type PullRequestFilesViewedRepositoryError = PersistenceSqlError | PersistenceDecodeError;
+export type IssueTrackerBindingsRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 export type PullRequestReviewGuideRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 
 export type ProjectionRepositoryError = PersistenceSqlError | PersistenceDecodeError;
-
-export const isPersistenceError = (
-  value: unknown,
-): value is PersistenceSqlError | PersistenceDecodeError =>
-  Schema.is(PersistenceSqlError)(value) || Schema.is(PersistenceDecodeError)(value);

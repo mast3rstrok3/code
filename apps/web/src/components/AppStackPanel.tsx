@@ -1,3 +1,4 @@
+import { msg } from "gt-react";
 import {
   type AppStack,
   type AppStackBundlePlanMember,
@@ -95,10 +96,6 @@ import {
   type AutoCreateNotice,
   type PreviewCandidate,
 } from "@t3tools/client-runtime/app-stack-panel";
-import {
-  AppStackWorkflowConflictWarning,
-  AppStackWorkflowOwnershipBadge,
-} from "./AppStackWorkflowOwnership";
 import {
   displayStackName,
   isSameOrChildStackPath,
@@ -261,7 +258,13 @@ function StackServices({ stack }: { readonly stack: AppStack }) {
 /** The apps a platform record started, each with its status and frontend. */
 // Copies the password of the stack's seeded test users without showing it.
 function StackTestPasswordButton(props: { readonly password: string; readonly stackName: string }) {
-  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "test password" });
+  const { copyToClipboard, isCopied } = useCopyToClipboard({
+    target: {
+      target: "test password",
+      unavailableMessage: msg("Clipboard API is unavailable while copying test password."),
+      failureMessage: msg("Failed to copy test password to the clipboard."),
+    },
+  });
   return (
     <Button
       size="xs"
@@ -386,7 +389,13 @@ function StackKubernetesInspect(props: {
   readonly onSelectContainer: (containerName: string) => void;
   readonly onRefresh: () => void;
 }) {
-  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "pod logs" });
+  const { copyToClipboard, isCopied } = useCopyToClipboard({
+    target: {
+      target: "pod logs",
+      unavailableMessage: msg("Clipboard API is unavailable while copying pod logs."),
+      failureMessage: msg("Failed to copy pod logs to the clipboard."),
+    },
+  });
   const selectedPod =
     props.pods.find((pod) => pod.name === props.selectedPodName) ?? props.pods[0] ?? null;
   const selectedContainerName =
@@ -875,7 +884,6 @@ export function AppStackPanel(props: AppStackPanelProps) {
             displayName: sourceStack?.displayName ?? appStackDisplayName(normalizedPath, branch),
             gitBranch: branch,
             namespace,
-            workflowId: sourceStack?.workflowId ?? undefined,
             variant,
             ...(bundle && bundle.length > 0 ? { bundle: [...bundle] } : {}),
             ...(omitServices === undefined ? {} : { omitServices }),
@@ -1275,7 +1283,6 @@ export function AppStackPanel(props: AppStackPanelProps) {
                     Current
                   </span>
                 ) : null}
-                <AppStackWorkflowOwnershipBadge stack={stack} />
                 {isProtectedAppStack(stack) ? (
                   <span className="inline-flex h-5 items-center gap-1 rounded-full border border-border bg-muted px-2 text-2xs font-medium text-muted-foreground">
                     <ShieldCheckIcon className="size-3" />
@@ -1405,7 +1412,7 @@ export function AppStackPanel(props: AppStackPanelProps) {
                 data-pressed={isProtectedAppStack(stack) ? "" : undefined}
                 aria-pressed={isProtectedAppStack(stack)}
                 aria-label={appStackProtectionAction(stack).ariaLabel}
-                title="Protected stacks survive workflow teardown and are shed last under memory pressure"
+                title="Protected stacks are shed last under memory pressure"
               >
                 {pendingAction === "protect" ? (
                   <LoaderIcon className="size-3.5 animate-spin" />
@@ -1514,8 +1521,6 @@ export function AppStackPanel(props: AppStackPanelProps) {
               <div>{statusQuery.error}</div>
             </div>
           ) : null}
-
-          <AppStackWorkflowConflictWarning conflicts={listQuery.data?.workflowConflicts ?? []} />
 
           {isCreateOpen ? (
             <section className="space-y-3 rounded-lg border border-border bg-card/35 p-3">

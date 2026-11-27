@@ -16,11 +16,9 @@ import {
   TurnItemId,
   WS_METHODS,
   type OrchestrationV2Command,
-  type ClientOrchestrationCommand,
   type OrchestrationV2ThreadLaunchInput,
   type OrchestrationV2ThreadProjection,
   type ProjectMutation,
-  type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
@@ -31,7 +29,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Stream from "effect/Stream";
+import * as Schema from "effect/Schema";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
 import { RpcClientError } from "effect/rpc";
@@ -49,6 +47,7 @@ import { v2Now, v2Projection, v2ThreadId } from "../state/orchestrationV2TestFix
 import {
   archiveThread,
   interruptThreadTurn,
+  promoteQueuedRun,
   revertThreadCheckpoint,
   resumeThreadQueue,
   startThreadTurn,
@@ -58,6 +57,8 @@ const layerTestRandom = Layer.succeed(
   SecureRandom.SecureRandom,
   SecureRandom.make((size) => new Uint8Array(size)),
 );
+
+class Refused extends Schema.TaggedError<Refused>()("Refused", {}) {}
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("environment-1"),
@@ -74,21 +75,13 @@ const CONNECTED_STATE: SupervisorConnectionState = {
 
 const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(function* (input: {
   readonly commands: OrchestrationV2Command[];
-  readonly workflowCommands?: ClientOrchestrationCommand[];
   readonly projects: ProjectMutation[];
   readonly launches?: OrchestrationV2ThreadLaunchInput[];
   readonly projection?: OrchestrationV2ThreadProjection;
-  readonly worktreeSetup?: Stream.Stream<WorktreeSetupSnapshot | null>;
   readonly projectionRequests?: ThreadId[];
   readonly advertiseThreadStop?: boolean;
 }) {
   const client = {
-    [WS_METHODS.subscribeWorktreeSetup]: () => input.worktreeSetup ?? Stream.empty,
-    [WS_METHODS.workflowDispatchCommand]: ({ command }: { command: ClientOrchestrationCommand }) =>
-      Effect.sync(() => {
-        input.workflowCommands?.push(command);
-        return { sequence: 1 };
-      }),
     [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
       Effect.sync(() => {
         input.commands.push(command);
@@ -197,6 +190,7 @@ describe("V2 environment commands", () => {
   it.effect("resolves run ordinal zero to the persisted thread-start checkpoint", () =>
     Effect.gen(function* () {
       const scopeId = CheckpointScopeId.make("checkpoint-scope-root");
+      const repositoryScopeId = CheckpointScopeId.make("checkpoint-scope-repository");
       const checkpointId = CheckpointId.make("checkpoint-thread-start");
       const projection: OrchestrationV2ThreadProjection = {
         ...v2Projection,
@@ -214,6 +208,38 @@ describe("V2 environment commands", () => {
             status: "ready",
             files: [],
             capturedAt: v2Now,
+          },
+          // A tracked repository's first baseline, recorded after the thread's own.
+          {
+            id: CheckpointId.make("checkpoint-repository-start"),
+            threadId: v2ThreadId,
+            scopeId: repositoryScopeId,
+            runId: null,
+            nodeId: NodeId.make("node-run-1"),
+            parentCheckpointId: null,
+            ordinalWithinScope: 0,
+            appRunOrdinal: null,
+            ref: CheckpointRef.make("refs/t3/repository-start"),
+            status: "ready",
+            files: [],
+            capturedAt: v2Now,
+          },
+        ],
+        checkpointScopes: [
+          {
+            id: repositoryScopeId,
+            threadId: v2ThreadId,
+            runId: null,
+            nodeId: NodeId.make("node-run-1"),
+            parentScopeId: scopeId,
+            providerThreadId: null,
+            kind: "manual",
+            ordinalWithinParent: 1,
+            advancesAppRunCount: false,
+            cwd: "/workspace/api",
+            label: "api",
+            repositoryPath: "/workspace/api",
+            createdAt: v2Now,
           },
         ],
       };
@@ -235,194 +261,6 @@ describe("V2 environment commands", () => {
           checkpointId,
         },
       ]);
-    }).pipe(Effect.provide(layerTestRandom)),
-  );
-
-  it.effect("launches a workflow draft without sending an ordinary provider turn first", () =>
-    Effect.gen(function* () {
-      const commands: OrchestrationV2Command[] = [];
-      const launches: OrchestrationV2ThreadLaunchInput[] = [];
-      const workflowCommands: ClientOrchestrationCommand[] = [];
-      const supervisor = yield* makeSupervisor({
-        commands,
-        projects: [],
-        launches,
-        workflowCommands,
-      });
-      yield* startThreadTurn({
-        commandId: CommandId.make("launch-workflow"),
-        threadId: v2ThreadId,
-        createdAt: "2026-10-07T00:00:00.000Z",
-        message: {
-          messageId: MessageId.make("workflow-message"),
-          role: "user",
-          text: "Build the feature",
-          attachments: [],
-        },
-        runtimeMode: "full-access",
-        interactionMode: "product-workflow",
-        workflowPreset: "fast-feature",
-        workflowPromptId: "implementation.fast-feature.codex",
-        bootstrap: {
-          createThread: {
-            projectId: ProjectId.make("project-1"),
-            title: "Feature",
-            modelSelection: v2Projection.thread.modelSelection,
-            runtimeMode: "full-access",
-            interactionMode: "product-workflow",
-            branch: null,
-            worktreePath: null,
-            createdAt: "2026-10-07T00:00:00.000Z",
-          },
-        },
-      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
-      expect(launches).toHaveLength(1);
-      expect(launches[0]?.initialMessage).toBeUndefined();
-      expect(commands).toEqual([]);
-      expect(workflowCommands).toMatchObject([
-        { type: "thread.composer-mode.set", workflowPreset: "fast-feature" },
-        {
-          type: "thread.turn.start",
-          workflowPromptId: "implementation.fast-feature.codex",
-          message: { text: "Build the feature" },
-        },
-      ]);
-    }).pipe(Effect.provide(layerTestRandom)),
-  );
-
-  it.effect(
-    "waits for worktree preparation before starting a workflow and rejects failed setup",
-    () =>
-      Effect.gen(function* () {
-        const running: WorktreeSetupSnapshot = {
-          threadId: v2ThreadId,
-          phase: "running",
-          startedAt: "2026-10-07T00:00:00.000Z",
-          endedAt: null,
-          branch: "feature",
-          baseRef: "dev",
-          worktreePath: null,
-          setupScript: null,
-          stages: [],
-          error: null,
-          sequence: 1,
-        };
-        for (const phase of ["done", "failed"] as const) {
-          const workflowCommands: ClientOrchestrationCommand[] = [];
-          const setup = Stream.make(null, running).pipe(
-            Stream.concat(
-              Stream.fromEffect(
-                Effect.sync(() => {
-                  expect(workflowCommands).toEqual([]);
-                  return {
-                    ...running,
-                    phase,
-                    sequence: 2,
-                    error: phase === "failed" ? "Setup script failed" : null,
-                  };
-                }),
-              ),
-            ),
-          );
-          const supervisor = yield* makeSupervisor({
-            commands: [],
-            projects: [],
-            workflowCommands,
-            worktreeSetup: setup,
-          });
-          const result = yield* startThreadTurn({
-            threadId: v2ThreadId,
-            message: {
-              messageId: MessageId.make("workflow-message"),
-              role: "user",
-              text: "Build a feature",
-              attachments: [],
-            },
-            runtimeMode: "full-access",
-            interactionMode: "product-workflow",
-            workflowPreset: "fast-feature",
-            workflowPromptId: "implementation.fast-feature.codex",
-            bootstrap: {
-              createThread: {
-                projectId: ProjectId.make("project-1"),
-                title: "Feature",
-                modelSelection: v2Projection.thread.modelSelection,
-                runtimeMode: "full-access",
-                interactionMode: "product-workflow",
-                branch: null,
-                worktreePath: null,
-                createdAt: "2026-10-07T00:00:00.000Z",
-              },
-              prepareWorktree: {
-                projectCwd: "/workspace/project",
-                branch: "feature",
-                baseBranch: "dev",
-              },
-            },
-          }).pipe(
-            Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-            Effect.exit,
-          );
-          expect(result._tag).toBe(phase === "done" ? "Success" : "Failure");
-          expect(workflowCommands.map((command) => command.type)).toEqual(
-            phase === "done" ? ["thread.composer-mode.set", "thread.turn.start"] : [],
-          );
-        }
-      }).pipe(Effect.provide(layerTestRandom)),
-  );
-
-  it.effect("routes a Build skill through the workflow runtime on an existing native thread", () =>
-    Effect.gen(function* () {
-      const commands: OrchestrationV2Command[] = [];
-      const workflowCommands: ClientOrchestrationCommand[] = [];
-      const supervisor = yield* makeSupervisor({ commands, projects: [], workflowCommands });
-      yield* startThreadTurn({
-        commandId: CommandId.make("skill-turn"),
-        threadId: v2ThreadId,
-        message: {
-          messageId: MessageId.make("skill-message"),
-          role: "user",
-          text: "Review the change",
-          attachments: [],
-        },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        workflowPromptId: "matt-pocock.code-review",
-      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
-      expect(commands).toEqual([]);
-      expect(workflowCommands).toMatchObject([
-        { type: "thread.composer-mode.set", workflowPreset: null },
-        { type: "thread.turn.start", workflowPromptId: "matt-pocock.code-review" },
-      ]);
-    }).pipe(Effect.provide(layerTestRandom)),
-  );
-
-  it.effect("clears workflow mode before sending an ordinary Build turn", () =>
-    Effect.gen(function* () {
-      const commands: OrchestrationV2Command[] = [];
-      const workflowCommands: ClientOrchestrationCommand[] = [];
-      const supervisor = yield* makeSupervisor({ commands, projects: [], workflowCommands });
-      yield* startThreadTurn({
-        commandId: CommandId.make("build-turn"),
-        threadId: v2ThreadId,
-        clearWorkflowMode: true,
-        message: {
-          messageId: MessageId.make("build-message"),
-          role: "user",
-          text: "Build directly",
-          attachments: [],
-        },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
-      expect(workflowCommands).toMatchObject([
-        {
-          type: "thread.composer-mode.set",
-          workflowPreset: null,
-          workflowImplementationSettings: null,
-        },
-      ]);
-      expect(commands).toMatchObject([{ type: "message.dispatch", text: "Build directly" }]);
     }).pipe(Effect.provide(layerTestRandom)),
   );
 
@@ -510,13 +348,14 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(layerTestRandom)),
   );
 
-  it.effect("uses server-resolved delivery intent without fetching the full projection", () =>
+  it.effect("sends title seed and delivery intent without fetching the full projection", () =>
     Effect.gen(function* () {
       const commands: OrchestrationV2Command[] = [];
       const projectionRequests: ThreadId[] = [];
       const supervisor = yield* makeSupervisor({ commands, projects: [], projectionRequests });
 
       for (const [mode, expectedType] of [
+        ["start", "start_immediately"],
         ["queue", "queue_after_active"],
         ["auto", "start_immediately"],
         ["steer", "start_immediately"],
@@ -533,17 +372,99 @@ describe("V2 environment commands", () => {
           },
           runtimeMode: "full-access",
           interactionMode: "default",
+          titleSeed: mode,
           dispatchMode: mode,
         }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
 
         expect(commands.at(-1)).toMatchObject({
           type: "message.dispatch",
+          titleSeed: mode,
           dispatchMode: { type: expectedType },
-          ...(mode === "queue" ? {} : { deliveryIntent: mode }),
+          ...(mode === "queue" || mode === "start" ? {} : { deliveryIntent: mode }),
         });
       }
       expect(projectionRequests).toEqual([]);
     }).pipe(Effect.provide(layerTestRandom)),
+  );
+
+  it.effect(
+    "sends fallback text only on empty manual continuations for servers without native resume",
+    () =>
+      Effect.gen(function* () {
+        const commands: OrchestrationV2Command[] = [];
+        const supervisor = yield* makeSupervisor({ commands, projects: [] });
+        const resumedRunId = RunId.make("run-interrupted");
+
+        yield* startThreadTurn({
+          commandId: CommandId.make("command-resume-empty"),
+          threadId: v2ThreadId,
+          manualContinuationOfRunId: resumedRunId,
+          message: {
+            messageId: MessageId.make("message-resume-empty"),
+            role: "user",
+            text: "",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          dispatchMode: "start",
+        }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+        yield* startThreadTurn({
+          commandId: CommandId.make("command-resume-text"),
+          threadId: v2ThreadId,
+          manualContinuationOfRunId: resumedRunId,
+          message: {
+            messageId: MessageId.make("message-resume-text"),
+            role: "user",
+            text: "Keep going",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          dispatchMode: "start",
+        }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+        yield* startThreadTurn({
+          commandId: CommandId.make("command-start-empty"),
+          threadId: v2ThreadId,
+          message: {
+            messageId: MessageId.make("message-start-empty"),
+            role: "user",
+            text: "",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          dispatchMode: "start",
+        }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+        expect(commands).toEqual([
+          expect.objectContaining({
+            type: "message.dispatch",
+            commandId: "command-resume-empty",
+            threadId: v2ThreadId,
+            manualContinuationOfRunId: resumedRunId,
+            text: "Continue where you left off.",
+            dispatchMode: { type: "start_immediately" },
+          }),
+          expect.objectContaining({
+            type: "message.dispatch",
+            commandId: "command-resume-text",
+            threadId: v2ThreadId,
+            manualContinuationOfRunId: resumedRunId,
+            text: "Keep going",
+            dispatchMode: { type: "start_immediately" },
+          }),
+          expect.objectContaining({
+            type: "message.dispatch",
+            commandId: "command-start-empty",
+            threadId: v2ThreadId,
+            text: "",
+            dispatchMode: { type: "start_immediately" },
+          }),
+        ]);
+      }).pipe(Effect.provide(layerTestRandom)),
   );
 
   // A dead socket reaches the caller as a protocol error, or as an interrupt when
@@ -758,6 +679,121 @@ describe("V2 environment commands", () => {
         "command-host-gone-false",
         "command-host-gone-true",
       ]);
+    }).pipe(Effect.provide(layerTestRandom)),
+  );
+
+  const turnSends = [
+    {
+      name: "new thread's first message",
+      method: ORCHESTRATION_V2_WS_METHODS.launchThread,
+      send: (commandId: CommandId) =>
+        startThreadTurn({
+          commandId,
+          threadId: v2ThreadId,
+          message: {
+            messageId: MessageId.make(commandId),
+            role: "user",
+            text: "hi",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          bootstrap: {
+            createThread: {
+              projectId: ProjectId.make("project-1"),
+              title: "Thread",
+              modelSelection: v2Projection.thread.modelSelection,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: null,
+              createdAt: "2026-06-20T00:00:00.000Z",
+            },
+          },
+        }),
+    },
+    {
+      name: "queued message sent now",
+      method: ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
+      send: (commandId: CommandId) =>
+        resumeThreadQueue({ commandId, threadId: v2ThreadId, runId: RunId.make("queued") }),
+    },
+    {
+      name: "queued message steered",
+      method: ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
+      send: (commandId: CommandId) =>
+        promoteQueuedRun({
+          commandId,
+          threadId: v2ThreadId,
+          queuedRunId: RunId.make("queued"),
+          targetRunId: RunId.make("running"),
+        }),
+    },
+  ] as const;
+
+  const sendFailingFirstAttempt = Effect.fn("TestEnvironmentCommands.sendFailingFirstAttempt")(
+    function* (turnSend: (typeof turnSends)[number], failure: Effect.Effect<never, Refused>) {
+      const supervisor = yield* makeSupervisor({ commands: [], projects: [], launches: [] });
+      const healthySession = Option.getOrThrow(yield* SubscriptionRef.get(supervisor.session));
+      const attempts: string[] = [];
+      const firstAttemptFailed = yield* Deferred.make<void>();
+      const healthyMethod = (
+        healthySession.client as unknown as Record<
+          string,
+          (input: unknown) => Effect.Effect<unknown>
+        >
+      )[turnSend.method]!;
+      const failingClient = {
+        ...healthySession.client,
+        [turnSend.method]: (input: { readonly commandId: CommandId }) =>
+          Effect.gen(function* () {
+            attempts.push(input.commandId);
+            if (attempts.length > 1) return yield* healthyMethod(input);
+            yield* SubscriptionRef.set(supervisor.session, Option.none());
+            yield* Deferred.succeed(firstAttemptFailed, undefined);
+            return yield* failure;
+          }),
+      } as unknown as WsRpcProtocolClient;
+      yield* SubscriptionRef.set(
+        supervisor.session,
+        Option.some({ ...healthySession, client: failingClient }),
+      );
+      const sendFiber = yield* turnSend
+        .send(CommandId.make("command-turn-send"))
+        .pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.forkChild,
+        );
+      yield* Deferred.await(firstAttemptFailed);
+      yield* SubscriptionRef.set(
+        supervisor.session,
+        Option.some({ ...healthySession, client: failingClient }),
+      );
+      return { exit: yield* Fiber.await(sendFiber), attempts };
+    },
+  );
+
+  it.effect.each(turnSends)("resends a $name lost to a session close", (turnSend) =>
+    Effect.gen(function* () {
+      const { exit, attempts } = yield* sendFailingFirstAttempt(
+        turnSend,
+        Effect.failCause(Cause.interrupt()),
+      );
+
+      expect(attempts).toEqual(["command-turn-send", "command-turn-send"]);
+      expect(Exit.isSuccess(exit)).toBe(true);
+    }).pipe(Effect.provide(layerTestRandom)),
+  );
+
+  it.effect("doesn't resend a new thread's first message the server refused", () =>
+    Effect.gen(function* () {
+      const { exit, attempts } = yield* sendFailingFirstAttempt(
+        turnSends[0],
+        Effect.fail(new Refused()),
+      );
+
+      expect(attempts).toEqual(["command-turn-send"]);
+      expect(Exit.isFailure(exit)).toBe(true);
     }).pipe(Effect.provide(layerTestRandom)),
   );
 
