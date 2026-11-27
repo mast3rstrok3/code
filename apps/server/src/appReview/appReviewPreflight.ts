@@ -10,9 +10,6 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import { ProcessRunner } from "../processRunner.ts";
 
-export const APP_REVIEW_PREFLIGHT_RETRY_MS = 60_000;
-export const APP_REVIEW_PREFLIGHT_WAIT_LIMIT_MS = 30 * 60_000;
-
 /** Discard process output because connection diagnostics may contain credentials. */
 export const runAppReviewPreflight = Effect.fn("runAppReviewPreflight")(function* (input: {
   readonly command: string;

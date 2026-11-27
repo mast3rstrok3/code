@@ -90,6 +90,7 @@ import * as DesktopBrowserChannel from "./DesktopBrowserChannel.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as PreviewManager from "./Manager.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import * as DomRecorder from "./DomRecorder.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
@@ -326,6 +327,19 @@ interface Recording {
   readonly framesInFlight: Set<Promise<void>>;
 }
 
+/** An rrweb recording: the page streams DOM events, appended to a pending attachment. */
+interface DomRecording {
+  readonly pendingId: string;
+  readonly path: string;
+  readonly file: NodeFSP.FileHandle;
+  readonly startedAt: string;
+  /** Serializes appends so batches cannot interleave inside a line. */
+  writes: Promise<void>;
+  bytes: number;
+  events: number;
+  stopping: boolean;
+}
+
 interface ServerTab {
   readonly threadId: ThreadId;
   readonly tabId: string;
@@ -399,6 +413,9 @@ interface ServerTab {
   } | null;
 
   recordingStart: Promise<Recording> | null;
+  domRecording: DomRecording | null;
+  /** Playwright registers a binding once per page, so later recordings reuse it. */
+  domRecorderBound: boolean;
   captureLock: Promise<void>;
   capturing: number;
 }
@@ -1029,6 +1046,7 @@ const make = Effect.gen(function* () {
       if (tab.isolatedContext) void closed.then(() => page.context().close()).catch(constVoid);
     }
     void tab.recording?.encoder.close().catch(constVoid);
+    void tab.domRecording?.file.close().catch(constVoid);
     void NodeFSP.rm(downloadDir(tab), { recursive: true, force: true }).catch(constVoid);
     reportLiveTabs();
     if (closeSession) {
@@ -1194,6 +1212,8 @@ const make = Effect.gen(function* () {
       closing: false,
       recording: null,
       recordingStart: null,
+      domRecording: null,
+      domRecorderBound: false,
       initialNavigation: null,
       pendingInitialRequestUrl: null,
       navigationGeneration: 0,
@@ -2314,8 +2334,103 @@ const make = Effect.gen(function* () {
       }
     });
 
+  const appendDomEvents = async (tab: ServerTab, payload: unknown) => {
+    const recording = tab.domRecording;
+    if (recording === null || recording.stopping) return { stop: true };
+    if (!Array.isArray(payload)) return { stop: false };
+    const lines = payload.map((event) => `${JSON.stringify(event)}\n`).join("");
+    recording.events += payload.length;
+    recording.bytes += Buffer.byteLength(lines);
+    recording.writes = recording.writes.then(() => recording.file.write(lines)).then(constVoid);
+    await recording.writes;
+    return { stop: false };
+  };
+
+  const startDomRecording = async (tab: ServerTab): Promise<DomRecording> => {
+    if (tab.domRecording) return tab.domRecording;
+    if (tab.recording || tab.recordingStart) {
+      throw new ServerBrowserPage.ServerBrowserOperationError({
+        tag: "PreviewAutomationExecutionError",
+        message: "A video recording is already running in this tab.",
+      });
+    }
+    const coverage = await tab.page.evaluate(DomRecorder.PIXEL_COVERAGE_PROBE).catch(() => null);
+    if (DomRecorder.pixelCoverageRejectsDomRecording(coverage)) {
+      throw new ServerBrowserPage.ServerBrowserOperationError({
+        tag: "PreviewAutomationExecutionError",
+        message: "The page is mostly canvas or video, which a DOM recording cannot replay.",
+      });
+    }
+    const bootstrap = DomRecorder.buildBootstrapScript(await DomRecorder.loadRrwebRecordScript());
+    if (!tab.domRecorderBound) {
+      await tab.page.exposeBinding(DomRecorder.DOM_RECORDER_BINDING, (_source, payload) =>
+        appendDomEvents(tab, payload),
+      );
+      // Re-arms the recorder in every document the tab loads; idle ones retire on first flush.
+      await tab.page.addInitScript({ content: bootstrap });
+      tab.domRecorderBound = true;
+    }
+    const pendingId = `${PENDING_ATTACHMENT_THREAD_SEGMENT}-${NodeCrypto.randomUUID()}-jsonl`;
+    const path = NodePath.join(config.attachmentsDir, `${pendingId}.jsonl`);
+    await NodeFSP.mkdir(config.attachmentsDir, { recursive: true });
+    const recording: DomRecording = {
+      pendingId,
+      path,
+      file: await NodeFSP.open(path, "a"),
+      startedAt: new Date().toISOString(),
+      writes: Promise.resolve(),
+      bytes: 0,
+      events: 0,
+      stopping: false,
+    };
+    tab.domRecording = recording;
+    try {
+      await tab.page.evaluate(
+        `window.__t3DomRecorderStop && window.__t3DomRecorderStop(); ${bootstrap}`,
+      );
+    } catch (cause) {
+      tab.domRecording = null;
+      await recording.file.close().catch(constVoid);
+      await NodeFSP.rm(path, { force: true }).catch(constVoid);
+      throw cause;
+    }
+    return recording;
+  };
+
+  const stopDomRecording = async (tab: ServerTab, recording: DomRecording) => {
+    try {
+      await tab.page
+        .evaluate(
+          "(async () => { if (window.__t3DomRecorderFlush) await window.__t3DomRecorderFlush(); if (window.__t3DomRecorderStop) window.__t3DomRecorderStop(); })()",
+        )
+        .catch(constVoid);
+      recording.stopping = true;
+      await recording.writes;
+    } finally {
+      tab.domRecording = null;
+      await recording.file.close().catch(constVoid);
+    }
+    if (recording.events === 0) {
+      await NodeFSP.rm(recording.path, { force: true }).catch(constVoid);
+      throw new ServerBrowserPage.ServerBrowserOperationError({
+        tag: "PreviewAutomationExecutionError",
+        message: "The recording captured no page events.",
+      });
+    }
+    return {
+      id: recording.pendingId,
+      tabId: tab.tabId,
+      path: recording.path,
+      mimeType: DomRecorder.DOM_RECORDING_MIME_TYPE,
+      sizeBytes: recording.bytes,
+      createdAt: new Date().toISOString(),
+      uploadedAttachmentId: recording.pendingId,
+    };
+  };
+
   const stopRecording = (tab: ServerTab) =>
     withCaptureLock(tab, async () => {
+      if (tab.domRecording) return stopDomRecording(tab, tab.domRecording);
       const recording = tab.recording;
       if (!recording) {
         throw new ServerBrowserPage.ServerBrowserOperationError({
@@ -2678,7 +2793,7 @@ const make = Effect.gen(function* () {
           (candidate) =>
             candidate.threadId === request.threadId &&
             candidate.control.agentMayAct(request.agentSessionId ?? "") &&
-            (candidate.recording || candidate.recordingStart),
+            (candidate.recording || candidate.recordingStart || candidate.domRecording),
         );
         const targetTabId =
           request.tabId ?? latestThreadTab(request.threadId, request.agentSessionId)?.tabId;
@@ -2891,7 +3006,10 @@ const make = Effect.gen(function* () {
       case "waitFor":
         return ServerBrowserPage.waitFor(tab.page, input as PreviewAutomationWaitForInput);
       case "recordingStart": {
-        const recording = await startRecording(tab);
+        const recording =
+          (input as { readonly format?: unknown } | undefined)?.format === "dom"
+            ? await startDomRecording(tab)
+            : await startRecording(tab);
         return { tabId: tab.tabId, recording: true, startedAt: recording.startedAt };
       }
     }

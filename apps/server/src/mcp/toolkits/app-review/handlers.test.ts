@@ -1,29 +1,30 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
-  AppReviewId,
-  EMPTY_APP_REVIEW_EVIDENCE,
   EnvironmentId,
   PreviewAutomationExecutionError,
   ProviderInstanceId,
   ThreadId,
   type AppReviewEvidence,
-  type AppReviewRecord,
-  type OrchestrationCommand,
+  type AppReviewScope,
+  type PreviewRecordingMode,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Stream from "effect/Stream";
+import * as Path from "effect/Path";
 
+import * as AppReviewStore from "../../../appReview/AppReviewStore.ts";
+import * as AppReviewTests from "../../../appReview/AppReviewTests.ts";
+import { createPendingAttachmentId } from "../../../attachmentStore.ts";
+import * as ServerConfig from "../../../config.ts";
+import { SqlitePersistenceMemory } from "../../../persistence/Layers/Sqlite.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
-import * as ServerConfig from "../../../config.ts";
-import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as PreviewRecordingPolicy from "../../../preview/PreviewRecordingPolicy.ts";
 import { handlers } from "./handlers.ts";
 
-const reviewId = AppReviewId.make("app-review-1");
 const threadId = ThreadId.make("thread-review");
 const environmentId = EnvironmentId.make("environment-1");
 const providerInstanceId = ProviderInstanceId.make("codex");
@@ -32,26 +33,10 @@ const providerInstanceId = ProviderInstanceId.make("codex");
 const PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
-const emptyDocument = {
-  verdict: "pending",
-  summary: "",
-  checks: [],
-  findings: [],
-  questions: [],
-  nextSteps: [],
-} as const;
-
-const screenshotBackedFailureDocument = {
+const failedDocument = {
   verdict: "failed",
   summary: "Checkout remains broken.",
-  checks: [
-    {
-      id: "checkout-submit",
-      label: "Submit checkout",
-      status: "failed",
-      notes: "The submit button remains disabled.",
-    },
-  ],
+  checks: [{ id: "checkout", label: "Submit checkout", status: "failed", notes: "Disabled." }],
   findings: [
     {
       id: "finding-1",
@@ -66,88 +51,78 @@ const screenshotBackedFailureDocument = {
   nextSteps: ["Repair checkout submission."],
 } as const;
 
-const makeReview = (
-  evidence: AppReviewEvidence,
-  appReviewScope?: AppReviewRecord["appReviewScope"],
-): AppReviewRecord => ({
-  id: reviewId,
-  sourceThreadId: ThreadId.make("thread-source"),
-  reviewThreadId: threadId,
-  ...(appReviewScope === undefined ? {} : { appReviewScope }),
-  sourceTurnId: null,
-  status: "running",
-  document: emptyDocument,
-  evidence,
-  createdAt: "2026-01-01T00:00:00.000Z",
-  updatedAt: "2026-01-01T00:00:00.000Z",
+const savedRecording: AppReviewEvidence["recording"] = {
+  status: "saved",
+  path: "/state/preview-artifacts/app-review/r/recording.webm",
+  mimeType: "video/webm",
+  sizeBytes: 2048,
+  startedAt: "2026-01-01T00:00:10.000Z",
+  completedAt: "2026-01-01T00:01:00.000Z",
+  error: null,
+};
+
+const screenshot = {
+  id: "shot-1",
+  path: "/state/preview-artifacts/app-review/r/shot-1.png",
+  mimeType: "image/png" as const,
+  caption: "Initial load",
+  capturedAt: "2026-01-01T00:00:30.000Z",
+};
+
+const testResult = (command: string, status: "passed" | "failed") => ({
+  command,
+  executedCommand: command,
+  status,
+  outputMarkdown: "",
+  completedAt: "2026-01-01T00:02:00.000Z",
 });
 
 const makeHarness = (input: {
-  readonly review: AppReviewRecord;
   readonly brokerResults?: Partial<Record<string, unknown>>;
   readonly brokerFailure?: PreviewAutomationExecutionError;
   readonly capabilities?: ReadonlyArray<McpInvocationContext.McpCapability>;
+  readonly recordingMode?: PreviewRecordingMode;
+  readonly failDomRecording?: boolean;
 }) => {
-  const dispatched: OrchestrationCommand[] = [];
-  const brokerInvocations: Array<{
-    operation: string;
-    tabId: string | undefined;
-    timeoutMs: number | undefined;
-  }> = [];
-
+  const brokerInvocations: Array<{ operation: string; input: unknown }> = [];
   const layer = Layer.mergeAll(
     Layer.succeed(McpInvocationContext.McpInvocationContext, {
       environmentId,
-
       capabilities: new Set(input.capabilities ?? (["preview", "app-review"] as const)),
       issuedAt: 1,
       thread: { threadId, providerSessionId: "provider-session-1", providerInstanceId },
       client: undefined,
-      requestNamespace: "workflow-test",
-    }),
-    Layer.mock(ProjectionSnapshotQuery)({
-      getThreadDetailSnapshotById: () => Effect.die("unused"),
-
-      getThreadDetailById: () =>
-        Effect.succeedSome({
-          id: threadId,
-          appReviews: [input.review],
-        } as never),
+      requestNamespace: "app-review-test",
     }),
     Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({
       invoke: (request) => {
-        brokerInvocations.push({
-          operation: request.operation,
-          tabId: request.tabId,
-          timeoutMs: request.timeoutMs,
-        });
+        brokerInvocations.push({ operation: request.operation, input: request.input });
         if (input.brokerFailure) return Effect.fail(input.brokerFailure);
+        if (input.failDomRecording && (request.input as { format?: string }).format === "dom") {
+          return Effect.fail(brokerFailure);
+        }
         return Effect.succeed(input.brokerResults?.[request.operation] as never);
       },
     }),
-    Layer.succeed(
-      OrchestrationEngineService,
-      OrchestrationEngineService.of({
-        latestSequence: Effect.succeed(0),
-        readEvents: () => Stream.empty,
-        readThreadEvents: () => Stream.empty,
-        getThreadReplayStats: () =>
-          Effect.succeed({ eventCount: 0, payloadBytes: 0, hasCreateEvent: false }),
-        dispatch: (command) => {
-          dispatched.push(command);
-          return Effect.succeed({ sequence: dispatched.length });
-        },
-        streamDomainEvents: Stream.empty,
-        subscribeDomainEvents: Effect.succeed(Stream.empty),
-      }),
-    ),
-    ServerConfig.ServerConfig.layerTest(process.cwd(), {
-      prefix: "t3-app-review-handlers-test-",
+    Layer.mock(AppReviewTests.AppReviewTests)({}),
+    Layer.succeed(PreviewRecordingPolicy.PreviewRecordingPolicy, {
+      modeForThread: () => Effect.succeed(input.recordingMode ?? "auto"),
     }),
-  ).pipe(Layer.provideMerge(NodeServices.layer));
-
-  return { dispatched, brokerInvocations, layer };
+    AppReviewStore.layer.pipe(Layer.provide(Layer.fresh(SqlitePersistenceMemory))),
+    ServerConfig.ServerConfig.layerTest(process.cwd(), { prefix: "t3-app-review-handlers-" }),
+  ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
+  return { brokerInvocations, layer };
 };
+
+/** Give the thread an active review holding `evidence`. */
+const seed = (scope: AppReviewScope, evidence: Partial<AppReviewEvidence>) =>
+  Effect.gen(function* () {
+    const store = yield* AppReviewStore.AppReviewStore;
+    yield* store.start({ threadId, scope });
+    return yield* store.update({ threadId }, (record) =>
+      Effect.succeed({ ...record, evidence: { ...record.evidence, ...evidence } }),
+    );
+  });
 
 const brokerFailure = new PreviewAutomationExecutionError({
   operation: "recordingStop",
@@ -165,282 +140,179 @@ const brokerFailure = new PreviewAutomationExecutionError({
 });
 
 describe("app-review toolkit handlers", () => {
-  it.effect("withholds browser evidence from an isolated E2E section", () => {
-    const harness = makeHarness({
-      review: makeReview(EMPTY_APP_REVIEW_EVIDENCE, "e2e"),
-      capabilities: ["app-review"],
-    });
-
+  it.effect("refuses browser evidence when the agent has no preview browser", () => {
+    const harness = makeHarness({ capabilities: ["app-review"] });
     return Effect.gen(function* () {
-      const result = yield* Effect.exit(handlers.app_review_recording_start({ reviewId }));
-      assert.strictEqual(result._tag, "Failure");
+      const error = yield* handlers.app_review_recording_start({}).pipe(Effect.flip);
+      assert.match(error.message, /preview browser is not available/);
       assert.deepStrictEqual(harness.brokerInvocations, []);
-      assert.deepStrictEqual(harness.dispatched, []);
+      const store = yield* AppReviewStore.AppReviewStore;
+      assert.deepStrictEqual(yield* store.listForThread(threadId), []);
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("recording start invokes the broker and persists recording evidence", () => {
-    const harness = makeHarness({
-      review: makeReview(EMPTY_APP_REVIEW_EVIDENCE),
-      brokerResults: {
-        recordingStart: {
-          tabId: "tab-1",
-          recording: true,
-          startedAt: "2026-01-01T00:00:10.000Z",
-        },
-      },
-    });
-
+  it.effect("requires the app-review capability", () => {
+    const harness = makeHarness({ capabilities: ["preview"] });
     return Effect.gen(function* () {
-      const recording = yield* handlers.app_review_recording_start({ reviewId });
-      assert.strictEqual(recording.status, "recording");
-      assert.strictEqual(recording.startedAt, "2026-01-01T00:00:10.000Z");
-      assert.deepStrictEqual(harness.brokerInvocations, [
-        { operation: "recordingStart", tabId: undefined, timeoutMs: undefined },
-      ]);
-      assert.strictEqual(harness.dispatched.length, 1);
-      const command = harness.dispatched[0];
-      assert.strictEqual(command?.type, "thread.app-review.evidence.update");
-      if (command?.type === "thread.app-review.evidence.update") {
-        assert.strictEqual(command.evidence.recording.status, "recording");
-      }
+      const error = yield* handlers.app_review_start({}).pipe(Effect.flip);
+      assert.strictEqual(error._tag, "AppReviewError");
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("recording stop persists the saved artifact without echoing the path", () => {
-    const harness = makeHarness({
-      review: makeReview({
-        ...EMPTY_APP_REVIEW_EVIDENCE,
-        recording: {
-          ...EMPTY_APP_REVIEW_EVIDENCE.recording,
-          status: "recording",
-          startedAt: "2026-01-01T00:00:10.000Z",
+  it.effect(
+    "starts a browser review on the first recording and saves the stopped recording under it",
+    () => {
+      const uploadedAttachmentId = createPendingAttachmentId(".webm");
+      const harness = makeHarness({
+        brokerResults: {
+          recordingStart: {
+            tabId: "tab-1",
+            recording: true,
+            startedAt: "2026-01-01T00:00:10.000Z",
+          },
+          recordingStop: {
+            id: "recording",
+            tabId: "tab-1",
+            path: "/desktop/recording.webm",
+            mimeType: "video/webm",
+            sizeBytes: 6,
+            createdAt: "2026-01-01T00:01:00.000Z",
+            uploadedAttachmentId,
+          },
         },
-      }),
-      brokerResults: {
-        recordingStop: {
-          id: "browser-recording-abc",
-          tabId: "tab-1",
-          path: "/state/preview-artifacts/browser-recording-abc.webm",
-          mimeType: "video/webm",
-          sizeBytes: 2048,
-          createdAt: "2026-01-01T00:01:00.000Z",
-        },
-      },
-    });
+      });
+      return Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const missing = yield* handlers.app_review_get({}).pipe(Effect.flip);
+        assert.match(missing.message, /no App Review yet/);
 
-    return Effect.gen(function* () {
-      const recording = yield* handlers.app_review_recording_stop({ reviewId });
-      assert.strictEqual(recording.status, "saved");
-      assert.strictEqual(recording.mimeType, "video/webm");
-      assert.strictEqual(recording.sizeBytes, 2048);
-      assert.strictEqual(recording.startedAt, "2026-01-01T00:00:10.000Z");
-      assert.deepStrictEqual(harness.brokerInvocations, [
-        { operation: "recordingStop", tabId: undefined, timeoutMs: 60_000 },
-      ]);
-      const command = harness.dispatched[0];
-      assert.strictEqual(command?.type, "thread.app-review.evidence.update");
-      if (command?.type === "thread.app-review.evidence.update") {
-        assert.strictEqual(
-          command.evidence.recording.path,
-          "/state/preview-artifacts/browser-recording-abc.webm",
+        const started = yield* handlers.app_review_recording_start({});
+        assert.strictEqual(started.status, "recording");
+        assert.deepStrictEqual(harness.brokerInvocations[0], {
+          operation: "recordingStart",
+          input: { format: "dom" },
+        });
+        const review = yield* handlers.app_review_get({});
+        assert.strictEqual(review.appReviewScope, "browser");
+        assert.strictEqual(review.reviewThreadId, threadId);
+
+        yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
+        yield* fileSystem.writeFileString(
+          path.join(config.attachmentsDir, `${uploadedAttachmentId}.webm`),
+          "video!",
         );
-      }
-    }).pipe(Effect.provide(harness.layer));
-  });
+        const stopped = yield* handlers.app_review_recording_stop({});
+        assert.strictEqual(stopped.status, "saved");
+        assert.strictEqual(stopped.startedAt, "2026-01-01T00:00:10.000Z");
+        assert.deepStrictEqual(harness.brokerInvocations.at(-1), {
+          operation: "recordingStop",
+          input: { transferToEnvironment: true },
+        });
+        const expected = path.join(
+          config.stateDir,
+          "preview-artifacts",
+          "app-review",
+          review.id,
+          "recording.webm",
+        );
+        assert.strictEqual(stopped.path, expected);
+        assert.strictEqual(yield* fileSystem.readFileString(expected), "video!");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 
-  it.effect("recording stop records a failure instead of erroring", () => {
-    const harness = makeHarness({
-      review: makeReview(EMPTY_APP_REVIEW_EVIDENCE),
-      brokerFailure,
-    });
+  it.effect("falls back to video only when the project leaves the recorder on auto", () =>
+    Effect.gen(function* () {
+      const recordingStart = { tabId: "tab-1", recording: true, startedAt: null };
+      const auto = makeHarness({ failDomRecording: true, brokerResults: { recordingStart } });
+      yield* handlers.app_review_recording_start({}).pipe(Effect.provide(auto.layer));
+      assert.deepStrictEqual(
+        auto.brokerInvocations.map((call) => call.input),
+        [{ format: "dom" }, { format: "video" }],
+      );
 
+      const dom = makeHarness({
+        recordingMode: "dom",
+        failDomRecording: true,
+        brokerResults: { recordingStart },
+      });
+      yield* handlers.app_review_recording_start({}).pipe(Effect.flip, Effect.provide(dom.layer));
+      assert.strictEqual(dom.brokerInvocations.length, 1);
+
+      const video = makeHarness({ recordingMode: "video", brokerResults: { recordingStart } });
+      yield* handlers.app_review_recording_start({}).pipe(Effect.provide(video.layer));
+      assert.deepStrictEqual(video.brokerInvocations[0]?.input, { format: "video" });
+    }),
+  );
+
+  it.effect("records a failed stop instead of erroring", () => {
+    const harness = makeHarness({ brokerFailure });
     return Effect.gen(function* () {
-      const recording = yield* handlers.app_review_recording_stop({ reviewId });
+      const recording = yield* handlers.app_review_recording_stop({});
       assert.strictEqual(recording.status, "failed");
       assert.isNotNull(recording.error);
-      const command = harness.dispatched[0];
-      assert.strictEqual(command?.type, "thread.app-review.evidence.update");
-      if (command?.type === "thread.app-review.evidence.update") {
-        assert.strictEqual(command.evidence.recording.status, "failed");
-      }
+      assert.strictEqual((yield* handlers.app_review_get({})).evidence.recording.status, "failed");
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("capture screenshot writes the PNG and persists gallery evidence", () => {
+  it.effect("writes screenshots to the review and returns only their metadata", () => {
     const harness = makeHarness({
-      review: makeReview(EMPTY_APP_REVIEW_EVIDENCE),
       brokerResults: {
-        snapshot: {
-          url: "http://127.0.0.1:5173/",
-          title: "App",
-          loading: false,
-          visibleText: "",
-          interactiveElements: [],
-          accessibilityTree: null,
-          consoleEntries: [],
-          networkEntries: [],
-          actionTimeline: [],
-          screenshot: {
-            mimeType: "image/png",
-            data: PNG_BASE64,
-            width: 1,
-            height: 1,
-          },
-        },
+        snapshot: { screenshot: { mimeType: "image/png", data: PNG_BASE64, width: 1, height: 1 } },
       },
     });
-
     return Effect.gen(function* () {
-      const result = yield* handlers.app_review_capture_screenshot({
-        reviewId,
-        caption: "Initial load",
-      });
-      assert.strictEqual(result.id, "shot-1");
-      assert.strictEqual(result.caption, "Initial load");
-      assert.deepStrictEqual(harness.brokerInvocations, [
-        { operation: "snapshot", tabId: undefined, timeoutMs: undefined },
-      ]);
-
-      const command = harness.dispatched[0];
-      assert.strictEqual(command?.type, "thread.app-review.evidence.update");
-      if (command?.type !== "thread.app-review.evidence.update") return;
-      const screenshot = command.evidence.screenshots[0];
-      assert.ok(screenshot);
-      assert.strictEqual(screenshot.id, "shot-1");
-      assert.strictEqual(screenshot.mimeType, "image/png");
-
+      const first = yield* handlers.app_review_capture_screenshot({ caption: "Initial load" });
+      const second = yield* handlers.app_review_capture_screenshot({ caption: "After submit" });
+      assert.deepStrictEqual([first.id, second.id], ["shot-1", "shot-2"]);
+      assert.notProperty(first, "path");
+      const review = yield* handlers.app_review_get({});
       const fileSystem = yield* FileSystem.FileSystem;
-      const written = yield* fileSystem.readFile(screenshot.path);
-      assert.deepStrictEqual(written, new Uint8Array(Buffer.from(PNG_BASE64, "base64")));
-      // Tool result stays metadata-only: no image bytes and no path.
-      assert.notProperty(result, "path");
+      assert.deepStrictEqual(
+        yield* fileSystem.readFile(review.evidence.screenshots[0]!.path),
+        new Uint8Array(Buffer.from(PNG_BASE64, "base64")),
+      );
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("rejects a passed verdict without saved recording and screenshots", () => {
-    const harness = makeHarness({
-      review: makeReview({
-        recording: { ...EMPTY_APP_REVIEW_EVIDENCE.recording, status: "failed" },
-        screenshots: [],
-      }),
-    });
-
+  it.effect("refuses 'passed' until the scope's evidence supports it", () => {
+    const harness = makeHarness({});
     return Effect.gen(function* () {
-      const error = yield* handlers
-        .app_review_update({ reviewId, status: "passed" })
-        .pipe(Effect.flip);
-      assert.strictEqual(error._tag, "AppReviewError");
-      assert.match(error.message, /saved screen recording/);
-      assert.match(error.message, /app_review_recording_start/);
-      assert.match(error.message, /failed/);
-      assert.strictEqual(harness.dispatched.length, 0);
+      const pass = handlers.app_review_update({ status: "passed" });
+
+      yield* seed("browser", { recording: { ...savedRecording, status: "failed" } });
+      assert.match((yield* Effect.flip(pass)).message, /saved recording/);
+
+      yield* seed("e2e", {});
+      assert.match((yield* Effect.flip(pass)).message, /without E2E results/);
+
+      yield* seed("e2e", {
+        tests: [testResult("pnpm e2e", "passed"), testResult("pnpm e2e:mobile", "failed")],
+      });
+      assert.match((yield* Effect.flip(pass)).message, /'pnpm e2e:mobile' failed/);
+
+      yield* seed("both", {
+        recording: savedRecording,
+        screenshots: [screenshot],
+        tests: [testResult("pnpm e2e", "failed"), testResult("pnpm e2e", "passed")],
+      });
+      assert.strictEqual((yield* pass).status, "passed");
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("accepts an e2e-only pass without browser evidence", () => {
-    const harness = makeHarness({
-      review: makeReview(EMPTY_APP_REVIEW_EVIDENCE, "e2e"),
-    });
-
+  it.effect("accepts a failed verdict without evidence and keeps the brief from the start", () => {
+    const harness = makeHarness({});
     return Effect.gen(function* () {
-      const updated = yield* handlers.app_review_update({ reviewId, status: "passed" });
-      assert.strictEqual(updated.status, "passed");
-      assert.strictEqual(harness.dispatched.length, 1);
-      assert.strictEqual(harness.dispatched[0]?.type, "thread.app-review.update");
-    }).pipe(Effect.provide(harness.layer));
-  });
-
-  it.effect("accepts screenshot-backed failed findings when recording finalization fails", () => {
-    const harness = makeHarness({
-      review: makeReview({
-        recording: {
-          ...EMPTY_APP_REVIEW_EVIDENCE.recording,
-          status: "failed",
-          error: "ffmpeg did not finalize in time",
-        },
-        screenshots: [
-          {
-            id: "shot-1",
-            path: "/state/preview-artifacts/app-review/app-review-1/shot-1.png",
-            mimeType: "image/png",
-            caption: "Checkout submit remains disabled",
-            capturedAt: "2026-01-01T00:00:30.000Z",
-          },
-        ],
-      }),
-    });
-
-    return Effect.gen(function* () {
+      yield* handlers.app_review_start({ scope: "browser", brief: "Checkout flow" });
       const updated = yield* handlers.app_review_update({
-        reviewId,
         status: "failed",
-        document: screenshotBackedFailureDocument,
+        document: failedDocument,
       });
       assert.strictEqual(updated.status, "failed");
-      assert.strictEqual(harness.dispatched.length, 1);
-      assert.strictEqual(harness.dispatched[0]?.type, "thread.app-review.update");
-    }).pipe(Effect.provide(harness.layer));
-  });
-
-  it.effect("preserves a failed verdict when browser evidence is unavailable", () => {
-    const harness = makeHarness({
-      review: makeReview({
-        recording: { ...EMPTY_APP_REVIEW_EVIDENCE.recording, status: "failed" },
-        screenshots: [],
-      }),
-    });
-
-    return Effect.gen(function* () {
-      const updated = yield* handlers.app_review_update({
-        reviewId,
-        status: "failed",
-        document: screenshotBackedFailureDocument,
-      });
-      assert.strictEqual(updated.status, "failed");
-      assert.strictEqual(harness.dispatched.length, 1);
-    }).pipe(Effect.provide(harness.layer));
-  });
-
-  it.effect("accepts a terminal verdict once evidence is complete", () => {
-    const harness = makeHarness({
-      review: makeReview({
-        recording: {
-          status: "saved",
-          path: "/state/preview-artifacts/browser-recording-abc.webm",
-          mimeType: "video/webm",
-          sizeBytes: 2048,
-          startedAt: "2026-01-01T00:00:10.000Z",
-          completedAt: "2026-01-01T00:01:00.000Z",
-          error: null,
-        },
-        screenshots: [
-          {
-            id: "shot-1",
-            path: "/state/preview-artifacts/app-review/app-review-1/shot-1.png",
-            mimeType: "image/png",
-            caption: "Initial load",
-            capturedAt: "2026-01-01T00:00:30.000Z",
-          },
-        ],
-      }),
-    });
-
-    return Effect.gen(function* () {
-      const updated = yield* handlers.app_review_update({ reviewId, status: "passed" });
-      assert.strictEqual(updated.status, "passed");
-      assert.strictEqual(harness.dispatched.length, 1);
-      assert.strictEqual(harness.dispatched[0]?.type, "thread.app-review.update");
-    }).pipe(Effect.provide(harness.layer));
-  });
-
-  it.effect("allows a diagnostic failure without browser evidence", () => {
-    const harness = makeHarness({ review: makeReview(EMPTY_APP_REVIEW_EVIDENCE) });
-
-    return Effect.gen(function* () {
-      const updated = yield* handlers.app_review_update({ reviewId, status: "failed" });
-      assert.strictEqual(updated.status, "failed");
-      assert.strictEqual(harness.dispatched.length, 1);
+      assert.strictEqual(updated.document.brief, "Checkout flow");
+      assert.strictEqual(updated.document.summary, "Checkout remains broken.");
     }).pipe(Effect.provide(harness.layer));
   });
 });

@@ -1,5 +1,5 @@
 import { ThreadAppStackIndicator } from "./ThreadAppStackIndicator";
-import { AppReviewControllerStatus } from "./AppReviewThreadStatus";
+import { AppReviewPanel } from "./AppReviewPanel";
 import { AppStackLogsPanel } from "./AppStackLogsPanel";
 import { AppStackPanel } from "./AppStackPanel";
 import { ChildThreadApprovals } from "./chat/ChildThreadApprovals";
@@ -3240,7 +3240,7 @@ export default function ChatView(props: ChatViewProps) {
   const rightPanelContent = activeThreadRef ? (
     // Fork-only surfaces render here; RightPanelSurfaceContent owns the shared ones.
     renderedRightPanelSurface?.kind === "app-review" ? (
-      <div />
+      <AppReviewPanel key={activeThreadKey} mode="sidebar" threadRef={activeThreadRef} />
     ) : renderedRightPanelSurface?.kind === "logs" ? (
       <AppStackLogsPanel
         environmentId={activeThreadRef.environmentId}
@@ -3564,11 +3564,6 @@ export default function ChatView(props: ChatViewProps) {
                   onViewportAttach={attachTimelineViewport}
                   onFooterGrow={onTimelineFooterGrowStable}
                   hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
-                  emptyPlaceholder={
-                    activeThread?.workflowRole === "app-review-orchestrator" && activeThreadRef ? (
-                      <AppReviewControllerStatus threadRef={activeThreadRef} />
-                    ) : undefined
-                  }
                   emptyPlaceholderInset={composerReservedHeight}
                   topFadeEnabled={!hasTimelineTopBanner}
                   {...(threadHistoryControls === undefined

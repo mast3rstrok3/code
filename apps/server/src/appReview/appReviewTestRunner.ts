@@ -1,14 +1,8 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import type {
-  AppReviewRetryCommand,
-  AppReviewTestPurpose,
   AppReviewTestRecording,
   AppReviewTestResult,
-  AppReviewWorkflowCycle,
-  AppReviewWorkflowFixResult,
-  OrchestrationPlanningTicket,
   ReviewTestPlatforms,
-  T3ProjectFile,
 } from "@t3tools/contracts";
 import {
   APP_REVIEW_ARTIFACT_DIR_ENV,
@@ -22,7 +16,6 @@ import {
   APP_REVIEW_TEST_RECORDING_SUFFIX,
 } from "@t3tools/contracts";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import * as Schema from "effect/Schema";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -91,13 +84,13 @@ const prepareTestLogs = Effect.fn("prepareTestLogs")(function* (runDir: string) 
   };
 });
 
-/** Where a run's collected test recordings live, below `stateDir/preview-artifacts`. */
-export const appReviewTestRecordingsDir = (path: Path.Path, stateDir: string, runId: string) =>
-  path.join(stateDir, "preview-artifacts", "app-review-e2e", runId);
+/** Where a review's collected test recordings live, below `stateDir/preview-artifacts`. */
+export const appReviewTestRecordingsDir = (path: Path.Path, stateDir: string, reviewId: string) =>
+  path.join(stateDir, "preview-artifacts", "app-review-e2e", reviewId);
 
 /** Suites publish here so builds survive disposal of the reviewed worktree. */
-export const appReviewBuildArtifactsDir = (path: Path.Path, stateDir: string, runId: string) =>
-  path.join(stateDir, "workflow-build-artifacts", runId);
+export const appReviewBuildArtifactsDir = (path: Path.Path, stateDir: string, reviewId: string) =>
+  path.join(stateDir, "app-review-artifacts", reviewId);
 
 /**
  * Give one command an empty directory to record into and the recorder script
@@ -146,207 +139,6 @@ const collectTestRecordings = Effect.fn("collectTestRecordings")(function* (inpu
   yield* fileSystem.remove(input.incomingDir, { recursive: true });
   return recordings;
 });
-
-/** Match results to the persisted selection, independent of completion order. */
-export function completedAppReviewTests(
-  execution: NonNullable<AppReviewWorkflowCycle["e2eExecution"]>,
-) {
-  return execution.commands.flatMap((selection) => {
-    const result = execution.results.find(
-      (entry) =>
-        entry.command === selection.command && entry.executedCommand === selection.retryCommand,
-    );
-    return result === undefined ? [] : [result];
-  });
-}
-
-/** Affected tests are nice-to-have, so the review never waits longer than this for them. */
-export const APP_REVIEW_AFFECTED_TEST_LIMIT_MINUTES = 30;
-
-export function appReviewTestTimeoutMinutes(
-  selection: Pick<AppReviewRetryCommand, "purpose">,
-  projectTimeoutMinutes: number | undefined,
-): number | undefined {
-  if (selection.purpose !== "affected") return projectTimeoutMinutes;
-  return Math.min(projectTimeoutMinutes ?? Infinity, APP_REVIEW_AFFECTED_TEST_LIMIT_MINUTES);
-}
-
-/** Affected tests are reported, but never fail a review or start a repair. */
-export function blockingAppReviewTestFailures(
-  execution: NonNullable<AppReviewWorkflowCycle["e2eExecution"]>,
-) {
-  const reportedOnly = new Set(
-    execution.commands.flatMap((selection) =>
-      selection.purpose === "affected" ? [selection.command] : [],
-    ),
-  );
-  return completedAppReviewTests(execution).filter(
-    (result) => result.status === "failed" && !reportedOnly.has(result.command),
-  );
-}
-
-/** A repair may narrow failed suites, but cannot reopen or replace other suites. */
-export function appReviewRetryCommandsFailure(
-  cycle: Pick<AppReviewWorkflowCycle, "e2eExecution">,
-  result: Pick<AppReviewWorkflowFixResult, "retryCommands">,
-): string | null {
-  const failedCommands = new Set(
-    cycle.e2eExecution === undefined
-      ? []
-      : completedAppReviewTests(cycle.e2eExecution)
-          .filter((entry) => entry.status === "failed")
-          .map((entry) => entry.command),
-  );
-  const seen = new Set<string>();
-  for (const selection of result.retryCommands ?? []) {
-    if (!selection.command?.trim() || !selection.retryCommand?.trim()) {
-      return "Retry mappings require non-empty command and retryCommand strings.";
-    }
-    if (seen.has(selection.command)) {
-      return `Duplicate retry mapping for '${selection.command}'.`;
-    }
-    if (!failedCommands.has(selection.command)) {
-      return `Retry mapping '${selection.command}' does not match a failed command in this cycle.`;
-    }
-    seen.add(selection.command);
-  }
-  return null;
-}
-
-/** Keep passing suites and rerun the failed selection after each committed repair. */
-export function appReviewTestCommands(
-  run: {
-    readonly cycles: ReadonlyArray<Pick<AppReviewWorkflowCycle, "e2eExecution" | "fixResult">>;
-  },
-  commands: ReadonlyArray<string | AppReviewTestSelection>,
-): AppReviewRetryCommand[] {
-  const previous = run.cycles.at(-1);
-  if (!previous?.e2eExecution) {
-    const selections = new Map<string, AppReviewRetryCommand>();
-    for (const entry of commands) {
-      const { command, purpose } = typeof entry === "string" ? { command: entry } : entry;
-      if (selections.has(command)) continue;
-      selections.set(command, {
-        command,
-        retryCommand: command,
-        ...(purpose === undefined ? {} : { purpose }),
-      });
-    }
-    return [...selections.values()];
-  }
-  const completed = completedAppReviewTests(previous.e2eExecution);
-  return previous.e2eExecution.commands.flatMap((selection) => {
-    if (selection.purpose === "affected") return [];
-    const result = completed.find((entry) => entry.command === selection.command);
-    if (result?.status === "passed") return [];
-    const retry = previous.fixResult?.retryCommands?.find(
-      (entry) => entry.command === selection.command,
-    );
-    return [{ ...selection, retryCommand: retry?.retryCommand ?? selection.retryCommand }];
-  });
-}
-
-export interface AppReviewTestSelection {
-  readonly command: string;
-  readonly purpose?: AppReviewTestPurpose | undefined;
-}
-
-/**
- * The feature tests an implementation run's tickets planned, in ticket order.
- * Commands are relative to the ticket's repository, so tickets that change
- * another project stay with that project's review.
- */
-export function implementationFeatureE2eCommands(input: {
-  readonly planningTicketIds: ReadonlyArray<string>;
-  readonly tickets: ReadonlyArray<OrchestrationPlanningTicket>;
-  readonly projectId: string;
-}): string[] {
-  const ticketsById = new Map(input.tickets.map((ticket) => [ticket.id as string, ticket]));
-  return input.planningTicketIds.flatMap((ticketId) => {
-    const ticket = ticketsById.get(ticketId);
-    if (ticket === undefined || ticket.appReviewEligible !== true) return [];
-    if (ticket.projectId !== undefined && ticket.projectId !== input.projectId) return [];
-    return ticket.appReviewCommands ?? [];
-  });
-}
-
-/**
- * A final App Review runs the tickets' feature tests, then the project's
- * affected-test commands. Without affected-test commands it keeps running the
- * project's complete suites after the feature tests.
- */
-export function finalAppReviewE2eSelections(input: {
-  readonly featureCommands: ReadonlyArray<string>;
-  readonly projectFile: Pick<T3ProjectFile, "e2eCommands" | "e2eAffectedCommands"> | undefined;
-}): AppReviewTestSelection[] {
-  const affected = input.projectFile?.e2eAffectedCommands;
-  return [
-    ...input.featureCommands.map((command) => ({ command, purpose: "feature" as const })),
-    ...(affected === undefined
-      ? (input.projectFile?.e2eCommands ?? []).map((command) => ({ command }))
-      : affected.map((command) => ({ command, purpose: "affected" as const }))),
-  ];
-}
-
-class AppReviewTestRestoreError extends Schema.TaggedError<AppReviewTestRestoreError>()(
-  "AppReviewTestRestoreError",
-  {
-    message: Schema.String,
-  },
-) {}
-
-/**
- * Undo what an E2E command wrote to the reviewed worktree. `paths` are relative
- * to the worktree root and were clean before the command ran: files HEAD tracks
- * are restored from HEAD, the rest are removed only while they are untracked.
- */
-export const restoreAppReviewTestWrites = Effect.fn("restoreAppReviewTestWrites")(
-  function* (input: { readonly cwd: string; readonly paths: readonly string[] }) {
-    const runner = yield* ProcessRunner;
-    const git = Effect.fn("restoreAppReviewTestWrites.git")(function* (
-      cwd: string,
-      args: readonly string[],
-    ) {
-      const output = yield* runner.run({
-        command: "git",
-        args: ["--literal-pathspecs", ...args],
-        cwd,
-      });
-      if (output.code !== 0) {
-        return yield* new AppReviewTestRestoreError({
-          message: `git ${args[0]} failed: ${output.stderr.trim()}`,
-        });
-      }
-      return output.stdout;
-    });
-    const nulSeparated = (stdout: string) => new Set(stdout.split("\0").filter(Boolean));
-    const root = (yield* git(input.cwd, ["rev-parse", "--show-toplevel"])).trim();
-    const inHead = nulSeparated(
-      yield* git(root, ["ls-tree", "-r", "-z", "--name-only", "HEAD", "--", ...input.paths]),
-    );
-    const restored = input.paths.filter((path) => inHead.has(path));
-    if (restored.length > 0) {
-      yield* git(root, ["restore", "--source=HEAD", "--staged", "--worktree", "--", ...restored]);
-    }
-    const candidates = input.paths.filter((path) => !inHead.has(path));
-    const untracked =
-      candidates.length === 0
-        ? new Set<string>()
-        : nulSeparated(
-            yield* git(root, [
-              "ls-files",
-              "-z",
-              "--others",
-              "--exclude-standard",
-              "--",
-              ...candidates,
-            ]),
-          );
-    const removed = candidates.filter((path) => untracked.has(path));
-    if (removed.length > 0) yield* git(root, ["clean", "-f", "-q", "--", ...removed]);
-    return { restored, removed };
-  },
-);
 
 /** Cancellation closes ProcessRunner's scope and terminates its child process. */
 interface AppReviewTestInput {

@@ -205,8 +205,6 @@ import {
 } from "./ThreadComposer";
 import { ComposerPopoverHost } from "./ComposerPopoverHost";
 import { ThreadFeed, type ThreadFeedHistoryControls } from "./ThreadFeed";
-import { appReviewSegmentLabel, isAppReviewThreadRole } from "../app-review/appReviewSheetModel";
-import { useAppReviewControllerStatus } from "../app-review/useAppReview";
 import { WorkspaceMutationIdProvider } from "./WorkspaceMutationIdProvider";
 import { useThreadTurnSubagents } from "./ThreadAgentsSheet";
 import { ComposerQueuedEditBanner } from "./ComposerQueuedEdit";
@@ -531,24 +529,6 @@ function ThreadDetailBody(
     ? (preferences.value.toolCallVisibility ?? "showAll")
     : "showAll";
   const queuedCount = useThreadQueuedCount(props.selectedThreadDetailRef);
-  const appReviewThread = isAppReviewThreadRole(props.selectedThread.workflowRole);
-  const appReviewStatus = useAppReviewControllerStatus(
-    props.environmentId,
-    props.selectedThread.id,
-    props.selectedThread.workflowRole === "app-review-orchestrator",
-  );
-  const appReviewSegment = appReviewThread
-    ? {
-        label: appReviewSegmentLabel(appReviewStatus),
-        onPress: () => {
-          Keyboard.dismiss();
-          navigation.navigate("ThreadAppReview", {
-            environmentId: props.environmentId,
-            threadId: props.selectedThread.id,
-          });
-        },
-      }
-    : null;
   const turnSubagents = useThreadTurnSubagents(props.selectedThreadDetailRef);
   const agentsSegment = resolveSubagentPillSegment(turnSubagents);
   const defaultComposerEditorRef = useRef<ComposerEditorHandle>(null);
@@ -928,7 +908,6 @@ function ThreadDetailBody(
     showWorkingControl ||
     queuedCount > 0 ||
     agentsSegment !== null ||
-    appReviewSegment !== null ||
     devicePreviews.length > 0 ||
     browserTabs.tabs.length > 0 ||
     appStackChip !== null ||
@@ -1671,7 +1650,6 @@ function ThreadDetailBody(
                         threadId: props.selectedThread.id,
                       });
                     }}
-                    appReview={appReviewSegment}
                     queuedCount={queuedCount}
                     onOpenQueue={() => {
                       Keyboard.dismiss();

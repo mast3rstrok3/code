@@ -575,6 +575,10 @@
       "types": "./src/state/appStacks.ts",
       "default": "./src/state/appStacks.ts"
     },
+    "./state/app-review": {
+      "types": "./src/state/appReview.ts",
+      "default": "./src/state/appReview.ts"
+    },
     "./app-review": {
       "types": "./src/appReview.ts",
       "default": "./src/appReview.ts"

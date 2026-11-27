@@ -3,21 +3,15 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import {
-  APP_REVIEW_WORKFLOW_DEFAULT_CYCLES,
   AppReviewEvidence,
   AppReviewCheck,
   AppReviewRecord,
-  AppReviewWorkflowRun,
-  AppReviewWorkflowFixResult,
   EMPTY_APP_REVIEW_EVIDENCE,
 } from "./review.ts";
 
-const decodeFixResult = Schema.decodeUnknownEffect(AppReviewWorkflowFixResult);
-const encodeFixResult = Schema.encodeEffect(AppReviewWorkflowFixResult);
 const decodeAppReviewRecord = Schema.decodeUnknownEffect(AppReviewRecord);
 const encodeAppReviewRecord = Schema.encodeEffect(AppReviewRecord);
 const decodeAppReviewEvidence = Schema.decodeUnknownEffect(AppReviewEvidence);
-const decodeAppReviewWorkflowRun = Schema.decodeUnknownEffect(AppReviewWorkflowRun);
 
 const emptyDocument = {
   verdict: "pending",
@@ -73,77 +67,6 @@ it.effect("round-trips App Review records with browser evidence", () =>
     const encoded = yield* encodeAppReviewRecord(record);
     assert.strictEqual(encoded.appReviewScope, "e2e");
     assert.deepStrictEqual(encoded.evidence, savedEvidence);
-  }),
-);
-
-it.effect("keeps a check's origin cycle when it was carried forward, and omits it otherwise", () =>
-  Effect.gen(function* () {
-    const record = yield* decodeAppReviewRecord({
-      id: "app-review-2",
-      sourceThreadId: "thread-source",
-      reviewThreadId: "thread-review",
-      sourceTurnId: null,
-      status: "passed",
-      document: {
-        ...emptyDocument,
-        verdict: "passed",
-        checks: [
-          { id: "login", label: "Login", status: "passed", notes: "", carriedFromCycle: 1 },
-          {
-            id: "submit-recovery",
-            label: "Submit recovery",
-            status: "passed",
-            notes: "",
-            replayUrl: "https://preview.example.test/replays/e2e-1",
-            replayMimeType: "application/x-rrweb+jsonl",
-          },
-        ],
-      },
-      evidence: savedEvidence,
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:01.000Z",
-    });
-    assert.strictEqual(record.document.checks[1]?.replayMimeType, "application/x-rrweb+jsonl");
-    assert.strictEqual(record.document.checks[0]?.carriedFromCycle, 1);
-    assert.strictEqual(record.document.checks[1]?.carriedFromCycle, undefined);
-    assert.strictEqual(
-      record.document.checks[1]?.replayUrl,
-      "https://preview.example.test/replays/e2e-1",
-    );
-
-    const encoded = yield* encodeAppReviewRecord(record);
-    assert.deepStrictEqual(encoded.document.checks[1], {
-      id: "submit-recovery",
-      label: "Submit recovery",
-      status: "passed",
-      notes: "",
-      replayUrl: "https://preview.example.test/replays/e2e-1",
-      replayMimeType: "application/x-rrweb+jsonl",
-    });
-  }),
-);
-
-it.effect("rejects a carried check that names cycle zero", () =>
-  Effect.gen(function* () {
-    const result = yield* Effect.exit(
-      decodeAppReviewRecord({
-        id: "app-review-3",
-        sourceThreadId: "thread-source",
-        reviewThreadId: "thread-review",
-        sourceTurnId: null,
-        status: "passed",
-        document: {
-          ...emptyDocument,
-          checks: [
-            { id: "login", label: "Login", status: "passed", notes: "", carriedFromCycle: 0 },
-          ],
-        },
-        evidence: savedEvidence,
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-01T00:00:01.000Z",
-      }),
-    );
-    assert.strictEqual(result._tag, "Failure");
   }),
 );
 
@@ -206,201 +129,6 @@ it.effect("rejects malformed App Review recording evidence", () =>
   }),
 );
 
-const workflowRun = {
-  id: "app-review-workflow-1",
-  targetThreadId: "thread-source",
-  controllerThreadId: "thread-controller",
-  caller: { type: "standalone", sourceThreadId: "thread-source" },
-  briefMarkdown: "Review checkout.",
-  supportingContextMarkdown: null,
-  previewTargets: ["http://localhost:3000"],
-  cyclesUsed: 0,
-  status: "running",
-  cycles: [],
-  activePhase: null,
-  activeThreadId: null,
-  workspaceRevision: {
-    headSha: "abc123",
-    workingTreeDiffHash: "worktree-hash",
-    branchDiffHash: "branch-hash",
-    fingerprint: "fingerprint",
-  },
-  finalHeadSha: null,
-  outcome: null,
-  failure: null,
-  createdAt: "2026-01-01T00:00:00.000Z",
-  updatedAt: "2026-01-01T00:00:00.000Z",
-  completedAt: null,
-} as const;
-
-it.effect("defaults App Review runs to ten attempts", () =>
-  Effect.gen(function* () {
-    const run = yield* decodeAppReviewWorkflowRun(workflowRun);
-    assert.strictEqual(run.cycleBudget, APP_REVIEW_WORKFLOW_DEFAULT_CYCLES);
-  }),
-);
-
-it.effect("allows App Review to resolve preview targets after launch", () =>
-  Effect.gen(function* () {
-    const run = yield* decodeAppReviewWorkflowRun({ ...workflowRun, previewTargets: [] });
-    assert.deepStrictEqual(run.previewTargets, []);
-  }),
-);
-
-const legacyCycle = {
-  cycleNumber: 1,
-  status: "planning",
-  reviewId: "app-review-1",
-  reviewerThreadId: "thread-reviewer",
-  reviewVerdict: "failed",
-  actionableFindingsMarkdown: "1. [major] Checkout fails",
-  planId: null,
-  plannerTurnId: null,
-  fixerThreadId: null,
-  fixResult: null,
-  workspaceRevision: {
-    headSha: "abc123",
-    workingTreeDiffHash: "worktree-hash",
-    branchDiffHash: "branch-hash",
-    fingerprint: "fingerprint",
-  },
-  startedAt: "2026-01-01T00:00:00.000Z",
-  completedAt: null,
-} as const;
-
-it.effect("decodes cycles recorded before gap analysis had its own thread", () =>
-  Effect.gen(function* () {
-    // Those cycles ran gap analysis on the reviewer; the reactor falls back to
-    // reviewerThreadId when plannerThreadId is absent, so it must stay optional.
-    const run = yield* decodeAppReviewWorkflowRun({ ...workflowRun, cycles: [legacyCycle] });
-    assert.strictEqual(run.cycles[0]?.plannerThreadId, undefined);
-  }),
-);
-
-it.effect("decodes cycles recorded before a cycle could carry its own failure", () =>
-  Effect.gen(function* () {
-    const run = yield* decodeAppReviewWorkflowRun({ ...workflowRun, cycles: [legacyCycle] });
-    assert.strictEqual(run.cycles[0]?.failure, undefined);
-  }),
-);
-
-it.effect("decodes cycles recorded before recovery continuation counters", () =>
-  Effect.gen(function* () {
-    const historical = yield* decodeAppReviewWorkflowRun({
-      ...workflowRun,
-      cycles: [legacyCycle],
-    });
-    assert.strictEqual(historical.cycles[0]?.recoveryContinuationCount, undefined);
-    assert.strictEqual(historical.cycles[0]?.fixResultContinuationCount, undefined);
-
-    const recovered = yield* decodeAppReviewWorkflowRun({
-      ...workflowRun,
-      cycles: [{ ...legacyCycle, recoveryContinuationCount: 1, fixResultContinuationCount: 1 }],
-    });
-    assert.strictEqual(recovered.cycles[0]?.recoveryContinuationCount, 1);
-    assert.strictEqual(recovered.cycles[0]?.fixResultContinuationCount, 1);
-  }),
-);
-
-it.effect("keeps why a spent cycle stopped short", () =>
-  Effect.gen(function* () {
-    const run = yield* decodeAppReviewWorkflowRun({
-      ...workflowRun,
-      cycles: [
-        {
-          ...legacyCycle,
-          status: "failed",
-          failure: {
-            reason: "review-blocked",
-            phase: "review",
-            cycleNumber: 1,
-            detailMarkdown: "You've hit your usage limit.",
-            failedAt: "2026-01-01T00:00:00.000Z",
-          },
-        },
-      ],
-    });
-    assert.strictEqual(run.cycles[0]?.status, "failed");
-    assert.strictEqual(run.cycles[0]?.failure?.reason, "review-blocked");
-  }),
-);
-
-it.effect("carries the gap analysis thread on new cycles", () =>
-  Effect.gen(function* () {
-    const run = yield* decodeAppReviewWorkflowRun({
-      ...workflowRun,
-      cycles: [{ ...legacyCycle, plannerThreadId: "thread-planner" }],
-    });
-    assert.strictEqual(run.cycles[0]?.plannerThreadId, "thread-planner");
-  }),
-);
-
-it.effect("rejects zero and clamps historical App Review budgets to 10", () =>
-  Effect.gen(function* () {
-    const exit = yield* Effect.exit(decodeAppReviewWorkflowRun({ ...workflowRun, cycleBudget: 0 }));
-    assert.strictEqual(exit._tag, "Failure");
-    for (const cycleBudget of [1, 10]) {
-      const run = yield* decodeAppReviewWorkflowRun({ ...workflowRun, cycleBudget });
-      assert.strictEqual(run.cycleBudget, cycleBudget);
-    }
-    const historical = yield* decodeAppReviewWorkflowRun({ ...workflowRun, cycleBudget: 50 });
-    assert.strictEqual(historical.cycleBudget, 10);
-  }),
-);
-
-it.effect("preserves pending validation repair feedback across a workflow round trip", () =>
-  Effect.gen(function* () {
-    const validationRepair = {
-      attempt: 2,
-      requestedAt: "2026-01-01T00:00:02.000Z",
-      requiredCommands: ["all-tests"],
-      result: {
-        runId: workflowRun.id,
-        planId: "repair-plan",
-        status: "succeeded",
-        validations: [
-          {
-            command: "all-tests",
-            scope: "project",
-            status: "failed",
-            outputMarkdown: "Archive failed",
-            completedAt: "2026-01-01T00:00:01.000Z",
-          },
-        ],
-        notesMarkdown: "Repair the new regression",
-      },
-      detailMarkdown: "all-tests: failed",
-    };
-    const run = yield* decodeAppReviewWorkflowRun({
-      ...workflowRun,
-      cycles: [{ ...legacyCycle, validationRepair }],
-    });
-    assert.deepStrictEqual<unknown>(run.cycles[0]?.validationRepair, validationRepair);
-  }),
-);
-
-it.effect("round-trips blocked repair checks without losing their explanation", () =>
-  Effect.gen(function* () {
-    const input = {
-      runId: "review-1",
-      planId: "plan-1",
-      status: "blocked",
-      validations: [
-        {
-          command: "pnpm e2e:review",
-          scope: "project",
-          status: "blocked",
-          outputMarkdown: "Not run: Cortex origin unavailable.",
-          completedAt: "2026-01-01T00:00:00.000Z",
-        },
-      ],
-      notesMarkdown: "Supply the assigned Cortex URL.",
-    };
-    const result = yield* decodeFixResult(input);
-    assert.deepStrictEqual<unknown>(yield* encodeFixResult(result), input);
-  }),
-);
-
 it.effect("preserves coverage and external blocker classifications and accepts legacy checks", () =>
   Effect.gen(function* () {
     const decode = Schema.decodeUnknownEffect(AppReviewCheck);
@@ -424,5 +152,42 @@ it.effect("preserves coverage and external blocker classifications and accepts l
       blockerKind: "unknown",
     }).pipe(Effect.result);
     assert.strictEqual(invalid._tag, "Failure");
+  }),
+);
+
+it.effect("decodes records written by the workflow engine and keeps E2E test evidence", () =>
+  Effect.gen(function* () {
+    const tests = [
+      {
+        command: "pnpm e2e",
+        executedCommand: "pnpm e2e",
+        status: "passed",
+        outputMarkdown: "Exit code: 0",
+        recordings: [
+          { id: "run-1", label: "checkout", path: "/tmp/run-1.rrweb.jsonl", sizeBytes: 12 },
+        ],
+        completedAt: "2026-01-01T00:02:00.000Z",
+      },
+    ] as const;
+    const record = yield* decodeAppReviewRecord({
+      id: "app-review-1",
+      sourceThreadId: "thread-source",
+      reviewThreadId: "thread-review",
+      planningTicketIds: ["ticket-1"],
+      sourceProposedPlan: { threadId: "thread-source", planId: "plan-1" },
+      sourceTurnId: null,
+      status: "passed",
+      document: {
+        ...emptyDocument,
+        checks: [{ id: "c", label: "Checkout", status: "passed", notes: "", carriedFromCycle: 1 }],
+      },
+      evidence: { ...savedEvidence, tests },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:01.000Z",
+    });
+    const encoded = yield* encodeAppReviewRecord(record);
+    assert.notProperty(encoded, "planningTicketIds");
+    assert.notProperty(encoded.document.checks[0], "carriedFromCycle");
+    assert.deepStrictEqual(encoded.evidence.tests, tests);
   }),
 );

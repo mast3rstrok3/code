@@ -339,7 +339,7 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
         <ListRow
           icon="checkmark.circle"
           label="App Review"
-          description="Test this worktree's app and repair what fails"
+          description="The agent's end-to-end tests and browser checks"
           onPress={() => navigation.navigate("ThreadAppReview", { environmentId, threadId })}
         />
       </ListSection>

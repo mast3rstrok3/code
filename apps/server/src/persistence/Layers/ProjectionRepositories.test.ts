@@ -474,10 +474,6 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         sourceThreadId: ThreadId.make("thread-source"),
         reviewThreadId: ThreadId.make("thread-review"),
         appReviewScope: "e2e",
-        sourceProposedPlan: {
-          threadId: ThreadId.make("thread-source"),
-          planId: "plan-app-review-anchor",
-        },
         sourceTurnId: null,
         status: "running",
         document: {
@@ -504,10 +500,6 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       assert.strictEqual(sourceRows[0]?.reviewId, reviewId);
       assert.strictEqual(reviewRows[0]?.reviewId, reviewId);
       assert.deepStrictEqual(sourceRows[0]?.evidence, evidence);
-      assert.deepStrictEqual(sourceRows[0]?.sourceProposedPlan, {
-        threadId: ThreadId.make("thread-source"),
-        planId: "plan-app-review-anchor",
-      });
 
       const persisted = yield* appReviews.getById({ reviewId });
       assert.deepStrictEqual(Option.getOrNull(persisted)?.evidence, evidence);

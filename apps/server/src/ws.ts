@@ -138,6 +138,7 @@ import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts"
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
 import * as DocumentText from "./provider/DocumentText.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
+import * as AppReviewStore from "./appReview/AppReviewStore.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as GuestShareService from "./guest/GuestShareService.ts";
 import {
@@ -1491,6 +1492,7 @@ export const layerWsRpc = (
       const commandOutputHub = yield* CommandOutputHub.CommandOutputHub;
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
+      const appReviews = yield* AppReviewStore.AppReviewStore;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const guestShares = yield* GuestShareService.GuestShareService;
       const pullRequests = yield* PullRequestService.PullRequestService;
@@ -3361,6 +3363,12 @@ export const layerWsRpc = (
         [WS_METHODS.reviewGetBranchCommits]: (input) => review.getBranchCommits(input),
         [WS_METHODS.reviewGetDiffPreview]: (input) => review.getDiffPreview(input),
         [WS_METHODS.reviewGetDiffFileContents]: (input) => review.getDiffFileContents(input),
+        [WS_METHODS.appReviewSubscribeThread]: (input) =>
+          Stream.unwrap(
+            Effect.annotateCurrentSpan({ "app_review.thread_id": input.threadId }).pipe(
+              Effect.as(appReviews.subscribeThread(input.threadId)),
+            ),
+          ),
         [WS_METHODS.terminalOpen]: (input) =>
           prepareTerminalLaunch(input).pipe(
             Effect.flatMap((launch) =>
