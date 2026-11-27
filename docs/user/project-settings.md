@@ -83,8 +83,8 @@ branch name remains.
 New worktrees start from the project's development branch unless you pick another base in the
 branch picker. Set it in **Settings → General → Projects & threads → Development branch**, usually
 for one project. Left empty, it is `dev` when the repository has a `dev` branch locally or on
-origin, and the repository's default branch otherwise. Feature workflows and agent-launched
-workflows start from the same branch.
+origin, and the repository's default branch otherwise. Unbound scheduled tasks an agent creates
+start from the same branch.
 
 ## Scheduled tasks on mobile
 
@@ -168,20 +168,8 @@ Additional deliveries are accepted without a log entry, and coalesced deliveries
 always replace the persisted payload. Coalesced updates count toward a separate
 60-per-minute validation limit; exceeding it receives HTTP 429.
 
-To have every request start its own Feature workflow, set **Start as** to
-**Feature workflow** on desktop or web. Each run then plans, implements, runs
-Code Review and opens a pull request in a new worktree from the base branch,
-which defaults to the project's development branch. **Engineering workflow**
-starts the Engineering workflow instead. Workflow runs work unattended in full
-access, and an Engineering run's Grill with Docs questions are answered by the
-LLM judge. Because the server opens an Engineering run's pull request, the
-task's thread gets one more turn when the pull request opens, naming its URL,
-and another if the run stops for a person, so the prompt can report either.
 The task's name may use the prompt's placeholders, so
-`Fix {{body.summary}}` titles each thread after its request. **Model** starts
-as **Workflow default**: each run uses the workflow's model from
-**Settings → Workflows** as it is when the run starts, so changing it there
-moves every such task. Pick **A specific model** to keep one task on its own.
+`Fix {{body.summary}}` titles each thread after its request.
 
 On desktop and web, pick **Deliveries** from a task's menu to see recent
 requests and the prompt each one produced.
@@ -257,7 +245,7 @@ archived. Set settled retention to 0 days to remove a worktree at the next clean
 settlement. In repositories without remotes,
 unchanged-worktree cleanup compares against the branch checked out in the project workspace;
 if that checkout has a detached HEAD, the worktree is kept. Only T3-managed worktrees are eligible.
-Active sessions, shared worktrees, and the worktrees of an implementation workflow that has not finished or been canceled prevent removal. **Keep worktrees with local changes** defaults
+Active sessions and shared worktrees prevent removal. **Keep worktrees with local changes** defaults
 to **Uncommitted changes**, which protects tracked edits and untracked files but deletes ignored
 files such as `.env` and build output. **Any local files** also protects ignored files other than
 `node_modules`. **Edited tracked files** protects only tracked edits and allows untracked and

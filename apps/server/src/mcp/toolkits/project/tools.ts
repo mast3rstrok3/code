@@ -1,7 +1,6 @@
 import { McpAttachmentInput } from "../attachment/input.ts";
 import {
   clampedPositiveInt,
-  GrillAnswerer,
   NonNegativeInt,
   ModelSelection,
   TrimmedNonEmptyString,
@@ -11,7 +10,7 @@ import {
   OrchestrationV2RunStatus,
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
   RuntimeMode,
-  ProviderInteractionMode,
+  SelectableProviderInteractionMode,
   Project,
   ProjectCreatePayload,
   ProjectUpdatePayload,
@@ -130,7 +129,7 @@ const ProjectCloneTool = Tool.make("t3_project_clone", {
 const ThreadLaunchTool = Tool.make("t3_thread_launch", {
   ...shared,
   description:
-    "Create one new top-level thread, bound to its workspace before the agent starts. Task in `message`. Omit `projectId`, model and modes to inherit yours (outside a thread, pass `projectId` or `scratch`); modes cannot exceed yours. After an error or lost reply, retry with the same `clientRequestId`. Follow it with `t3_thread_read` or `t3_thread_wait`. Mention it with its `link`. `workflowPreset` starts it as a workflow, as the composer does: it needs `message`, uses the workflow's default model unless `modelSelection` is passed, ignores `interactionMode`, runs unattended in full access (yours must allow it), and without `workspaceStrategy` gets a new worktree from the project's development branch.",
+    "Create one new top-level thread, bound to its workspace before the agent starts. Task in `message`. Omit `projectId`, model and modes to inherit yours (outside a thread, pass `projectId` or `scratch`); modes cannot exceed yours. After an error or lost reply, retry with the same `clientRequestId`. Follow it with `t3_thread_read` or `t3_thread_wait`. Mention it with its `link`.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
     projectId: Schema.optional(ProjectId),
@@ -143,19 +142,7 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
     title: TrimmedNonEmptyString,
     modelSelection: Schema.optional(ModelSelection),
     runtimeMode: Schema.optional(RuntimeMode),
-    interactionMode: Schema.optional(ProviderInteractionMode),
-    workflowPreset: Schema.optional(
-      Schema.Literals(["feature", "engineering"]).annotate({
-        description:
-          "Start the thread as this workflow: feature (Plan, Implement, Code Review, pull request) or engineering (the Engineering workflow).",
-      }),
-    ),
-    grillAnswerer: Schema.optional(
-      GrillAnswerer.annotate({
-        description:
-          'Who answers the Engineering workflow\'s Grill with Docs questions: "human" (default) leaves them for the user; "judge" has a separate LLM judge thread answer them from the task and the Grill\'s recommendations. Only with workflowPreset "engineering".',
-      }),
-    ),
+    interactionMode: Schema.optional(SelectableProviderInteractionMode),
     workspaceStrategy: Schema.optional(
       OrchestrationV2ThreadLaunchWorkspaceStrategy.annotate({
         description:

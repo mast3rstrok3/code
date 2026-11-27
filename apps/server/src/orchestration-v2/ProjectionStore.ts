@@ -1792,15 +1792,6 @@ export function threadShellFromProjection(
     ...(projection.thread.ownerUserId === undefined
       ? {}
       : { ownerUserId: projection.thread.ownerUserId }),
-    ...(projection.thread.workflowRole === undefined
-      ? {}
-      : { workflowRole: projection.thread.workflowRole }),
-    ...(projection.thread.workflowContext === undefined
-      ? {}
-      : { workflowContext: projection.thread.workflowContext }),
-    ...(projection.thread.workflowPreset === undefined
-      ? {}
-      : { workflowPreset: projection.thread.workflowPreset }),
     providerInstanceId: projection.thread.providerInstanceId,
     modelSelection: projection.thread.modelSelection,
     runtimeMode: projection.thread.runtimeMode,

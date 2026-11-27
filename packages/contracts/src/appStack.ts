@@ -110,7 +110,6 @@ export const AppStack = Schema.Struct({
   description: NullableString,
   repoName: Schema.optionalKey(NullableString),
   branchName: Schema.optionalKey(NullableString),
-  workflowId: Schema.optionalKey(NullableTrimmedNonEmptyString),
   status: AppStackStatus,
   namespace: Schema.optionalKey(NullableTrimmedNonEmptyString),
   services: Schema.NullOr(Schema.Array(AppStackService)),
@@ -123,8 +122,8 @@ export const AppStack = Schema.Struct({
   lastStartedAt: Schema.optionalKey(Schema.NullOr(IsoDateTime)),
   lastStoppedAt: Schema.optionalKey(Schema.NullOr(IsoDateTime)),
   previewUrls: Schema.optionalKey(Schema.NullOr(AppStackPreviewUrls)),
-  // Protected stacks survive workflow teardown and are the last thing the
-  // environment sheds under memory pressure. Older servers omit the field.
+  // Protected stacks are the last thing the environment sheds under memory
+  // pressure. Older servers omit the field.
   protected: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
   // The platform app the worktree's contract names, and the bundle the stack
   // runs in. Every member of a bundle carries the same bundleId; stop, restart
@@ -162,17 +161,6 @@ export type AppStackListInput = typeof AppStackListInput.Type;
 
 export const AppStackListResult = Schema.Struct({
   stacks: Schema.Array(AppStack),
-  workflowConflicts: Schema.optionalKey(
-    Schema.Array(
-      Schema.Struct({
-        kind: Schema.optionalKey(Schema.Literals(["duplicate-worktree", "ownership-mismatch"])),
-        workflowId: TrimmedNonEmptyString,
-        stackIds: Schema.Array(TrimmedNonEmptyString),
-        runIds: Schema.Array(TrimmedNonEmptyString),
-        worktreePaths: Schema.Array(TrimmedNonEmptyString),
-      }),
-    ),
-  ),
 });
 export type AppStackListResult = typeof AppStackListResult.Type;
 
@@ -201,26 +189,13 @@ export const AppStackSetProtectedInput = Schema.Struct({
 });
 export type AppStackSetProtectedInput = typeof AppStackSetProtectedInput.Type;
 
-export const AppStackWorkflowTeardownInput = Schema.Struct({
-  workflowId: TrimmedNonEmptyString,
-});
-export type AppStackWorkflowTeardownInput = typeof AppStackWorkflowTeardownInput.Type;
-
-export const AppStackWorkflowTeardownResult = Schema.Struct({
-  stoppedStackIds: Schema.Array(TrimmedNonEmptyString),
-  skippedProtectedStackIds: Schema.Array(TrimmedNonEmptyString),
-  failedStackIds: Schema.Array(TrimmedNonEmptyString),
-});
-export type AppStackWorkflowTeardownResult = typeof AppStackWorkflowTeardownResult.Type;
-
 export const AppStackAutoCreateInput = Schema.Struct({
   worktreePath: TrimmedNonEmptyString,
   displayName: TrimmedNonEmptyString,
   gitBranch: Schema.optional(NullableTrimmedNonEmptyString),
   namespace: Schema.optional(NullableTrimmedNonEmptyString),
-  workflowId: Schema.optional(NullableTrimmedNonEmptyString),
-  // Defaults to dev. Nothing picks prod on the caller's behalf: workflows
-  // never set it, and the panel asks for it explicitly.
+  // Defaults to dev. Nothing picks prod on the caller's behalf: agents never
+  // set it, and the panel asks for it explicitly.
   variant: Schema.optional(AppStackVariant),
   // Other platform apps to run from their same-branch worktrees next to this
   // one. Apps left out stay on their standing dev copies. Missing worktrees

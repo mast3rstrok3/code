@@ -1,15 +1,10 @@
-import { OrchestrationLayerLive as WorkflowMetadataLayer } from "./orchestration/runtimeLayer.ts";
-import * as WorkflowDrain from "./orchestration/WorkflowDrainCoordinator.ts";
-import * as WorkflowNativeEventStore from "./orchestration-v2/EventStore.ts";
-import * as WorkflowRuntime from "./orchestration/workflowRuntimeLayer.ts";
+import * as AppStackLifecycleReactor from "./appStack/AppStackLifecycleReactor.ts";
 import * as AppStackManager from "./appStack/AppStackManager.ts";
 import * as AppReviewStore from "./appReview/AppReviewStore.ts";
 import * as AppReviewTests from "./appReview/AppReviewTests.ts";
 import * as PreviewRecordingPolicy from "./preview/PreviewRecordingPolicy.ts";
 import * as BuildBatchService from "./buildBatch/BuildBatchService.ts";
 import * as PreviewCoordinator from "./preview/PreviewCoordinator.ts";
-import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects.ts";
-import { ProjectionThreadRepositoryLive } from "./persistence/Layers/ProjectionThreads.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
 import * as Random from "effect/Random";
@@ -672,11 +667,7 @@ const layerOrchestrationApplication = Layer.merge(
 
 const layerThreadSettlementWorker = Layer.effectDiscard(
   ThreadSettlementService.make.pipe(Effect.flatMap((service) => service.start())),
-).pipe(
-  Layer.provide(layerPullRequestService),
-  Layer.provide(ProjectionStoreV2.layer),
-  Layer.provide(WorkflowMetadataLayer),
-);
+).pipe(Layer.provide(layerPullRequestService), Layer.provide(ProjectionStoreV2.layer));
 
 const layerIdleCompactionWorker = Layer.effectDiscard(
   IdleCompactionService.make.pipe(Effect.flatMap((service) => service.start())),
@@ -733,7 +724,7 @@ const layerServerRestart = Layer.effect(
 );
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
-  WorkflowRuntime.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
+  AppStackLifecycleReactor.layer,
   AgentAwarenessRelay.layer,
   HeldHooksWaker.layer,
   layerThreadSettlementWorker,
@@ -788,11 +779,8 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Layer.provideMerge(layerOrchestrationApplication),
     Layer.provideMerge(AppStackManager.AppStackManager.layer),
     Layer.provideMerge(BuildBatchService.layer.pipe(Layer.provide(ProcessRunner.layer))),
-    Layer.provideMerge(
-      Layer.merge(RuntimeLayer.layerEventInfrastructure, WorkflowNativeEventStore.layer),
-    ),
+    Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
     Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
-    Layer.provideMerge(WorkflowDrain.layer.pipe(Layer.provideMerge(ServerLifecycleEvents.layer))),
     Layer.provideMerge(SecretCheck.layer),
   )
   .pipe(
@@ -804,13 +792,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Layer.provideMerge(layerGit),
     Layer.provideMerge(layerVcs),
     Layer.provideMerge(Layer.mergeAll(layerTerminal, layerPreview, layerDevice)),
-    Layer.provideMerge(
-      Layer.mergeAll(
-        ProjectionProjectRepositoryLive,
-        ProjectionThreadRepositoryLive,
-        T3ProjectFileLoader.layer,
-      ),
-    ),
+    Layer.provideMerge(T3ProjectFileLoader.layer),
     Layer.provideMerge(layerPersistence),
     Layer.provideMerge(Layer.mergeAll(Keybindings.layer, UsageLimitSources.layer)),
     Layer.provideMerge(ProviderRegistry.layer),
@@ -926,6 +908,8 @@ const layerMakeRoutes = Layer.mergeAll(
     McpHttpServer.layer.pipe(
       Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
       Layer.provide(McpOAuth.layerMcpClientAuthenticator),
+      // App Stack tools resolve a thread's workspace from the projections.
+      Layer.provide(ProjectionStoreV2.layer),
     ),
   ),
   Layer.provide(

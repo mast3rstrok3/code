@@ -57,13 +57,11 @@ import {
   type RuntimeMode,
   type ScheduledTask,
   type ScheduledTaskUpsertInput,
-  type ScheduledTaskWorkflow,
   scheduledTaskThreadMode,
   type ServerProvider,
   type ServerProviderModel,
   ThreadId,
   isOrchestrationV2WorkActive,
-  WORKFLOW_AUTOMATION_RUNTIME_MODE,
   latestProviderTurnForAttempt,
   resolveProjectProviderInstanceEnabled,
   SECRET_REQUEST_UNSAVED_NOTE,
@@ -294,11 +292,6 @@ export interface ScheduledTaskDefaults {
   ) => Effect.Effect<ScheduledTask["workspaceStrategy"] | null>;
   /** The project's default model for new threads (project, then environment), or null. */
   readonly defaultModelSelection: (projectId: ProjectId) => ModelSelection | null;
-  /** The model a new workflow starts with when nobody names one, or null. */
-  readonly workflowModelSelection: (
-    projectId: ProjectId,
-    workflow: ScheduledTaskWorkflow,
-  ) => ModelSelection | null;
 }
 
 function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): OrchestratorMcpScheduledTask {
@@ -309,10 +302,6 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
     enabled: task.enabled,
     projectId: task.projectId,
     boundThreadId: task.threadId,
-    workflow: task.workflow ?? null,
-    ...(task.workflow == null
-      ? {}
-      : { useWorkflowDefaultModel: task.useWorkflowDefaultModel === true }),
     freshSession: scheduledTaskThreadMode(task) === "fresh_session",
     schedule: task.schedule,
     nextRunAt: task.nextRunAt,
@@ -2247,21 +2236,10 @@ const make = Effect.gen(function* () {
         const projectId = yield* resolveProjectTarget(parent, input.projectId);
         yield* assertLiveCallerForOtherProject(scope, parent, projectId);
         const project = yield* requireProject(projectId);
-        const workflow = input.workflow ?? null;
-        if (workflow !== null) {
-          if (input.bindToCurrentThread === true) {
-            return yield* failure(
-              "invalid_request",
-              "A workflow task starts a fresh thread on every run; omit bindToCurrentThread.",
-            );
-          }
-          // Its runs start unattended in full access.
-          yield* resolveRuntimeMode(limits.runtimeMode, WORKFLOW_AUTOMATION_RUNTIME_MODE);
-        }
         // Binding means "wake this thread", which only a thread caller in that project has.
         const bindToCurrentThread =
           input.bindToCurrentThread ??
-          (workflow === null && parent !== undefined && parent.thread.projectId === projectId);
+          (parent !== undefined && parent.thread.projectId === projectId);
         if (
           bindToCurrentThread &&
           (parent === undefined || parent.thread.projectId !== projectId)
@@ -2273,10 +2251,7 @@ const make = Effect.gen(function* () {
               : "bindToCurrentThread binds to this thread, which belongs to a different project.",
           );
         }
-        // An agent names no model, so a workflow task follows the workflow's
-        // default at each run; the stored model is the fallback.
         const modelSelection =
-          (workflow === null ? null : defaults?.workflowModelSelection(projectId, workflow)) ??
           parent?.thread.modelSelection ??
           defaults?.defaultModelSelection(projectId) ??
           (yield* projectDefaultModelSelection(project));
@@ -2292,12 +2267,11 @@ const make = Effect.gen(function* () {
           schedule: input.schedule,
           projectId,
           threadId: bindToCurrentThread && parent !== undefined ? parent.thread.id : null,
-          threadMode:
-            workflow === null && input.freshSession
-              ? "fresh_session"
-              : bindToCurrentThread
-                ? "continue"
-                : "new_thread",
+          threadMode: input.freshSession
+            ? "fresh_session"
+            : bindToCurrentThread
+              ? "continue"
+              : "new_thread",
           workspaceStrategy: yield* scheduledTaskWorkspaceStrategy(
             bindToCurrentThread,
             projectId,
@@ -2306,8 +2280,6 @@ const make = Effect.gen(function* () {
           modelSelection,
           runtimeMode: limits.runtimeMode,
           interactionMode: limits.interactionMode,
-          workflow,
-          useWorkflowDefaultModel: workflow !== null,
           createdBy: "agent",
           creationSource: "mcp",
           // Scope the idempotency key by provider session so two callers
@@ -2359,22 +2331,8 @@ const make = Effect.gen(function* () {
         const { parent, limits } = yield* loadCaller(scope, ["runs"]);
         const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
         yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
-        const workflow =
-          input.workflow === undefined ? (existing.workflow ?? null) : input.workflow;
-        if (workflow !== null) {
-          if (input.bindToCurrentThread === true) {
-            return yield* failure(
-              "invalid_request",
-              "A workflow task starts a fresh thread on every run; set workflow to null to bind it.",
-            );
-          }
-          yield* resolveRuntimeMode(limits.runtimeMode, WORKFLOW_AUTOMATION_RUNTIME_MODE);
-        }
-        // Choosing a workflow unbinds the task: each run starts its own thread.
-        const bindToCurrentThread =
-          workflow !== null && existing.threadId !== null ? false : input.bindToCurrentThread;
         if (
-          bindToCurrentThread === true &&
+          input.bindToCurrentThread === true &&
           (parent === undefined || parent.thread.projectId !== existing.projectId)
         ) {
           return yield* failure(
@@ -2397,9 +2355,9 @@ const make = Effect.gen(function* () {
           );
         }
         const threadId =
-          bindToCurrentThread === undefined
+          input.bindToCurrentThread === undefined
             ? existing.threadId
-            : bindToCurrentThread && parent !== undefined
+            : input.bindToCurrentThread && parent !== undefined
               ? parent.thread.id
               : null;
         // Reset the workspace only when the binding flips, so unbinding cannot leave runs in the shared checkout.
@@ -2419,11 +2377,8 @@ const make = Effect.gen(function* () {
           schedule: input.schedule ?? existing.schedule,
           projectId: existing.projectId,
           threadId,
-          // A workflow task starts its own thread on every run.
           threadMode:
-            workflow !== null
-              ? "new_thread"
-              : input.freshSession === undefined && input.bindToCurrentThread === undefined
+            input.freshSession === undefined && input.bindToCurrentThread === undefined
               ? scheduledTaskThreadMode(existing)
               : (input.freshSession ??
                   (input.bindToCurrentThread !== false &&
@@ -2438,11 +2393,6 @@ const make = Effect.gen(function* () {
           modelSelection: existing.modelSelection,
           runtimeMode: existing.runtimeMode,
           interactionMode: existing.interactionMode,
-          workflow,
-          // A task that becomes a workflow task follows the workflow's default model.
-          ...(workflow !== null && existing.workflow == null
-            ? { useWorkflowDefaultModel: true }
-            : {}),
           createdBy: existing.createdBy,
           creationSource: existing.creationSource,
         };

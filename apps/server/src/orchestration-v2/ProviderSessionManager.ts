@@ -578,20 +578,13 @@ export const layerWithOptions = (
                   yield* agentAccessSettings(threadId);
                 const capabilities = new Set<
                   import("../mcp/McpInvocationContext.ts").McpCapability
-                >([
-                  "orchestration",
-                  "worktree",
-                  "pull-requests",
-                  "app-review",
-                  "workflow-artifacts",
-                  "user-input",
-                ]);
-                const workflowThread = Option.getOrUndefined(
-                  yield* projectionStore.getThread(threadId).pipe(Effect.option),
-                );
+                >(["orchestration", "worktree", "pull-requests", "app-review"]);
                 if (browserToolsAvailable) capabilities.add("preview");
                 if (deviceToolsAvailable) capabilities.add("device");
-                const subagent = workflowThread?.lineage.relationshipToParent === "subagent";
+                const subagent = yield* projectionStore.getThread(threadId).pipe(
+                  Effect.map((thread) => thread.lineage.relationshipToParent === "subagent"),
+                  Effect.orElseSucceed(() => false),
+                );
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
                   // Reserve before async validation so release cannot revoke between validation and reservation.

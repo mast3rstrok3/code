@@ -6,6 +6,7 @@ import { NodeId, RunAttemptId, TrimmedNonEmptyString } from "./index.ts";
 import {
   latestProviderTurnForAttempt,
   OrchestrationV2CheckpointFileSummary,
+  OrchestrationV2DomainEventJson,
   OrchestrationV2ProviderCapabilities,
   OrchestrationV2ProviderThread,
   OrchestrationV2ProviderThreadJson,
@@ -21,6 +22,8 @@ import {
 const now = DateTime.makeUnsafe("2026-04-20T00:00:00.000Z");
 
 const decodeOrchestrationV2TurnItemJson = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
+const decodeDomainEventJson = Schema.decodeUnknownSync(OrchestrationV2DomainEventJson);
+const decodeThreadShellJson = Schema.decodeUnknownSync(OrchestrationV2ThreadShellJson);
 const encodeOrchestrationV2TurnItemJson = Schema.encodeSync(OrchestrationV2TurnItemJson);
 const decodeOrchestrationV2Subagent = Schema.decodeUnknownSync(OrchestrationV2Subagent);
 const decodeCheckpointFileSummary = Schema.decodeSync(OrchestrationV2CheckpointFileSummary);
@@ -458,39 +461,41 @@ describe("orchestration V2 contracts", () => {
   });
 });
 
+const storedThreadShell = {
+  id: "thread-test",
+  projectId: "project-test",
+  title: "Thread",
+  providerInstanceId: "codex",
+  modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  branch: null,
+  worktreePath: null,
+  activeProviderThreadId: null,
+  lineage: { rootThreadId: "thread-test", parentThreadId: null, relationshipToParent: null },
+  forkedFrom: null,
+  createdBy: "user",
+  creationSource: "mobile",
+  latestRunId: null,
+  activeRunId: null,
+  status: "idle",
+  pendingRuntimeRequest: null,
+  latestVisibleMessage: null,
+  latestUserMessageAt: null,
+  hasActionableProposedPlan: false,
+  itemCount: 0,
+  visibleItemCount: 0,
+  createdAt: "2026-10-01T00:00:00.000Z",
+  updatedAt: "2026-10-01T00:00:00.000Z",
+  archivedAt: null,
+  settledOverride: null,
+  settledAt: null,
+  deletedAt: null,
+};
+
 describe("thread open stats", () => {
   it("reads a thread whose open stats this build cannot read, without them", () => {
-    const shell = {
-      id: "thread-test",
-      projectId: "project-test",
-      title: "Thread",
-      providerInstanceId: "codex",
-      modelSelection: { instanceId: "codex", model: "gpt-5.4" },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      branch: null,
-      worktreePath: null,
-      activeProviderThreadId: null,
-      lineage: { rootThreadId: "thread-test", parentThreadId: null, relationshipToParent: null },
-      forkedFrom: null,
-      createdBy: "user",
-      creationSource: "mobile",
-      latestRunId: null,
-      activeRunId: null,
-      status: "idle",
-      pendingRuntimeRequest: null,
-      latestVisibleMessage: null,
-      latestUserMessageAt: null,
-      hasActionableProposedPlan: false,
-      itemCount: 0,
-      visibleItemCount: 0,
-      createdAt: "2026-10-01T00:00:00.000Z",
-      updatedAt: "2026-10-01T00:00:00.000Z",
-      archivedAt: null,
-      settledOverride: null,
-      settledAt: null,
-      deletedAt: null,
-    };
+    const shell = storedThreadShell;
     const decode = Schema.decodeUnknownSync(OrchestrationV2ThreadShellJson);
     const opens = { openedAt: 1, score: 1, picks: [{ query: "upl", at: 1 }] };
     expect(decode({ ...shell, opens }).opens).toEqual(opens);
@@ -648,5 +653,65 @@ describe("latestProviderTurnForAttempt", () => {
     ];
     expect(latestProviderTurnForAttempt(turns, RunAttemptId.make("goal-attempt"))?.id).toBe("last");
     expect(latestProviderTurnForAttempt(turns, null)).toBeUndefined();
+  });
+});
+
+describe("removed workflow interaction modes", () => {
+  it.each(["planning-workflow", "implementation-workflow", "product-workflow"])(
+    "decodes a stored %s thread as the default mode",
+    (interactionMode) => {
+      const thread = decodeThreadShellJson({
+        ...storedThreadShell,
+        interactionMode,
+        workflowRole: "implementation-root",
+        workflowContext: { workflowId: "workflow-1" },
+      });
+      expect(thread.interactionMode).toBe("default");
+      expect(thread).not.toHaveProperty("workflowRole");
+      expect(
+        decodeThreadShellJson({ ...storedThreadShell, interactionMode: "plan" }).interactionMode,
+      ).toBe("plan");
+      expect(() =>
+        decodeThreadShellJson({ ...storedThreadShell, interactionMode: "bogus" }),
+      ).toThrow();
+    },
+  );
+
+  it("decodes a stored thread.created event from a workflow launch", () => {
+    const event = decodeDomainEventJson({
+      id: "event-workflow-root",
+      type: "thread.created",
+      threadId: "thread-test",
+      providerInstanceId: "codex",
+      occurredAt: "2026-10-01T00:00:00.000Z",
+      payload: {
+        id: "thread-test",
+        projectId: "project-test",
+        title: "Engineering workflow",
+        providerInstanceId: "codex",
+        modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+        runtimeMode: "full-access",
+        interactionMode: "implementation-workflow",
+        workflowPreset: "engineering",
+        workflowRole: "implementation-root",
+        workflowImplementationSettings: { maxParallelTickets: 2 },
+        branch: null,
+        worktreePath: null,
+        activeProviderThreadId: null,
+        lineage: { rootThreadId: "thread-test", parentThreadId: null, relationshipToParent: null },
+        forkedFrom: null,
+        createdBy: "user",
+        creationSource: "web",
+        createdAt: "2026-10-01T00:00:00.000Z",
+        updatedAt: "2026-10-01T00:00:00.000Z",
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
+      },
+    });
+    expect(event.type === "thread.created" && event.payload.interactionMode).toBe("default");
+    expect(event.payload).not.toHaveProperty("workflowPreset");
   });
 });

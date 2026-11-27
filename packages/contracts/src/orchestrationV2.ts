@@ -1,10 +1,4 @@
-import {
-  OrchestrationThreadWorkflowRole,
-  ThreadWorkflowContext,
-  WorkflowPreset,
-} from "./workflowIdentity.ts";
 import { WorkspaceUserId } from "./workspaceUsers.ts";
-import { ImplementationWorkflowSettings } from "./workflowSettings.ts";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import { withRecordIdTable } from "./orchestrationV2IdTable.ts";
 import * as DateTime from "effect/DateTime";
@@ -472,12 +466,6 @@ const OrchestrationV2LastTitleRegeneration = Schema.Struct({
 
 export const OrchestrationV2AppThread = Schema.Struct({
   ownerUserId: Schema.optionalKey(WorkspaceUserId),
-  workflowRole: Schema.optionalKey(Schema.NullOr(OrchestrationThreadWorkflowRole)),
-  workflowContext: Schema.optionalKey(Schema.NullOr(ThreadWorkflowContext)),
-  workflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
-  /** Per-run stage settings a workflow root was launched with; the workflow engine owns them after import. */
-  workflowImplementationSettings: Schema.optionalKey(ImplementationWorkflowSettings),
-
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -754,7 +742,6 @@ export const OrchestrationV2Run = Schema.Struct({
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
   checkpointId: Schema.NullOr(CheckpointId),
   contextHandoffId: Schema.NullOr(ContextHandoffId),
-  freshProviderSession: Schema.optional(Schema.Boolean),
   restartContinuationOfRunId: Schema.optional(RunId),
   manualContinuationOfRunId: Schema.optional(RunId),
   usageLimitContinuationOfRunId: Schema.optional(RunId),
@@ -1457,9 +1444,6 @@ export const OrchestrationV2UserInputQuestion = Schema.Struct({
   allowCustomAnswer: Schema.optional(Schema.Boolean),
   initialAnswer: Schema.optional(Schema.String),
   required: Schema.optional(Schema.Boolean),
-  recommendation: Schema.optional(
-    Schema.Struct({ optionLabel: TrimmedNonEmptyString, rationale: TrimmedNonEmptyString }),
-  ),
 });
 export type OrchestrationV2UserInputQuestion = typeof OrchestrationV2UserInputQuestion.Type;
 
@@ -2210,10 +2194,6 @@ export type OrchestrationV2LatestVisibleMessageSummary =
 
 export const OrchestrationV2ThreadShell = Schema.Struct({
   ownerUserId: Schema.optionalKey(WorkspaceUserId),
-  workflowRole: Schema.optionalKey(Schema.NullOr(OrchestrationThreadWorkflowRole)),
-  workflowContext: Schema.optionalKey(Schema.NullOr(ThreadWorkflowContext)),
-  workflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
-
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -3109,11 +3089,6 @@ export const OrchestrationV2Command = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("thread.create"),
     ownerUserId: Schema.optionalKey(WorkspaceUserId),
-    workflowRole: Schema.optionalKey(Schema.NullOr(OrchestrationThreadWorkflowRole)),
-    workflowContext: Schema.optionalKey(Schema.NullOr(ThreadWorkflowContext)),
-    workflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
-    /** Per-run stage settings the root starts with, copied to the workflow engine on import. */
-    workflowImplementationSettings: Schema.optionalKey(ImplementationWorkflowSettings),
     parentThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
     ...OrchestrationV2CreationFields,
     commandId: CommandId,
@@ -3273,10 +3248,6 @@ export const OrchestrationV2Command = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("thread.metadata.update"),
     ownerUserId: Schema.optionalKey(WorkspaceUserId),
-    workflowRole: Schema.optionalKey(Schema.NullOr(OrchestrationThreadWorkflowRole)),
-    workflowContext: Schema.optionalKey(Schema.NullOr(ThreadWorkflowContext)),
-    workflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
-
     commandId: CommandId,
     threadId: ThreadId,
     title: Schema.optional(TrimmedNonEmptyString),
@@ -3400,7 +3371,6 @@ export const OrchestrationV2Command = Schema.Union([
     titleSeed: Schema.optional(TrimmedNonEmptyString),
     modelSelection: Schema.optional(ModelSelection),
     sourcePlanRef: Schema.optional(Schema.Struct({ threadId: ThreadId, planId: PlanId })),
-    freshProviderSession: Schema.optional(Schema.Boolean),
     restartContinuationOfRunId: Schema.optional(RunId),
     usageLimitContinuationOfRunId: Schema.optional(RunId),
     manualContinuationOfRunId: Schema.optional(RunId),
@@ -3810,21 +3780,6 @@ const OrchestrationV2InternalCommand = Schema.Union([
     secretStatus: OrchestrationV2SecretRequestStatus,
   }),
   /**
-   * Opens or retires the card for a question asked through the
-   * workflow_request_user_input MCP tool, whose answer goes back to that tool
-   * call rather than to the provider. Internal so no client can open one.
-   */
-  Schema.Struct({
-    type: Schema.Literal("workflow_user_input.record"),
-    commandId: CommandId,
-    threadId: ThreadId,
-    runId: RunId,
-    requestId: RuntimeRequestId,
-    questions: Schema.Array(OrchestrationV2UserInputQuestion),
-    status: Schema.Literals(["pending", "resolved", "cancelled"]),
-    answers: Schema.optional(ProviderUserInputAnswers),
-  }),
-  /**
    * Records or updates a link an agent asked the user to make. Internal so no
    * client can mark a request linked without the link being made.
    */
@@ -3948,8 +3903,6 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
-  /** Starts the thread as the root of this workflow. Older servers ignore it. */
-  workflowPreset: Schema.optional(WorkflowPreset),
   initialMessage: Schema.optional(
     Schema.Struct({
       messageId: Schema.optional(MessageId),

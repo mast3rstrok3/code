@@ -20,9 +20,6 @@ import {
   type RuntimeMode,
   type ScheduledTaskId,
   ThreadId,
-  WorkflowId,
-  type WorkflowPreset,
-  type ImplementationWorkflowSettings,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -96,10 +93,6 @@ export interface ThreadLaunchInput {
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
   readonly workspaceStrategy: ThreadLaunchWorkspaceStrategy;
-  /** Makes the thread the root of this workflow, as the composer does when it picks one. */
-  readonly workflowPreset?: WorkflowPreset;
-  /** The workflow's per-run stage settings, as the composer pins them when it picks one. */
-  readonly workflowImplementationSettings?: ImplementationWorkflowSettings;
   readonly initialMessage?: ThreadLaunchInitialMessage;
   readonly importedNativeThread?: {
     readonly ref: {
@@ -1298,21 +1291,6 @@ const make = Effect.gen(function* () {
                 ...(input.importedNativeThread === undefined
                   ? {}
                   : { importedNativeThread: input.importedNativeThread }),
-                ...(input.workflowPreset === undefined
-                  ? {}
-                  : {
-                      workflowPreset: input.workflowPreset,
-                      ...(input.workflowImplementationSettings === undefined
-                        ? {}
-                        : { workflowImplementationSettings: input.workflowImplementationSettings }),
-                      // Every step thread and sub-run joins this id, which keeps the run one card.
-                      workflowContext: {
-                        workflowId: WorkflowId.make(`workflow-${candidateThreadId}`),
-                        parentWorkflowId: null,
-                        rootThreadId: candidateThreadId,
-                        ticketScope: [],
-                      },
-                    }),
                 ...(input.linkOrigin === undefined ? {} : { linkOrigin: input.linkOrigin }),
                 ...(input.delegatedFrom === undefined
                   ? {}

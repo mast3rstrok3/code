@@ -12,7 +12,6 @@ import {
   RunId,
   type OrchestrationV2Run,
   ThreadId,
-  WorkflowId,
   TurnItemId,
   type OrchestrationProjectShell,
   type OrchestrationV2AppThread,
@@ -2278,64 +2277,6 @@ describe("ThreadSettlementServiceV2 single-thread sweeps", () => {
       }),
     ),
   );
-});
-
-describe("workflow settlement", () => {
-  it("keeps a root and its children active while implementation or App Review runs", () => {
-    const root = ThreadId.make("workflow-root");
-    const child = ThreadId.make("workflow-child");
-    const unrelated = ThreadId.make("unrelated");
-    const threads = [
-      { id: root, workflowContext: null, workflowPausedAt: null },
-      {
-        id: child,
-        workflowContext: {
-          workflowId: WorkflowId.make("workflow"),
-          rootThreadId: root,
-          ticketScope: [],
-        },
-        workflowPausedAt: null,
-      },
-      { id: unrelated, workflowContext: null, workflowPausedAt: null },
-    ];
-    for (const threadId of [root, child]) {
-      expect(
-        ThreadSettlementService.workflowHoldsSettlement(threadId, {
-          threads,
-          implementationRuns: [{ orchestratorThreadId: root, status: "needs-human-attention" }],
-        }),
-      ).toBe(true);
-      expect(
-        ThreadSettlementService.workflowHoldsSettlement(threadId, {
-          threads,
-          appReviewWorkflowRuns: [
-            { targetThreadId: root, controllerThreadId: child, status: "running" },
-          ],
-        }),
-      ).toBe(true);
-      expect(
-        ThreadSettlementService.workflowHoldsSettlement(threadId, {
-          threads,
-          implementationRuns: [{ orchestratorThreadId: root, status: "canceled" }],
-        }),
-      ).toBe(false);
-    }
-    expect(
-      ThreadSettlementService.workflowHoldsSettlement(unrelated, {
-        threads,
-        implementationRuns: [{ orchestratorThreadId: root, status: "running" }],
-      }),
-    ).toBe(false);
-    expect(
-      ThreadSettlementService.workflowHoldsSettlement(root, {
-        threads: threads.map((thread) =>
-          thread.id === child
-            ? { ...thread, workflowPausedAt: "2026-10-07T00:00:00.000Z" }
-            : thread,
-        ),
-      }),
-    ).toBe(true);
-  });
 });
 
 describe("isSnoozed", () => {

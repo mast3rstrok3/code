@@ -4,10 +4,6 @@ import { AppReviewToolkit } from "./toolkits/app-review/tools.ts";
 import * as AppReviewHandlers from "./toolkits/app-review/handlers.ts";
 import { BuildBatchToolkit } from "./toolkits/build-batch/tools.ts";
 import * as BuildBatchHandlers from "./toolkits/build-batch/handlers.ts";
-import { WorkflowArtifactsToolkit } from "./toolkits/workflow-artifacts/tools.ts";
-import * as WorkflowArtifactsHandlers from "./toolkits/workflow-artifacts/handlers.ts";
-import { WorkflowUserInputToolkit } from "./toolkits/workflow-user-input/tools.ts";
-import * as WorkflowUserInputHandlers from "./toolkits/workflow-user-input/handlers.ts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -1358,8 +1354,6 @@ export const layerTools = Layer.mergeAll(
   toolkitRegistration(AppStackToolkit, AppStackHandlers.layer),
   toolkitRegistration(AppReviewToolkit, AppReviewHandlers.layer),
   layerBuildBatchToolkit,
-  toolkitRegistration(WorkflowArtifactsToolkit, WorkflowArtifactsHandlers.layer),
-  toolkitRegistration(WorkflowUserInputToolkit, WorkflowUserInputHandlers.layer),
   layerPreviewToolkit,
   layerOrchestratorToolkit,
   layerThreadToolkit,

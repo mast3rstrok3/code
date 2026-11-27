@@ -55,8 +55,6 @@
         "src/claude-history-worker.ts!",
         "scripts/cli.ts",
         "scripts/fetch-expo-schema.ts",
-        // Maintainers run this by hand; docs/architecture/workflow-catalog.md cites it.
-        "scripts/delete-orphan-workflow-threads.ts",
         "scripts/probe-claude-fork-local-rollback-replay.ts",
         "scripts/update-test-shard-weights.ts",
         "scripts/verify-background-live.ts",

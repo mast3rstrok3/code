@@ -14,8 +14,6 @@ For setup work in another repository, copy the full prompt in
 
 - One worktree maps to one Kubernetes namespace per variant. A worktree can run a dev stack
   and a prod stack side by side, never two of one kind.
-- A workflow owns at most one stack that it created. Existing worktree stacks and standing
-  deployments are reused without transferring ownership.
 - If no namespace is supplied, T3 Code derives it from the worktree basename and appends `-dev`,
   or `-prod` for the prod variant.
 - The public frontend service should be named `web`, `frontend`, or `app`.
@@ -64,13 +62,9 @@ out, or start a prod stack.
 
 When a thread settles, T3 Code stops its unprotected dev and prod stacks to free resources.
 This includes automatic settlement after a pull request merges or closes. Stacks stay running
-while another active thread uses their worktree or workflow. A bundle stays running if any
+while another active thread uses their worktree. A bundle stays running if any
 member is protected or still in use. Standing `dev` and `main` deployments stay running.
 Restart a stopped stack from the App Stack panel when you need it again.
-
-Stacks created for a workflow are labeled **Workflow-owned**. If historical implementation runs
-map more than one visible stack to the same workflow, the panel reports the conflict but never
-deletes either stack automatically.
 
 ## Bundles across apps
 
@@ -84,8 +78,7 @@ your Rudi instead of the standing one. A standing app never calls a bundle membe
 If a checked app has no worktree on the branch, T3 Code creates one where the form shows. The new
 worktree tracks `origin/<branch>` when the branch was pushed and otherwise starts from `origin/dev`.
 Each app runs in its own namespace. Stop, restart, and delete act on the whole bundle. Agents get
-the same choice through the `bundle` argument of `app_stack_start`. A workflow whose tickets change
-other repositories bundles those repositories into its shared stack by itself. Bundles need a Stacks
+the same choice through the `bundle` argument of `app_stack_start`. Bundles need a Stacks
 controller and are not available in native mode.
 
 A repository that wires the apps together, such as healthcare-infra, can start them all. Its
@@ -126,22 +119,9 @@ The default lease lasts 30 minutes once the guest is ready. The agent can renew 
 the same lease ID. Save test artifacts before calling `app_stack_device_stop`, which
 deletes the guest and leaves the application backend running.
 
-## Automatic teardown and protected stacks
+## Protected stacks
 
-T3 Code deletes a ticket's App Stack when the ticket succeeds, unless you protected it. It keeps the branch and worktree
-available for dependent tickets. Failed stack deletions are retried automatically, including after
-a server restart.
-
-After integration confirms that the ticket commit is in the combined branch, T3 Code removes the
-worktree if Git reports the expected branch, accepted commit, and no working tree changes. A dirty,
-divergent, or unmerged worktree stays on disk for manual inspection.
-
-When an Engineering run completes, or a Feature links its pull request, T3 Code stops every
-unprotected stack the workflow started and lists what it stopped in the thread's activity log.
-Protected stacks keep running. Stacks you started yourself are untouched, since no workflow owns
-them.
-
-Expand a stack card and choose **Protect** to keep it out of general workflow teardown. A protected
+Expand a stack card and choose **Protect** to keep it running when its thread settles. A protected
 stack shows a **Protected** badge and is the last one the environment stops when the host runs low
 on memory. Press the button again to release it. Protection does not change explicit **Stop**,
 **Restart**, or **Delete** actions.
@@ -178,8 +158,8 @@ more precise runtime-specific setup.
 | `prod`          | `infra/compose/compose.app-prod.yml` | The production build, baked into an image, no source mounts  |
 
 The variant lives in the compose file name, never in stored state, so restart and rebuild stay
-on the same contract. Nothing picks prod for you: workflows always ask for dev, and the App Stack
-panel has an explicit Dev/Prod choice when you start a new stack. A prod stack is for checking how a
+on the same contract. Nothing picks prod for you: agents ask for dev unless told otherwise, and the
+App Stack panel has an explicit Dev/Prod choice when you start a new stack. A prod stack is for checking how a
 release candidate behaves and performs; every code change needs a new image build, so it is the
 wrong tool for iterating.
 
@@ -219,8 +199,3 @@ the worktree/branch is already running the API answers `created: false` with
 `alreadyRunning` and the existing URLs; branches served by the standing
 deployments (`dev`, `main`) answer `reserved: true` with that deployment's URL
 and never provision a duplicate stack.
-
-Workflow orchestration sends its durable workflow ID when no existing worktree stack can be reused.
-When that workflow later moves to another implementation worktree, the controller replaces only
-the stack owned by that workflow. Shared, manual, and standing `dev`/`main` stacks are protected.
-Completed and canceled workflows retain their latest stack for testing until their threads settle.

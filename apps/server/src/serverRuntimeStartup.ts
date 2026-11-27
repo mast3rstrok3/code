@@ -1,6 +1,3 @@
-import { WorkflowDrainCoordinator } from "./orchestration/WorkflowDrainCoordinator.ts";
-import * as Option from "effect/Option";
-import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor.ts";
 import {
   CommandId,
   DEFAULT_MODEL,
@@ -453,9 +450,6 @@ const runOrderedV2StartupPhases = Effect.fn("serverRuntimeStartup.runOrderedV2St
 
 const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: StartupOptions) {
   const serverConfig = yield* ServerConfig.ServerConfig;
-  const workflows = yield* Effect.serviceOption(OrchestrationReactor);
-  const workflowDrain = yield* Effect.serviceOption(WorkflowDrainCoordinator);
-  const startupCompleted = yield* Ref.make(false);
   const keybindings = yield* Keybindings.Keybindings;
   const legacyV1ThreadImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
   const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
@@ -482,16 +476,6 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
           cause: "Server runtime is shutting down.",
         }),
       );
-      if (Option.isSome(workflows) && (yield* Ref.get(startupCompleted))) {
-        if (Option.isSome(workflowDrain)) {
-          const requestedAt = DateTime.formatIso(yield* DateTime.now);
-          yield* workflowDrain.value.requestDrain({
-            operationId: `workflow-drain-${requestedAt}`,
-            requestedAt,
-            drain: workflows.value.drainForShutdown,
-          });
-        } else yield* workflows.value.drainForShutdown;
-      }
       const workerFiber = yield* Ref.getAndSet(effectWorkerFiber, null);
       if (workerFiber !== null) {
         yield* Fiber.interrupt(workerFiber).pipe(Effect.ignore);
@@ -590,10 +574,6 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
       ).pipe(Effect.map((targets): AutoBootstrapWelcomeTargets => targets)),
     });
     yield* Effect.logInfo("V2 orchestration recovery completed", recovery);
-    if (Option.isSome(workflows)) {
-      yield* workflows.value.start();
-      yield* workflows.value.reconcilePendingProviderCommands;
-    }
     // Runs after activation: the status check fetches every enabled project's
     // remote, and awaiting it here held command readiness for that long.
     yield* runStartupPhase(
@@ -690,7 +670,6 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
     yield* options?.activate ?? Effect.void;
     yield* Effect.logDebug("Accepting commands");
     yield* commandGate.signalCommandReady;
-    yield* Ref.set(startupCompleted, true);
     yield* Effect.logDebug("startup phase: publishing ready event");
     yield* runStartupPhase(
       "ready.publish",

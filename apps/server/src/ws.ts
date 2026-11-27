@@ -1,14 +1,5 @@
-import type { AppStackListInput } from "@t3tools/contracts";
-import * as WorkflowRuntimeBridge from "./orchestration/WorkflowRuntimeBridge.ts";
-import { NativeVerificationError } from "@t3tools/contracts";
-import { executeNativeVerification } from "./orchestration/nativeVerificationService.ts";
 import { PreviewCoordinator } from "./preview/PreviewCoordinator.ts";
-import { OrchestrationCommand, OrchestrationGetSnapshotError } from "@t3tools/contracts";
-import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
-import { getWorkflowArtifactsForThread } from "./orchestration/workflowArtifacts.ts";
 import { AppStackManager } from "./appStack/AppStackManager.ts";
-import { appStackWorkflowConflicts } from "./appStack/workflowOwnership.ts";
 import { verifyGithubOwnerToken } from "./workspaceUserCredentials.ts";
 import * as SkillsPlugin from "./skills/SkillsPlugin.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
@@ -1433,8 +1424,6 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
   },
 );
 
-const decodeWorkflowCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
-
 // Instrumentation wraps protocol execution and adds no handler dependencies.
 // Register against the contract group to avoid expanding its middleware across
 // every handler again, which exceeds the compiler's type instantiation depth.
@@ -1564,27 +1553,8 @@ export const layerWsRpc = (
       const databaseStorage = yield* DatabaseStorage.DatabaseStorage;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const skillsPlugin = yield* SkillsPlugin.SkillsPlugin;
-      const workflowEngine = yield* OrchestrationEngineService;
-      const workflowBridge = yield* WorkflowRuntimeBridge.WorkflowRuntimeBridge;
-      const workflowPath = yield* Path.Path;
-      const workflowSnapshots = yield* ProjectionSnapshotQuery;
       const appStackManager = yield* AppStackManager;
       const previewCoordinator = yield* PreviewCoordinator;
-      const workflowSnapshot = workflowSnapshots.getShellSnapshot().pipe(
-        Effect.map((snapshot) => ({
-          ...snapshot,
-          threads: snapshot.threads.filter(
-            (thread) =>
-              thread.workflowContext != null ||
-              thread.workflowRole !== null ||
-              thread.workflowPreset != null,
-          ),
-        })),
-        Effect.mapError(
-          (cause) =>
-            new OrchestrationGetSnapshotError({ message: "Failed to load workflows", cause }),
-        ),
-      );
       const secretResolver = yield* SecretResolver.SecretResolver;
       const peerLinks = yield* PeerLinks.PeerLinks;
       const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
@@ -1998,75 +1968,6 @@ export const layerWsRpc = (
       });
 
       const handlers = ServerWsRpcGroup.of({
-        [WS_METHODS.workflowDispatchCommand]: (input) =>
-          startup
-            .enqueueCommand(
-              decodeWorkflowCommand(input.command).pipe(
-                Effect.flatMap((command) => workflowBridge.dispatchCommand(command)),
-              ),
-            )
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new OrchestrationDispatchCommandError({
-                    message: "Failed to update workflow",
-                    cause,
-                  }),
-              ),
-            ),
-        [WS_METHODS.workflowNativeVerification]: (input) =>
-          startup
-            .enqueueCommand(
-              executeNativeVerification(input).pipe(
-                Effect.provideService(OrchestrationEngineService, workflowEngine),
-                Effect.provideService(ProjectionSnapshotQuery, workflowSnapshots),
-                Effect.provideService(Path.Path, workflowPath),
-              ),
-            )
-            .pipe(
-              Effect.mapError((cause) => new NativeVerificationError({ message: cause.message })),
-            ),
-        [WS_METHODS.workflowGetThread]: (input) =>
-          Stream.unwrap(
-            Effect.gen(function* () {
-              const events = yield* workflowEngine.subscribeDomainEvents;
-              const snapshot = workflowSnapshots.getThreadDetailById(input.threadId).pipe(
-                Effect.map(Option.getOrNull),
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationGetSnapshotError({
-                      message: "Failed to load workflow thread",
-                      cause,
-                    }),
-                ),
-              );
-              return Stream.concat(
-                Stream.fromEffect(snapshot),
-                events.pipe(
-                  Stream.filter((event) => event.aggregateId === input.threadId),
-                  Stream.mapEffect(() => snapshot),
-                ),
-              );
-            }),
-          ),
-        [WS_METHODS.workflowGetSnapshot]: () => workflowSnapshot,
-        [WS_METHODS.workflowSubscribe]: () =>
-          Stream.unwrap(
-            Effect.gen(function* () {
-              const events = yield* workflowEngine.subscribeDomainEvents;
-              return Stream.concat(
-                Stream.fromEffect(workflowSnapshot),
-                events.pipe(
-                  Stream.filter(
-                    (event) =>
-                      event.type !== "thread.message-sent" &&
-                      event.type !== "thread.activity-appended",
-                  ),
-                  Stream.mapEffect(() => workflowSnapshot),
-                ),
-              );
-            }),
-          ),
         [WS_METHODS.previewSubscribeFrames]: (input) =>
           Stream.unwrap(previewCoordinator.subscribeFrames(input)),
         [WS_METHODS.previewInput]: (input) => previewCoordinator.input(input),
@@ -2082,23 +1983,10 @@ export const layerWsRpc = (
         [WS_METHODS.previewAutomationRespond]: (input) => previewAutomationBroker.respond(input),
         [WS_METHODS.previewAutomationFocusHost]: (input) =>
           previewAutomationBroker.focusHost(input),
-        [WS_METHODS.workflowArtifactsGet]: (input) => getWorkflowArtifactsForThread(input),
         [WS_METHODS.serverVerifyGithubOwnerToken]: (input) => verifyGithubOwnerToken(input),
         [WS_METHODS.serverGetSkillCatalog]: () => Effect.succeed(skillsPlugin.catalog),
         [WS_METHODS.appStackStatus]: () => appStackManager.status,
-        [WS_METHODS.appStackList]: Effect.fn("ws.appStackList")(function* (
-          input: AppStackListInput,
-        ) {
-          const result = yield* appStackManager.list(input);
-          const model = yield* workflowSnapshots
-            .getCommandReadModel()
-            .pipe(Effect.orElseSucceed(() => null));
-          return {
-            ...result,
-            workflowConflicts:
-              model === null ? [] : appStackWorkflowConflicts(result.stacks, model),
-          };
-        }),
+        [WS_METHODS.appStackList]: (input) => appStackManager.list(input),
         [WS_METHODS.appStackGetByWorktree]: (input) => appStackManager.getByWorktree(input),
         [WS_METHODS.appStackGet]: (input) => appStackManager.get(input),
         [WS_METHODS.appStackAutoCreate]: (input) => appStackManager.autoCreate(input),
@@ -2332,9 +2220,6 @@ export const layerWsRpc = (
                           runtimeMode: input.runtimeMode,
                           interactionMode: input.interactionMode,
                           workspaceStrategy: input.workspaceStrategy,
-                          ...(input.workflowPreset === undefined
-                            ? {}
-                            : { workflowPreset: input.workflowPreset }),
                           ...(input.initialMessage === undefined
                             ? {}
                             : {

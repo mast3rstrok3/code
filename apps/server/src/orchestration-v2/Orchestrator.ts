@@ -30,7 +30,7 @@ import {
   isOrchestrationV2WorkActive,
   isProviderNativeSubagentThread,
   MessageId,
-  NodeId,
+  type NodeId,
   type ModelSelection,
   OrchestrationV2Command,
   type OrchestrationV2InternalCommand,
@@ -689,7 +689,6 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
       return command.parentThreadId;
     case "secret_request.record":
     case "link_request.record":
-    case "workflow_user_input.record":
       return command.threadId;
     case "thread.fork":
     case "thread.merge_back":
@@ -1666,13 +1665,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly adapter: ProviderAdapter.ProviderAdapterV2["Service"];
     readonly providerInstanceId: ProviderInstanceId;
     readonly threadId: ThreadId;
-    readonly freshProviderSession?: boolean;
     readonly ownerUserId: OrchestrationV2AppThread["ownerUserId"];
   }) =>
     input.adapter.getCapabilities().pipe(
       Effect.flatMap((capabilities) =>
-        capabilities.sessions.supportsMultipleProviderThreadsPerSession &&
-        !input.freshProviderSession
+        capabilities.sessions.supportsMultipleProviderThreadsPerSession
           ? Effect.sync(() => {
               const shared = idAllocator.derive.providerSession({
                 providerInstanceId: input.providerInstanceId,
@@ -2920,8 +2917,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ),
           ));
       const providerSessionId =
-        (!queuedRun.freshProviderSession &&
-        !canResumeAcrossInstances &&
+        (!canResumeAcrossInstances &&
         queuedProviderThread.providerSessionId !== null &&
         !switchPlan?.releaseProviderSessionIds.includes(queuedProviderThread.providerSessionId)
           ? queuedProviderThread.providerSessionId
@@ -2933,9 +2929,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               providerInstanceId: queuedRun.providerInstanceId,
               ownerUserId: projection.thread.ownerUserId,
               threadId,
-              ...(queuedRun.freshProviderSession === undefined
-                ? {}
-                : { freshProviderSession: queuedRun.freshProviderSession }),
             }),
           ),
           Effect.mapError(
@@ -3799,14 +3792,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       createdBy: command.createdBy,
       creationSource: command.creationSource,
       ...(ownerUserId === undefined ? {} : { ownerUserId }),
-      ...(command.workflowRole === undefined ? {} : { workflowRole: command.workflowRole }),
-      ...(command.workflowContext === undefined
-        ? {}
-        : { workflowContext: command.workflowContext }),
-      ...(command.workflowPreset === undefined ? {} : { workflowPreset: command.workflowPreset }),
-      ...(command.workflowImplementationSettings === undefined
-        ? {}
-        : { workflowImplementationSettings: command.workflowImplementationSettings }),
       id: command.threadId,
       projectId: command.projectId,
       title: command.title,
@@ -3826,7 +3811,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       lineage: {
         parentThreadId: command.parentThreadId ?? null,
         relationshipToParent: command.parentThreadId == null ? null : "subagent",
-        rootThreadId: command.workflowContext?.rootThreadId ?? command.threadId,
+        rootThreadId: command.threadId,
       },
       forkedFrom: null,
       createdAt: now,
@@ -4880,13 +4865,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return {
             ...thread,
             ...(command.ownerUserId === undefined ? {} : { ownerUserId: command.ownerUserId }),
-            ...(command.workflowRole === undefined ? {} : { workflowRole: command.workflowRole }),
-            ...(command.workflowContext === undefined
-              ? {}
-              : { workflowContext: command.workflowContext }),
-            ...(command.workflowPreset === undefined
-              ? {}
-              : { workflowPreset: command.workflowPreset }),
             ...(command.title === undefined ? {} : { title: command.title }),
             ...(command.limitRecovery === undefined ? {} : { limitRecovery }),
             ...(command.limitRecovery !== undefined &&
@@ -7453,9 +7431,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return;
     }
 
-    const activeProviderThread = command.freshProviderSession
-      ? undefined
-      : dispatchProviderThread(projection, { ...command, delegatedCompletion }, freshContext);
+    const activeProviderThread = dispatchProviderThread(
+      projection,
+      { ...command, delegatedCompletion },
+      freshContext,
+    );
     const activeRun = projection.runs.find(isActiveRun);
     // Messages after failed or stopped worktree setup must wait for a worktree,
     // rather than start in the project checkout.
@@ -7539,7 +7519,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const now = yield* DateTime.now;
       const ordinal = nextRunOrdinal(projection);
       const runId = idAllocator.derive.run({ threadId: command.threadId, ordinal });
-      const targetProviderThread = freshContext || command.freshProviderSession
+      const targetProviderThread = freshContext
         ? undefined
         : modelSelection.instanceId === queueProviderThread.providerInstanceId
           ? queueProviderThread
@@ -7690,9 +7670,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         checkpointId: null,
         contextHandoffId: null,
         ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
-        ...(command.freshProviderSession === undefined
-          ? {}
-          : { freshProviderSession: command.freshProviderSession }),
         ...(command.restartContinuationOfRunId === undefined
           ? {}
           : { restartContinuationOfRunId: command.restartContinuationOfRunId }),
@@ -8009,9 +7986,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             providerInstanceId: modelSelection.instanceId,
             ownerUserId: projection.thread.ownerUserId,
             threadId: command.threadId,
-            ...(command.freshProviderSession === undefined
-              ? {}
-              : { freshProviderSession: command.freshProviderSession }),
           }),
         ));
       const providerThreadId =
@@ -8111,9 +8085,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         checkpointId: null,
         contextHandoffId: legacyImportHandoff?.id ?? null,
         ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
-        ...(command.freshProviderSession === undefined
-          ? {}
-          : { freshProviderSession: command.freshProviderSession }),
         ...(command.restartContinuationOfRunId === undefined
           ? {}
           : { restartContinuationOfRunId: command.restartContinuationOfRunId }),
@@ -8441,9 +8412,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }),
       ),
     );
-    const targetProviderThread = command.freshProviderSession
-      ? undefined
-      : isProviderSwitch && !canResumeAcrossInstances
+    const targetProviderThread =
+      isProviderSwitch && !canResumeAcrossInstances
         ? rootProviderThreadsForProvider(projection, modelSelection.instanceId)[0]
         : activeProviderThread;
     const providerSessionId =
@@ -8454,9 +8424,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           providerInstanceId: modelSelection.instanceId,
           ownerUserId: projection.thread.ownerUserId,
           threadId: command.threadId,
-          ...(command.freshProviderSession === undefined
-            ? {}
-            : { freshProviderSession: command.freshProviderSession }),
         }),
       ));
     const existingProviderSession = projection.providerSessions.find(
@@ -8919,9 +8886,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         legacyImportRecoveryHandoff?.id ??
         null,
       ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
-      ...(command.freshProviderSession === undefined
-        ? {}
-        : { freshProviderSession: command.freshProviderSession }),
       ...(command.restartContinuationOfRunId === undefined
         ? {}
         : { restartContinuationOfRunId: command.restartContinuationOfRunId }),
@@ -10573,165 +10537,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     },
   );
-
-  /**
-   * The card for a workflow_request_user_input call. A stale record (the run
-   * ended, or the card is already gone) is a no-op, because the workflow
-   * bridge replays these and retries any failure.
-   */
-  const dispatchWorkflowUserInputRecord = Effect.fn(
-    "orchestrationV2.dispatch.workflowUserInputRecord",
-  )(function* (
-    command: Extract<
-      OrchestrationV2InternalCommand,
-      { readonly type: "workflow_user_input.record" }
-    >,
-    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-  ) {
-    const existing = yield* projectionStore
-      .getRuntimeResponseContext(command.threadId, command.requestId)
-      .pipe(mapDispatchError(command));
-    const now = yield* DateTime.now;
-    const emitEvent = emit(events, command);
-    if (command.status !== "pending") {
-      const { request, node, item } = existing;
-      if (request === undefined || request.status !== "pending") return;
-      const answers = command.status === "resolved" ? command.answers : undefined;
-      const settled = answers === undefined ? ("cancelled" as const) : ("completed" as const);
-      yield* emitEvent({
-        type: "runtime-request.updated",
-        threadId: command.threadId,
-        runId: command.runId,
-        nodeId: request.nodeId,
-        occurredAt: now,
-        payload: {
-          ...request,
-          status: answers === undefined ? "cancelled" : "resolved",
-          resolvedAt: now,
-          ...(answers === undefined ? {} : { answers }),
-        },
-      });
-      if (node !== undefined) {
-        yield* emitEvent({
-          type: "node.updated",
-          threadId: command.threadId,
-          runId: command.runId,
-          nodeId: node.id,
-          occurredAt: now,
-          payload: { ...node, status: settled, completedAt: now },
-        });
-      }
-      if (item !== undefined) {
-        yield* emitEvent({
-          type: "turn-item.updated",
-          threadId: command.threadId,
-          runId: command.runId,
-          nodeId: request.nodeId,
-          occurredAt: now,
-          payload: {
-            ...item,
-            ...(item.type === "user_input_request" && answers !== undefined
-              ? {
-                  questionAnswer: {
-                    requestId: command.requestId,
-                    answers,
-                    attachmentsByQuestionId: {},
-                    questionTextById: Object.fromEntries(
-                      item.questions.map((question) => [question.id, question.question]),
-                    ),
-                  },
-                }
-              : {}),
-            status: settled,
-            completedAt: now,
-            updatedAt: now,
-          },
-        });
-      }
-      return;
-    }
-    if (existing.request !== undefined) return;
-    const { run, providerThread, providerTurn } = yield* projectionStore
-      .getRunningTurnContext(command.threadId)
-      .pipe(mapDispatchError(command));
-    const providerSessionId = providerThread?.providerSessionId ?? null;
-    if (
-      run === undefined ||
-      run.id !== command.runId ||
-      run.rootNodeId === null ||
-      providerThread === undefined ||
-      providerSessionId === null
-    ) {
-      return;
-    }
-    const nodeId = NodeId.make(`node:workflow-user-input:${command.requestId}`);
-    const providerTurnId = providerTurn?.id ?? null;
-    const node: OrchestrationV2ExecutionNode = {
-      id: nodeId,
-      threadId: command.threadId,
-      runId: run.id,
-      parentNodeId: run.rootNodeId,
-      rootNodeId: run.rootNodeId,
-      kind: "user_input_request",
-      status: "waiting",
-      countsForRun: false,
-      providerThreadId: providerThread.id,
-      providerTurnId,
-      nativeItemRef: null,
-      runtimeRequestId: command.requestId,
-      checkpointScopeId: null,
-      startedAt: now,
-      completedAt: null,
-    };
-    const base = {
-      threadId: command.threadId,
-      runId: run.id,
-      nodeId,
-      providerInstanceId: run.providerInstanceId,
-      occurredAt: now,
-    };
-    yield* emitEvent({ ...base, type: "node.updated", payload: node });
-    yield* emitEvent({
-      ...base,
-      type: "runtime-request.updated",
-      payload: {
-        id: command.requestId,
-        nodeId,
-        providerTurnId,
-        nativeRequestRef: null,
-        kind: "user_input",
-        status: "pending",
-        responseCapability: { type: "live", providerSessionId },
-        createdAt: now,
-        resolvedAt: null,
-      },
-    });
-    yield* emitEvent({
-      ...base,
-      type: "turn-item.updated",
-      payload: {
-        id: TurnItemId.make(`turn-item:workflow-user-input:${command.requestId}`),
-        threadId: command.threadId,
-        runId: run.id,
-        nodeId,
-        providerThreadId: providerThread.id,
-        providerTurnId,
-        nativeItemRef: null,
-        parentItemId: null,
-        ordinal: yield* projectionStore
-          .getNextTurnItemOrdinal(command.threadId)
-          .pipe(mapDispatchError(command)),
-        status: "waiting",
-        title: null,
-        startedAt: now,
-        completedAt: null,
-        updatedAt: now,
-        type: "user_input_request",
-        requestId: command.requestId,
-        questions: command.questions,
-      },
-    });
-  });
 
   /**
    * Records or updates the card for a link an agent asked the user to make.
@@ -15527,9 +15332,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "link_request.record":
         yield* dispatchLinkRequestRecord(command, events, effects);
         break;
-      case "workflow_user_input.record":
-        yield* dispatchWorkflowUserInputRecord(command, events);
-        break;
       default:
         return yield* dispatchUnsupported(command);
     }
@@ -15659,8 +15461,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.type === "subagent.stop" ||
           // Closing a share again, or after it ended, is not an error.
           command.type === "thread.guest-share.close" ||
-          // A replayed or late question card is already settled.
-          command.type === "workflow_user_input.record" ||
           (command.type === "thread.delete" && command.onlyIfUnused === true),
         (_planned) =>
           new OrchestratorDispatchError({

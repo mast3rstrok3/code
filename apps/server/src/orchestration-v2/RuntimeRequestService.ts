@@ -11,7 +11,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { WorkflowUserInputBroker } from "../mcp/WorkflowUserInputBroker.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 
@@ -49,6 +48,10 @@ export class RuntimeRequestResponseExecutionError extends Schema.TaggedError<Run
 
 const isRuntimeRequestResponseExecutionError = Schema.is(RuntimeRequestResponseExecutionError);
 
+// Cards opened by the removed workflow_request_user_input tool; no provider holds their request.
+const isRemovedWorkflowQuestion = (nodeId: string) =>
+  nodeId.startsWith("node:workflow-user-input:");
+
 export interface RuntimeRequestServiceV2Shape {
   readonly respond: (input: {
     readonly threadId: ThreadId;
@@ -68,15 +71,12 @@ export class RuntimeRequestServiceV2 extends Context.Service<
 export const layer: Layer.Layer<
   RuntimeRequestServiceV2,
   never,
-  | ProjectionStore.ProjectionStoreV2
-  | ProviderSessionManager.ProviderSessionManagerV2
-  | WorkflowUserInputBroker
+  ProjectionStore.ProjectionStoreV2 | ProviderSessionManager.ProviderSessionManagerV2
 > = Layer.effect(
   RuntimeRequestServiceV2,
   Effect.gen(function* () {
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
-    const workflowUserInput = yield* WorkflowUserInputBroker;
 
     return RuntimeRequestServiceV2.of({
       respond: Effect.fn("RuntimeRequestService.respond")(
@@ -101,7 +101,8 @@ export const layer: Layer.Layer<
           }
           if (
             request.responseCapability.type !== "live" ||
-            request.responseCapability.providerSessionId !== input.providerSessionId
+            request.responseCapability.providerSessionId !== input.providerSessionId ||
+            isRemovedWorkflowQuestion(request.nodeId)
           ) {
             return yield* new RuntimeRequestResponseExecutionError({
               reason: "request-not-resumable",
@@ -109,17 +110,6 @@ export const layer: Layer.Layer<
               providerSessionId: input.providerSessionId,
               requestId: input.requestId,
             });
-          }
-          // A workflow_request_user_input call is parked in the MCP server, not the provider.
-          if (
-            request.kind === "user_input" &&
-            (yield* workflowUserInput.respond({
-              threadId: input.threadId,
-              requestId: input.requestId,
-              answers: input.answers ?? {},
-            }))
-          ) {
-            return;
           }
           const session = yield* sessions.get(input.providerSessionId);
           if (Option.isNone(session)) {
