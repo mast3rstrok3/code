@@ -1,7 +1,7 @@
 {
   "name": "t3",
   "version": "1.0.0",
-  "description": "Skills bundled with T3 Code: Matt Pocock's engineering and productivity skills, plus the T3 workflow and App Review skills.",
+  "description": "Skills bundled with T3 Code: Matt Pocock's engineering and productivity skills, plus the T3 workflow, App Review and hill-climb skills.",
   "author": {
     "name": "T3 Code"
   },
@@ -35,6 +35,7 @@
     "./skills/wait-what",
     "./skills/writing-for-agents",
     "./skills/workflow",
-    "./skills/app-review"
+    "./skills/app-review",
+    "./skills/hill-climb"
   ]
 }
