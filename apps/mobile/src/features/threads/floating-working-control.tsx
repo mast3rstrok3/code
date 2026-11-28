@@ -169,6 +169,8 @@ export function FloatingWorkingControl(props: {
     width: capsuleWidth.value ?? 0,
   }));
 
+  // Pressing "Scroll to end" hides it, so it must act on release, not press-in: React Native's
+  // responder stays on a view removed mid-touch, and the next tap (often Send) is lost.
   if (!hasCapsule && !props.showScrollToEnd) {
     return null;
   }
@@ -394,7 +396,6 @@ export function FloatingWorkingControl(props: {
           >
             <ControlPill
               accessibilityLabel={gt("Scroll to end")}
-              activateOnPressIn
               className="h-11 w-11 border border-border bg-glass-fallback shadow-md shadow-black/10"
               disabled={!props.showScrollToEnd}
               icon={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
@@ -414,7 +415,6 @@ export function FloatingWorkingControl(props: {
       ) : (
         <ControlPill
           accessibilityLabel={gt("Scroll to end")}
-          activateOnPressIn
           className="h-11 w-11 border border-border bg-glass-fallback shadow-md shadow-black/10"
           icon={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
           onPress={props.onScrollToEnd}
@@ -593,7 +593,6 @@ function ScrollToEndButton(props: { readonly disabled?: boolean; readonly onPres
   return (
     <ControlPill
       accessibilityLabel={gt("Scroll to end")}
-      activateOnPressIn
       className="h-11 w-11 bg-transparent"
       disabled={props.disabled}
       icon={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
