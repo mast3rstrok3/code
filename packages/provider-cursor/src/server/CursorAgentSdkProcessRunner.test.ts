@@ -323,6 +323,7 @@ describe("CursorAgentSdkProcessRunner", () => {
                   stoppedUnits.push(unit);
                 }),
               kill: () => Effect.succeed(false),
+              controlGroups: Effect.undefined,
               clear: () => Effect.void,
             }),
           );
