@@ -1,11 +1,30 @@
 import type { EnvironmentId } from "@t3tools/contracts";
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
+
+import { msg } from "gt-react-native";
 
 import type { AppBarMenuItem } from "../../components/ui/AppBar.types";
+import { m, type MessageResolver } from "../../i18n/messages";
+import type { WorkspaceEnvironment } from "../../state/workspaceModel";
 import type { WorkspaceUserMenuScope } from "../workspace-users/workspaceUserMenu";
 
 export interface HomeListFilterMenuEnvironment {
   readonly environmentId: EnvironmentId;
   readonly label: string;
+}
+
+export function homeListFilterEnvironments(environments: ReadonlyArray<WorkspaceEnvironment>) {
+  return Arr.sort(
+    environments
+      .filter((environment) => environment.isEnabled)
+      .map((environment) => ({
+        environmentId: environment.environmentId,
+        label: environment.environmentLabel,
+        connectionState: environment.connectionState,
+      })),
+    Order.mapInput(Order.String, (environment: { readonly label: string }) => environment.label),
+  );
 }
 
 export interface HomeListFilterMenuProject {
@@ -20,35 +39,38 @@ export interface HomeListWizardFilter {
   readonly onChange: (active: boolean) => void;
 }
 
-export function buildHomeListFilterMenuItems(props: {
-  readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
-  readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
-  readonly selectedEnvironmentId: EnvironmentId | null;
-  readonly selectedProjectKey: string | null;
-  readonly userScopes: ReadonlyArray<WorkspaceUserMenuScope>;
-  readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
-  readonly onProjectChange: (projectKey: string | null) => void;
-  readonly onUserScopeChange: (environmentId: EnvironmentId, key: string) => void;
-  readonly wizard?: HomeListWizardFilter;
-}): AppBarMenuItem[] {
+export function buildHomeListFilterMenuItems(
+  props: {
+    readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
+    readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
+    readonly selectedEnvironmentId: EnvironmentId | null;
+    readonly selectedProjectKey: string | null;
+    readonly userScopes: ReadonlyArray<WorkspaceUserMenuScope>;
+    readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
+    readonly onProjectChange: (projectKey: string | null) => void;
+    readonly onUserScopeChange: (environmentId: EnvironmentId, key: string) => void;
+    readonly wizard?: HomeListWizardFilter;
+  },
+  resolve: MessageResolver = m,
+): AppBarMenuItem[] {
   const wizard = props.wizard;
   const items: AppBarMenuItem[] = [
     ...(wizard !== undefined && (wizard.offered || wizard.active)
       ? [
           {
             id: "wizard",
-            title: "Wizard",
+            title: resolve(msg("Wizard", { $context: "filter menu heading" })),
             items: [
               {
                 id: "wizard:all",
-                title: "All threads",
+                title: resolve(msg("All threads")),
                 selected: !wizard.active,
                 onPress: () => wizard.onChange(false),
               },
               {
                 id: "wizard:only",
-                title: "Only Wizard threads",
-                subtitle: "Threads the Wizard API started",
+                title: resolve(msg("Only Wizard threads")),
+                subtitle: resolve(msg("Threads the Wizard API started")),
                 icon: "wand.and.stars",
                 selected: wizard.active,
                 onPress: () => wizard.onChange(true),
@@ -69,12 +91,12 @@ export function buildHomeListFilterMenuItems(props: {
     })),
     {
       id: "environment",
-      title: "Environment",
+      title: resolve(msg("Environment", { $context: "filter menu heading" })),
       items: [
         {
           id: "environment:all",
-          title: "All environments",
-          subtitle: "Show threads from every environment",
+          title: resolve(msg("All environments")),
+          subtitle: resolve(msg("Show threads from every environment")),
           selected: props.selectedEnvironmentId === null,
           onPress: () => props.onEnvironmentChange(null),
         },
@@ -91,12 +113,12 @@ export function buildHomeListFilterMenuItems(props: {
   if (props.projects.length > 0) {
     items.push({
       id: "project",
-      title: "Project",
+      title: resolve(msg("Project", { $context: "filter menu heading" })),
       items: [
         {
           id: "project:all",
-          title: "All projects",
-          subtitle: "Show threads from every project",
+          title: resolve(msg("All projects")),
+          subtitle: resolve(msg("Show threads from every project")),
           selected: props.selectedProjectKey === null,
           onPress: () => props.onProjectChange(null),
         },

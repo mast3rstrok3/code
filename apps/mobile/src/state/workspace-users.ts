@@ -1,4 +1,4 @@
-import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, WorkspaceUser, WorkspaceUserId } from "@t3tools/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useCallback, useMemo } from "react";
@@ -10,7 +10,8 @@ import {
   type ResolvedWorkspaceUserScope,
 } from "../features/workspace-users/workspaceUserScope";
 import { appAtomRegistry } from "./atom-registry";
-import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "./preferences";
+import { mobilePreferencesAtom, saveMobilePreferences } from "./preferences";
+import { useAtomCommand } from "./use-atom-command";
 import { environmentServerConfigsAtom, serverEnvironment } from "./server";
 
 /** Null until the server's settings arrive. */
@@ -92,10 +93,10 @@ export function useWorkspaceUsers(environmentId: EnvironmentId) {
 }
 
 export function useSelectWorkspaceUserScope() {
-  const updatePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const savePreferences = useAtomCommand(saveMobilePreferences);
   return useCallback(
     (environmentId: EnvironmentId, scopeKey: string) =>
-      updatePreferences({
+      void savePreferences({
         transform: (current) => ({
           workspaceUserScopes: {
             ...current.workspaceUserScopes,
@@ -106,6 +107,6 @@ export function useSelectWorkspaceUserScope() {
           },
         }),
       }),
-    [updatePreferences],
+    [savePreferences],
   );
 }

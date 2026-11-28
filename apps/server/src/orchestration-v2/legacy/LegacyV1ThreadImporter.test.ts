@@ -10,6 +10,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
@@ -25,7 +26,10 @@ import { layerReaderDatabase, traceSqlRouting } from "../../persistence/testkit/
 
 const layerDatabase = layerReaderDatabase;
 const layerEventStoreProvided = EventStore.layer.pipe(Layer.provideMerge(layerDatabase));
-const layerProjectionStoreProvided = ProjectionStore.layer.pipe(Layer.provideMerge(layerDatabase));
+const layerProjectionStoreProvided = ProjectionStore.layer.pipe(
+  Layer.provide(NodeCrypto.layerDigest),
+  Layer.provideMerge(layerDatabase),
+);
 const layerStoresProvided = Layer.mergeAll(
   layerDatabase,
   layerEventStoreProvided,
@@ -531,11 +535,10 @@ it.layer(layerTest)("LegacyV1ThreadImporter", (it) => {
       const shellProjection = yield* projections.getThreadProjection(threadId);
       assert.equal(shellProjection.thread.historyOrigin, "v1_import");
       assert.equal(shellProjection.thread.ownerUserId, "alice");
-      assert.equal(shellProjection.thread.interactionMode, "implementation-workflow");
-      assert.equal(shellProjection.thread.workflowRole, "implementation-worker");
-      assert.equal(shellProjection.thread.workflowPreset, "fast-feature");
-      assert.equal(shellProjection.thread.workflowContext?.workflowId, "workflow");
-      assert.equal(shellProjection.thread.workflowContext?.rootThreadId, "root");
+      // A workflow thread from an old database imports as a plain thread under its root.
+      assert.equal(shellProjection.thread.interactionMode, "default");
+      assert.equal(shellProjection.thread.lineage.rootThreadId, "root");
+      assert.notProperty(shellProjection.thread, "workflowRole");
       assert.equal(shellProjection.thread.branch, "main");
       assert.equal(shellProjection.thread.worktreePath, "/tmp/legacy-project");
       assert.deepEqual(

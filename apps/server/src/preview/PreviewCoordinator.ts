@@ -52,9 +52,7 @@ export class PreviewCoordinator extends Context.Service<
     readonly resize: (
       input: PreviewResizeInput,
     ) => Effect.Effect<PreviewSessionSnapshot, PreviewError>;
-    readonly close: (
-      input: PreviewCloseInput & { readonly reason?: "workflow-cleanup" },
-    ) => Effect.Effect<void, PreviewError>;
+    readonly close: (input: PreviewCloseInput) => Effect.Effect<void, PreviewError>;
     readonly list: (input: PreviewListInput) => Effect.Effect<PreviewListResult>;
     readonly reportStatus: (
       input: Parameters<PreviewManager.PreviewManager["Service"]["reportStatus"]>[0],
@@ -175,7 +173,7 @@ const make = Effect.gen(function* PreviewCoordinatorMake() {
 
 export const layer = Layer.effect(PreviewCoordinator, make);
 
-/** Workflow cleanup uses the same tabs as the current Browser panel. */
+/** Server-side closes use the same tabs as the current Browser panel. */
 export const layerNative = Layer.effect(
   PreviewCoordinator,
   Effect.gen(function* () {

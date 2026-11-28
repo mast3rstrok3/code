@@ -4,6 +4,7 @@ import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
 } from "./chatAttachment.ts";
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 
@@ -42,13 +43,25 @@ const RUNTIME_MODE_RANK: Record<RuntimeMode, number> = {
 export const isRuntimeModeAbove = (mode: RuntimeMode, ceiling: RuntimeMode | undefined): boolean =>
   ceiling !== undefined && RUNTIME_MODE_RANK[mode] > RUNTIME_MODE_RANK[ceiling];
 
+/** The modes a user or agent can choose; MCP tool inputs advertise only these. */
+export const SelectableProviderInteractionMode = Schema.Literals(["default", "plan"]);
+
+// Stored events, projections, and queued sends still carry the removed workflow modes.
 export const ProviderInteractionMode = Schema.Literals([
   "default",
   "plan",
   "planning-workflow",
   "implementation-workflow",
   "product-workflow",
-]);
+]).pipe(
+  Schema.decodeTo(
+    SelectableProviderInteractionMode,
+    SchemaTransformation.transform({
+      decode: (mode) => (mode === "plan" ? "plan" : "default"),
+      encode: (mode) => mode,
+    }),
+  ),
+);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
 
@@ -81,6 +94,19 @@ export const ProviderApprovalOption = Schema.Struct({
   warning: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderApprovalOption = typeof ProviderApprovalOption.Type;
+
+/**
+ * What an approval to run a repository's push hooks names. Clients show it as the request's
+ * details; the item's `prompt` stays the whole question in one sentence.
+ */
+export const ProviderApprovalPushHooks = Schema.Struct({
+  branch: Schema.String,
+  /** Hook files, relative to the checkout when they are in it. */
+  files: Schema.Array(Schema.String),
+  /** Hooks Git's configuration defines. */
+  commands: Schema.Array(Schema.Struct({ name: Schema.String, command: Schema.String })),
+});
+export type ProviderApprovalPushHooks = typeof ProviderApprovalPushHooks.Type;
 
 export const ProviderUserInputAnswers = Schema.Record(Schema.String, Schema.Unknown);
 export type ProviderUserInputAnswers = typeof ProviderUserInputAnswers.Type;

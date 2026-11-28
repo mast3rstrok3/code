@@ -11,7 +11,8 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import { AppStackManager } from "../../../appStack/AppStackManager.ts";
-import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProjectionStore from "../../../orchestration-v2/ProjectionStore.ts";
+import * as ProjectStore from "../../../orchestration-v2/ProjectStore.ts";
 import { McpInvocationContext } from "../../McpInvocationContext.ts";
 import {
   AppStackToolkit,
@@ -37,22 +38,21 @@ const resolveWorkspace = Effect.fn("AppStackToolkit.resolveWorkspace")(function*
       message: "App Stack tools require a thread credential.",
     });
   const callerId = invocation.thread.threadId;
-  const query = yield* ProjectionSnapshotQuery;
+  const threads = yield* ProjectionStore.ProjectionStoreV2;
+  const projects = yield* ProjectStore.ProjectStoreV2;
   const lookupFailed = (cause: unknown) =>
     new AppStackError({ operation, message: "Could not resolve this thread's workspace.", cause });
-  const target = yield* query
-    .getThreadShellById(targetThreadId ?? callerId)
-    .pipe(Effect.map(Option.getOrUndefined), Effect.mapError(lookupFailed));
+  const target = yield* threads
+    .getThreadShell(targetThreadId ?? callerId)
+    .pipe(Effect.mapError(lookupFailed));
   if (target && target.id !== callerId) {
-    // Workflow workers and fixers sit below their orchestrator, which sits below the root.
+    // Delegated threads can sit several levels below the caller.
     const seen = new Set<ThreadId>([target.id]);
-    let parentId = target.parentThreadId;
+    let parentId = target.lineage.parentThreadId;
     while (parentId !== null && parentId !== callerId && !seen.has(parentId)) {
       seen.add(parentId);
-      const parent = yield* query
-        .getThreadShellById(parentId)
-        .pipe(Effect.map(Option.getOrUndefined), Effect.mapError(lookupFailed));
-      parentId = parent?.parentThreadId ?? null;
+      const parent = yield* threads.getThreadShell(parentId).pipe(Effect.mapError(lookupFailed));
+      parentId = parent?.lineage.parentThreadId ?? null;
     }
     if (parentId !== callerId) {
       return yield* new AppStackError({
@@ -64,13 +64,12 @@ const resolveWorkspace = Effect.fn("AppStackToolkit.resolveWorkspace")(function*
   const workspace = yield* Effect.gen(function* () {
     if (!target) return undefined;
     const branch = target.branch;
-    const workflowId = target.workflowContext?.workflowId;
     if (target.worktreePath?.trim()) {
-      return { worktreePath: target.worktreePath.trim(), branch, workflowId };
+      return { worktreePath: target.worktreePath.trim(), branch };
     }
-    const project = yield* query.getProjectShellById(target.projectId);
+    const project = yield* projects.get(target.projectId);
     const worktreePath = Option.getOrUndefined(project)?.workspaceRoot.trim();
-    return worktreePath ? { worktreePath, branch, workflowId } : undefined;
+    return worktreePath ? { worktreePath, branch } : undefined;
   }).pipe(Effect.mapError(lookupFailed));
   if (!workspace) {
     return yield* new AppStackError({
@@ -306,14 +305,12 @@ export const handlers = {
       }
       return { ...existing, created: false, alreadyRunning: true };
     }
-    const workflowId = existing.stack?.workflowId ?? workspace.workflowId;
     const result = yield* manager.autoCreate({
       worktreePath: workspace.worktreePath,
       gitBranch: workspace.branch,
       displayName:
         input.displayName ?? appStackDisplayName(workspace.worktreePath, workspace.branch),
       variant,
-      ...(workflowId === undefined ? {} : { workflowId }),
       ...(bundle.length === 0 ? {} : { bundle }),
       ...(input.omitServices === undefined ? {} : { omitServices: input.omitServices }),
     });

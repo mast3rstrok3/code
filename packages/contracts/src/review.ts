@@ -1,48 +1,39 @@
-import { ReviewTestPlatforms } from "./reviewPlatforms.ts";
-import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as SchemaTransformation from "effect/SchemaTransformation";
 import {
+  GitRefName,
   IsoDateTime,
   NonNegativeInt,
-  PositiveInt,
   ThreadId,
   TrimmedNonEmptyString,
   TurnId,
 } from "./baseSchemas.ts";
 import { GitCommandError } from "./git.ts";
 import { VcsError } from "./vcs.ts";
-import { WorkflowStageExecution } from "./workflowExecution.ts";
 
 export const AppReviewId = TrimmedNonEmptyString.pipe(Schema.brand("AppReviewId"));
 export type AppReviewId = typeof AppReviewId.Type;
 
 /**
- * Environment variable App Review sets when running a project's `e2eCommands`:
- * the review's authoritative preview target, so a suite that tests a deployed
- * frontend hits the stack under review (per-ticket stacks included) instead of
- * a hardcoded default.
+ * Environment variables App Review sets when it runs an E2E command. The preview
+ * URL is the target under review, so a suite that tests a deployed frontend hits
+ * the stack being reviewed instead of a hardcoded default.
  */
 export const APP_REVIEW_PREVIEW_URL_ENV = "APP_REVIEW_PREVIEW_URL";
 
-/** Comma-separated workflow platforms passed to E2E commands and readiness checks. */
+/** Comma-separated platforms passed to E2E commands and readiness checks. */
 export const APP_REVIEW_TEST_PLATFORMS_ENV = "APP_REVIEW_TEST_PLATFORMS";
 
 /**
  * Stacks controller ID of the App Stack serving `APP_REVIEW_PREVIEW_URL`, set
  * for E2E commands when the reviewed worktree has one. Suites that drive the
- * stack itself (test fleets, native executors) read it with the
- * `APP_DEV_STACK_API_*` credentials instead of guessing which stack is theirs.
+ * stack itself read it with the `APP_DEV_STACK_API_*` credentials.
  */
 export const APP_REVIEW_STACK_ID_ENV = "APP_REVIEW_STACK_ID";
 
-/** Run-owned persistent directory for suites to publish builds and qualification receipts. */
+/** Review-owned persistent directory for suites to publish builds and qualification receipts. */
 export const APP_REVIEW_ARTIFACT_DIR_ENV = "APP_REVIEW_ARTIFACT_DIR";
 
-/**
- * The commit an implementation run branched from, set for E2E commands of its
- * App Reviews so `e2eAffectedCommands` can select the tests its changes affect.
- */
+/** The commit a change branched from, so `e2eAffectedCommands` can select affected tests. */
 export const APP_REVIEW_BASE_REF_ENV = "APP_REVIEW_BASE_REF";
 
 /**
@@ -56,97 +47,12 @@ export const APP_REVIEW_RECORDER_BINDING_ENV = "APP_REVIEW_RECORDER_BINDING";
 export const APP_REVIEW_TEST_RECORDING_SUFFIX = ".rrweb.jsonl";
 
 /**
- * How an App Review verifies its target: the project's e2e commands only, the
- * browser only, or both. Direct browser reviews and historical records keep
- * their scope. Workflow cycles use E2E testing and require `e2eCommands`.
+ * What an App Review verifies: E2E test commands, the app in the preview
+ * browser, or both. It decides which evidence a passed verdict needs.
  */
 export const AppReviewScope = Schema.Literals(["e2e", "browser", "both"]);
 export type AppReviewScope = typeof AppReviewScope.Type;
 
-/** Default and hard limit for complete review, gap-analysis, and implementation cycles. */
-export const APP_REVIEW_WORKFLOW_DEFAULT_CYCLES = 5;
-export const APP_REVIEW_WORKFLOW_MAX_CYCLES = 10;
-
-export const AppReviewWorkflowRunId = TrimmedNonEmptyString.pipe(
-  Schema.brand("AppReviewWorkflowRunId"),
-);
-export type AppReviewWorkflowRunId = typeof AppReviewWorkflowRunId.Type;
-
-const BoundedAppReviewWorkflowCycleBudget = PositiveInt.check(
-  Schema.isLessThanOrEqualTo(APP_REVIEW_WORKFLOW_MAX_CYCLES),
-);
-export const AppReviewWorkflowCycleBudget = PositiveInt.pipe(
-  Schema.decodeTo(
-    BoundedAppReviewWorkflowCycleBudget,
-    SchemaTransformation.transform({
-      decode: (value) => Math.min(value, APP_REVIEW_WORKFLOW_MAX_CYCLES),
-      encode: (value) => value,
-    }),
-  ),
-);
-export type AppReviewWorkflowCycleBudget = typeof AppReviewWorkflowCycleBudget.Type;
-
-export const AppReviewWorkflowOutcome = Schema.Literals(["passed", "failed", "exhausted"]);
-export type AppReviewWorkflowOutcome = typeof AppReviewWorkflowOutcome.Type;
-
-export const AppReviewWorkflowRunStatus = Schema.Literals([
-  "running",
-  "passed",
-  "failed",
-  "exhausted",
-]);
-export type AppReviewWorkflowRunStatus = typeof AppReviewWorkflowRunStatus.Type;
-
-export const AppReviewWorkflowPhase = Schema.Literals(["e2e", "review", "planning", "fixing"]);
-export type AppReviewWorkflowPhase = typeof AppReviewWorkflowPhase.Type;
-
-export const AppReviewWorkflowCaller = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("standalone"),
-    sourceThreadId: ThreadId,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("implementation"),
-    implementationRunId: TrimmedNonEmptyString,
-    orchestratorThreadId: ThreadId,
-    ticketId: Schema.optionalKey(TrimmedNonEmptyString),
-  }),
-]);
-export type AppReviewWorkflowCaller = typeof AppReviewWorkflowCaller.Type;
-
-/** HEAD plus ReviewService's two canonical diff hashes. */
-export const AppReviewWorkflowWorkspaceRevision = Schema.Struct({
-  headSha: TrimmedNonEmptyString,
-  workingTreeDiffHash: TrimmedNonEmptyString,
-  branchDiffHash: TrimmedNonEmptyString,
-  fingerprint: TrimmedNonEmptyString,
-});
-export type AppReviewWorkflowWorkspaceRevision = typeof AppReviewWorkflowWorkspaceRevision.Type;
-
-export const AppReviewWorkflowFixValidation = Schema.Struct({
-  purpose: Schema.optionalKey(Schema.Literals(["reproduction", "verification"])),
-  command: TrimmedNonEmptyString,
-  supersedesCommand: Schema.optionalKey(TrimmedNonEmptyString),
-  scope: Schema.optionalKey(Schema.Literals(["focused", "project"])),
-  status: Schema.Literals(["passed", "failed", "blocked"]),
-  outputMarkdown: Schema.String,
-  completedAt: IsoDateTime,
-});
-export type AppReviewWorkflowFixValidation = typeof AppReviewWorkflowFixValidation.Type;
-
-/**
- * Why a final App Review runs a command: a ticket's own feature tests, or the
- * project's selection of tests the change affects. Absent means a complete suite.
- */
-export const AppReviewTestPurpose = Schema.Literals(["feature", "affected"]);
-export type AppReviewTestPurpose = typeof AppReviewTestPurpose.Type;
-
-export const AppReviewRetryCommand = Schema.Struct({
-  command: TrimmedNonEmptyString,
-  retryCommand: TrimmedNonEmptyString,
-  purpose: Schema.optionalKey(AppReviewTestPurpose),
-});
-export type AppReviewRetryCommand = typeof AppReviewRetryCommand.Type;
 /** One test's rrweb event log, collected from the command's recording directory. */
 export const AppReviewTestRecording = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -166,204 +72,6 @@ export const AppReviewTestResult = Schema.Struct({
   completedAt: IsoDateTime,
 });
 export type AppReviewTestResult = typeof AppReviewTestResult.Type;
-
-export const AppReviewWorkflowFixResult = Schema.Struct({
-  runId: AppReviewWorkflowRunId,
-  planId: TrimmedNonEmptyString,
-  retryCommands: Schema.optionalKey(Schema.Array(AppReviewRetryCommand)),
-  status: Schema.Literals(["succeeded", "failed", "blocked"]),
-  commitSha: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
-  validations: Schema.Array(AppReviewWorkflowFixValidation),
-  notesMarkdown: Schema.String,
-});
-export type AppReviewWorkflowFixResult = typeof AppReviewWorkflowFixResult.Type;
-
-export const AppReviewWorkflowRepairTicket = Schema.Struct({
-  key: TrimmedNonEmptyString,
-  parentTicketKey: Schema.NullOr(TrimmedNonEmptyString),
-  title: TrimmedNonEmptyString,
-  bodyMarkdown: TrimmedNonEmptyString,
-  dependencyKeys: Schema.Array(TrimmedNonEmptyString),
-});
-export type AppReviewWorkflowRepairTicket = typeof AppReviewWorkflowRepairTicket.Type;
-
-export const AppReviewWorkflowFailureReason = Schema.Literals([
-  "review-blocked",
-  "plan-missing",
-  "plan-malformed",
-  "fixer-failed",
-  "fix-result-missing",
-  "workspace-stale",
-  "automation-unavailable",
-  "unexpected-approval",
-  "unexpected-user-input",
-  "embedded-worktree-dirty",
-  "embedded-head-mismatch",
-  "preview-unavailable",
-  "unknown",
-]);
-export type AppReviewWorkflowFailureReason = typeof AppReviewWorkflowFailureReason.Type;
-
-export const AppReviewWorkflowFailure = Schema.Struct({
-  reason: AppReviewWorkflowFailureReason,
-  phase: Schema.NullOr(AppReviewWorkflowPhase),
-  cycleNumber: Schema.NullOr(PositiveInt),
-  /** Whether an unattended recovery sweep may reopen this failure. */
-  retryable: Schema.optionalKey(Schema.Boolean),
-  detailMarkdown: TrimmedNonEmptyString,
-  failedAt: IsoDateTime,
-});
-export type AppReviewWorkflowFailure = typeof AppReviewWorkflowFailure.Type;
-
-export const AppReviewWorkflowCycleStatus = Schema.Literals([
-  "e2e-testing",
-  "reviewing",
-  "review-failed",
-  "planning",
-  "fixing",
-  "completed",
-  /** Automation could not complete the cycle after bounded in-cycle phase retries. */
-  "failed",
-]);
-export type AppReviewWorkflowCycleStatus = typeof AppReviewWorkflowCycleStatus.Type;
-
-export const AppReviewWorkflowCycle = Schema.Struct({
-  cycleNumber: PositiveInt,
-  status: AppReviewWorkflowCycleStatus,
-  /** The effective parts fixed when this cycle starts. */
-  appReviewScope: Schema.optionalKey(AppReviewScope),
-  /** The isolated end-to-end section. Absent on browser-only and historical cycles. */
-  e2eReviewId: Schema.optionalKey(Schema.NullOr(AppReviewId)),
-  e2eThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
-  e2eExecution: Schema.optionalKey(
-    Schema.Struct({
-      id: TrimmedNonEmptyString,
-      commands: Schema.Array(AppReviewRetryCommand),
-      results: Schema.Array(AppReviewTestResult),
-      preparation: Schema.optionalKey(
-        Schema.Struct({
-          command: TrimmedNonEmptyString,
-          result: Schema.NullOr(AppReviewTestResult),
-        }),
-      ),
-    }),
-  ),
-  e2eLaunchCount: Schema.optionalKey(NonNegativeInt),
-  e2eVerdict: Schema.optionalKey(Schema.NullOr(Schema.Literals(["pending", "passed", "failed"]))),
-  reviewId: AppReviewId,
-  reviewerThreadId: ThreadId,
-  /** Provider launches for the current phase. Runtime failures retry in-cycle. */
-  reviewLaunchCount: Schema.optionalKey(NonNegativeInt),
-  planningLaunchCount: Schema.optionalKey(NonNegativeInt),
-  fixingLaunchCount: Schema.optionalKey(NonNegativeInt),
-  /** One-time same-thread continuations claimed while recovering a terminal phase. */
-  recoveryContinuationCount: Schema.optionalKey(NonNegativeInt),
-  /** One result-only continuation after a fixer completes without its directive. */
-  fixResultContinuationCount: Schema.optionalKey(NonNegativeInt),
-  fixResultContinuationRequestedAt: Schema.optionalKey(Schema.NullOr(IsoDateTime)),
-  validationRepair: Schema.optionalKey(
-    Schema.NullOr(
-      Schema.Struct({
-        attempt: PositiveInt,
-        requestedAt: IsoDateTime,
-        requiredCommands: Schema.Array(TrimmedNonEmptyString),
-        result: AppReviewWorkflowFixResult,
-        detailMarkdown: Schema.String,
-      }),
-    ),
-  ),
-  /** Older phase threads replaced by an in-cycle retry. */
-  supersededThreadIds: Schema.optionalKey(Schema.Array(ThreadId)),
-  reviewVerdict: Schema.NullOr(Schema.Literals(["pending", "passed", "failed"])),
-  actionableFindingsMarkdown: Schema.NullOr(Schema.String),
-  planId: Schema.NullOr(TrimmedNonEmptyString),
-  /**
-   * The thread that runs gap analysis and writes the cycle's repair tickets.
-   * Absent on cycles recorded before gap analysis moved out of the reviewer
-   * thread; those still reconcile against `reviewerThreadId`.
-   */
-  plannerThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
-  plannerTurnId: Schema.NullOr(TurnId),
-  fixerThreadId: Schema.NullOr(ThreadId),
-  repairTickets: Schema.optionalKey(Schema.Array(AppReviewWorkflowRepairTicket)),
-  ticketingTurnId: Schema.optionalKey(Schema.NullOr(TurnId)),
-  fixResult: Schema.NullOr(AppReviewWorkflowFixResult),
-  /**
-   * The latest phase failure. A successful phase clears it. The run keeps the
-   * final failure here when a phase exhausts its launch limit.
-   */
-  failure: Schema.optionalKey(Schema.NullOr(AppReviewWorkflowFailure)),
-  workspaceRevision: AppReviewWorkflowWorkspaceRevision,
-  /** Configured regression commands reserved for the implementation's final gate. */
-  deferredValidationCommands: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
-  /** Provenance captured when a committed repair result is accepted. */
-  fixWorkspaceRevision: Schema.optionalKey(AppReviewWorkflowWorkspaceRevision),
-  fixPreviewTargets: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
-  startedAt: IsoDateTime,
-  completedAt: Schema.NullOr(IsoDateTime),
-});
-export type AppReviewWorkflowCycle = typeof AppReviewWorkflowCycle.Type;
-
-export const AppReviewWorkflowRun = Schema.Struct({
-  id: AppReviewWorkflowRunId,
-  targetThreadId: ThreadId,
-  controllerThreadId: ThreadId,
-  caller: AppReviewWorkflowCaller,
-  testPlatforms: Schema.optionalKey(ReviewTestPlatforms),
-  e2eCommands: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
-  /** Keep a split retry serial, including after server recovery. */
-  serialE2e: Schema.optionalKey(Schema.Boolean),
-  briefMarkdown: TrimmedNonEmptyString,
-  supportingContextMarkdown: Schema.NullOr(Schema.String),
-  previewTargets: Schema.Array(TrimmedNonEmptyString),
-  /**
-   * Set when the user named the target themselves. A pinned run reviews
-   * exactly `previewTargets`; an unpinned one resolves the worktree's App Dev
-   * Stack first and falls back to those targets only when no stack matches.
-   */
-  previewTargetsPinned: Schema.optionalKey(Schema.Boolean),
-  /**
-   * Set when the run stops after gap analysis instead of repairing what it
-   * found. It still spends its one cycle on the browser review and the repair
-   * tickets, and then ends `exhausted` with those findings unresolved, the
-   * same way a budget that runs out on a failing review does.
-   */
-  reviewOnly: Schema.optionalKey(Schema.Boolean),
-  /** How this run verifies its target; absent means e2e and browser both. */
-  appReviewScope: Schema.optionalKey(AppReviewScope),
-  cycleBudget: AppReviewWorkflowCycleBudget.pipe(
-    Schema.withDecodingDefault(Effect.succeed(APP_REVIEW_WORKFLOW_DEFAULT_CYCLES)),
-  ),
-  cyclesUsed: NonNegativeInt,
-  status: AppReviewWorkflowRunStatus,
-  cycles: Schema.Array(AppReviewWorkflowCycle),
-  activePhase: Schema.NullOr(AppReviewWorkflowPhase),
-  activeThreadId: Schema.NullOr(ThreadId),
-  phaseExecution: Schema.NullOr(WorkflowStageExecution).pipe(
-    Schema.withDecodingDefault(Effect.succeed(null)),
-  ),
-  workspaceRevision: AppReviewWorkflowWorkspaceRevision,
-  finalHeadSha: Schema.NullOr(TrimmedNonEmptyString),
-  outcome: Schema.NullOr(AppReviewWorkflowOutcome),
-  failure: Schema.NullOr(AppReviewWorkflowFailure),
-  /** A readiness wait that resumes its exact phase when the check passes. */
-  prerequisiteCheck: Schema.optionalKey(
-    Schema.NullOr(
-      Schema.Struct({
-        phase: Schema.Literals(["e2e", "fixing"]),
-        cycleNumber: PositiveInt,
-        cwd: TrimmedNonEmptyString,
-        previewUrl: Schema.NullOr(TrimmedNonEmptyString),
-        command: TrimmedNonEmptyString,
-        nextCheckAt: IsoDateTime,
-      }),
-    ),
-  ),
-  createdAt: IsoDateTime,
-  updatedAt: IsoDateTime,
-  completedAt: Schema.NullOr(IsoDateTime),
-});
-export type AppReviewWorkflowRun = typeof AppReviewWorkflowRun.Type;
 
 export const AppReviewStatus = Schema.Literals(["pending", "running", "passed", "failed"]);
 export type AppReviewStatus = typeof AppReviewStatus.Type;
@@ -391,10 +99,6 @@ export type AppReviewCheckStatus = typeof AppReviewCheckStatus.Type;
 export const AppReviewVerdict = Schema.Literals(["pending", "passed", "failed"]);
 export type AppReviewVerdict = typeof AppReviewVerdict.Type;
 
-/**
- * `carriedFromCycle` names the earlier cycle whose browser pass still stands when
- * this cycle did not re-run the check. E2E checks use `reusedValidation` instead.
- */
 export const AppReviewCheck = Schema.Struct({
   id: TrimmedNonEmptyString,
   label: TrimmedNonEmptyString,
@@ -405,19 +109,12 @@ export const AppReviewCheck = Schema.Struct({
   /** A test runner's inspectable web replay for this check, when it publishes one. */
   replayUrl: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isPattern(/^https?:\/\//i))),
   replayMimeType: Schema.optionalKey(TrimmedNonEmptyString),
-  carriedFromCycle: Schema.optionalKey(PositiveInt),
-  /** Reuse a recorded post-repair validation after checking the current test environment. */
-  reusedValidation: Schema.optionalKey(
-    Schema.Struct({
-      cycleNumber: PositiveInt,
-      command: TrimmedNonEmptyString,
-      environmentEvidence: TrimmedNonEmptyString,
-    }),
-  ),
 });
 export type AppReviewCheck = typeof AppReviewCheck.Type;
 
 export const AppReviewDocument = Schema.Struct({
+  /** What the review checks, as the agent stated it when the review started. */
+  brief: Schema.optionalKey(Schema.String),
   verdict: AppReviewVerdict,
   summary: Schema.String,
   checks: Schema.Array(AppReviewCheck),
@@ -457,37 +154,19 @@ export const AppReviewScreenshotEvidence = Schema.Struct({
 export type AppReviewScreenshotEvidence = typeof AppReviewScreenshotEvidence.Type;
 
 /**
- * Browser evidence captured during an App Review: one screen recording plus a
- * captioned screenshot gallery (gallery order = array order; findings'
- * `evidenceIds` reference screenshot ids).
+ * What an App Review captured: one browser recording, a captioned screenshot
+ * gallery (findings' `evidenceIds` reference screenshot ids), and the E2E
+ * commands it ran with their per-test recordings, in run order.
  */
 export const AppReviewEvidence = Schema.Struct({
   recording: AppReviewRecordingEvidence,
   screenshots: Schema.Array(AppReviewScreenshotEvidence),
+  tests: Schema.optionalKey(Schema.Array(AppReviewTestResult)),
 });
 export type AppReviewEvidence = typeof AppReviewEvidence.Type;
 
 export const hasCompleteAppReviewEvidence = (evidence: AppReviewEvidence): boolean =>
   evidence.recording.status === "saved" && evidence.screenshots.length > 0;
-
-/**
- * A failed recording must not erase product defects that have independent durable evidence.
- * Every actionable finding stays traceable to a captured screenshot and the check matrix records
- * at least one actual failure, so orchestration can safely repair rather than retrying tooling.
- */
-export const hasScreenshotBackedAppReviewFailure = (
-  document: AppReviewDocument,
-  evidence: AppReviewEvidence,
-): boolean => {
-  const screenshotIds = new Set(evidence.screenshots.map((screenshot) => screenshot.id));
-  return (
-    document.checks.some((check) => check.status === "failed") &&
-    document.findings.length > 0 &&
-    document.findings.every((finding) =>
-      finding.evidenceIds.some((evidenceId) => screenshotIds.has(evidenceId)),
-    )
-  );
-};
 
 /** Evidence id used to mint asset URLs for the review's screen recording. */
 export const APP_REVIEW_RECORDING_EVIDENCE_ID = "recording";
@@ -505,25 +184,12 @@ export const EMPTY_APP_REVIEW_EVIDENCE: AppReviewEvidence = {
   screenshots: [],
 };
 
-/**
- * The proposed plan an App Review anchors to when no Spec exists. Specs anchor
- * reviews through their planning tickets; fast-feature and plan-mode threads
- * only have a proposed plan, so the plan itself is the review's anchor node.
- */
-export const AppReviewSourceProposedPlan = Schema.Struct({
-  threadId: ThreadId,
-  planId: TrimmedNonEmptyString,
-});
-export type AppReviewSourceProposedPlan = typeof AppReviewSourceProposedPlan.Type;
-
 export const AppReviewRecord = Schema.Struct({
   id: AppReviewId,
   sourceThreadId: ThreadId,
   reviewThreadId: ThreadId,
-  /** The effective scope fixed at launch. Absent records require browser evidence. */
+  /** Absent on older records, which require browser evidence. */
   appReviewScope: Schema.optionalKey(AppReviewScope),
-  planningTicketIds: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
-  sourceProposedPlan: Schema.optionalKey(AppReviewSourceProposedPlan),
   sourceTurnId: Schema.NullOr(TurnId),
   status: AppReviewStatus,
   document: AppReviewDocument,
@@ -539,19 +205,39 @@ export class AppReviewError extends Schema.TaggedError<AppReviewError>()("AppRev
   cause: Schema.optional(Schema.Defect()),
 }) {}
 
+// An object id or HEAD, never an option-looking ref, since it is passed to git as a revision.
+const ReviewMergeBase = Schema.String.check(
+  Schema.isPattern(/^(?:[0-9a-f]{40}|[0-9a-f]{64}|HEAD)$/),
+);
+
+export const ReviewDiffChangeType = Schema.Literals([
+  "change",
+  "rename-pure",
+  "rename-changed",
+  "new",
+  "deleted",
+]);
+export type ReviewDiffChangeType = typeof ReviewDiffChangeType.Type;
+
 export const ReviewDiffPreviewInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
-  baseRef: Schema.optional(TrimmedNonEmptyString),
+  baseRef: Schema.optional(GitRefName),
+  // A branch-range file read reuses its preview's merge base instead of resolving it again.
+  mergeBase: Schema.optionalKey(ReviewMergeBase),
   commitSha: Schema.optional(TrimmedNonEmptyString),
   ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
   sourceKind: Schema.optionalKey(Schema.Literals(["working-tree", "branch-range"])),
   trackedOnly: Schema.optionalKey(Schema.Boolean),
+  /** From a trackedOnly result, so the complete read adds only the untracked files. */
+  completionToken: Schema.optionalKey(Schema.String),
   metadataOnly: Schema.optionalKey(Schema.Boolean),
   file: Schema.optionalKey(
     Schema.Struct({
       path: Schema.NonEmptyString,
       previousPath: Schema.NullOr(Schema.NonEmptyString),
       sourceKind: Schema.Literals(["working-tree", "branch-range", "commit"]),
+      // The preview's change type; the server still confirms a tracked path before relying on it.
+      changeType: Schema.optionalKey(ReviewDiffChangeType),
     }),
   ),
 });
@@ -559,7 +245,7 @@ export type ReviewDiffPreviewInput = typeof ReviewDiffPreviewInput.Type;
 
 export const ReviewBranchCommitsInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
-  baseRef: Schema.optional(TrimmedNonEmptyString),
+  baseRef: Schema.optional(GitRefName),
 });
 export type ReviewBranchCommitsInput = typeof ReviewBranchCommitsInput.Type;
 
@@ -582,15 +268,6 @@ export const ReviewDiffPreviewSourceKind = Schema.Literals([
 ]);
 export type ReviewDiffPreviewSourceKind = typeof ReviewDiffPreviewSourceKind.Type;
 
-export const ReviewDiffChangeType = Schema.Literals([
-  "change",
-  "rename-pure",
-  "rename-changed",
-  "new",
-  "deleted",
-]);
-export type ReviewDiffChangeType = typeof ReviewDiffChangeType.Type;
-
 export const ReviewDiffFileStat = Schema.Struct({
   path: Schema.String,
   previousPath: Schema.NullOr(Schema.String),
@@ -606,8 +283,10 @@ export const ReviewDiffPreviewSource = Schema.Struct({
   kind: ReviewDiffPreviewSourceKind,
   title: TrimmedNonEmptyString,
   commitSubject: Schema.optionalKey(TrimmedNonEmptyString),
-  baseRef: Schema.NullOr(TrimmedNonEmptyString),
-  headRef: Schema.NullOr(TrimmedNonEmptyString),
+  baseRef: Schema.NullOr(GitRefName),
+  headRef: Schema.NullOr(GitRefName),
+  // Branch-range only; older servers omit it.
+  mergeBase: Schema.optionalKey(ReviewMergeBase),
   diff: Schema.String,
   diffHash: TrimmedNonEmptyString,
   truncated: Schema.Boolean,
@@ -620,10 +299,10 @@ export const ReviewDiffFileContentsInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   sourceKind: ReviewDiffPreviewSourceKind,
   changeType: ReviewDiffChangeType,
-  baseRef: Schema.NullOr(TrimmedNonEmptyString),
-  headRef: Schema.NullOr(TrimmedNonEmptyString),
-  oldPath: TrimmedNonEmptyString,
-  newPath: TrimmedNonEmptyString,
+  baseRef: Schema.NullOr(GitRefName),
+  headRef: Schema.NullOr(GitRefName),
+  oldPath: Schema.NonEmptyString,
+  newPath: Schema.NonEmptyString,
 });
 export type ReviewDiffFileContentsInput = typeof ReviewDiffFileContentsInput.Type;
 
@@ -638,6 +317,7 @@ export const ReviewDiffPreviewResult = Schema.Struct({
   generatedAt: Schema.DateTimeUtc,
   sources: Schema.Array(ReviewDiffPreviewSource),
   incomplete: Schema.optionalKey(Schema.Boolean),
+  completionToken: Schema.optionalKey(Schema.String),
 });
 export type ReviewDiffPreviewResult = typeof ReviewDiffPreviewResult.Type;
 

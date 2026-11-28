@@ -22,8 +22,6 @@ import {
   type AppStackPodLogEntry,
   type AppStackService,
   type AppStackSetProtectedInput,
-  type AppStackWorkflowTeardownInput,
-  type AppStackWorkflowTeardownResult,
   type AppStackVariant,
 } from "@t3tools/contracts";
 import {
@@ -55,7 +53,6 @@ const STACK_LOG_FETCH_CONCURRENCY = 3;
 const APP_STACK_COMPONENT_LABEL = "cortex.ai/component";
 const APP_STACK_COMPONENT_VALUE = "app-dev-stack";
 const APP_STACK_STACK_ID_LABEL = "cortex.ai/stack-id";
-const APP_STACK_WORKFLOW_ANNOTATION = "cortex.ai/workflow-id";
 const APP_STACK_PROTECTED_ANNOTATION = "cortex.ai/protected";
 const APP_STACK_MANAGED_BY_LABEL = "app.kubernetes.io/managed-by";
 
@@ -182,7 +179,6 @@ interface ResolvedNativeAppStackConfig {
   readonly displaySlug: string | undefined;
   readonly repoName: string | undefined;
   readonly branchName: string | undefined;
-  readonly workflowId: string | undefined;
   readonly protected: boolean;
   readonly kubectlPath: string;
   readonly dockerPath: string;
@@ -217,9 +213,6 @@ export interface NativeAppStackService {
   readonly setProtected: (
     input: AppStackSetProtectedInput,
   ) => Effect.Effect<AppStack, AppStackError>;
-  readonly workflowTeardown: (
-    input: AppStackWorkflowTeardownInput,
-  ) => Effect.Effect<AppStackWorkflowTeardownResult, AppStackError>;
   readonly restart: (input: AppStackGetInput) => Effect.Effect<AppStack, AppStackError>;
   readonly delete: (input: AppStackGetInput) => Effect.Effect<AppStackDeleteResult, AppStackError>;
   readonly listPods: (
@@ -411,7 +404,6 @@ const resolveNativeConfigForNamespace = (
     branchName:
       annotationValue(annotations, "cortex.ai/branch-name") ??
       labelValue(labels, "cortex.ai/branch-name"),
-    workflowId: annotationValue(annotations, APP_STACK_WORKFLOW_ANNOTATION),
     protected: annotationValue(annotations, APP_STACK_PROTECTED_ANNOTATION) === "true",
     kubectlPath: config.kubectlPath,
     dockerPath: config.dockerPath,
@@ -438,7 +430,6 @@ const resolveNativeConfigForWorktree = (
     readonly displayName?: string | null | undefined;
     readonly gitBranch?: string | null | undefined;
     readonly namespace?: string | null | undefined;
-    readonly workflowId?: string | null | undefined;
     readonly variant?: AppStackVariant | null | undefined;
     readonly preferConfiguredNamespace?: boolean;
   },
@@ -477,9 +468,8 @@ const resolveNativeConfigForWorktree = (
     displaySlug: useConfiguredMetadata ? config.displaySlug : undefined,
     repoName: useConfiguredMetadata && config.repoName !== undefined ? config.repoName : repoName,
     branchName: input.gitBranch?.trim() || (useConfiguredMetadata ? config.branchName : undefined),
-    // Ownership and protection live on the namespace, so a freshly resolved
-    // config starts unclaimed until the cluster is read back.
-    workflowId: input.workflowId?.trim() || undefined,
+    // Protection lives on the namespace, so a freshly resolved config starts
+    // unprotected until the cluster is read back.
     protected: false,
     kubectlPath: config.kubectlPath,
     dockerPath: config.dockerPath,
@@ -987,7 +977,6 @@ const buildStack = async (
       lastStartedAt: null,
       lastStoppedAt: now,
       previewUrls: null,
-      workflowId: config.workflowId ?? null,
       protected: config.protected,
     };
   }
@@ -1048,10 +1037,6 @@ const buildStack = async (
     lastStartedAt: status === "stopped" ? null : now,
     lastStoppedAt: status === "stopped" ? now : null,
     previewUrls: Object.keys(previewUrls).length > 0 ? previewUrls : null,
-    workflowId:
-      annotationValue(namespace.metadata?.annotations, APP_STACK_WORKFLOW_ANNOTATION) ??
-      config.workflowId ??
-      null,
     protected:
       annotationValue(namespace.metadata?.annotations, APP_STACK_PROTECTED_ANNOTATION) === "true",
   };
@@ -1302,15 +1287,10 @@ export const makeNativeAppStackService = (
           displayName: input.displayName,
           gitBranch: input.gitBranch,
           namespace: input.namespace,
-          workflowId: input.workflowId,
           variant: input.variant,
           preferConfiguredNamespace: config.worktreePath === undefined,
         });
         const namespace = await readNamespace(resolved, runKubectl);
-        const existingWorkflowId = annotationValue(
-          namespace?.metadata?.annotations,
-          APP_STACK_WORKFLOW_ANNOTATION,
-        );
         const deployments = namespace === null ? null : await readDeployments(resolved, runKubectl);
         const shouldProvision = namespace === null || (deployments?.items ?? []).length === 0;
         await provisionNativeAppStack(resolved, runKubectl, runCommand);
@@ -1323,18 +1303,6 @@ export const makeNativeAppStackService = (
           "--all",
           "--replicas=1",
         ]);
-        // A stack already owned by another workflow keeps its owner; teardown
-        // must never reach a standing stack it merely reused.
-        const workflowId = input.workflowId?.trim();
-        if (workflowId && existingWorkflowId === undefined) {
-          await runKubectl([
-            "annotate",
-            "namespace",
-            resolved.namespace,
-            `${APP_STACK_WORKFLOW_ANNOTATION}=${workflowId}`,
-            "--overwrite",
-          ]);
-        }
         const stack = await buildStack(resolved, runKubectl);
         const frontend = frontendPreviewForStack(stack, resolved.frontendUrl);
         return {
@@ -1374,38 +1342,6 @@ export const makeNativeAppStackService = (
           }),
         ),
       ),
-    workflowTeardown: (input) =>
-      nativeOperation("workflowTeardown", async () => {
-        const namespaces = await readAppStackNamespaces(runKubectl);
-        const stoppedStackIds: Array<string> = [];
-        const skippedProtectedStackIds: Array<string> = [];
-        const failedStackIds: Array<string> = [];
-        for (const namespace of namespaces) {
-          const annotations = namespace.metadata?.annotations;
-          if (annotationValue(annotations, APP_STACK_WORKFLOW_ANNOTATION) !== input.workflowId)
-            continue;
-          const resolved = resolveNativeConfigForNamespace(config, namespace);
-          if (resolved === null) continue;
-          if (resolved.protected) {
-            skippedProtectedStackIds.push(resolved.id);
-            continue;
-          }
-          try {
-            await runKubectl([
-              "-n",
-              resolved.namespace,
-              "scale",
-              "deployment",
-              "--all",
-              "--replicas=0",
-            ]);
-            stoppedStackIds.push(resolved.id);
-          } catch {
-            failedStackIds.push(resolved.id);
-          }
-        }
-        return { stoppedStackIds, skippedProtectedStackIds, failedStackIds };
-      }),
     restart: (input) =>
       resolveKnownStack("restart", input.stackId).pipe(
         Effect.flatMap((resolved) =>

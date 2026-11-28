@@ -57,10 +57,6 @@ const deviceLeaseJson = {
   stopReason: null,
 };
 
-const decodeWorkflowRequest = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Struct({ workflow_id: Schema.optional(Schema.String) })),
-);
-
 const decodeProtectionRequest = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ protected: Schema.Boolean })),
 );
@@ -111,6 +107,7 @@ const derivedPaths = {
   environmentIdPath: "/tmp/t3-app-dev-stack-manager-test/state/environment-id",
   serverRuntimeStatePath: "/tmp/t3-app-dev-stack-manager-test/state/server-runtime.json",
   secretsDir: "/tmp/t3-app-dev-stack-manager-test/state/secrets",
+  workflowsDir: "/tmp/t3-app-dev-stack-manager-test/state/workflows",
 } satisfies ServerConfig.ServerDerivedPaths;
 
 const makeConfigLayer = (input?: {
@@ -230,7 +227,6 @@ it.effect("sends the configured backend bearer token when starting a stack", () 
       worktreePath: "/repo/worktrees/feature",
       displayName: "feature",
       gitBranch: "feature",
-      workflowId: "workflow-123",
     });
 
     const request = requests.find((candidate) =>
@@ -245,13 +241,6 @@ it.effect("sends the configured backend bearer token when starting a stack", () 
       `${backendUrl.href.replace(/\/+$/u, "")}/api/app-dev-stacks/auto-create`,
     );
     assert.equal(request.headers.authorization, "Bearer backend-token");
-    if (request.body._tag !== "Uint8Array") {
-      assert.fail("expected JSON request body");
-    }
-    assert.equal(
-      decodeWorkflowRequest(new TextDecoder().decode(request.body.body)).workflow_id,
-      "workflow-123",
-    );
   }).pipe(Effect.provide(layer));
 });
 
@@ -272,7 +261,6 @@ it.effect("reuses an active stack without posting auto-create", () => {
     const result = yield* manager.autoCreate({
       worktreePath: stackJson.worktreePath,
       displayName: "feature",
-      workflowId: "workflow-123",
     });
 
     assert.equal(result.created, false);
@@ -316,12 +304,10 @@ it.effect("serializes concurrent creates so only one controller create is posted
         manager.autoCreate({
           worktreePath: stackJson.worktreePath,
           displayName: "feature",
-          workflowId: "workflow-123",
         }),
         manager.autoCreate({
           worktreePath: stackJson.worktreePath,
           displayName: "feature",
-          workflowId: "workflow-123",
         }),
       ],
       { concurrency: "unbounded" },
@@ -410,7 +396,7 @@ it.effect("restarts a stack through get, stop, and auto-create backend calls", (
     response: (request) => {
       const url = new URL(request.url);
       if (url.pathname === "/api/app-dev-stacks/11111111-1111-1111-1111-111111111111") {
-        return Response.json({ ...stackJson, workflowId: "workflow-123" });
+        return Response.json(stackJson);
       }
       if (url.pathname === "/api/app-dev-stacks/11111111-1111-1111-1111-111111111111/stop") {
         return Response.json({ ...stackJson, status: "stopped" });
@@ -418,7 +404,7 @@ it.effect("restarts a stack through get, stop, and auto-create backend calls", (
       if (url.pathname === "/api/app-dev-stacks/by-worktree") {
         return Response.json({
           ...noStackByWorktree,
-          stack: { ...stackJson, status: "stopped", workflowId: "workflow-123" },
+          stack: { ...stackJson, status: "stopped" },
         });
       }
       if (url.pathname === "/api/app-dev-stacks/auto-create") {
@@ -454,16 +440,6 @@ it.effect("restarts a stack through get, stop, and auto-create backend calls", (
     assert.equal(
       requests.every((request) => request.headers.authorization === "Bearer backend-token"),
       true,
-    );
-    const createRequest = requests.find((request) =>
-      new URL(request.url).pathname.endsWith("/auto-create"),
-    );
-    if (createRequest?.body._tag !== "Uint8Array") {
-      assert.fail("expected restart auto-create JSON body");
-    }
-    assert.equal(
-      decodeWorkflowRequest(new TextDecoder().decode(createRequest.body.body)).workflow_id,
-      "workflow-123",
     );
   }).pipe(Effect.provide(layer));
 });
@@ -885,38 +861,6 @@ it.effect("posts the protection toggle to the controller", () => {
     assert.deepStrictEqual(decodeProtectionRequest(new TextDecoder().decode(request.body.body)), {
       protected: true,
     });
-  }).pipe(Effect.provide(layer));
-});
-
-it.effect("tears a workflow's stacks down in one controller call", () => {
-  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
-  const layer = makeLayer({
-    requests,
-    response: () =>
-      Response.json({
-        stoppedStackIds: ["stack-a"],
-        skippedProtectedStackIds: ["stack-b"],
-        failedStackIds: [],
-      }),
-  });
-
-  return Effect.gen(function* () {
-    const manager = yield* AppStackManager;
-    const result = yield* manager.workflowTeardown({ workflowId: "workflow-123" });
-
-    assert.deepStrictEqual(result.stoppedStackIds, ["stack-a"]);
-    assert.deepStrictEqual(result.skippedProtectedStackIds, ["stack-b"]);
-    const request = requests[0];
-    if (request === undefined) assert.fail("expected a teardown request");
-    assert.equal(
-      request.url,
-      `${backendUrl.href.replace(/\/+$/u, "")}/api/app-dev-stacks/workflow-teardown`,
-    );
-    if (request.body._tag !== "Uint8Array") assert.fail("expected JSON request body");
-    assert.equal(
-      decodeWorkflowRequest(new TextDecoder().decode(request.body.body)).workflow_id,
-      "workflow-123",
-    );
   }).pipe(Effect.provide(layer));
 });
 

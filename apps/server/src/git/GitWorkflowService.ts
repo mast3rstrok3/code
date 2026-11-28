@@ -33,6 +33,7 @@ import {
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 
+import { trimAsciiWhitespace } from "@t3tools/contracts";
 import * as GitManager from "./GitManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
@@ -73,6 +74,7 @@ export class GitWorkflowService extends Context.Service<
         readonly refName: string;
         readonly aheadCount: number;
         readonly behindCount: number;
+        readonly details: GitVcsDriver.GitRemoteStatusDetails;
       } | null,
       GitManagerServiceError
     >;
@@ -82,7 +84,9 @@ export class GitWorkflowService extends Context.Service<
     ) => Effect.Effect<VcsStatusRemoteResult | null, GitManagerServiceError>;
     readonly invalidateLocalStatus: (cwd: string) => Effect.Effect<void, never>;
     readonly invalidateRemoteStatus: (cwd: string) => Effect.Effect<void, never>;
-    readonly readRefSnapshot: (cwd: string) => Effect.Effect<string | null>;
+    readonly readStatusRefreshRefs: GitVcsDriver.GitVcsDriver["Service"]["readStatusRefreshRefs"];
+    readonly readStatusPoll: GitVcsDriver.GitVcsDriver["Service"]["readStatusPoll"];
+    readonly readRefSnapshot: GitVcsDriver.GitVcsDriver["Service"]["readRefSnapshot"];
     readonly invalidateStatus: (cwd: string) => Effect.Effect<void, never>;
     /** The checkout's own HEAD file, inside a linked worktree's admin directory when there is one. */
     readonly headPath: (cwd: string) => Effect.Effect<string | null, never>;
@@ -492,7 +496,7 @@ export const make = Effect.gen(function* () {
         timeoutMs: 5_000,
       });
       if (result.exitCode === 0) {
-        return result.stdout.trim().replace(/^refs\/heads\//, "") || null;
+        return trimAsciiWhitespace(result.stdout).replace(/^refs\/heads\//, "") || null;
       }
       if (result.exitCode === 1) return null;
       return yield* new GitCommandError({
@@ -513,6 +517,7 @@ export const make = Effect.gen(function* () {
             refName: details.branch,
             aheadCount: details.aheadCount,
             behindCount: details.behindCount,
+            details,
           }
         : null;
     }),
@@ -525,10 +530,14 @@ export const make = Effect.gen(function* () {
     }),
     invalidateLocalStatus: gitManager.invalidateLocalStatus,
     invalidateRemoteStatus: gitManager.invalidateRemoteStatus,
+    readStatusRefreshRefs: git.readStatusRefreshRefs,
+    readStatusPoll: git.readStatusPoll,
     readRefSnapshot: git.readRefSnapshot,
     invalidateStatus: gitManager.invalidateStatus,
-    headPath: Effect.fn("GitWorkflowService.headPath")(function (cwd) {
-      return git
+    headPath: Effect.fn("GitWorkflowService.headPath")(function* (cwd) {
+      // Clients keep watching threads whose worktree was removed; spawning there fails noisily.
+      if (!(yield* fileSystem.exists(cwd).pipe(Effect.orElseSucceed(() => true)))) return null;
+      return yield* git
         .execute({
           operation: "GitWorkflowService.headPath",
           cwd,

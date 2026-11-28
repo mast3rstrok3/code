@@ -22,11 +22,15 @@ import {
 } from "./baseSchemas.ts";
 import {
   ScheduledTaskRunStatus,
-  ScheduledTaskWorkflow,
   ScheduledTaskSchedule,
   ScheduledTaskUpsertSchedule,
 } from "./scheduledTask.ts";
-import { ProviderInteractionMode, ProviderRequestKind, RuntimeMode } from "./providerPolicy.ts";
+import {
+  ProviderInteractionMode,
+  ProviderRequestKind,
+  RuntimeMode,
+  SelectableProviderInteractionMode,
+} from "./providerPolicy.ts";
 import { PullRequestState } from "./pullRequest.ts";
 import {
   ThreadLinkedPullRequest,
@@ -111,7 +115,7 @@ export const OrchestratorMcpTarget = Schema.Struct({
   options: Schema.optional(
     OrchestratorMcpTargetOptions.annotate({
       description:
-        "Options from `orchestrator_capabilities`, such as {effort:'max'}. Given values override inherited. [] or {} clears.",
+        "Ids vary by provider; see `orchestrator_capabilities`. Given values override inherited. [] or {} clears.",
     }),
   ),
   environmentId: Schema.optional(
@@ -134,7 +138,7 @@ export type OrchestratorMcpRuntimeMode = typeof OrchestratorMcpRuntimeMode.Type;
 
 export const OrchestratorMcpInteractionMode = Schema.Union([
   Schema.Literal("inherit"),
-  ProviderInteractionMode,
+  SelectableProviderInteractionMode,
 ]);
 export type OrchestratorMcpInteractionMode = typeof OrchestratorMcpInteractionMode.Type;
 
@@ -171,7 +175,10 @@ export type OrchestratorMcpTerminalDelegatedTaskStatus =
 
 export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
   task: OrchestratorMcpPrompt,
-  target: Schema.optional(OrchestratorMcpTarget),
+  // Some providers send the whole target object as JSON text.
+  target: Schema.optional(
+    Schema.Union([OrchestratorMcpTarget, Schema.fromJsonString(OrchestratorMcpTarget)]),
+  ),
   title: Schema.optional(OrchestratorMcpTitle),
   role: Schema.optional(OrchestratorMcpTaskRole),
   isolation: Schema.optional(
@@ -559,6 +566,12 @@ export const OrchestratorMcpThreadSendInput = Schema.Struct({
         "Start a new provider session without the thread's earlier context, like /clear. Never steers.",
     }),
   ),
+  outputSchema: Schema.optional(
+    Schema.Record(Schema.String, Schema.Json).annotate({
+      description:
+        "JSON Schema for a result the turn must return as data, read back as `output` from `t3_thread_wait`. Never steers.",
+    }),
+  ),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
 });
 export type OrchestratorMcpThreadSendInput = typeof OrchestratorMcpThreadSendInput.Type;
@@ -585,6 +598,12 @@ export const OrchestratorMcpThreadWaitInput = Schema.Struct({
         "Also wait for its delegated and background tasks and their completions to settle. `resultRun` then names the run with its final answer.",
     }),
   ),
+  untilOutput: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "Also wait for the `output` the run was asked for, which a later turn may submit.",
+    }),
+  ),
 });
 export type OrchestratorMcpThreadWaitInput = typeof OrchestratorMcpThreadWaitInput.Type;
 
@@ -596,6 +615,8 @@ export const OrchestratorMcpThreadWaitResult = Schema.Struct({
   next: Schema.optional(OrchestratorMcpRunningTaskNext),
   /** With untilDelegatedWorkSettled, once settled: the run whose reply is the thread's result. */
   resultRun: Schema.optional(Schema.Struct({ runId: RunId, status: OrchestrationV2RunStatus })),
+  /** What the run returned against the `outputSchema` it was sent with. Absent until submitted. */
+  output: Schema.optional(Schema.Json),
 });
 export type OrchestratorMcpThreadWaitResult = typeof OrchestratorMcpThreadWaitResult.Type;
 
@@ -652,6 +673,8 @@ export const OrchestratorMcpProviderCapability = Schema.Struct({
       /** Omitted when it only restates the id. */
       label: Schema.optional(Schema.String),
       options: Schema.optional(Schema.Array(OrchestratorMcpModelOption)),
+      /** Set only on the user's favorite models. */
+      favorite: Schema.optional(Schema.Literal(true)),
     }),
   ),
   /** Models left out of `models`: unlisted visible models, or matches past the cap with `search`. */
@@ -724,12 +747,6 @@ export const OrchestratorMcpScheduleTaskInput = Schema.Struct({
         "Runs share one thread but each starts a fresh session. Unbound: the first run makes the thread.",
     }),
   ),
-  workflow: Schema.optional(
-    ScheduledTaskWorkflow.annotate({
-      description:
-        "Start each run as a fresh thread running this workflow, in a new worktree from the project's development branch: feature (Plan, Implement, Code Review, pull request) or engineering. Implies bindToCurrentThread=false, and the caller must allow full access.",
-    }),
-  ),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
 });
 export type OrchestratorMcpScheduleTaskInput = typeof OrchestratorMcpScheduleTaskInput.Type;
@@ -751,11 +768,6 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   enabled: Schema.Boolean,
   projectId: ProjectId,
   boundThreadId: Schema.NullOr(ThreadId),
-  workflow: Schema.NullOr(ScheduledTaskWorkflow),
-  useWorkflowDefaultModel: Schema.optional(Schema.Boolean).annotate({
-    description:
-      "True when each run starts on the workflow's default model from settings, resolved when the run starts.",
-  }),
   freshSession: Schema.Boolean,
   schedule: ScheduledTaskSchedule,
   nextRunAt: Schema.NullOr(IsoDateTime),
@@ -800,12 +812,6 @@ export const OrchestratorMcpUpdateScheduledTaskInput = Schema.Struct({
   schedule: Schema.optional(OrchestratorMcpSchedule),
   enabled: Schema.optional(Schema.Boolean),
   bindToCurrentThread: Schema.optional(Schema.Boolean),
-  workflow: Schema.optional(
-    Schema.NullOr(ScheduledTaskWorkflow).annotate({
-      description:
-        "Start each run as a fresh thread running this workflow (feature or engineering), or null for a plain thread. Setting one unbinds the task from its thread.",
-    }),
-  ),
   freshSession: Schema.optional(Schema.Boolean),
 });
 export type OrchestratorMcpUpdateScheduledTaskInput =
@@ -815,6 +821,25 @@ export type OrchestratorMcpUpdateScheduledTaskInput =
 const PastedSecretValue = Schema.String.check(
   Schema.makeFilter((value: string) => value.length > 0, { expected: "a non-empty string" }),
 );
+
+const RequestSecretFields = Schema.Array(
+  Schema.Struct({
+    name: TrimmedNonEmptyString.check(Schema.isPattern(/^[A-Za-z][A-Za-z0-9_]{0,31}$/)),
+    label: TrimmedNonEmptyString,
+    placeholder: Schema.optional(TrimmedNonEmptyString),
+    secret: Schema.optional(Schema.Boolean).annotate({
+      description: "false shows the typed value, e.g. an email.",
+    }),
+  }),
+)
+  .check(Schema.isMinLength(1), Schema.isMaxLength(8))
+  .check(
+    Schema.makeFilter((fields) =>
+      new Set(fields.map((field) => field.name)).size === fields.length
+        ? true
+        : "Field names must be unique.",
+    ),
+  );
 
 export const OrchestratorMcpRequestSecretInput = Schema.Struct({
   label: TrimmedNonEmptyString.annotate({
@@ -835,6 +860,10 @@ export const OrchestratorMcpRequestSecretInput = Schema.Struct({
   placeholder: Schema.optional(TrimmedNonEmptyString),
   delivery: Schema.optional(Schema.Literals(["secretRef", "file"])).annotate({
     description: "secretRef (default) for a T3 tool; file for a command.",
+  }),
+  fields: Schema.optional(RequestSecretFields).annotate({
+    description:
+      'Values only the user has, in one card, e.g. email + password, with delivery "file". Returns `files` by name.',
   }),
   value: Schema.optional(PastedSecretValue).annotate({
     description: "Pasted in this thread; no card.",
@@ -861,6 +890,12 @@ export const OrchestratorMcpRequestSecretResult = Schema.Union([
     file: Schema.String.annotate({
       description:
         "Owner-only file with the value. Read it inside commands and never print it. Deleted after 24 hours.",
+    }),
+  }),
+  Schema.Struct({
+    status: Schema.Literal("saved"),
+    files: Schema.Record(Schema.String, Schema.String).annotate({
+      description: "One file per field name, used like `file`.",
     }),
   }),
   Schema.Struct({
@@ -937,6 +972,7 @@ export type OrchestratorMcpEnvironmentUnlinkInput =
 export const OrchestratorMcpEnvironmentUnlinkResult = Schema.Struct({
   environmentId: EnvironmentId,
   removed: Schema.Boolean,
+  endedThere: Schema.Boolean,
 });
 export type OrchestratorMcpEnvironmentUnlinkResult =
   typeof OrchestratorMcpEnvironmentUnlinkResult.Type;

@@ -19,18 +19,19 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
-import * as WorkflowUserInputBroker from "../mcp/WorkflowUserInputBroker.ts";
 
 const threadId = ThreadId.make("thread:control-reads");
 const providerThreadId = ProviderThreadId.make("provider-thread:control-reads");
@@ -195,7 +196,10 @@ function fixtureEvents(now: DateTime.Utc): ReadonlyArray<OrchestrationV2DomainEv
 const storageCases = [
   {
     storage: "sqlite" as const,
-    storeLayer: ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)),
+    storeLayer: ProjectionStore.layer.pipe(
+      Layer.provide(NodeCrypto.layerDigest),
+      Layer.provideMerge(SqlitePersistence.layerMemory),
+    ),
   },
 ];
 
@@ -394,7 +398,9 @@ it.effect.each(storageCases)(
       }).pipe(
         Effect.provide(
           Layer.merge(ProviderTurnControlService.layer, RuntimeRequestService.layer).pipe(
-            Layer.provide(Layer.mergeAll(layerSessions, layerEvents, WorkflowUserInputBroker.layer)),
+            Layer.provide(
+              Layer.mergeAll(layerSessions, layerEvents, McpAppModelContext.layerEmpty),
+            ),
           ),
         ),
       );

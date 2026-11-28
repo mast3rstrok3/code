@@ -13,15 +13,11 @@ import {
   serverProviderDeltas,
   ServerProviders,
   ServerUpsertKeybindingResult,
-  WorkflowCatalog,
-  WorkflowPromptContract,
 } from "./server.ts";
 import { ServerSettings } from "./settings.ts";
 
 const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
 const decodeServerProviders = Schema.decodeUnknownSync(ServerProviders);
-const decodeWorkflowPromptContract = Schema.decodeUnknownSync(WorkflowPromptContract);
-const decodeWorkflowCatalog = Schema.decodeUnknownSync(WorkflowCatalog);
 const decodeUpsertKeybindingResult = Schema.decodeUnknownSync(ServerUpsertKeybindingResult);
 const decodeAvailableEditors = Schema.decodeUnknownSync(ServerConfig.fields.availableEditors);
 
@@ -38,98 +34,6 @@ const baseProviderSnapshot = {
 };
 
 describe("ServerProvider", () => {
-  it("decodes workflow catalogs with linked skills and docs", () => {
-    const parsed = decodeWorkflowCatalog({
-      workflows: [
-        {
-          id: "fix",
-          order: 1,
-          title: "Fix",
-          description: "Fix it.",
-          interactionMode: "product-workflow",
-          steps: [{ label: "Intent", skillId: "product.fix.codex" }],
-        },
-      ],
-      skills: [
-        {
-          id: "product.fix.codex",
-          order: 1,
-          workflow: "product",
-          role: "planning-thread",
-          stage: "intent",
-          title: "Fix",
-          description: "Fix intent.",
-          promptText: "Prompt.",
-          workflowAnnotations: [
-            {
-              workflowPromptId: "fix.workflow",
-              title: "Workflow variation",
-              text: "Use the shared environment.",
-            },
-          ],
-          docIds: ["context"],
-          buildModes: ["build"],
-          workflowIds: ["fix"],
-        },
-      ],
-      docs: [
-        {
-          id: "context",
-          title: "Context",
-          path: "CONTEXT.md",
-          description: "Project context.",
-          content: "# Context",
-          skillIds: ["product.fix.codex"],
-        },
-      ],
-    });
-    expect(parsed.workflows[0]?.steps[0]?.skillId).toBe("product.fix.codex");
-    expect(parsed.skills[0]?.buildModes).toEqual(["build"]);
-    expect(parsed.skills[0]?.workflowAnnotations[0]?.text).toBe("Use the shared environment.");
-    expect(parsed.docs[0]?.description).toBe("Project context.");
-  });
-
-  it("defaults new catalog relationship fields from older servers", () => {
-    const parsed = decodeWorkflowCatalog({
-      workflows: [],
-      skills: [
-        {
-          id: "legacy",
-          order: 1,
-          workflow: "shared",
-          role: "workflow-communications",
-          stage: "legacy",
-          title: "Legacy",
-          description: "Legacy skill.",
-          promptText: "Prompt.",
-          docIds: [],
-          workflowIds: [],
-        },
-      ],
-      docs: [
-        { id: "legacy", title: "Legacy", path: "legacy.md", content: "# Legacy", skillIds: [] },
-      ],
-    });
-
-    expect(parsed.skills[0]?.buildModes).toEqual([]);
-    expect(parsed.docs[0]?.description).toBe("Supporting reference for a workflow skill.");
-  });
-
-  it("rejects unknown workflow discriminators", () => {
-    expect(() =>
-      decodeWorkflowPromptContract({
-        id: "yolo.grill-stage.codex",
-        order: 1,
-        workflow: "yolo",
-        role: "planning-thread",
-        stage: "grill",
-        title: "1. Intent Grill",
-        description: "Legacy workflow discriminator.",
-        promptText: "Prompt text.",
-      }),
-    ).toThrow();
-  });
-
   it.each([undefined, true, false])("decodes workspace command discovery pending=%s", (pending) => {
     const workspace = {
       cwd: "/workspace/project",

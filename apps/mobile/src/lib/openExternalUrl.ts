@@ -6,11 +6,11 @@ const ExternalUrlTarget = Schema.Literals([
   "markdown-link",
   "pull-request",
   "provider-auth",
-  "html-render",
   "mcp-app",
   "app-stack",
   "app-review",
   "secret-request",
+  "external-link",
 ]);
 
 export type ExternalUrlTarget = typeof ExternalUrlTarget.Type;
@@ -43,7 +43,10 @@ function externalUrlMetadata(url: string): { readonly scheme: string; readonly h
   }
 }
 
-export async function tryOpenExternalUrl(url: string, target: ExternalUrlTarget): Promise<boolean> {
+export async function tryOpenExternalUrl(
+  url: string,
+  target: ExternalUrlTarget = "external-link",
+): Promise<boolean> {
   try {
     await Linking.openURL(url);
     return true;
@@ -58,4 +61,15 @@ export async function tryOpenExternalUrl(url: string, target: ExternalUrlTarget)
     });
     return false;
   }
+}
+
+/**
+ * For a link in rendered text, such as a pull request body: opens web, mail and phone links
+ * only.
+ */
+export async function tryOpenWebLink(
+  url: string,
+  target: ExternalUrlTarget = "external-link",
+): Promise<boolean> {
+  return /^(?:https?|mailto|tel):/i.test(url) && (await tryOpenExternalUrl(url, target));
 }

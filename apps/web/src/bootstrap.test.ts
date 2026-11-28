@@ -1,96 +1,87 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { showBootError } from "./lib/bootError";
-
-class BootElement extends EventTarget {
-  children: BootElement[] = [];
-  textContent = "";
-
-  constructor(readonly tagName: string) {
-    super();
-  }
-
-  setAttribute() {}
-
-  append(child: BootElement) {
-    this.children.push(child);
-  }
-
-  replaceChildren(...children: BootElement[]) {
-    this.children = children;
-  }
-
-  get text(): string {
-    return this.textContent + this.children.map((child) => child.text).join(" ");
-  }
+function createStorageStub(initial: Record<string, string> = {}): Storage {
+  const store = new Map(Object.entries(initial));
+  return {
+    getItem: (key) => store.get(key) ?? null,
+    setItem: (key, value) => {
+      store.set(key, value);
+    },
+    removeItem: (key) => {
+      store.delete(key);
+    },
+    clear: () => store.clear(),
+    key: (index) => [...store.keys()][index] ?? null,
+    get length() {
+      return store.size;
+    },
+  };
 }
 
-describe("app startup failures", () => {
-  let bootShell: BootElement | null;
+async function bootWith(mainFactory: () => object, storage: Storage = createStorageStub()) {
+  vi.resetModules();
+  const showBootError = vi.fn().mockName("showBootError");
+  const reload = vi.fn().mockName("reloadApp");
+  vi.doMock("./lib/bootError", () => ({ showBootError }));
+  // The real reload refreshes assets through the document first; the guard only needs a reload.
+  vi.doMock("./lib/reloadApp", () => ({ reloadApp: reload }));
+  vi.doMock("./main", mainFactory);
+  vi.stubGlobal("window", Object.assign(new EventTarget(), { sessionStorage: storage }));
+  const { boot } = await import("./bootstrap");
+  await boot;
+  return { reload, showBootError };
+}
 
-  beforeEach(() => {
-    vi.resetModules();
-    bootShell = new BootElement("div");
-    vi.stubGlobal("document", {
-      getElementById: () => bootShell,
-      createElement: (tagName: string) => new BootElement(tagName),
-      querySelectorAll: () => [],
-    });
-    vi.spyOn(console, "error").mockImplementation(() => {});
+// Mirrors Vite's build preload helper when main's CSS or JS chunk fails to load.
+function failingMainChunk(): never {
+  const error = new TypeError("Failed to fetch dynamically imported module: /assets/main.js");
+  const event = Object.assign(new Event("vite:preloadError", { cancelable: true }), {
+    payload: error,
+  });
+  window.dispatchEvent(event);
+  throw error;
+}
+
+describe("bootstrap", () => {
+  afterEach(() => {
+    vi.doUnmock("./main");
+    vi.doUnmock("./lib/bootError");
+    vi.doUnmock("./lib/reloadApp");
+    vi.unstubAllGlobals();
   });
 
   it("shows failures from asynchronous app startup", async () => {
-    vi.stubEnv("DEV", true);
-    vi.doMock("./main", () => ({ startup: Promise.reject(new Error("Startup chunks failed")) }));
+    const failure = new Error("Startup chunks failed");
+    const { reload, showBootError } = await bootWith(() => ({
+      startup: Promise.reject(failure),
+    }));
 
-    await import("./bootstrap");
-    await vi.dynamicImportSettled();
-
-    expect(bootShell?.text).toContain("Startup chunks failed");
+    expect(reload).not.toHaveBeenCalled();
+    expect(showBootError).toHaveBeenCalledWith(failure);
   });
 
-  afterEach(() => {
-    vi.doUnmock("./main");
-    vi.unstubAllGlobals();
-    vi.unstubAllEnvs();
-    vi.restoreAllMocks();
-  });
-
-  it("replaces the splash when an app import throws before main can run", async () => {
-    vi.doMock("./main", () => {
+  it("shows the boot error when an app import throws before main can run", async () => {
+    const { showBootError } = await bootWith(() => {
       throw new Error("@vitejs/plugin-react can't detect preamble. Something is wrong.");
     });
-    const reload = vi.fn();
-    vi.stubGlobal("window", { location: { reload } });
 
-    await import("./bootstrap");
-    await vi.dynamicImportSettled();
+    expect(showBootError).toHaveBeenCalledTimes(1);
+  });
 
-    expect(bootShell?.text).toContain("T3 Code could not load.");
-    const reloadButton = bootShell?.children[0]?.children.find(
-      (element) => element.tagName === "button",
+  it("reloads once instead of showing the boot error when the main chunk fails to load", async () => {
+    const { reload, showBootError } = await bootWith(failingMainChunk);
+
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(showBootError).not.toHaveBeenCalled();
+  });
+
+  it("shows the boot error when the main chunk fails again after the reload", async () => {
+    const { reload, showBootError } = await bootWith(
+      failingMainChunk,
+      createStorageStub({ "t3code:chunk-load-reloaded": import.meta.env.APP_VERSION }),
     );
-    expect(reloadButton?.text).toBe("Reload");
-    reloadButton?.dispatchEvent(new Event("click"));
-    await Promise.resolve();
-    expect(reload).toHaveBeenCalledOnce();
-  });
 
-  it.each([true, false])("shows startup error details only in dev mode, DEV=%s", (dev) => {
-    vi.stubEnv("DEV", dev);
-
-    showBootError(new Error("internal module path"));
-
-    expect(bootShell?.text).toContain("T3 Code could not load.");
-    expect(bootShell?.text.includes("internal module path")).toBe(dev);
-  });
-
-  it("does not replace the app after React removes the splash", () => {
-    bootShell = null;
-    const createElement = vi.spyOn(document, "createElement");
-
-    showBootError(new Error("late failure"));
-
-    expect(createElement).not.toHaveBeenCalled();
+    expect(reload).not.toHaveBeenCalled();
+    expect(showBootError).toHaveBeenCalledTimes(1);
   });
 });

@@ -4,7 +4,6 @@ import {
   AppReviewId,
   AppReviewRecord,
   AppReviewScope,
-  AppReviewSourceProposedPlan,
   AppReviewStatus,
   IsoDateTime,
   ThreadId,
@@ -22,8 +21,6 @@ export const ProjectionThreadAppReview = Schema.Struct({
   sourceThreadId: ThreadId,
   reviewThreadId: ThreadId,
   appReviewScope: Schema.NullOr(AppReviewScope),
-  planningTicketIds: Schema.optionalKey(Schema.Array(Schema.String)),
-  sourceProposedPlan: Schema.NullOr(AppReviewSourceProposedPlan),
   sourceTurnId: Schema.NullOr(TurnId),
   status: AppReviewStatus,
   document: AppReviewDocument,
@@ -44,20 +41,12 @@ export const ListProjectionThreadAppReviewsByThreadInput = Schema.Struct({
 export type ListProjectionThreadAppReviewsByThreadInput =
   typeof ListProjectionThreadAppReviewsByThreadInput.Type;
 
-export const DeleteProjectionThreadAppReviewsByThreadInput = Schema.Struct({
-  threadId: ThreadId,
-});
-export type DeleteProjectionThreadAppReviewsByThreadInput =
-  typeof DeleteProjectionThreadAppReviewsByThreadInput.Type;
-
 export function appReviewRecordToProjection(record: AppReviewRecord): ProjectionThreadAppReview {
   return {
     reviewId: record.id,
     sourceThreadId: record.sourceThreadId,
     reviewThreadId: record.reviewThreadId,
     appReviewScope: record.appReviewScope ?? null,
-    planningTicketIds: record.planningTicketIds ?? [],
-    sourceProposedPlan: record.sourceProposedPlan ?? null,
     sourceTurnId: record.sourceTurnId,
     status: record.status,
     document: record.document,
@@ -73,8 +62,6 @@ export function projectionThreadAppReviewToRecord(row: ProjectionThreadAppReview
     sourceThreadId: row.sourceThreadId,
     reviewThreadId: row.reviewThreadId,
     ...(row.appReviewScope === null ? {} : { appReviewScope: row.appReviewScope }),
-    planningTicketIds: row.planningTicketIds ?? [],
-    ...(row.sourceProposedPlan === null ? {} : { sourceProposedPlan: row.sourceProposedPlan }),
     sourceTurnId: row.sourceTurnId,
     status: row.status,
     document: row.document,
@@ -91,16 +78,10 @@ export interface ProjectionThreadAppReviewRepositoryShape {
   readonly getById: (
     input: GetProjectionThreadAppReviewInput,
   ) => Effect.Effect<Option.Option<ProjectionThreadAppReview>, ProjectionRepositoryError>;
+  /** Reviews where the thread is the source or the review thread, oldest first. */
   readonly listByThreadId: (
     input: ListProjectionThreadAppReviewsByThreadInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadAppReview>, ProjectionRepositoryError>;
-  readonly listAll: () => Effect.Effect<
-    ReadonlyArray<ProjectionThreadAppReview>,
-    ProjectionRepositoryError
-  >;
-  readonly deleteByThreadId: (
-    input: DeleteProjectionThreadAppReviewsByThreadInput,
-  ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 
 export class ProjectionThreadAppReviewRepository extends Context.Service<

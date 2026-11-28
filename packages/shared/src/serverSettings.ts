@@ -583,16 +583,6 @@ export function applyServerSettingsPatch(
     ...(patch.workflowStepInstructions !== undefined
       ? { workflowStepInstructions: patch.workflowStepInstructions }
       : {}),
-    ...(patch.workflowStepReviewParts !== undefined
-      ? { workflowStepReviewParts: patch.workflowStepReviewParts }
-      : {}),
-    // Replace, never merge: dropping a default step pin has to be expressible.
-    ...(patch.workflowStepModels !== undefined
-      ? { workflowStepModels: patch.workflowStepModels }
-      : {}),
-    ...(patch.workflowStepCycles !== undefined
-      ? { workflowStepCycles: patch.workflowStepCycles }
-      : {}),
     ...(patch.workspaceUsers !== undefined
       ? {
           workspaceUsers: normalizeWorkspaceUsersPatch(
@@ -741,23 +731,24 @@ export function applyServerSettingsPatch(
   };
 }
 
-/** Compose environment defaults after the built-in skill and its workflow variation. */
-export function appendWorkflowSkillInstructions(
-  text: string,
-  skillId: string,
-  workflowPromptId: string,
-  instructions: Readonly<Record<string, string>>,
+/** A bundled skill's saved additions. `matt-pocock.<name>` keys predate the skills plugin. */
+export function skillAdditions(
+  additions: Readonly<Record<string, string>>,
+  skillName: string,
 ): string {
-  const extra = [
-    instructions[skillId],
-    ...(skillId === workflowPromptId ? [] : [instructions[workflowPromptId]]),
-  ]
-    .map((value) => value?.trim())
-    .filter(Boolean)
-    .join("\n\n");
+  return (additions[skillName] ?? additions[`matt-pocock.${skillName}`] ?? "").trim();
+}
+
+/** The SKILL.md an agent reads: the bundled text, then the environment's saved additions. */
+export function appendSkillAdditions(
+  skillText: string,
+  skillName: string,
+  additions: Readonly<Record<string, string>>,
+): string {
+  const extra = skillAdditions(additions, skillName);
   return extra
-    ? `${text}\n\n<user-workflow-instructions>\n${extra}\n</user-workflow-instructions>`
-    : text;
+    ? `${skillText.trimEnd()}\n\n<user-skill-additions>\n${extra}\n</user-skill-additions>\n`
+    : skillText;
 }
 
 export function resolveModelPreferences(

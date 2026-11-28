@@ -10,38 +10,18 @@ import { EMPTY_ENVIRONMENT_THREAD_STATE } from "@t3tools/client-runtime/state/th
 import { ThreadId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
+import { linkedThreadRouteParams } from "./linkedThreadSurface";
 import { makeThreadProjectionFixture } from "./test-fixtures";
 
 import {
-  buildWorkflowRouteUrl,
+  isThreadRoutePathname,
   isThreadRouteSnapshotAuthoritative,
   resolveActiveThreadRouteRef,
   resolveThreadRouteRenderState,
-  resolveThreadRouteSearch,
-  isThreadRoutePathname,
   resolveThreadRouteTarget,
 } from "./threadRoutes";
 
 describe("threadRoutes", () => {
-  it("parses workflow deep-link identity and ignores invalid values", () => {
-    expect(resolveThreadRouteSearch({ workflow: " workflow-123 " })).toEqual({
-      workflow: "workflow-123",
-    });
-    expect(resolveThreadRouteSearch({ workflow: 123 })).toEqual({});
-    expect(resolveThreadRouteSearch({ workflow: "   " })).toEqual({});
-  });
-
-  it("builds a canonical link to a workflow run", () => {
-    expect(
-      buildWorkflowRouteUrl({
-        currentHref: "https://code.example/old/thread?panel=diff#message",
-        environmentId: "env one" as never,
-        rootThreadId: ThreadId.make("root/thread"),
-        workflowId: "workflow-123" as never,
-      }),
-    ).toBe("https://code.example/env%20one/root%2Fthread?workflow=workflow-123");
-  });
-
   it("does not treat cached thread lists as authoritative for deep links", () => {
     expect(isThreadRouteSnapshotAuthoritative("empty")).toBe(false);
     expect(isThreadRouteSnapshotAuthoritative("cached")).toBe(false);
@@ -96,6 +76,17 @@ describe("threadRoutes", () => {
     expect(isThreadRoutePathname(router.state.location.pathname, ref)).toBe(true);
     await router.navigate({ to: "/new" });
     expect(isThreadRoutePathname(router.state.location.pathname, ref)).toBe(false);
+  });
+
+  it("does not take a linked environment's thread route for a thread this client can open", () => {
+    // The layout reads every match's params untyped, as here.
+    const params: Record<string, string> = linkedThreadRouteParams({
+      viaEnvironmentId: "env-1" as never,
+      environmentId: "env-2" as never,
+      threadId: ThreadId.make("thread-there"),
+    });
+
+    expect(resolveThreadRouteTarget(params)).toBeNull();
   });
 
   it("resolves the backing thread while a draft route is being promoted", () => {
@@ -169,6 +160,17 @@ describe("threadRoutes", () => {
         draftThreadExists: false,
       }),
     ).toBe("missing");
+    // A link to an environment this app has no connection to never bootstraps.
+    expect(
+      resolveThreadRouteRenderState({
+        bootstrapComplete: false,
+        serverThreadExists: false,
+        serverThreadDeleted: false,
+        unlistedThreadDetail: EMPTY_ENVIRONMENT_THREAD_STATE,
+        draftThreadExists: false,
+        environmentUnreachable: true,
+      }),
+    ).toBe("unreachable");
   });
 
   it("opens an unlisted server thread once its detail arrives, without waiting for the shell", () => {

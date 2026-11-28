@@ -1,4 +1,6 @@
 import { isTransportConnectionErrorMessage } from "@t3tools/client-runtime/errors";
+import { msg } from "gt-react-native";
+import { m } from "../i18n/messages";
 import {
   clampFileAttachmentUploadBytes,
   fileAttachmentTooLargeMessage,
@@ -9,7 +11,6 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EnvironmentId,
-  ImplementationWorkflowSettings,
   IsoDateTime,
   MessageId,
   ModelSelection,
@@ -18,7 +19,6 @@ import {
   ProviderInteractionMode,
   RuntimeMode,
   ThreadId,
-  WorkflowPreset,
   type ModelSelection as ModelSelectionType,
   type ProjectId as ProjectIdType,
   type ProviderInteractionMode as ProviderInteractionModeType,
@@ -35,10 +35,9 @@ import { withImplicitFastModeSelection } from "../lib/providerOptions";
 import type { ComposerDispatchMode } from "@t3tools/client-runtime/state/composer-dispatch";
 import type { DraftComposerAttachment } from "../lib/composerImages";
 import { scopedThreadKey } from "../lib/scopedEntities";
-import type { ComposerWorkflowSend } from "./composer-workflow";
 
-// Keep current writes until a compatible native baseline includes the v4 reader.
-const THREAD_OUTBOX_SCHEMA_VERSION = 3;
+// v4 file-backed writes require native baselines with embedded readers and storage guards.
+const THREAD_OUTBOX_SCHEMA_VERSION = 4;
 const THREAD_OUTBOX_MAX_RETRY_DELAY_MS = 16_000;
 
 const QueuedThreadCreationSchema = Schema.Struct({
@@ -51,23 +50,18 @@ const QueuedThreadCreationSchema = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
   startFromOrigin: Schema.optional(Schema.Boolean),
   pullRequestReference: Schema.optional(Schema.String),
+  repositories: Schema.optional(Schema.Array(Schema.String)),
+  startsFromRepositoryDefaults: Schema.optional(Schema.Boolean),
 });
 
-// Older readers ignore the key, so adding it needs no schema version bump.
-const QueuedThreadWorkflowSchema = Schema.Struct({
-  workflowPreset: Schema.NullOr(WorkflowPreset),
-  workflowPromptId: Schema.NullOr(Schema.String),
-  workflowImplementationSettings: ImplementationWorkflowSettings,
-  clearWorkflowMode: Schema.Boolean,
-});
-
-export const QueuedThreadMessageSchema = Schema.Struct({
-  schemaVersion: Schema.Literals([1, 2, THREAD_OUTBOX_SCHEMA_VERSION, 4]),
+const QueuedThreadMessageSchema = Schema.Struct({
+  schemaVersion: Schema.Literals([1, 2, 3, THREAD_OUTBOX_SCHEMA_VERSION]),
   environmentId: EnvironmentId,
   threadId: ThreadId,
   messageId: MessageId,
   commandId: CommandId,
   text: Schema.String,
+  restoreToDraft: Schema.optional(Schema.Boolean),
   context: Schema.optional(OrchestrationMessageContext),
   attachments: Schema.Array(DraftComposerAttachmentSchema),
   modelSelection: Schema.optional(ModelSelection),
@@ -76,7 +70,6 @@ export const QueuedThreadMessageSchema = Schema.Struct({
   freshContext: Schema.optional(Schema.Boolean),
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
-  workflow: Schema.optional(QueuedThreadWorkflowSchema),
   creation: Schema.optional(QueuedThreadCreationSchema),
   createdAt: IsoDateTime,
 });
@@ -95,6 +88,10 @@ export interface QueuedThreadCreation {
   readonly worktreePath: string | null;
   readonly startFromOrigin?: boolean;
   readonly pullRequestReference?: string;
+  /** Tracked repositories the new worktree takes, by path; absent leaves the choice to the server. */
+  readonly repositories?: ReadonlyArray<string>;
+  /** The project folder is no Git repository, so a new worktree needs no base branch. */
+  readonly startsFromRepositoryDefaults?: boolean;
 }
 
 export interface QueuedThreadMessage {
@@ -103,13 +100,12 @@ export interface QueuedThreadMessage {
   readonly messageId: MessageId;
   readonly commandId: CommandId;
   readonly text: string;
+  readonly restoreToDraft?: boolean;
   readonly context?: OrchestrationMessageContext;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly modelSelection?: ModelSelectionType;
   readonly runtimeMode?: RuntimeModeType;
   readonly interactionMode?: ProviderInteractionModeType;
-  /** Captured at enqueue time like the other settings; absent for a plain turn. */
-  readonly workflow?: ComposerWorkflowSend;
   /** Captured at enqueue because draining may occur long after the tap. */
   readonly dispatchMode?: ComposerDispatchMode;
   /** Sends "When you return"'s `/compact` ahead of the message, which queues behind it. */
@@ -126,13 +122,12 @@ export interface ThreadSettingsSnapshot {
   readonly interactionMode: ProviderInteractionModeType;
 }
 
-// Providers without a Build/Plan toggle run in build mode; workflow modes come from a
-// workflow preset, not that toggle, so they survive it.
+// Providers without a Build/Plan toggle always run in build mode.
 function resolveProviderInteractionMode(
   provider: Pick<ServerProvider, "showInteractionModeToggle"> | undefined,
   interactionMode: ProviderInteractionModeType,
 ): ProviderInteractionModeType {
-  return provider?.showInteractionModeToggle === false && !interactionMode.endsWith("-workflow")
+  return provider?.showInteractionModeToggle === false
     ? DEFAULT_PROVIDER_INTERACTION_MODE
     : interactionMode;
 }
@@ -178,7 +173,19 @@ export function encodeQueuedThreadMessage(message: QueuedThreadMessage): unknown
   });
 }
 
-export function decodeQueuedThreadMessage(value: unknown): QueuedThreadMessage {
+// Engineering workflow sends queued before workflows were removed must not replay as plain turns.
+function isQueuedWorkflowSend(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const interactionMode = (value as { readonly interactionMode?: unknown }).interactionMode;
+  return (
+    "workflow" in value ||
+    (typeof interactionMode === "string" && interactionMode.endsWith("-workflow"))
+  );
+}
+
+/** Null for a stored send that can no longer be delivered; callers drop it. */
+export function decodeQueuedThreadMessage(value: unknown): QueuedThreadMessage | null {
+  if (isQueuedWorkflowSend(value)) return null;
   const { schemaVersion: _, ...message } = decodeStoredQueuedThreadMessage(value);
   return message;
 }
@@ -264,7 +271,7 @@ export function resolveThreadOutboxDispatchStep(input: {
   }
   const maxBytes = input.serverConfig.maxFileUploadBytes;
   if (maxBytes === undefined) {
-    return { step: "restore", reason: "This server does not support file attachments." };
+    return { step: "restore", reason: m(msg("This server does not support file attachments.")) };
   }
   const effectiveMaxBytes = clampFileAttachmentUploadBytes(maxBytes);
   const oversized = input.fileAttachments.find(
@@ -283,7 +290,11 @@ export function isQueuedThreadCreationSendable(message: QueuedThreadMessage): bo
   if (!hasContent || message.modelSelection === undefined) {
     return false;
   }
-  return message.creation.workspaceMode !== "worktree" || Boolean(message.creation.branch);
+  return (
+    message.creation.workspaceMode !== "worktree" ||
+    Boolean(message.creation.branch) ||
+    message.creation.startsFromRepositoryDefaults === true
+  );
 }
 
 function errorMessage(error: unknown): string | null {
@@ -308,6 +319,9 @@ export function shouldRetryThreadOutboxDelivery(error: unknown): boolean {
       case "EnvironmentRpcUnavailableError":
       case "EnvironmentNotRegisteredError":
         return true;
+      // A shared upload's failure decides by what made the upload fail.
+      case "AttachmentUploadError":
+        return "cause" in error && shouldRetryThreadOutboxDelivery(error.cause);
       default:
         break;
     }

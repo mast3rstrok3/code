@@ -37,8 +37,6 @@ import {
   type AppStackPodLogEntry,
   type AppStackRestartServicesInput,
   type AppStackSetProtectedInput,
-  type AppStackWorkflowTeardownInput,
-  AppStackWorkflowTeardownResult,
   type AppStackVariant,
 } from "@t3tools/contracts";
 import { appStackVariantForComposePath } from "@t3tools/shared/appStack";
@@ -148,10 +146,6 @@ export class AppStackManager extends Context.Service<
     readonly setProtected: (
       input: AppStackSetProtectedInput,
     ) => Effect.Effect<AppStack, AppStackError>;
-    /** Stops every unprotected stack a finished workflow owns. */
-    readonly workflowTeardown: (
-      input: AppStackWorkflowTeardownInput,
-    ) => Effect.Effect<AppStackWorkflowTeardownResult, AppStackError>;
     readonly restart: (input: AppStackGetInput) => Effect.Effect<AppStack, AppStackError>;
     readonly delete: (
       input: AppStackGetInput,
@@ -640,7 +634,6 @@ export class AppStackManager extends Context.Service<
               git_branch: plan.branch,
               variant,
               bundle,
-              ...(input.workflowId === undefined ? {} : { workflow_id: input.workflowId }),
               ...(input.omitServices === undefined ? {} : { omit_services: input.omitServices }),
             }),
           ),
@@ -722,7 +715,6 @@ export class AppStackManager extends Context.Service<
               git_branch: input.gitBranch ?? null,
               variant: input.variant ?? "dev",
               ...(input.namespace === undefined ? {} : { namespace: input.namespace }),
-              ...(input.workflowId === undefined ? {} : { workflow_id: input.workflowId }),
               ...(input.omitServices === undefined ? {} : { omit_services: input.omitServices }),
             }),
           ),
@@ -763,11 +755,10 @@ export class AppStackManager extends Context.Service<
         input: AppStackAutoCreateInput,
       ) {
         const normalizedPath = input.worktreePath.trim().replace(/[\\/]+$/u, "");
-        const key = `${input.workflowId?.trim() ?? "manual"}\u0000${normalizedPath}`;
-        const semaphore = yield* getAutoCreateSemaphore(key);
+        const semaphore = yield* getAutoCreateSemaphore(normalizedPath);
         return yield* semaphore
           .withPermit(autoCreateRequest(input))
-          .pipe(Effect.ensuring(releaseAutoCreateSemaphore(key)));
+          .pipe(Effect.ensuring(releaseAutoCreateSemaphore(normalizedPath)));
       });
 
       const stop = Effect.fn("AppStackManager.stop")(function* (input: AppStackGetInput) {
@@ -792,19 +783,6 @@ export class AppStackManager extends Context.Service<
           AppStack,
         );
         return normalizeStack(stack);
-      });
-
-      const workflowTeardown = Effect.fn("AppStackManager.workflowTeardown")(function* (
-        input: AppStackWorkflowTeardownInput,
-      ) {
-        const base = yield* requireBaseUrl("workflowTeardown");
-        return yield* executeJson(
-          "workflowTeardown",
-          HttpClientRequest.post(appStackUrl(base, "/workflow-teardown")).pipe(
-            HttpClientRequest.bodyJsonUnsafe({ workflow_id: input.workflowId }),
-          ),
-          AppStackWorkflowTeardownResult,
-        );
       });
 
       const restart = Effect.fn("AppStackManager.restart")(function* (input: AppStackGetInput) {
@@ -845,7 +823,6 @@ export class AppStackManager extends Context.Service<
           worktreePath: stack.worktreePath,
           displayName: displayNameForRestart(stack),
           gitBranch: stack.branchName ?? null,
-          workflowId: stack.workflowId ?? undefined,
           variant: stack.variant,
           ...(bundle === undefined ? {} : { bundle }),
           ...(omitServices === undefined ? {} : { omitServices }),
@@ -1090,7 +1067,6 @@ export class AppStackManager extends Context.Service<
         createBundleWorktrees,
         stop,
         setProtected,
-        workflowTeardown,
         restart,
         delete: deleteStack,
         listPods,

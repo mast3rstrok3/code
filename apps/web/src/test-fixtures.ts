@@ -20,7 +20,6 @@ const DEFAULT_TIMESTAMP = "2026-01-01T00:00:00.000Z";
 
 export type ThreadFixtureOverrides = Partial<Thread> & {
   readonly parentThreadId?: ThreadId | null;
-  readonly planningWorkflow?: import("@t3tools/contracts").OrchestrationPlanningWorkflow | null;
   readonly appReviews?: ReadonlyArray<unknown>;
   readonly messages?: ReadonlyArray<ChatMessage>;
   readonly proposedPlans?: ReadonlyArray<unknown>;

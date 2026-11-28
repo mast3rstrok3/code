@@ -6,7 +6,6 @@ import {
   ProviderInstanceId,
   ScheduledTaskId,
   type ScheduledTask,
-  WORKFLOW_START_MODEL_PINS,
   ThreadId,
 } from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -19,6 +18,7 @@ import { resolveSettingsScope, type SettingsScopeSearch } from "./settingsScope"
 
 import { deriveProviderInstanceEntries } from "../../providerInstances";
 import {
+  changeDraftProject,
   scheduledTaskDefaultModel,
   defaultScheduledTaskProjectId,
   matchesScheduledTaskScope,
@@ -172,21 +172,25 @@ describe("editing scheduled task branch settings", () => {
     expect(draft.baseRef).toBe("release");
     expect(draft.startFromOrigin).toBe(false);
   });
-});
 
-describe("scheduled task workflows", () => {
-  it("edits a task that an older server sent without a workflow as a plain thread", () => {
-    expect(taskToDraft(legacyTask).workflow).toBeNull();
+  it("leaves the base automatic when a task without a worktree switches to one", () => {
+    const draft = taskToDraft({ ...legacyTask, workspaceStrategy: { type: "root" } });
+    expect(draft.baseRef).toBe("");
   });
 
-  it("keeps a Feature task's workflow and leaves an unset base for the development branch", () => {
-    const draft = taskToDraft({
-      ...legacyTask,
-      workflow: "feature",
-      workspaceStrategy: { type: "root" },
+  it("clears the old project's base branch and checkout when the project changes", () => {
+    const worktree = taskToDraft(legacyTask);
+    expect(changeDraftProject(worktree, legacyTask.projectId)).toBe(worktree);
+    expect(changeDraftProject(worktree, "other")).toMatchObject({
+      projectId: "other",
+      workspaceMode: "worktree",
+      baseRef: "",
     });
-    expect(draft.workflow).toBe("feature");
-    expect(draft.baseRef).toBe("");
+    const checkout = taskToDraft({
+      ...legacyTask,
+      workspaceStrategy: { type: "existing_worktree", worktreePath: "/work/project" },
+    });
+    expect(changeDraftProject(checkout, "other").existingWorktreePath).toBe("");
   });
 });
 
@@ -324,16 +328,14 @@ describe("webhook scheduled tasks", () => {
     });
   });
 
-  it("opens a task on the workflow default without a stored model to edit", () => {
+  it("edits a task saved with a workflow as a plain task on its stored model", () => {
     const draft = taskToDraft({
       ...webhookTask,
       workflow: "feature",
       useWorkflowDefaultModel: true,
-    });
-    expect(draft.useWorkflowDefaultModel).toBe(true);
-    expect(draft.modelKey).toBe("");
-    expect(draft.baseModelSelection).toBeNull();
-    expect(taskToDraft(webhookTask).useWorkflowDefaultModel).toBe(false);
+    } as ScheduledTask);
+    expect(draft).not.toHaveProperty("workflow");
+    expect(draft.modelSelection).toEqual(webhookTask.modelSelection);
   });
 
   it("round-trips the max age, treats blank as no limit, and rejects an invalid limit", () => {
@@ -440,24 +442,6 @@ describe("scheduled task model defaults", () => {
       }),
     ).toEqual(environmentSelection);
   });
-  it("puts a workflow's own default first, and only for that workflow", () => {
-    const featureSelection = { instanceId, model: "first-model" };
-    const settings = {
-      ...config.settings,
-      workflowStepModels: [
-        { workflowPromptId: WORKFLOW_START_MODEL_PINS.feature, modelSelection: featureSelection },
-      ],
-    };
-    const entries = deriveProviderInstanceEntries(config.providers);
-    const project = { id: projectId, defaultModelSelection: projectSelection };
-    expect(scheduledTaskDefaultModel(settings, project, entries, "feature")).toEqual(
-      featureSelection,
-    );
-    expect(scheduledTaskDefaultModel(settings, project, entries, "engineering")).toEqual(
-      projectSelection,
-    );
-    expect(scheduledTaskDefaultModel(settings, project, entries)).toEqual(projectSelection);
-  });
 });
 
 it("rejects dedupe templates without a request placeholder", () => {
@@ -466,11 +450,65 @@ it("rejects dedupe templates without a request placeholder", () => {
   expect(scheduleFromDraft({ ...draft, coalesceKey: "{{body.bad" })).toBeNull();
 });
 
+// The host locale's clock for a wall time, so these pass in any locale (digits, day period, zero padding).
+function clock(hour12: boolean, hour: number, minute: number) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12,
+    timeZone: "UTC",
+  }).format(Date.UTC(2000, 0, 1, hour, minute));
+}
+
 it("appends the server zone only to fixed-time schedule labels", () => {
-  expect(scheduleLabel({ type: "fixed_time", timeOfDay: "16:31" }, "Etc/UTC")).toBe(
-    "Daily at 16:31 UTC",
+  expect(scheduleLabel({ type: "fixed_time", timeOfDay: "16:31" }, "24-hour", "Etc/UTC")).toBe(
+    `Daily at ${clock(false, 16, 31)} UTC`,
   );
-  expect(scheduleLabel({ type: "fixed_time", timeOfDay: "09:00" })).toBe("Daily at 09:00");
-  expect(scheduleLabel({ type: "interval", everyMs: 60_000 }, "Etc/UTC")).toBe("Every 1 min");
-  expect(scheduleLabel({ type: "webhook", signature: null }, "Etc/UTC")).toBe("On webhook");
+  expect(scheduleLabel({ type: "fixed_time", timeOfDay: "09:00" }, "24-hour")).toBe(
+    `Daily at ${clock(false, 9, 0)}`,
+  );
+  expect(scheduleLabel({ type: "interval", everyMs: 60_000 }, "24-hour", "Etc/UTC")).toBe(
+    "Every 1 min",
+  );
+  expect(scheduleLabel({ type: "webhook", signature: null }, "24-hour", "Etc/UTC")).toBe(
+    "On webhook",
+  );
+});
+
+it("labels the weekdays a schedule runs on, whatever order or repeats it stores", () => {
+  const label = (weekdays: Array<number>) =>
+    scheduleLabel(
+      { type: "fixed_time", timeOfDay: "09:00", weekdays },
+      "24-hour",
+      undefined,
+      null,
+      undefined,
+      "en-US",
+    );
+  const at = clock(false, 9, 0);
+  expect(label([1, 1, 2, 3, 4])).toBe(`Mon, Tue, Wed, Thu at ${at}`);
+  expect(label([0, 1, 2, 3, 4, 5, 6])).toBe(`Daily at ${at}`);
+  expect(label([5, 1, 3])).toBe(`Mon, Wed, Fri at ${at}`);
+});
+
+it("shows schedule times in the Time format setting", () => {
+  const daily = { type: "fixed_time", timeOfDay: "17:30" } as const;
+  expect(scheduleLabel(daily, "24-hour")).toBe(`Daily at ${clock(false, 17, 30)}`);
+  expect(scheduleLabel(daily, "12-hour")).toBe(`Daily at ${clock(true, 17, 30)}`);
+  const midnight = scheduleLabel({ type: "fixed_time", timeOfDay: "0:05" }, "24-hour");
+  expect(midnight).toBe(`Daily at ${clock(false, 0, 5)}`);
+  // An h24 clock would print midnight as 24:05 in both the label and the helper.
+  expect(midnight).not.toContain("24");
+
+  // A local wall time, so the label reads 17:30 in any host zone.
+  const runAt = new Date(2026, 10, 20, 17, 30);
+  const once = { type: "once", runAt: runAt.toISOString() } as const;
+  for (const hour12 of [false, true]) {
+    const dateTime = new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+      hour12,
+    }).format(runAt);
+    expect(scheduleLabel(once, hour12 ? "12-hour" : "24-hour")).toBe(`Once, ${dateTime}`);
+  }
 });

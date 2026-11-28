@@ -1,17 +1,17 @@
-import { OrchestratorMcpFailure } from "@t3tools/contracts";
-import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import {
   AppReviewDocument,
   AppReviewError,
   AppReviewId,
   AppReviewRecord,
   AppReviewRecordingEvidence,
+  AppReviewScope,
   AppReviewStatus,
+  AppReviewTestResult,
   IsoDateTime,
-  OrchestrationDispatchCommandError,
-  OrchestrationGetSnapshotError,
+  OrchestratorMcpFailure,
   PreviewAutomationError,
   PreviewTabId,
+  ReviewTestPlatforms,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as FileSystem from "effect/FileSystem";
@@ -19,59 +19,76 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { McpSchema, Tool, Toolkit } from "effect/ai";
 
+import * as AppReviewStore from "../../../appReview/AppReviewStore.ts";
+import * as AppReviewTests from "../../../appReview/AppReviewTests.ts";
+import * as ServerConfig from "../../../config.ts";
+import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
-import * as ServerConfig from "../../../config.ts";
-import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
-
-const OptionalReviewIdField = {
-  reviewId: Schema.optional(AppReviewId).annotate({
-    description:
-      "Optional App Review record ID. Omit to use the record linked to the current review thread.",
-  }),
-};
+import * as PreviewRecordingPolicy from "../../../preview/PreviewRecordingPolicy.ts";
 
 const OptionalTabIdField = {
   tabId: Schema.optional(PreviewTabId).annotate({
-    description:
-      "Optional collaborative browser tab to target. Omit to use the current preview tab.",
+    description: "Preview tab to target. Omit for the current tab.",
   }),
 };
 
-export const AppReviewLookupInput = Schema.Struct(OptionalReviewIdField);
+const AppReviewStartInput = Schema.Struct({
+  scope: Schema.optional(AppReviewScope).annotate({
+    description:
+      "What this review verifies: 'e2e' (test commands), 'browser' (the app in the preview browser), or 'both' (default).",
+  }),
+  brief: Schema.optional(Schema.String).annotate({
+    description: "One or two sentences on what is under review, shown at the top of the review.",
+  }),
+});
 
-export const AppReviewUpdateInput = Schema.Struct({
-  ...OptionalReviewIdField,
+const AppReviewLookupInput = Schema.Struct({
+  reviewId: Schema.optional(AppReviewId).annotate({
+    description: "A review on this thread. Omit for the active review.",
+  }),
+});
+
+const AppReviewUpdateInput = Schema.Struct({
   status: Schema.optional(AppReviewStatus).annotate({
-    description: "Updated workflow status for the App Review.",
+    description:
+      "Final status: 'passed' or 'failed'. Leave it out while the review is in progress.",
   }),
   document: Schema.optional(AppReviewDocument).annotate({
     description:
-      "Full serialized App Review document with verdict, summary, checks, findings, questions, and next steps.",
+      "The complete review document: verdict, summary, checks, findings, questions and next steps. Send it whole each time.",
   }),
 });
 
-export const AppReviewRecordingStartInput = Schema.Struct({
-  ...OptionalReviewIdField,
-  ...OptionalTabIdField,
+const AppReviewRunTestInput = Schema.Struct({
+  command: TrimmedNonEmptyString.annotate({
+    description:
+      "Shell command run from the thread's worktree, usually one of t3.json's e2eCommands or e2eAffectedCommands.",
+  }),
+  previewUrl: Schema.optional(TrimmedNonEmptyString).annotate({
+    description:
+      "URL under test, passed as APP_REVIEW_PREVIEW_URL. Omit to use the worktree's App Stack frontend.",
+  }),
+  baseRef: Schema.optional(TrimmedNonEmptyString).annotate({
+    description:
+      "Commit the change branched from, passed as APP_REVIEW_BASE_REF for e2eAffectedCommands.",
+  }),
+  testPlatforms: Schema.optional(ReviewTestPlatforms).annotate({
+    description:
+      "Platforms the suite should test, passed as APP_REVIEW_TEST_PLATFORMS. Default web.",
+  }),
 });
 
-export const AppReviewRecordingStopInput = Schema.Struct({
-  ...OptionalReviewIdField,
-  ...OptionalTabIdField,
-});
+const AppReviewRecordingInput = Schema.Struct(OptionalTabIdField);
 
-export const AppReviewCaptureScreenshotInput = Schema.Struct({
-  ...OptionalReviewIdField,
+const AppReviewCaptureScreenshotInput = Schema.Struct({
   ...OptionalTabIdField,
   caption: TrimmedNonEmptyString.annotate({
-    description:
-      "Short caption describing the application state this screenshot captures, for example 'Task list after creating the first task'.",
+    description: "The application state shown, e.g. 'Task list after creating the first task'.",
   }),
 });
 
-export const AppReviewScreenshotResult = Schema.Struct({
+const AppReviewScreenshotResult = Schema.Struct({
   id: TrimmedNonEmptyString,
   caption: Schema.String,
   capturedAt: IsoDateTime,
@@ -80,30 +97,23 @@ export const AppReviewScreenshotResult = Schema.Struct({
 const dependencies = [
   ThreadManagementService.ThreadManagementService,
   McpInvocationContext.McpInvocationContext,
-  OrchestrationEngineService,
-  ProjectionSnapshotQuery,
+  AppReviewStore.AppReviewStore,
 ];
 
 const browserDependencies = [
   ...dependencies,
   PreviewAutomationBroker.PreviewAutomationBroker,
+  PreviewRecordingPolicy.PreviewRecordingPolicy,
   ServerConfig.ServerConfig,
   FileSystem.FileSystem,
   Path.Path,
 ];
 
-const AppReviewToolFailure = Schema.Union([
-  OrchestratorMcpFailure,
-  AppReviewError,
-  OrchestrationDispatchCommandError,
-  OrchestrationGetSnapshotError,
-]);
+const AppReviewToolFailure = Schema.Union([OrchestratorMcpFailure, AppReviewError]);
 
 const AppReviewBrowserToolFailure = Schema.Union([
   OrchestratorMcpFailure,
   AppReviewError,
-  OrchestrationDispatchCommandError,
-  OrchestrationGetSnapshotError,
   PreviewAutomationError,
 ]);
 
@@ -113,15 +123,26 @@ const appReviewTool = <T extends Tool.Any>(tool: T): T =>
     .annotate(Tool.Destructive, true)
     .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients) as T;
 
+const AppReviewStartTool = appReviewTool(
+  Tool.make("app_review_start", {
+    description:
+      "Start a new App Review on this thread and make it the active one. Evidence tools start one on first use, so call this to set the scope and brief, or to begin a fresh review after a verdict.",
+    parameters: AppReviewStartInput,
+    success: AppReviewRecord,
+    failure: AppReviewToolFailure,
+    dependencies,
+  }).annotate(Tool.Title, "Start App Review"),
+);
+
 const AppReviewGetTool = Tool.make("app_review_get", {
   description:
-    "Load the durable App Review record linked to this workflow thread, including status, document, and captured evidence (recording + screenshots).",
+    "Load this thread's App Review: status, document, browser evidence, and E2E test results.",
   parameters: AppReviewLookupInput,
   success: AppReviewRecord,
   failure: AppReviewToolFailure,
   dependencies,
 })
-  .annotate(Tool.Title, "Get App Review record")
+  .annotate(Tool.Title, "Get App Review")
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
@@ -130,19 +151,30 @@ const AppReviewGetTool = Tool.make("app_review_get", {
 const AppReviewUpdateTool = appReviewTool(
   Tool.make("app_review_update", {
     description:
-      "Persist the App Review document and/or final status. Send the complete document each time, not a partial patch. Blocked checks use blockerKind coverage-gap when tests or assertions can be added in the worktree, or external-prerequisite for missing credentials, billing, approvals, services, or controller actions. Explain the missing coverage or prerequisite and recovery action in notes. E2E checks may include replayUrl when the test runner publishes an inspectable web replay. Passed browser sections require a saved recording and screenshot. Failed browser sections accept the same complete evidence, or screenshot-backed findings with failed checks when recording finalization failed. A browser check this cycle did not exercise, because an earlier cycle passed it and the repair could not reach it, is repeated with status passed and carriedFromCycle set to the cycle that ran it.",
+      "Save the App Review document and/or its final status. 'passed' needs the evidence its scope covers: a passing latest run of every E2E command, and a saved browser recording plus a screenshot. Mark blocked checks blockerKind 'coverage-gap' when tests can be added in the worktree, or 'external-prerequisite' for missing credentials, services or approvals, and say what would unblock them in notes.",
     parameters: AppReviewUpdateInput,
     success: AppReviewRecord,
     failure: AppReviewToolFailure,
     dependencies,
-  }).annotate(Tool.Title, "Update App Review record"),
+  }).annotate(Tool.Title, "Update App Review"),
+);
+
+const AppReviewRunTestTool = appReviewTool(
+  Tool.make("app_review_run_test", {
+    description:
+      "Run one E2E test command in this thread's worktree and attach its result to the App Review. Browsers the suite launches are recorded as DOM replays through APP_REVIEW_RECORDER_SCRIPT. Waits for the command (up to 60 minutes) and returns its exit status and output tail.",
+    parameters: AppReviewRunTestInput,
+    success: AppReviewTestResult,
+    failure: AppReviewToolFailure,
+    dependencies: [...dependencies, AppReviewTests.AppReviewTests],
+  }).annotate(Tool.Title, "Run App Review test"),
 );
 
 const AppReviewRecordingStartTool = appReviewTool(
   Tool.make("app_review_recording_start", {
     description:
-      "Start the browser screen recording for this App Review. Call after preview_open and before exercising the feature. Returns the updated recording evidence.",
-    parameters: AppReviewRecordingStartInput,
+      "Start recording the preview tab for this App Review. Call after preview_open and before exercising the app.",
+    parameters: AppReviewRecordingInput,
     success: AppReviewRecordingEvidence,
     failure: AppReviewBrowserToolFailure,
     dependencies: browserDependencies,
@@ -152,8 +184,8 @@ const AppReviewRecordingStartTool = appReviewTool(
 const AppReviewRecordingStopTool = appReviewTool(
   Tool.make("app_review_recording_stop", {
     description:
-      "Stop the browser screen recording and attach the saved video to this App Review's evidence. Returns the updated recording evidence; status 'failed' means no video was saved.",
-    parameters: AppReviewRecordingStopInput,
+      "Stop the preview recording and attach it to this App Review. Status 'failed' means nothing was saved.",
+    parameters: AppReviewRecordingInput,
     success: AppReviewRecordingEvidence,
     failure: AppReviewBrowserToolFailure,
     dependencies: browserDependencies,
@@ -163,7 +195,7 @@ const AppReviewRecordingStopTool = appReviewTool(
 const AppReviewCaptureScreenshotTool = appReviewTool(
   Tool.make("app_review_capture_screenshot", {
     description:
-      "Capture a captioned screenshot of the current preview tab and attach it to this App Review's evidence. Use at each meaningful application state; findings can reference the returned id in evidenceIds.",
+      "Capture a captioned screenshot of the preview tab for this App Review. Findings reference the returned id in evidenceIds.",
     parameters: AppReviewCaptureScreenshotInput,
     success: AppReviewScreenshotResult,
     failure: AppReviewBrowserToolFailure,
@@ -172,8 +204,10 @@ const AppReviewCaptureScreenshotTool = appReviewTool(
 );
 
 export const AppReviewToolkit = Toolkit.make(
+  AppReviewStartTool,
   AppReviewGetTool,
   AppReviewUpdateTool,
+  AppReviewRunTestTool,
   AppReviewRecordingStartTool,
   AppReviewRecordingStopTool,
   AppReviewCaptureScreenshotTool,

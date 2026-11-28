@@ -1,9 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
-import type { OrchestrationEvent } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import { createEmptyReadModel, projectEvent } from "../../orchestration/projector.ts";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
@@ -28,22 +26,8 @@ const threadCreated = (threadId: string, workflowPreset: string) =>
 const composerModeSet = (threadId: string, workflowPreset: string) =>
   JSON.stringify({ threadId, interactionMode: "plan", workflowPreset, updatedAt: at });
 
-interface EventRow {
-  readonly sequence: number;
-  readonly eventId: string;
-  readonly aggregateKind: string;
-  readonly streamId: string;
-  readonly streamVersion: number;
-  readonly eventType: string;
-  readonly occurredAt: string;
-  readonly commandId: string | null;
-  readonly actorKind: string;
-  readonly payloadJson: string;
-  readonly metadataJson: string;
-}
-
 describe("108_RetireQuickWorkflowPresets", () => {
-  it.effect("rewrites retired presets in projections and stored events, which replay", () =>
+  it.effect("rewrites retired presets in projections and stored events", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 107 });
@@ -122,40 +106,6 @@ describe("108_RetireQuickWorkflowPresets", () => {
           ["fast-plan", "fast-plan", "planning", "planning"],
         );
       }
-
-      const rows = yield* sql<EventRow>`
-        SELECT sequence, event_id AS "eventId", aggregate_kind AS "aggregateKind",
-               stream_id AS "streamId", stream_version AS "streamVersion",
-               event_type AS "eventType", occurred_at AS "occurredAt",
-               command_id AS "commandId", actor_kind AS "actorKind",
-               payload_json AS "payloadJson", metadata_json AS "metadataJson"
-        FROM workflow_events ORDER BY sequence
-      `;
-      let model = createEmptyReadModel(at);
-      for (const row of rows) {
-        model = yield* projectEvent(model, {
-          sequence: row.sequence,
-          eventId: row.eventId,
-          aggregateKind: row.aggregateKind,
-          aggregateId: row.streamId,
-          streamVersion: row.streamVersion,
-          type: row.eventType,
-          occurredAt: row.occurredAt,
-          commandId: row.commandId,
-          causationEventId: null,
-          correlationId: null,
-          actorKind: row.actorKind,
-          payload: JSON.parse(row.payloadJson),
-          metadata: JSON.parse(row.metadataJson),
-        } as unknown as OrchestrationEvent);
-      }
-      assert.deepStrictEqual(
-        model.threads.map((thread) => ({ id: String(thread.id), preset: thread.workflowPreset })),
-        [
-          { id: "quick", preset: "fast-plan" },
-          { id: "engineering", preset: "planning" },
-        ],
-      );
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });

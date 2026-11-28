@@ -9,12 +9,10 @@ import {
   resolveProjectProviderInstanceEnabled,
   resolveTextGenerationSelectionEnabled,
   type ResolvedServerSettings,
-  type ScheduledTaskWorkflow,
   type ServerSettings,
   type T3ProjectFile,
   type ThreadEnvMode,
   type WorktreeCleanupRules,
-  WORKFLOW_START_MODEL_PINS,
 } from "@t3tools/contracts";
 import { readCustomModelEntries } from "./model.ts";
 import { normalizeProjectPathForComparison } from "./path.ts";
@@ -209,50 +207,13 @@ export function resolveNewThreadEnvMode(input: {
   return isNewProjectFolder ? "local" : configured;
 }
 
+/** Worktree mode needs a repository: the project folder, or a folder the project tracks. */
 export function resolveSendEnvMode(input: {
   readonly requestedEnvMode: ThreadEnvMode;
   readonly isGitRepo: boolean;
+  readonly tracksGitRepositories?: boolean;
 }): ThreadEnvMode {
-  return input.isGitRepo ? input.requestedEnvMode : "local";
-}
-
-/** The model set for a workflow to start on, or null when it follows the default model. */
-export function workflowStartModel(
-  settings: Pick<ServerSettings, "workflowStepModels">,
-  workflow: ScheduledTaskWorkflow,
-): ModelSelection | null {
-  const pin = WORKFLOW_START_MODEL_PINS[workflow];
-  return (
-    settings.workflowStepModels.find(
-      (entry) => entry.workflowPromptId === pin && entry.stepWorkflowPromptId === undefined,
-    )?.modelSelection ?? null
-  );
-}
-
-/**
- * The model a new workflow starts with when its starter names none: the
- * workflow's own default, then the project's and the environment's default
- * model for new threads. A selection on a disabled provider is skipped; null
- * when nothing usable is set.
- */
-export function resolveWorkflowModelSelection(
-  settings: ServerSettings,
-  projectId: ProjectId | null,
-  workflow: ScheduledTaskWorkflow,
-  project?: LegacyProjectSettingsFields | null,
-): ModelSelection | null {
-  const candidates = [
-    workflowStartModel(settings, workflow),
-    resolveProjectSettings(settings, projectId, project).settings.defaultModelSelection,
-    settings.defaultModelSelection,
-  ];
-  return (
-    candidates.find(
-      (selection): selection is ModelSelection =>
-        selection != null &&
-        resolveProjectProviderInstanceEnabled(settings, projectId, selection.instanceId),
-    ) ?? null
-  );
+  return input.isGitRepo || input.tracksGitRepositories === true ? input.requestedEnvMode : "local";
 }
 
 export function clearProjectSettingsOverrides(

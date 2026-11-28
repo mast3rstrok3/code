@@ -200,15 +200,3 @@ Collision scanning depends on the mode. `dev:web` scans only the web port and sh
 offset. `dev:server` scans only the server port. `dev` and `dev:desktop` scan both and shift them
 together as one shared offset. Explicit server or dev-URL overrides remove the corresponding port
 from the availability check. Treat the `[dev-runner]` output as authoritative.
-
-## Resetting the workflow database
-
-The Product Workflow/Spec/Ticket terminology change intentionally does not migrate older workflow
-databases. Startup fails with reset guidance when legacy workflow tables are detected.
-
-Stop T3 Code before resetting it. In the configured state directory, delete `state.sqlite` and its
-`-wal` and `-shm` siblings when present. The default development state directory is `~/.t3/dev/`;
-production and desktop use `<T3CODE_HOME>/userdata/`.
-
-This permanently deletes projects, conversations, workflow artifacts, and other database-backed
-state. It does not delete settings, credentials, logs, or attachments stored outside SQLite.

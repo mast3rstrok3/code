@@ -9,7 +9,6 @@ import {
   type ProviderInstanceMutation,
   defaultInstanceIdForDriver,
   isProviderDriverKind,
-  isUnconfiguredDefaultInstanceEnabled,
   ProviderDriverKind,
   ProviderInstanceId,
   resolveProviderInstanceEnabled,
@@ -59,6 +58,7 @@ import {
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ManagedPolicy from "./policy/ManagedPolicy.ts";
 import { secretProviderDefinitions } from "./secrets/secretProviderDefinitions.ts";
+import { watchDirectoryReplacements } from "./watchDirectoryReplacements.ts";
 import {
   readSecretFieldValues,
   sourceControlHostSecretName,
@@ -68,6 +68,7 @@ import {
   mapSettingsSecrets,
   mapSettingsSecretValues,
   withoutRemovedSecretProviderReferences,
+  withoutRedirectedSecrets,
   SECRET_REDACTED,
   type SettingsSecret,
 } from "./settingsSecrets.ts";
@@ -195,9 +196,14 @@ function mapServerSettingsSecrets(
   };
 }
 
+export interface SettingsClient {
+  readonly secretReferences: boolean;
+  readonly httpUsageLimitSources?: boolean;
+}
+
 export function redactServerSettingsForClient(
   settings: ServerSettings,
-  client: { readonly secretReferences: boolean },
+  client: SettingsClient,
 ): ServerSettings {
   const redacted = mapServerSettingsSecrets(settings, (secret) =>
     secret.sensitive
@@ -210,7 +216,18 @@ export function redactServerSettingsForClient(
     : mapSettingsSecretValues(redacted, (value) =>
         isSecretReference(value) ? SECRET_REDACTED : value,
       );
-  return { ...shaped, secretProviders: withoutUnknownSecretProviderConfigs(shaped) };
+  return {
+    ...shaped,
+    secretProviders: withoutUnknownSecretProviderConfigs(shaped),
+    // Older clients decode only "cliproxy" sources and reject the whole settings payload otherwise.
+    usageLimitSources: client.httpUsageLimitSources
+      ? shaped.usageLimitSources
+      : Object.fromEntries(
+          Object.entries(shaped.usageLimitSources).filter(
+            ([, source]) => source.kind === "cliproxy",
+          ),
+        ),
+  };
 }
 
 /** A client shown a reference as a saved secret sends that marker back; it keeps the reference. */
@@ -436,6 +453,20 @@ const PersistedServerSettings = Schema.Struct({
 // Parse first and decode second, so a managed policy can fill its defaults in between.
 const decodeSettingsFileJsonExit = Schema.decodeUnknownExit(fromLenientJson(Schema.Unknown));
 const decodePersistedServerSettingsExit = Schema.decodeUnknownExit(PersistedServerSettings);
+
+/**
+ * The settings on disk with the managed policy laid over them, read without the service: no
+ * database, no write, no legacy migration. A missing or unreadable file reads as the defaults.
+ */
+export const readServerSettingsFromDisk = Effect.gen(function* () {
+  const { settingsPath } = yield* ServerConfig.ServerConfig;
+  const fs = yield* FileSystem.FileSystem;
+  const { settings: managed } = yield* ManagedPolicy.ManagedPolicy;
+  const raw = yield* fs.readFileString(settingsPath).pipe(Effect.option);
+  return managed.applyLocks(
+    Option.isNone(raw) ? managed.defaults : decodeSettingsFile(raw.value, managed).settings,
+  );
+}).pipe(Effect.withSpan("ServerSettings.readServerSettingsFromDisk"));
 const LegacyProviderSettingsJson = fromLenientJson(
   Schema.Struct({
     providers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
@@ -444,6 +475,40 @@ const LegacyProviderSettingsJson = fromLenientJson(
   }),
 );
 const decodeLegacyProviderSettingsJsonExit = Schema.decodeUnknownExit(LegacyProviderSettingsJson);
+
+/**
+ * A settings file as the server reads it: its settings, or the defaults when the file or its
+ * legacy fields are rejected, with the cause. Pure, so the CLI reads files as the server does.
+ */
+function decodeSettingsFile(
+  raw: string,
+  managed: ManagedPolicy.ManagedPolicy["Service"]["settings"],
+) {
+  const parsed = decodeSettingsFileJsonExit(raw);
+  const decoded = Exit.isFailure(parsed)
+    ? parsed
+    : decodePersistedServerSettingsExit(managed.withDefaults(parsed.value));
+  const legacy = decodeLegacyProviderSettingsJsonExit(raw);
+  const failure = Exit.isFailure(decoded)
+    ? decoded.cause
+    : Exit.isFailure(legacy)
+      ? legacy.cause
+      : undefined;
+  const settings: ServerSettings =
+    Exit.isSuccess(decoded) && failure === undefined
+      ? decoded.value
+      : // The file may hold choices we can no longer read, so opt-in behaviour stays off.
+        {
+          ...managed.defaults,
+          continueThreadsAfterServerUpdate: false,
+          usageHistoryRetentionDays: "unlimited",
+          requireConnectDeviceApproval: true,
+          enablePreviewTunnel: false,
+          enableAgentBrowserAccess: false,
+          defaultRuntimeMode: "approval-required",
+        };
+  return { settings, legacy: Exit.isSuccess(legacy) ? legacy.value : undefined, failure };
+}
 
 const LEGACY_BITBUCKET_SECRET_NAMES: Readonly<Record<string, string>> = {
   accessToken: "bitbucket-access-token",
@@ -551,15 +616,6 @@ function migrateLegacyProviderSettings(
   };
 }
 
-const ACP_REGISTRY_DRIVER = ProviderDriverKind.make("acpRegistry");
-
-function selectionSupportsTextGeneration(
-  settings: ServerSettings,
-  selection: ModelSelection,
-): boolean {
-  return settings.providerInstances[selection.instanceId]?.driver !== ACP_REGISTRY_DRIVER;
-}
-
 type DriverAllowed = (driver: ProviderDriverKind) => boolean;
 const anyDriver: DriverAllowed = () => true;
 
@@ -569,7 +625,6 @@ function resolveTextGenerationProvider(
 ): ServerSettings {
   const selection = settings.textGenerationModelSelection;
   return isModelSelectionProviderEnabled(settings, selection) &&
-    selectionSupportsTextGeneration(settings, selection) &&
     isDriverAllowed(
       settings.providerInstances[selection.instanceId]?.driver ??
         ProviderDriverKind.make(selection.instanceId),
@@ -593,49 +648,6 @@ function fallbackTextGenerationProvider(
     { defaultModelSelection: settings.defaultModelSelection },
   );
   return fallback === null ? settings : { ...settings, textGenerationModelSelection: fallback };
-}
-
-/**
- * The unconfigured default instance counts when it is enabled by default. Prefers an enabled
- * `preferredInstanceId`, then the driver's default instance, then the first enabled one.
- */
-export function findEnabledProviderInstanceIdForDriver(
-  settings: ServerSettings,
-  driver: ProviderDriverKind,
-  preferredInstanceId?: ProviderInstanceId,
-): ProviderInstanceId | undefined {
-  const enabledInstanceIds = Object.entries(settings.providerInstances)
-    .filter(([, entry]) => entry.driver === driver && resolveProviderInstanceEnabled(entry))
-    .map(([instanceId]) => ProviderInstanceId.make(instanceId));
-
-  const defaultInstanceId = defaultInstanceIdForDriver(driver);
-  if (
-    !(defaultInstanceId in settings.providerInstances) &&
-    isUnconfiguredDefaultInstanceEnabled(defaultInstanceId)
-  ) {
-    enabledInstanceIds.push(defaultInstanceId);
-  }
-
-  const findEnabled = (instanceId: ProviderInstanceId | undefined) =>
-    instanceId !== undefined && enabledInstanceIds.includes(instanceId) ? instanceId : undefined;
-
-  return (
-    findEnabled(preferredInstanceId) ?? findEnabled(defaultInstanceId) ?? enabledInstanceIds[0]
-  );
-}
-
-/**
- * True when `instanceId` names a provider instance that is currently enabled, using the same
- * rule as `findEnabledProviderInstanceIdForDriver`. An id absent from `providerInstances` is
- * treated as the default instance for the driver of the same name.
- */
-export function isProviderInstanceEnabled(
-  settings: ServerSettings,
-  instanceId: ProviderInstanceId,
-): boolean {
-  const driver =
-    settings.providerInstances[instanceId]?.driver ?? ProviderDriverKind.make(instanceId);
-  return findEnabledProviderInstanceIdForDriver(settings, driver, instanceId) === instanceId;
 }
 
 const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
@@ -889,33 +901,19 @@ const make = Effect.gen(function* () {
     let parseFailure = Option.none<unknown>();
 
     if (yield* readConfigExists) {
-      const raw = yield* readRawConfig;
-      const parsed = decodeSettingsFileJsonExit(raw);
-      const decoded = Exit.isFailure(parsed)
-        ? parsed
-        : decodePersistedServerSettingsExit(managed.withDefaults(parsed.value));
-      const legacySettings = decodeLegacyProviderSettingsJsonExit(raw);
-      if (legacySettings._tag === "Success") {
-        legacyProviders = legacySettings.value.providers;
-        legacySourceControl = {
-          bitbucket: legacySettings.value.bitbucket,
-          github: legacySettings.value.github,
-        };
+      const file = decodeSettingsFile(yield* readRawConfig, managed);
+      if (file.legacy !== undefined) {
+        legacyProviders = file.legacy.providers;
+        legacySourceControl = { bitbucket: file.legacy.bitbucket, github: file.legacy.github };
       }
-      if (decoded._tag === "Failure" || legacySettings._tag === "Failure") {
-        const failure = decoded._tag === "Failure" ? decoded : legacySettings;
-        // The file may hold an opt-out we can no longer read; never resume threads on a guess.
-        settings = { ...managed.defaults, continueThreadsAfterServerUpdate: false };
-        if (failure._tag === "Failure") {
-          parseFailure = Option.some(Cause.squash(failure.cause));
-          yield* Effect.logWarning("failed to parse settings.json, using defaults", {
-            path: settingsPath,
-            issues: Cause.pretty(failure.cause),
-            cause: failure.cause,
-          });
-        }
-      } else {
-        settings = decoded.value;
+      settings = file.settings;
+      if (file.failure !== undefined) {
+        parseFailure = Option.some(Cause.squash(file.failure));
+        yield* Effect.logWarning("failed to parse settings.json, using defaults", {
+          path: settingsPath,
+          issues: Cause.pretty(file.failure),
+          cause: file.failure,
+        });
       }
     }
     // Settings saved by a server that kept the mode in `compactIdleThreads` move
@@ -1142,42 +1140,45 @@ const make = Effect.gen(function* () {
       const keptSecretNames = new Set<string>();
       const writtenSecretNames = new Set<string>();
       const inlineWrites = new Map<string, SecretChange>();
-      const settings = mapServerSettingsSecrets(withEchoedSecretReferences(current, next), (secret) => {
-        const metadata = {
-          secretName: secret.secretName,
-          ...(secret.providerInstanceId !== undefined
-            ? { providerInstanceId: secret.providerInstanceId }
-            : {}),
-          ...(secret.environmentVariable !== undefined
-            ? { environmentVariable: secret.environmentVariable }
-            : {}),
-        };
-        if (!secret.sensitive) {
-          changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
-          return { value: secret.value, redacted: false };
-        }
-        if (secret.redacted) {
-          keptSecretNames.add(secret.secretName);
-          nextSecretNames.add(secret.secretName);
-          const inlineValue = inlineValues.get(secret.secretName);
-          if (inlineValue !== undefined) {
-            inlineWrites.set(secret.secretName, {
-              ...metadata,
-              kind: "write",
-              value: textEncoder.encode(inlineValue),
-            });
+      const settings = mapServerSettingsSecrets(
+        withEchoedSecretReferences(current, next),
+        (secret) => {
+          const metadata = {
+            secretName: secret.secretName,
+            ...(secret.providerInstanceId !== undefined
+              ? { providerInstanceId: secret.providerInstanceId }
+              : {}),
+            ...(secret.environmentVariable !== undefined
+              ? { environmentVariable: secret.environmentVariable }
+              : {}),
+          };
+          if (!secret.sensitive) {
+            changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
+            return { value: secret.value, redacted: false };
           }
+          if (secret.redacted) {
+            keptSecretNames.add(secret.secretName);
+            nextSecretNames.add(secret.secretName);
+            const inlineValue = inlineValues.get(secret.secretName);
+            if (inlineValue !== undefined) {
+              inlineWrites.set(secret.secretName, {
+                ...metadata,
+                kind: "write",
+                value: textEncoder.encode(inlineValue),
+              });
+            }
+            return { value: "", redacted: true };
+          }
+          if (secret.value.length === 0) {
+            changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
+            return { value: "", redacted: false };
+          }
+          nextSecretNames.add(secret.secretName);
+          writtenSecretNames.add(secret.secretName);
+          changes.push({ ...metadata, kind: "write", value: textEncoder.encode(secret.value) });
           return { value: "", redacted: true };
-        }
-        if (secret.value.length === 0) {
-          changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
-          return { value: "", redacted: false };
-        }
-        nextSecretNames.add(secret.secretName);
-        writtenSecretNames.add(secret.secretName);
-        changes.push({ ...metadata, kind: "write", value: textEncoder.encode(secret.value) });
-        return { value: "", redacted: true };
-      });
+        },
+      );
       // A legacy inline value only moves to the store when no row in this save replaces it.
       for (const [secretName, change] of inlineWrites) {
         if (!writtenSecretNames.has(secretName)) changes.push(change);
@@ -1298,7 +1299,10 @@ const make = Effect.gen(function* () {
         }
         // An older client echoes a reference as the redacted marker; restore it before vetting so
         // a removed provider's reference is cleared below rather than restored by persistence.
-        const updated = withEchoedSecretReferences(current, yield* update(current));
+        const updated = withoutRedirectedSecrets(
+          current,
+          withEchoedSecretReferences(current, yield* update(current)),
+        );
         // Vet before secrets: a variable the policy hides from clients is not one they removed.
         const vetted = managed.vetWrite(current, yield* normalizeServerSettings(updated), patch);
         if (vetted._tag === "Locked") {
@@ -1368,21 +1372,45 @@ const make = Effect.gen(function* () {
     }),
   );
 
-  const watchFileChanges = (filePath: string) => {
+  // `ready` completes once the watch is registered, or once it fails to be.
+  const watchFileChanges = (filePath: string, ready: Deferred.Deferred<void>) => {
     const directory = pathService.dirname(filePath);
     const fileName = pathService.basename(filePath);
     const resolvedFilePath = pathService.resolve(filePath);
-    return fs
-      .watch(directory)
-      .pipe(
-        Stream.filter(
-          (event) =>
-            event.path === fileName ||
-            event.path === filePath ||
-            pathService.resolve(directory, event.path) === resolvedFilePath,
-        ),
-      );
+    const markReady = () => Deferred.doneUnsafe(ready, Exit.void);
+    return fs.watch(directory, { onReady: markReady }).pipe(
+      Stream.filter(
+        (event) =>
+          event.path === fileName ||
+          event.path === filePath ||
+          pathService.resolve(directory, event.path) === resolvedFilePath,
+      ),
+      Stream.as(undefined),
+      Stream.ensuring(Effect.sync(markReady)),
+    );
   };
+
+  // A directory watch follows the directory's inode, so when the target's
+  // directory is renamed away and another takes its path, watch the new one.
+  const watchLinkTargetChanges = (linkTargetPath: string, ready: Deferred.Deferred<void>) =>
+    watchDirectoryReplacements(
+      (parentReady) => watchFileChanges(pathService.dirname(linkTargetPath), parentReady),
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const registered = yield* Deferred.make<void>();
+          return Stream.merge(
+            watchFileChanges(linkTargetPath, registered).pipe(Stream.ignoreCause({ log: true })),
+            // Startup reloads once ready. Later watches trigger their own reload.
+            Stream.fromEffect(
+              Deferred.await(registered).pipe(Effect.andThen(Deferred.succeed(ready, undefined))),
+            ).pipe(
+              Stream.filter((completedStartup) => !completedStartup),
+              Stream.as(undefined),
+            ),
+          );
+        }),
+      ),
+    );
 
   const startWatcher = Effect.gen(function* () {
     const settingsDir = pathService.dirname(settingsPath);
@@ -1415,30 +1443,44 @@ const make = Effect.gen(function* () {
       return Option.some(linkTargetPath);
     }).pipe(Effect.orElseSucceed(() => Option.none<string>()));
 
-    const initialLinkTarget = yield* watchLinkTarget;
-    const linkTargetEvents = Stream.make(initialLinkTarget).pipe(
-      Stream.concat(watchFileChanges(settingsPath).pipe(Stream.mapEffect(() => watchLinkTarget))),
-      Stream.changes,
-      Stream.switchMap(
-        Option.match({
-          onNone: () => Stream.empty,
-          onSome: (linkTargetPath) =>
-            watchFileChanges(linkTargetPath).pipe(Stream.ignore({ log: true })),
-        }),
-      ),
-    );
+    const settingsReady = yield* Deferred.make<void>();
+    const linkTargetReady = yield* Deferred.make<void>();
+    yield* Effect.gen(function* () {
+      const [settingsEvents, resolveEvents] = yield* watchFileChanges(
+        settingsPath,
+        settingsReady,
+      ).pipe(
+        Stream.ignoreCause({ log: true }),
+        Stream.broadcastN({ n: 2, capacity: 1, strategy: "sliding" }),
+      );
+      // Buffer settings path changes while resolving the first target.
+      const linkTargetEvents = Stream.fromEffect(
+        Deferred.await(settingsReady).pipe(Effect.andThen(watchLinkTarget)),
+      ).pipe(
+        Stream.concat(resolveEvents.pipe(Stream.mapEffect(() => watchLinkTarget))),
+        Stream.changes,
+        Stream.switchMap(
+          Option.match({
+            onNone: () =>
+              Stream.fromEffect(Deferred.succeed(linkTargetReady, undefined)).pipe(Stream.drain),
+            onSome: (linkTargetPath) => watchLinkTargetChanges(linkTargetPath, linkTargetReady),
+          }),
+        ),
+      );
 
-    // Saves emit multiple events; fs.watch may fire before content is flushed.
-    const debouncedSettingsEvents = Stream.merge(
-      watchFileChanges(settingsPath),
-      linkTargetEvents,
-    ).pipe(Stream.debounce(Duration.millis(100)));
-
-    yield* Stream.runForEach(debouncedSettingsEvents, () => revalidateAndEmitSafely).pipe(
+      // Saves emit multiple events; fs.watch may fire before content is flushed.
+      yield* Stream.merge(settingsEvents, linkTargetEvents).pipe(
+        Stream.debounce(Duration.millis(100)),
+        Stream.runForEach(() => revalidateAndEmitSafely),
+      );
+    }).pipe(
+      Effect.scoped,
       Effect.ignoreCause({ log: true }),
+      Effect.ensuring(Deferred.succeed(linkTargetReady, undefined)),
       Effect.forkIn(watcherScope),
-      Effect.asVoid,
     );
+    // Edits made once `start` returns must reach a registered watch.
+    yield* Deferred.await(linkTargetReady);
   });
 
   const start = Effect.gen(function* () {

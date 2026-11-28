@@ -287,6 +287,40 @@ describe("composerDraftStore addImages", () => {
     expect(draft?.images.map((image) => image.id)).toEqual(["img-a", "img-c"]);
     expect(revokeSpy).toHaveBeenCalledWith("blob:b");
   });
+
+  it("replaces an edited image's bytes in place and drops its stale persisted copy", () => {
+    const store = useComposerDraftStore.getState();
+    const first = makeImage({ id: "first", previewUrl: "blob:first" });
+    const second = makeImage({ id: "second", previewUrl: "blob:second", sizeBytes: 6 });
+    store.addImages(threadRef, [first, second]);
+    const threadKey = threadKeyFor(threadId, TEST_ENVIRONMENT_ID);
+    useComposerDraftStore.setState((state) => ({
+      draftsByThreadKey: {
+        ...state.draftsByThreadKey,
+        [threadKey]: {
+          ...state.draftsByThreadKey[threadKey]!,
+          persistedAttachments: [first, second].map(({ id, name, mimeType, sizeBytes }) => ({
+            id,
+            name,
+            mimeType,
+            sizeBytes,
+            dataUrl: `data:${mimeType};base64,AA==`,
+          })),
+        },
+      },
+    }));
+    const edited = new File([new Uint8Array(12).fill(3)], "second.png", { type: "image/png" });
+
+    expect(store.replaceImageFile(threadRef, "second", edited)).toBe(true);
+
+    const draft = store.getComposerDraft(threadRef);
+    expect(draft?.images.map((image) => image.id)).toEqual(["first", "second"]);
+    expect(draft?.images[1]).toMatchObject({ file: edited, sizeBytes: 12 });
+    expect(draft?.images[1]?.previewUrl).not.toBe("blob:second");
+    expect(draft?.persistedAttachments.map((attachment) => attachment.id)).toEqual(["first"]);
+    expect(revokeSpy).toHaveBeenCalledWith("blob:second");
+    expect(store.replaceImageFile(threadRef, "missing", edited)).toBe(false);
+  });
 });
 
 describe("composerDraftStore copied attachments", () => {
@@ -1319,6 +1353,20 @@ describe("composerDraftStore project draft thread mapping", () => {
     });
   });
 
+  it("keeps a picked workspace marked as picked when a draft moves environment", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId, envMode: "local" });
+    store.setDraftThreadContext(draftId, { envMode: "local", workspaceExplicit: true });
+
+    store.setDraftThreadContext(draftId, { projectRef: remoteProjectRef });
+
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)).toMatchObject({
+      environmentId: OTHER_TEST_ENVIRONMENT_ID,
+      envMode: "local",
+      workspaceExplicit: true,
+    });
+  });
+
   it("clears stale upload metadata when retargeting a draft to another environment", () => {
     const store = useComposerDraftStore.getState();
     const hydratedFile: ComposerFileAttachment = {
@@ -1476,6 +1524,7 @@ function modelReconciliationHarness(
   );
   const shells = createEnvironmentThreadShellAtoms({
     catalogValueAtom,
+    connectionPhaseAtom: () => Atom.make("connected" as const),
     snapshotAtom: () => visibleSnapshotAtom,
     hiddenThreadTagsAtom: () => Atom.make(null),
   });
@@ -2435,7 +2484,7 @@ describe("composerDraftStore model seed migration", () => {
     }
   });
 
-  it("reopens Quick Feature and Quick Engineering drafts on their successors", async () => {
+  it("loads drafts saved with workflow fields and drops them", async () => {
     vi.useFakeTimers();
     try {
       const storage = useComposerDraftStore.persist.getOptions().storage;
@@ -2447,9 +2496,10 @@ describe("composerDraftStore model seed migration", () => {
             [typedDraftId]: {
               prompt: "add a fast checkout",
               attachments: [],
-              interactionMode: "plan",
-              workflowPreset: "quick-plan",
-              lastWorkflowPreset: "fast-engineering",
+              interactionMode: "planning-workflow",
+              workflowPreset: "planning",
+              lastWorkflowPreset: "fast-feature",
+              workflowImplementationSettings: { appReviewEnabled: false },
             },
           },
           draftThreadsByThreadKey: { [typedDraftId]: draftThread(typedThreadId) },
@@ -2462,11 +2512,12 @@ describe("composerDraftStore model seed migration", () => {
 
       await useComposerDraftStore.persist.rehydrate();
 
-      expect(draftByKey(typedDraftId)).toMatchObject({
-        prompt: "add a fast checkout",
-        workflowPreset: "fast-plan",
-        lastWorkflowPreset: "planning",
-      });
+      const draft = draftByKey(typedDraftId);
+      expect(draft?.prompt).toBe("add a fast checkout");
+      expect(draft?.interactionMode).toBeNull();
+      expect(draft).not.toHaveProperty("workflowPreset");
+      expect(draft).not.toHaveProperty("lastWorkflowPreset");
+      expect(draft).not.toHaveProperty("workflowImplementationSettings");
     } finally {
       vi.useRealTimers();
     }
@@ -2662,51 +2713,6 @@ describe("composerDraftStore runtime and interaction settings", () => {
     store.setInteractionMode(threadRef, "plan");
 
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.interactionMode).toBe("plan");
-  });
-
-  it("stores run-local workflow stage choices with the selected preset", () => {
-    const store = useComposerDraftStore.getState();
-    const settings = {
-      ticketAppReviewEnabled: true,
-      appReviewEnabled: false,
-      finalCodeReviewEnabled: false,
-      pullRequestCreationEnabled: false,
-      pullRequestBabysittingEnabled: false,
-    };
-
-    store.setComposerMode(threadRef, "planning-workflow", "planning", settings);
-
-    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toMatchObject({
-      interactionMode: "planning-workflow",
-      workflowPreset: "planning",
-      workflowImplementationSettings: settings,
-    });
-  });
-
-  it("remembers the last workflow preset after Build or Plan clears the active preset", () => {
-    const store = useComposerDraftStore.getState();
-
-    store.setComposerMode(threadRef, "product-workflow", "fast-feature");
-    store.setComposerMode(threadRef, "default", null);
-
-    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toMatchObject({
-      interactionMode: "default",
-      workflowPreset: null,
-      lastWorkflowPreset: "fast-feature",
-    });
-  });
-
-  it("preserves the preset when an internal provider-mode transition is recorded", () => {
-    const store = useComposerDraftStore.getState();
-
-    store.setComposerMode(threadRef, "product-workflow", "fix");
-    store.setInteractionMode(threadRef, "plan");
-
-    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toMatchObject({
-      interactionMode: "plan",
-      workflowPreset: "fix",
-      lastWorkflowPreset: "fix",
-    });
   });
 
   it("removes empty settings-only drafts when overrides are cleared", () => {
@@ -3137,9 +3143,19 @@ describe("composerDraftStore checkout pull request", () => {
     store().setDraftThreadContext(draftId, { checkoutPullRequest: null });
     expect(store().getDraftSession(draftId)?.checkoutPullRequest).toBeUndefined();
 
-    store().setDraftThreadContext(draftId, { checkoutPullRequest: checkout });
+    store().setDraftThreadContext(draftId, {
+      checkoutPullRequest: checkout,
+      worktreeRepositories: ["/work/api"],
+    });
+    // An unrelated change keeps the repository choice; an empty choice is still a choice.
+    store().setDraftThreadContext(draftId, { envMode: "worktree" });
+    expect(store().getDraftSession(draftId)?.worktreeRepositories).toEqual(["/work/api"]);
+    store().setDraftThreadContext(draftId, { worktreeRepositories: [] });
+    expect(store().getDraftSession(draftId)?.worktreeRepositories).toEqual([]);
+
     store().setDraftThreadContext(draftId, { projectRef: otherProjectRef });
     expect(store().getDraftSession(draftId)?.checkoutPullRequest).toBeUndefined();
+    expect(store().getDraftSession(draftId)?.worktreeRepositories).toBeUndefined();
   });
 
   it("persists the pull request and still restores drafts saved without one", async () => {
@@ -3168,7 +3184,11 @@ describe("composerDraftStore checkout pull request", () => {
         state: {
           draftsByThreadKey: {},
           draftThreadsByThreadKey: {
-            [draftId]: { ...persistedDraftThread(threadId), checkoutPullRequest: checkout },
+            [draftId]: {
+              ...persistedDraftThread(threadId),
+              checkoutPullRequest: checkout,
+              worktreeRepositories: ["/work/api"],
+            },
             [legacyDraftId]: persistedDraftThread(ThreadId.make("thread-legacy")),
           },
           logicalProjectDraftThreadKeyByLogicalProjectKey: {
@@ -3186,7 +3206,8 @@ describe("composerDraftStore checkout pull request", () => {
       expect(checkoutPullRequestUrlToLink(legacy)).toBeNull();
       expect(
         partializeComposerDraftStoreState(store()).draftThreadsByThreadKey[draftId],
-      ).toMatchObject({ checkoutPullRequest: checkout });
+      ).toMatchObject({ checkoutPullRequest: checkout, worktreeRepositories: ["/work/api"] });
+      expect(legacy).not.toHaveProperty("worktreeRepositories");
     } finally {
       await useComposerDraftStore.persist.clearStorage();
       vi.useRealTimers();

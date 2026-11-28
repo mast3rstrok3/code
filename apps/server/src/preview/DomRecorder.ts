@@ -1,15 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off - Resolving rrweb's UMD build needs Node module resolution and its sibling path.
 /**
- * DomRecorder - rrweb DOM recording for the preview browser.
- *
- * A screencast recording costs a realtime video encoder per review. rrweb instead
- * serializes DOM mutations and input in the page, so the artifact is a JSON event
- * log and the server spawns nothing. The trade is fidelity: rrweb records the DOM,
- * not pixels, so canvas and WebGL replay blank. `ServerBrowserManager` picks the
- * recorder and falls back to the encoder when this one cannot attach.
- *
- * Injection is deliberately lazy. These tabs are also the general in-app browser,
- * and nothing is evaluated in a page until a review actually starts recording.
+ * rrweb records DOM events instead of pixels, so a review needs no video encoder, but
+ * canvas and WebGL replay blank. Injection is lazy: preview tabs are the general in-app
+ * browser, and nothing runs in a page until a review starts recording.
  */
 import * as NodeModule from "node:module";
 import * as NodeFSP from "node:fs/promises";
@@ -17,6 +10,8 @@ import * as NodePath from "node:path";
 
 /** Page-side entry point installed by the bootstrap script. */
 export const DOM_RECORDER_BINDING = "__t3DomRecorderEmit";
+
+export const DOM_RECORDING_MIME_TYPE = "application/x-rrweb+jsonl";
 
 /** How long the page buffers events between binding calls. */
 const DOM_RECORDER_FLUSH_INTERVAL_MS = 1_000;
@@ -115,6 +110,13 @@ export const buildBootstrapScript = (recordScript: string): string => `
 
   const timer = setInterval(flush, ${DOM_RECORDER_FLUSH_INTERVAL_MS});
   window.__t3DomRecorderFlush = flush;
+  // Retire this recorder so a later recording can start fresh in the same document.
+  window.__t3DomRecorderStop = () => {
+    stopped = true;
+    if (typeof stopRecording === "function") stopRecording();
+    clearInterval(timer);
+    window.__t3DomRecorderInstalled = false;
+  };
   window.addEventListener("pagehide", () => {
     void flush();
   });
