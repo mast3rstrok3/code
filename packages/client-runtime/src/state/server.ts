@@ -20,6 +20,7 @@ import {
   applyWorkflowRunsUpdate,
   type ServerSelfUpdateProgressEvent,
   type ServerSelfUpdateResult,
+  resolveProviderInstanceEnabled,
   shouldRecommendDatabaseCompaction,
   type UsageSummary,
   type WorkflowRunsSnapshot,
@@ -1408,11 +1409,20 @@ export function createServerEnvironmentAtoms<R, E>(
     Atom.make((get) => {
       const settings = get(settingsValueAtom(environmentId));
       const aliases = settings?.usageModelAliases ?? {};
+      const instances = settings?.providerInstances ?? {};
       return JSON.stringify([
         get(usagePricesAtom(environmentId)),
         Object.keys(aliases)
           .sort()
           .map((model) => [model, aliases[model]]),
+        // The server scans only enabled instances whose usage access is allowed.
+        Object.entries(instances)
+          .map(([id, instance]) => [
+            id,
+            resolveProviderInstanceEnabled(instance),
+            instance.usageAccess,
+          ])
+          .sort(([a], [b]) => String(a).localeCompare(String(b))),
       ]);
     }).pipe(Atom.withLabel(`environment-data:server:usage-scan-settings:${environmentId}`)),
   );
@@ -1860,6 +1870,7 @@ export function createServerEnvironmentAtoms<R, E>(
             input.fresh ?? false,
             input.refreshModels ?? false,
             input.modelCatalogOnly ?? false,
+            input.limitsOnly ?? false,
           ]),
       },
     }),
